@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "analytics"
+version = "0.1"
+description = "Extensions to Polars expressions for Data Analysis"
+requires-python = ">=3.10"
+dependencies = [
+    "polars>=0.19.0",
+]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+

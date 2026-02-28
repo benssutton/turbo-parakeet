@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-C", "target-cpu=native"]
+
+# Or for specific features:
+# rustflags = ["-C", "target-feature=+avx2,+fma"]
