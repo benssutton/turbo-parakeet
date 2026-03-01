@@ -115,11 +115,17 @@ fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
                 })
                 .collect())
         }
+        DataType::Categorical(_, _) | DataType::Enum(_, _) => {
+            let phys = series.to_physical_repr();
+            Ok(phys
+                .u32()?
+                .iter()
+                .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
+                .collect())
+        }
         _ => Err(PolarsError::ComputeError(
             format!(
-                "Unsupported data type for joint entropy: {:?}. \
-                 Supported: Int8/16/32/64, UInt8/16/32/64, Float32/64, \
-                 Date, Datetime, Duration, String",
+                "Unsupported data type for joint entropy: {:?}. ",
                 series.dtype()
             )
             .into(),
@@ -264,7 +270,7 @@ fn entropy_from_count_of_counts(coc: &[(u64, u64)], logr: f64, r_f: f64) -> f64 
 // Pairwise (2-way) v2
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn pairwise_entropy_v2_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
+fn pairwise_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
     let fields = vec![
         Field::new("col_a".into(), DataType::String),
         Field::new("col_b".into(), DataType::String),
@@ -276,7 +282,7 @@ fn pairwise_entropy_v2_output_type(_input_fields: &[Field]) -> PolarsResult<Fiel
     ))
 }
 
-pub(crate) fn pairwise_joint_entropy_v2_impl(
+pub(crate) fn pairwise_joint_entropy_impl(
     inputs: &[Series],
     kwargs: PairwiseKwargs,
 ) -> PolarsResult<Series> {
@@ -411,16 +417,16 @@ pub(crate) fn pairwise_joint_entropy_v2_impl(
     Ok(struct_ca.into_series())
 }
 
-#[polars_expr(output_type_func=pairwise_entropy_v2_output_type)]
+#[polars_expr(output_type_func=pairwise_entropy_output_type)]
 fn pairwise_joint_entropy_v2(inputs: &[Series], kwargs: PairwiseKwargs) -> PolarsResult<Series> {
-    pairwise_joint_entropy_v2_impl(inputs, kwargs)
+    pairwise_joint_entropy_impl(inputs, kwargs)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Threeway (3-way) v2
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn threeway_entropy_v2_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
+fn threeway_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
     let fields = vec![
         Field::new("col_a".into(), DataType::String),
         Field::new("col_b".into(), DataType::String),
@@ -433,7 +439,7 @@ fn threeway_entropy_v2_output_type(_input_fields: &[Field]) -> PolarsResult<Fiel
     ))
 }
 
-pub(crate) fn threeway_joint_entropy_v2_impl(
+pub(crate) fn threeway_joint_entropy_impl(
     inputs: &[Series],
     kwargs: ThreewayKwargs,
 ) -> PolarsResult<Series> {
@@ -480,16 +486,12 @@ pub(crate) fn threeway_joint_entropy_v2_impl(
                 .collect();
             resolve_triplets(raw_triplets, &name_map)?
         }
-        None => {
-            const MAX_TRIPLETS: usize = 5000;
-            (0..n_cols)
-                .flat_map(|i| {
-                    ((i + 1)..n_cols)
-                        .flat_map(move |j| ((j + 1)..n_cols).map(move |k| (i, j, k)))
-                })
-                .take(MAX_TRIPLETS)
-                .collect()
-        }
+        None => (0..n_cols)
+            .flat_map(|i| {
+                ((i + 1)..n_cols)
+                    .flat_map(move |j| ((j + 1)..n_cols).map(move |k| (i, j, k)))
+            })
+            .collect(),
     };
 
     let n_triplets = triplets.len();
@@ -572,9 +574,9 @@ pub(crate) fn threeway_joint_entropy_v2_impl(
     Ok(struct_ca.into_series())
 }
 
-#[polars_expr(output_type_func=threeway_entropy_v2_output_type)]
-fn threeway_joint_entropy_v2(inputs: &[Series], kwargs: ThreewayKwargs) -> PolarsResult<Series> {
-    threeway_joint_entropy_v2_impl(inputs, kwargs)
+#[polars_expr(output_type_func=threeway_entropy_output_type)]
+fn threeway_joint_entropy(inputs: &[Series], kwargs: ThreewayKwargs) -> PolarsResult<Series> {
+    threeway_joint_entropy_impl(inputs, kwargs)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -675,11 +677,11 @@ mod tests {
     // ── Pairwise v2 ───────────────────────────────────────────────────────
 
     #[test]
-    fn test_pairwise_v2_uniform() {
+    fn test_pairwise_uniform() {
         // 4 unique pairs, each once → H = log2(4) = 2.0
         let s1 = Series::new("a".into(), &[0i32, 0, 1, 1]);
         let s2 = Series::new("b".into(), &[0i32, 1, 0, 1]);
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2], no_pairs()).unwrap();
+        let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
         assert_eq!(result.len(), 1);
 
         let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
@@ -688,10 +690,10 @@ mod tests {
     }
 
     #[test]
-    fn test_pairwise_v2_deterministic() {
+    fn test_pairwise_deterministic() {
         let s1 = Series::new("a".into(), &[1i32; 100]);
         let s2 = Series::new("b".into(), &[1i32; 100]);
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2], no_pairs()).unwrap();
+        let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
 
         let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
@@ -699,38 +701,38 @@ mod tests {
     }
 
     #[test]
-    fn test_pairwise_v2_3_columns() {
+    fn test_pairwise_3_columns() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2, s3], no_pairs()).unwrap();
+        let result = pairwise_joint_entropy_impl(&[s1, s2, s3], no_pairs()).unwrap();
         assert!(matches!(result.dtype(), DataType::Struct(_)));
         assert_eq!(result.len(), 3); // 3-choose-2 = 3 pairs
     }
 
     #[test]
-    fn test_pairwise_v2_single_column() {
+    fn test_pairwise_single_column() {
         let s1 = Series::new("a".into(), &[1i32, 2, 3]);
-        let result = pairwise_joint_entropy_v2_impl(&[s1], no_pairs()).unwrap();
+        let result = pairwise_joint_entropy_impl(&[s1], no_pairs()).unwrap();
         assert_eq!(result.len(), 0);
     }
 
     #[test]
-    fn test_pairwise_v2_empty_inputs() {
-        let result = pairwise_joint_entropy_v2_impl(&[], no_pairs());
+    fn test_pairwise_empty_inputs() {
+        let result = pairwise_joint_entropy_impl(&[], no_pairs());
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_pairwise_v2_length_mismatch() {
+    fn test_pairwise_length_mismatch() {
         let s1 = Series::new("a".into(), &[1i32, 2, 3]);
         let s2 = Series::new("b".into(), &[1i32, 2]);
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2], no_pairs());
+        let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs());
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_pairwise_v2_specific_pairs() {
+    fn test_pairwise_specific_pairs() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
@@ -738,12 +740,12 @@ mod tests {
         let kwargs = PairwiseKwargs {
             pairs: Some(vec![vec!["a".to_string(), "c".to_string()]]),
         };
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2, s3], kwargs).unwrap();
+        let result = pairwise_joint_entropy_impl(&[s1, s2, s3], kwargs).unwrap();
         assert_eq!(result.len(), 1);
     }
 
     #[test]
-    fn test_pairwise_v2_specific_pairs_multiple() {
+    fn test_pairwise_specific_pairs_multiple() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
@@ -754,77 +756,77 @@ mod tests {
                 vec!["a".to_string(), "c".to_string()],
             ]),
         };
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2, s3], kwargs).unwrap();
+        let result = pairwise_joint_entropy_impl(&[s1, s2, s3], kwargs).unwrap();
         assert_eq!(result.len(), 2);
     }
 
     #[test]
-    fn test_pairwise_v2_invalid_column_name() {
+    fn test_pairwise_invalid_column_name() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
 
         let kwargs = PairwiseKwargs {
             pairs: Some(vec![vec!["a".to_string(), "nonexistent".to_string()]]),
         };
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2], kwargs);
+        let result = pairwise_joint_entropy_impl(&[s1, s2], kwargs);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_pairwise_v2_invalid_pair_length() {
+    fn test_pairwise_invalid_pair_length() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
 
         let kwargs = PairwiseKwargs {
             pairs: Some(vec![vec!["a".to_string()]]),
         };
-        let result = pairwise_joint_entropy_v2_impl(&[s1, s2], kwargs);
+        let result = pairwise_joint_entropy_impl(&[s1, s2], kwargs);
         assert!(result.is_err());
     }
 
     // ── Threeway v2 ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_threeway_v2_basic() {
+    fn test_threeway_basic() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
 
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2, s3], no_triplets()).unwrap();
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3], no_triplets()).unwrap();
         assert!(matches!(result.dtype(), DataType::Struct(_)));
         assert_eq!(result.len(), 1);
     }
 
     #[test]
-    fn test_threeway_v2_four_columns() {
+    fn test_threeway_four_columns() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
         let s4 = Series::new("d".into(), &[1i32, 1, 2, 1]);
 
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2, s3, s4], no_triplets()).unwrap();
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3, s4], no_triplets()).unwrap();
         assert_eq!(result.len(), 4); // 4-choose-3 = 4
     }
 
     #[test]
-    fn test_threeway_v2_insufficient_columns() {
+    fn test_threeway_insufficient_columns() {
         let s1 = Series::new("a".into(), &[1i32, 2, 3]);
         let s2 = Series::new("b".into(), &[1i32, 2, 3]);
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2], no_triplets());
+        let result = threeway_joint_entropy_impl(&[s1, s2], no_triplets());
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_threeway_v2_length_mismatch() {
+    fn test_threeway_length_mismatch() {
         let s1 = Series::new("a".into(), &[1i32, 2, 3]);
         let s2 = Series::new("b".into(), &[1i32, 2]);
         let s3 = Series::new("c".into(), &[1i32, 2, 3]);
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2, s3], no_triplets());
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3], no_triplets());
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_threeway_v2_specific_triplets() {
+    fn test_threeway_specific_triplets() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
@@ -837,12 +839,12 @@ mod tests {
                 "d".to_string(),
             ]]),
         };
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2, s3, s4], kwargs).unwrap();
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3, s4], kwargs).unwrap();
         assert_eq!(result.len(), 1);
     }
 
     #[test]
-    fn test_threeway_v2_specific_triplets_multiple() {
+    fn test_threeway_specific_triplets_multiple() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
@@ -854,12 +856,12 @@ mod tests {
                 vec!["b".to_string(), "c".to_string(), "d".to_string()],
             ]),
         };
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2, s3, s4], kwargs).unwrap();
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3, s4], kwargs).unwrap();
         assert_eq!(result.len(), 2);
     }
 
     #[test]
-    fn test_threeway_v2_invalid_triplet_column() {
+    fn test_threeway_invalid_triplet_column() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
@@ -871,12 +873,12 @@ mod tests {
                 "x".to_string(),
             ]]),
         };
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2, s3], kwargs);
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3], kwargs);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_threeway_v2_invalid_triplet_length() {
+    fn test_threeway_invalid_triplet_length() {
         let s1 = Series::new("a".into(), &[1i32, 1, 2, 2]);
         let s2 = Series::new("b".into(), &[1i32, 2, 1, 2]);
         let s3 = Series::new("c".into(), &[1i32, 1, 1, 2]);
@@ -884,16 +886,40 @@ mod tests {
         let kwargs = ThreewayKwargs {
             triplets: Some(vec![vec!["a".to_string(), "b".to_string()]]),
         };
-        let result = threeway_joint_entropy_v2_impl(&[s1, s2, s3], kwargs);
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3], kwargs);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_threeway_v2_max_triplets_limit() {
+    fn test_threeway_all_triplets_generated() {
+        // 40 columns → C(40,3) = 9880 triplets, no cap.
         let series: Vec<Series> = (0..40)
             .map(|i| Series::new(format!("col_{}", i).into(), &[1i32, 2, 3, 4]))
             .collect();
-        let result = threeway_joint_entropy_v2_impl(&series, no_triplets()).unwrap();
-        assert_eq!(result.len(), 5000);
+        let result = threeway_joint_entropy_impl(&series, no_triplets()).unwrap();
+        assert_eq!(result.len(), 9880);
+    }
+
+    #[test]
+    fn test_categorical_to_u64() {
+        use polars::datatypes::Categories;
+        let cats = Categories::global();
+        let s = Series::new("cat".into(), &["x", "y", "x", "z"])
+            .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
+            .unwrap();
+        let result = series_to_u64(&s).unwrap();
+        assert_eq!(result[0], result[2]); // "x" == "x"
+        assert_ne!(result[0], result[1]); // "x" != "y"
+    }
+
+    #[test]
+    fn test_categorical_null() {
+        use polars::datatypes::Categories;
+        let cats = Categories::global();
+        let s = Series::new("cat".into(), &[Some("a"), None, Some("b")])
+            .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
+            .unwrap();
+        let result = series_to_u64(&s).unwrap();
+        assert_eq!(result[1], NULL_SENTINEL);
     }
 }
