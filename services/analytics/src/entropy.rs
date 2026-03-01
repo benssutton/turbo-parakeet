@@ -1,14 +1,11 @@
 use rayon::prelude::*;
 use foldhash::fast::{FixedState as FoldHashFixed, RandomState as FoldHashFast};
-use scc::HashMap as SccHashMap;
 use wide::f64x4;
 use polars::prelude::*;
 use pyo3_polars::derive::polars_expr;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher};
-
-type FoldHashFastSccMap<K, V> = SccHashMap<K, V, FoldHashFast>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwargs (same wire format as entropy.rs)
@@ -357,29 +354,32 @@ pub(crate) fn pairwise_joint_entropy_impl(
     let needed: HashSet<usize> = pairs.iter().flat_map(|(i, j)| [*i, *j]).collect();
     let cache = build_column_cache_par(inputs, &needed)?;
 
+    // Pre-collect column names to avoid per-thread allocations inside par_iter.
+    let col_names: Vec<String> = inputs.iter().map(|s| s.name().to_string()).collect();
+
     // Steps 4–5: parallel entropy calculation across all pairs.
     let results: Vec<_> = pairs
         .par_iter()
         .map(|(i, j)| {
             let col_a = &cache[*i];
             let col_b = &cache[*j];
-            let col_a_name = inputs[*i].name().to_string();
-            let col_b_name = inputs[*j].name().to_string();
+            let col_a_name = col_names[*i].clone();
+            let col_b_name = col_names[*j].clone();
 
             // 5a+5b: pack into u128 keys, build frequency map.
-            let freq: FoldHashFastSccMap<u128, u64> =
-                SccHashMap::with_capacity_and_hasher(r, FoldHashFast::default());
+            let mut freq: HashMap<u128, u64, FoldHashFast> =
+                HashMap::with_capacity_and_hasher(r, FoldHashFast::default());
             col_a.iter().zip(col_b.iter()).for_each(|(a, b)| {
                 let key = (*a as u128) << 64 | (*b as u128);
-                let _ = freq.entry(key).and_modify(|v| *v += 1).or_insert(1);
+                *freq.entry(key).or_insert(0) += 1;
             });
 
             // 5c: count-of-counts.
             let mut coc_map: HashMap<u64, u64, FoldHashFast> =
                 HashMap::with_capacity_and_hasher(freq.len(), FoldHashFast::default());
-            freq.scan(|_, count| {
+            for count in freq.values() {
                 *coc_map.entry(*count).or_insert(0) += 1;
-            });
+            }
             let coc: Vec<(u64, u64)> = coc_map.into_iter().collect();
 
             // 5d: SIMD entropy from count-of-counts.
@@ -503,6 +503,9 @@ pub(crate) fn threeway_joint_entropy_impl(
         .collect();
     let cache = build_column_cache_par(inputs, &needed)?;
 
+    // Pre-collect column names to avoid per-thread allocations inside par_iter.
+    let col_names: Vec<String> = inputs.iter().map(|s| s.name().to_string()).collect();
+
     // Steps 4–5: parallel entropy calculation across all triplets.
     let results: Vec<_> = triplets
         .par_iter()
@@ -510,28 +513,28 @@ pub(crate) fn threeway_joint_entropy_impl(
             let col_a = &cache[*i];
             let col_b = &cache[*j];
             let col_c = &cache[*k];
-            let col_a_name = inputs[*i].name().to_string();
-            let col_b_name = inputs[*j].name().to_string();
-            let col_c_name = inputs[*k].name().to_string();
+            let col_a_name = col_names[*i].clone();
+            let col_b_name = col_names[*j].clone();
+            let col_c_name = col_names[*k].clone();
 
             // 5a+5b: pack into [u64; 3] keys, build frequency map.
-            let freq: FoldHashFastSccMap<[u64; 3], u64> =
-                SccHashMap::with_capacity_and_hasher(r, FoldHashFast::default());
+            let mut freq: HashMap<[u64; 3], u64, FoldHashFast> =
+                HashMap::with_capacity_and_hasher(r, FoldHashFast::default());
             col_a
                 .iter()
                 .zip(col_b.iter())
                 .zip(col_c.iter())
                 .for_each(|((a, b), c)| {
                     let key = [*a, *b, *c];
-                    let _ = freq.entry(key).and_modify(|v| *v += 1).or_insert(1);
+                    *freq.entry(key).or_insert(0) += 1;
                 });
 
             // 5c: count-of-counts.
             let mut coc_map: HashMap<u64, u64, FoldHashFast> =
                 HashMap::with_capacity_and_hasher(freq.len(), FoldHashFast::default());
-            freq.scan(|_, count| {
+            for count in freq.values() {
                 *coc_map.entry(*count).or_insert(0) += 1;
-            });
+            }
             let coc: Vec<(u64, u64)> = coc_map.into_iter().collect();
 
             // 5d: SIMD entropy from count-of-counts.
