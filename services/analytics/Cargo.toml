@@ -14,10 +14,10 @@ bytes = { version = "1.10"}
 bitvec = { version = "1.0.1", features = ["serde"] }
 
 #Polars and pyo3
-polars = { version = "0.51.0", features = ["lazy", "performant"] }
+polars = { version = "0.51.0", features = ["lazy", "performant", "dtype-decimal"] }
 polars-arrow = { version = "0.51.0", default-features = false }
 pyo3 = { version = "0.25.0", features = ["extension-module", "abi3-py39"] }
-pyo3-polars = { version = "0.24.0", features = ["derive", "dtype-struct", "dtype-array", "dtype-categorical", "lazy"] }
+pyo3-polars = { version = "0.24.0", features = ["derive", "dtype-struct", "dtype-array", "dtype-categorical", "dtype-decimal", "lazy"] }
 
 #Concurrent hashmaps & hashing functions
 scc = "2"

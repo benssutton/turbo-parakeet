@@ -49,6 +49,21 @@ fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
             .iter()
             .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
             .collect()),
+        DataType::Int128 => {
+            let build_hasher = FoldHashFixed::default();
+            Ok(series
+                .i128()?
+                .iter()
+                .map(|v| match v {
+                    None => NULL_SENTINEL,
+                    Some(x) => {
+                        let mut hasher = build_hasher.build_hasher();
+                        x.hash(&mut hasher);
+                        hasher.finish()
+                    }
+                })
+                .collect())
+        }
         DataType::UInt8 => Ok(series
             .u8()?
             .iter()
@@ -68,6 +83,15 @@ fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
             .u64()?
             .iter()
             .map(|v| v.unwrap_or(NULL_SENTINEL))
+            .collect()),
+        DataType::Boolean => Ok(series
+            .bool()?
+            .iter()
+            .map(|v| match v {
+                Some(true) => 1u64,
+                Some(false) => 0u64,
+                None => NULL_SENTINEL,
+            })
             .collect()),
         DataType::Float32 => Ok(series
             .f32()?
@@ -97,6 +121,12 @@ fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
             .iter()
             .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
             .collect()),
+        DataType::Time => Ok(series
+            .time()?
+            .phys
+            .iter()
+            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
+            .collect()),
         DataType::String => {
             let build_hasher = FoldHashFixed::default();
             Ok(series
@@ -119,6 +149,67 @@ fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
                 .iter()
                 .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
                 .collect())
+        }
+        // Decimal is physically i128 with a fixed scale per-Series; hash the raw integer.
+        // to_physical_repr() strips the Decimal wrapper and returns Int128.
+        DataType::Decimal(_, _) => {
+            let build_hasher = FoldHashFixed::default();
+            let phys = series.to_physical_repr();
+            Ok(phys
+                .i128()?
+                .iter()
+                .map(|v| match v {
+                    None => NULL_SENTINEL,
+                    Some(x) => {
+                        let mut hasher = build_hasher.build_hasher();
+                        x.hash(&mut hasher);
+                        hasher.finish()
+                    }
+                })
+                .collect())
+        }
+        // List and Array: amortized_iter avoids per-row Series allocations.
+        // Recursively convert the inner element sequence to u64, then hash it
+        // as an ordered tuple so that [1,2] != [2,1] and [] != null.
+        DataType::List(_) => {
+            let build_hasher = FoldHashFixed::default();
+            let list_ca = series.list()?;
+            let mut out = Vec::with_capacity(list_ca.len());
+            for opt_inner in list_ca.amortized_iter() {
+                match opt_inner {
+                    None => out.push(NULL_SENTINEL),
+                    Some(inner) => {
+                        let vals = series_to_u64(inner.as_ref())?;
+                        let mut h = build_hasher.build_hasher();
+                        vals.len().hash(&mut h);
+                        for v in vals {
+                            v.hash(&mut h);
+                        }
+                        out.push(h.finish());
+                    }
+                }
+            }
+            Ok(out)
+        }
+        DataType::Array(_, _) => {
+            let build_hasher = FoldHashFixed::default();
+            let arr_ca = series.array()?;
+            let mut out = Vec::with_capacity(arr_ca.len());
+            for opt_inner in arr_ca.amortized_iter() {
+                match opt_inner {
+                    None => out.push(NULL_SENTINEL),
+                    Some(inner) => {
+                        let vals = series_to_u64(inner.as_ref())?;
+                        let mut h = build_hasher.build_hasher();
+                        vals.len().hash(&mut h);
+                        for v in vals {
+                            v.hash(&mut h);
+                        }
+                        out.push(h.finish());
+                    }
+                }
+            }
+            Ok(out)
         }
         _ => Err(PolarsError::ComputeError(
             format!(
@@ -924,5 +1015,101 @@ mod tests {
             .unwrap();
         let result = series_to_u64(&s).unwrap();
         assert_eq!(result[1], NULL_SENTINEL);
+    }
+
+    #[test]
+    fn test_boolean_to_u64() {
+        let s = Series::new("test".into(), &[Some(true), Some(false), None]);
+        let result = series_to_u64(&s).unwrap();
+        assert_eq!(result[0], 1u64);
+        assert_eq!(result[1], 0u64);
+        assert_eq!(result[2], NULL_SENTINEL);
+        assert_ne!(result[0], result[1]);
+    }
+
+    #[test]
+    fn test_time_to_u64() {
+        let s = Series::new("test".into(), &[Some(1_000_000i64), Some(2_000_000i64), None])
+            .cast(&DataType::Time)
+            .unwrap();
+        let result = series_to_u64(&s).unwrap();
+        assert_eq!(result[0], 1_000_000u64);
+        assert_eq!(result[1], 2_000_000u64);
+        assert_eq!(result[2], NULL_SENTINEL);
+        assert_ne!(result[0], result[1]);
+    }
+
+    #[test]
+    fn test_int128_to_u64() {
+        let s = Series::new("test".into(), &[Some(1i64), Some(2i64), None])
+            .cast(&DataType::Int128)
+            .unwrap();
+        let result = series_to_u64(&s).unwrap();
+        assert_ne!(result[0], result[1]); // distinct values → distinct hashes
+        assert_eq!(result[2], NULL_SENTINEL);
+
+        // Same value in a separate series must hash identically (fixed seed)
+        let s2 = Series::new("test2".into(), &[Some(1i64)])
+            .cast(&DataType::Int128)
+            .unwrap();
+        let result2 = series_to_u64(&s2).unwrap();
+        assert_eq!(result[0], result2[0]);
+    }
+
+    #[test]
+    fn test_decimal_to_u64() {
+        let s = Series::new("test".into(), &[1i32, 2, 1])
+            .cast(&DataType::Decimal(Some(10), Some(0)))
+            .unwrap();
+        let result = series_to_u64(&s).unwrap();
+        assert_ne!(result[0], result[1]); // 1 ≠ 2
+        assert_eq!(result[0], result[2]); // 1 == 1 → same hash
+    }
+
+    #[test]
+    fn test_list_same_contents_same_hash() {
+        // Rows with identical element sequences must produce the same u64.
+        let s = Series::from_any_values(
+            "test".into(),
+            &[
+                AnyValue::List(Series::new("".into(), &[1i32, 2i32])),
+                AnyValue::List(Series::new("".into(), &[1i32, 2i32])),
+                AnyValue::List(Series::new("".into(), &[3i32])),
+                AnyValue::Null,
+            ],
+            false,
+        )
+        .unwrap();
+        let result = series_to_u64(&s).unwrap();
+        assert_eq!(result[0], result[1]); // [1,2] == [1,2]
+        assert_ne!(result[0], result[2]); // [1,2] != [3]
+        assert_eq!(result[3], NULL_SENTINEL);
+    }
+
+    #[test]
+    fn test_list_order_matters() {
+        // [1,2] and [2,1] are different lists and must produce different hashes.
+        let s = Series::from_any_values(
+            "test".into(),
+            &[
+                AnyValue::List(Series::new("".into(), &[1i32, 2i32])),
+                AnyValue::List(Series::new("".into(), &[2i32, 1i32])),
+            ],
+            false,
+        )
+        .unwrap();
+        let result = series_to_u64(&s).unwrap();
+        assert_ne!(result[0], result[1]);
+    }
+
+    #[test]
+    fn test_pairwise_boolean_column() {
+        let s1 = Series::new("a".into(), &[true, false, true, false]);
+        let s2 = Series::new("b".into(), &[true, true, false, false]);
+        let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
+        assert_eq!(result.len(), 1);
+        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+        assert!(h >= 0.0 && h <= 2.0);
     }
 }
