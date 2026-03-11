@@ -1,6 +1,8 @@
 //mod bloomfilter;
 //mod minhash;
+mod shared;
 mod entropy;
+mod chi_squared;
 
 use mimalloc::MiMalloc;
 

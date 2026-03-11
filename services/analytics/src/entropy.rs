@@ -1,314 +1,10 @@
+use crate::shared::*;
+use foldhash::fast::RandomState as FoldHashFast;
 use rayon::prelude::*;
-use foldhash::fast::{FixedState as FoldHashFixed, RandomState as FoldHashFast};
 use wide::f64x4;
 use polars::prelude::*;
 use pyo3_polars::derive::polars_expr;
-use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::hash::{BuildHasher, Hash, Hasher};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Kwargs (same wire format as entropy.rs)
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct PairwiseKwargs {
-    pub pairs: Option<Vec<Vec<String>>>,
-}
-
-#[derive(Deserialize)]
-pub struct ThreewayKwargs {
-    pub triplets: Option<Vec<Vec<String>>>,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Null-safe column conversion (nulls → u64::MAX)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const NULL_SENTINEL: u64 = u64::MAX;
-
-fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
-    match series.dtype() {
-        DataType::Int8 => Ok(series
-            .i8()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Int16 => Ok(series
-            .i16()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Int32 => Ok(series
-            .i32()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Int64 => Ok(series
-            .i64()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Int128 => {
-            let build_hasher = FoldHashFixed::default();
-            Ok(series
-                .i128()?
-                .iter()
-                .map(|v| match v {
-                    None => NULL_SENTINEL,
-                    Some(x) => {
-                        let mut hasher = build_hasher.build_hasher();
-                        x.hash(&mut hasher);
-                        hasher.finish()
-                    }
-                })
-                .collect())
-        }
-        DataType::UInt8 => Ok(series
-            .u8()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::UInt16 => Ok(series
-            .u16()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::UInt32 => Ok(series
-            .u32()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::UInt64 => Ok(series
-            .u64()?
-            .iter()
-            .map(|v| v.unwrap_or(NULL_SENTINEL))
-            .collect()),
-        DataType::Boolean => Ok(series
-            .bool()?
-            .iter()
-            .map(|v| match v {
-                Some(true) => 1u64,
-                Some(false) => 0u64,
-                None => NULL_SENTINEL,
-            })
-            .collect()),
-        DataType::Float32 => Ok(series
-            .f32()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x.to_bits() as u64))
-            .collect()),
-        DataType::Float64 => Ok(series
-            .f64()?
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x.to_bits()))
-            .collect()),
-        DataType::Date => Ok(series
-            .date()?
-            .phys
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Datetime(_, _) => Ok(series
-            .datetime()?
-            .phys
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Duration(_) => Ok(series
-            .duration()?
-            .phys
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Time => Ok(series
-            .time()?
-            .phys
-            .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::String => {
-            let build_hasher = FoldHashFixed::default();
-            Ok(series
-                .str()?
-                .iter()
-                .map(|v| match v {
-                    Some(s) => {
-                        let mut hasher = build_hasher.build_hasher();
-                        s.hash(&mut hasher);
-                        hasher.finish()
-                    }
-                    None => NULL_SENTINEL,
-                })
-                .collect())
-        }
-        DataType::Categorical(_, _) | DataType::Enum(_, _) => {
-            let phys = series.to_physical_repr();
-            Ok(phys
-                .u32()?
-                .iter()
-                .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-                .collect())
-        }
-        // Decimal is physically i128 with a fixed scale per-Series; hash the raw integer.
-        // to_physical_repr() strips the Decimal wrapper and returns Int128.
-        DataType::Decimal(_, _) => {
-            let build_hasher = FoldHashFixed::default();
-            let phys = series.to_physical_repr();
-            Ok(phys
-                .i128()?
-                .iter()
-                .map(|v| match v {
-                    None => NULL_SENTINEL,
-                    Some(x) => {
-                        let mut hasher = build_hasher.build_hasher();
-                        x.hash(&mut hasher);
-                        hasher.finish()
-                    }
-                })
-                .collect())
-        }
-        // List and Array: amortized_iter avoids per-row Series allocations.
-        // Recursively convert the inner element sequence to u64, then hash it
-        // as an ordered tuple so that [1,2] != [2,1] and [] != null.
-        DataType::List(_) => {
-            let build_hasher = FoldHashFixed::default();
-            let list_ca = series.list()?;
-            let mut out = Vec::with_capacity(list_ca.len());
-            for opt_inner in list_ca.amortized_iter() {
-                match opt_inner {
-                    None => out.push(NULL_SENTINEL),
-                    Some(inner) => {
-                        let vals = series_to_u64(inner.as_ref())?;
-                        let mut h = build_hasher.build_hasher();
-                        vals.len().hash(&mut h);
-                        for v in vals {
-                            v.hash(&mut h);
-                        }
-                        out.push(h.finish());
-                    }
-                }
-            }
-            Ok(out)
-        }
-        DataType::Array(_, _) => {
-            let build_hasher = FoldHashFixed::default();
-            let arr_ca = series.array()?;
-            let mut out = Vec::with_capacity(arr_ca.len());
-            for opt_inner in arr_ca.amortized_iter() {
-                match opt_inner {
-                    None => out.push(NULL_SENTINEL),
-                    Some(inner) => {
-                        let vals = series_to_u64(inner.as_ref())?;
-                        let mut h = build_hasher.build_hasher();
-                        vals.len().hash(&mut h);
-                        for v in vals {
-                            v.hash(&mut h);
-                        }
-                        out.push(h.finish());
-                    }
-                }
-            }
-            Ok(out)
-        }
-        _ => Err(PolarsError::ComputeError(
-            format!(
-                "Unsupported data type for joint entropy: {:?}. ",
-                series.dtype()
-            )
-            .into(),
-        )),
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Parallel column cache
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn build_column_cache_par(
-    inputs: &[Series],
-    needed: &HashSet<usize>,
-) -> PolarsResult<Vec<Vec<u64>>> {
-    // Collect (index, series) pairs for needed columns, convert in parallel,
-    // then scatter results back into positional Vec.
-    let tasks: Vec<(usize, &Series)> = inputs
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| needed.contains(idx))
-        .collect();
-
-    let converted: Vec<(usize, Vec<u64>)> = tasks
-        .into_par_iter()
-        .map(|(idx, series)| {
-            let data = series_to_u64(series)?;
-            Ok((idx, data))
-        })
-        .collect::<PolarsResult<Vec<_>>>()?;
-
-    let mut cache: Vec<Vec<u64>> = (0..inputs.len()).map(|_| Vec::new()).collect();
-    for (idx, data) in converted {
-        cache[idx] = data;
-    }
-    Ok(cache)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Pair / triplet resolution from kwargs
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn resolve_pairs(
-    raw_pairs: &[Vec<String>],
-    name_map: &HashMap<String, usize>,
-) -> PolarsResult<Vec<(usize, usize)>> {
-    raw_pairs
-        .iter()
-        .map(|pair| {
-            if pair.len() != 2 {
-                return Err(PolarsError::ComputeError(
-                    format!("Each pair must have exactly 2 column names, got {}", pair.len())
-                        .into(),
-                ));
-            }
-            let i = *name_map.get(&pair[0]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(pair[0].clone().into())
-            })?;
-            let j = *name_map.get(&pair[1]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(pair[1].clone().into())
-            })?;
-            Ok((i, j))
-        })
-        .collect()
-}
-
-fn resolve_triplets(
-    raw_triplets: &[Vec<String>],
-    name_map: &HashMap<String, usize>,
-) -> PolarsResult<Vec<(usize, usize, usize)>> {
-    raw_triplets
-        .iter()
-        .map(|triplet| {
-            if triplet.len() != 3 {
-                return Err(PolarsError::ComputeError(
-                    format!(
-                        "Each triplet must have exactly 3 column names, got {}",
-                        triplet.len()
-                    )
-                    .into(),
-                ));
-            }
-            let i = *name_map.get(&triplet[0]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(triplet[0].clone().into())
-            })?;
-            let j = *name_map.get(&triplet[1]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(triplet[1].clone().into())
-            })?;
-            let k = *name_map.get(&triplet[2]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(triplet[2].clone().into())
-            })?;
-            Ok((i, j, k))
-        })
-        .collect()
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SIMD entropy from count-of-counts
@@ -491,10 +187,10 @@ pub(crate) fn pairwise_joint_entropy_impl(
         entropy_values.push(e);
     }
 
-    let col_a_s = StringChunked::from_iter(col_a_names.iter().map(|s| s.as_str()))
+    let col_a_s = StringChunked::from_iter(col_a_names.iter().map(|s: &String| s.as_str()))
         .into_series()
         .with_name("col_a".into());
-    let col_b_s = StringChunked::from_iter(col_b_names.iter().map(|s| s.as_str()))
+    let col_b_s = StringChunked::from_iter(col_b_names.iter().map(|s: &String| s.as_str()))
         .into_series()
         .with_name("col_b".into());
     let entropy_s = Float64Chunked::from_vec("entropy".into(), entropy_values).into_series();
@@ -648,13 +344,13 @@ pub(crate) fn threeway_joint_entropy_impl(
         entropy_values.push(e);
     }
 
-    let col_a_s = StringChunked::from_iter(col_a_names.iter().map(|s| s.as_str()))
+    let col_a_s = StringChunked::from_iter(col_a_names.iter().map(|s: &String| s.as_str()))
         .into_series()
         .with_name("col_a".into());
-    let col_b_s = StringChunked::from_iter(col_b_names.iter().map(|s| s.as_str()))
+    let col_b_s = StringChunked::from_iter(col_b_names.iter().map(|s: &String| s.as_str()))
         .into_series()
         .with_name("col_b".into());
-    let col_c_s = StringChunked::from_iter(col_c_names.iter().map(|s| s.as_str()))
+    let col_c_s = StringChunked::from_iter(col_c_names.iter().map(|s: &String| s.as_str()))
         .into_series()
         .with_name("col_c".into());
     let entropy_s = Float64Chunked::from_vec("entropy".into(), entropy_values).into_series();
@@ -680,6 +376,7 @@ fn threeway_joint_entropy(inputs: &[Series], kwargs: ThreewayKwargs) -> PolarsRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::*;
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 

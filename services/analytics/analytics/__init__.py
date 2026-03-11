@@ -49,6 +49,49 @@ def pairwise_joint_entropy(
         ).alias("pairwise_entropy")
     )
 
+def pairwise_chi_squared(
+    df: pl.DataFrame | pl.LazyFrame,
+    pairs: list[tuple[str, str]] | None = None,
+) -> pl.DataFrame:
+    """
+    Calculate pairwise chi-squared independence statistics using the Rust plugin.
+
+    Parameters
+    ----------
+    df : pl.DataFrame or pl.LazyFrame
+        Input data. LazyFrames will be collected.
+    pairs : list of (str, str) tuples, optional
+        Specific column pairs to test.
+        When None (default), computes all N-choose-2 combinations.
+
+    Returns
+    -------
+    pl.DataFrame
+        Single column "pairwise_chi_squared" containing structs with:
+        - col_a: String - First column name
+        - col_b: String - Second column name
+        - chi2_stat: f64 - Chi-squared test statistic
+        - p_value: f64 - P-value for the independence test
+        - cramers_v: f64 - Cramer's V effect size (0=no association, 1=perfect)
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    kwargs_dict = {
+        "pairs": [list(p) for p in pairs] if pairs is not None else None
+    }
+
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="pairwise_chi_squared",
+            args=df.get_columns(),
+            kwargs=kwargs_dict,
+            is_elementwise=False,
+        ).alias("pairwise_chi_squared")
+    )
+
+
 def threeway_joint_entropy(
     df: pl.DataFrame | pl.LazyFrame,
     triplets: list[tuple[str, str, str]] | None = None,
