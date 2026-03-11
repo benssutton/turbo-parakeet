@@ -179,16 +179,17 @@ fn compute_chi_squared(col_a: &[u64], col_b: &[u64]) -> (f64, f64, f64) {
 
     let n_f = n_valid as f64;
 
-    // Second pass over joint freq map: compute chi-squared statistic.
+    // Second pass: iterate all (row, col) marginal combinations, including
+    // zero-observation cells (O=0 contributes E to the chi2 sum and must not be skipped).
     let mut chi2_stat = 0.0f64;
-    for (&key, &obs) in &joint {
-        let a_key = (key >> 64) as u64;
-        let b_key = (key & 0xFFFF_FFFF_FFFF_FFFF) as u64;
-        let row_total = *row_m.get(&a_key).unwrap() as f64;
-        let col_total = *col_m.get(&b_key).unwrap() as f64;
-        let expected = row_total * col_total / n_f;
-        let diff = obs as f64 - expected;
-        chi2_stat += diff * diff / expected;
+    for (&a_key, &row_total) in &row_m {
+        for (&b_key, &col_total) in &col_m {
+            let key = (a_key as u128) << 64 | (b_key as u128);
+            let obs = *joint.get(&key).unwrap_or(&0);
+            let expected = row_total as f64 * col_total as f64 / n_f;
+            let diff = obs as f64 - expected;
+            chi2_stat += diff * diff / expected;
+        }
     }
 
     // Degrees of freedom = (unique_a - 1) * (unique_b - 1).
