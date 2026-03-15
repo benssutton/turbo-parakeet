@@ -9,6 +9,77 @@ PLUGIN_PATH = Path(__file__).parent
 
 __version__ = "0.1.0"
 
+@pl.api.register_expr_namespace("analytics")
+class AnalyticFunctions:
+    def __init__(self, expr: pl.Expr) -> None:
+        self._expr = expr
+    #TODO: pyo3 supports bytes in version 27 and above, however pyo3-polars currently requires version 26.  When pyo3-polars upgrades to pyo3 v27 or above, pass bytes between python and the rust plugin
+    def bloom_filter(self,
+                        existing_filter: list[int],
+                        k: int,
+                        m: int) -> pl.Expr:
+        return register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="bloom_filter",
+            args=self._expr,
+            kwargs={
+                "bit_array_bytes": existing_filter or [],
+                "k": k,
+                "m": m
+            },
+            is_elementwise=True,
+        )
+
+    def membership(self,
+                        bit_array_bytes: list[int],
+                        k: int,
+                        m: int) -> pl.Expr:
+        return register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="membership",
+            args=self._expr,
+            kwargs={
+                "bit_array_bytes": bit_array_bytes,
+                "k": k,
+                "m": m
+            },
+            is_elementwise=True,
+        )
+
+    def membership_ratio(self,
+                        bit_array_bytes: list[int],
+                        k: int,
+                        m: int) -> pl.Expr:
+        return register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="membership_ratio",
+            args=self._expr,
+            kwargs={
+                "bit_array_bytes": bit_array_bytes,
+                "k": k,
+                "m": m
+            },
+            is_elementwise=True,
+        )
+
+    def membership_ratio_sample(self,
+                        bit_array_bytes: list[int],
+                        k: int,
+                        m: int,
+                        sample_frac: float) -> pl.Expr:
+        return register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="membership_ratio_sample",
+            args=self._expr,
+            kwargs={
+                "bit_array_bytes": bit_array_bytes,
+                "k": k,
+                "m": m,
+                "sample_frac": sample_frac,
+            },
+            is_elementwise=True,
+        )
+
 def pairwise_joint_entropy(
     df: pl.DataFrame | pl.LazyFrame,
     pairs: list[tuple[str, str]] | None = None,
@@ -42,7 +113,7 @@ def pairwise_joint_entropy(
     return df.select(
         register_plugin_function(
             plugin_path=PLUGIN_PATH,
-            function_name="pairwise_joint_entropy_v2",
+            function_name="pairwise_joint_entropy",
             args=df.get_columns(),
             kwargs=kwargs_dict,
             is_elementwise=False,

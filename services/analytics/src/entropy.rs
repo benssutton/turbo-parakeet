@@ -1,10 +1,11 @@
-use crate::shared::*;
 use foldhash::fast::RandomState as FoldHashFast;
 use rayon::prelude::*;
 use wide::f64x4;
 use polars::prelude::*;
 use pyo3_polars::derive::polars_expr;
 use std::collections::{HashMap, HashSet};
+
+use crate::shared::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SIMD entropy from count-of-counts
@@ -72,7 +73,7 @@ pub(crate) fn pairwise_joint_entropy_impl(
 ) -> PolarsResult<Series> {
     if inputs.is_empty() {
         return Err(PolarsError::ComputeError(
-            "pairwise_joint_entropy_v2 requires at least one column".into(),
+            "pairwise_joint_entropy requires at least one column".into(),
         ));
     }
 
@@ -205,7 +206,7 @@ pub(crate) fn pairwise_joint_entropy_impl(
 }
 
 #[polars_expr(output_type_func=pairwise_entropy_output_type)]
-fn pairwise_joint_entropy_v2(inputs: &[Series], kwargs: PairwiseKwargs) -> PolarsResult<Series> {
+fn pairwise_joint_entropy(inputs: &[Series], kwargs: PairwiseKwargs) -> PolarsResult<Series> {
     pairwise_joint_entropy_impl(inputs, kwargs)
 }
 
