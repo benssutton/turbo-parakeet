@@ -9,6 +9,10 @@ PLUGIN_PATH = Path(__file__).parent
 
 __version__ = "0.1.0"
 
+"""
+Bloom Filter
+"""
+
 @pl.api.register_expr_namespace("analytics")
 class AnalyticFunctions:
     def __init__(self, expr: pl.Expr) -> None:
@@ -46,39 +50,95 @@ class AnalyticFunctions:
             is_elementwise=True,
         )
 
-    def membership_ratio(self,
-                        bit_array_bytes: list[int],
-                        k: int,
-                        m: int) -> pl.Expr:
-        return register_plugin_function(
+def membership_ratio(
+    df: pl.DataFrame | pl.LazyFrame,
+    bit_array_bytes: list[int],
+    k: int,
+    m: int,
+) -> pl.DataFrame:
+    """
+    Calculate membership ratio for each column independently against a bloom filter.
+
+    Parameters
+    ----------
+    df : pl.DataFrame or pl.LazyFrame
+        Input data. LazyFrames will be collected.
+    bit_array_bytes : list[int]
+        The bloom filter bit array as a list of bytes.
+    k : int
+        Number of hash functions used in the bloom filter.
+    m : int
+        Size of the bloom filter bit array in bytes.
+
+    Returns
+    -------
+    pl.DataFrame
+        Single column "membership_ratio" containing structs with:
+        - col_name: String - Column name
+        - ratio_all: f64 - Fraction found (nulls counted in denominator)
+        - ratio_non_null: f64 - Fraction found (nulls excluded from denominator)
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    return df.select(
+        register_plugin_function(
             plugin_path=PLUGIN_PATH,
             function_name="membership_ratio",
-            args=self._expr,
-            kwargs={
-                "bit_array_bytes": bit_array_bytes,
-                "k": k,
-                "m": m
-            },
-            is_elementwise=True,
-        )
+            args=df.get_columns(),
+            kwargs={"bit_array_bytes": bit_array_bytes, "k": k, "m": m},
+            is_elementwise=False,
+        ).alias("membership_ratio")
+    )
 
-    def membership_ratio_sample(self,
-                        bit_array_bytes: list[int],
-                        k: int,
-                        m: int,
-                        sample_frac: float) -> pl.Expr:
-        return register_plugin_function(
+def membership_ratio_sample(
+    df: pl.DataFrame | pl.LazyFrame,
+    bit_array_bytes: list[int],
+    k: int,
+    m: int,
+    sample_frac: float = 0.05,
+) -> pl.DataFrame:
+    """
+    Calculate membership ratio for each column independently, using a random sample.
+
+    Parameters
+    ----------
+    df : pl.DataFrame or pl.LazyFrame
+        Input data. LazyFrames will be collected.
+    bit_array_bytes : list[int]
+        The bloom filter bit array as a list of bytes.
+    k : int
+        Number of hash functions used in the bloom filter.
+    m : int
+        Size of the bloom filter bit array in bytes.
+    sample_frac : float, optional
+        Fraction of each column to sample (default 0.05 = 5%).
+
+    Returns
+    -------
+    pl.DataFrame
+        Single column "membership_ratio_sample" containing structs with:
+        - col_name: String - Column name
+        - ratio_all: f64 - Fraction found in sample (nulls in denominator)
+        - ratio_non_null: f64 - Fraction found in sample (nulls excluded)
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    return df.select(
+        register_plugin_function(
             plugin_path=PLUGIN_PATH,
             function_name="membership_ratio_sample",
-            args=self._expr,
-            kwargs={
-                "bit_array_bytes": bit_array_bytes,
-                "k": k,
-                "m": m,
-                "sample_frac": sample_frac,
-            },
-            is_elementwise=True,
-        )
+            args=df.get_columns(),
+            kwargs={"bit_array_bytes": bit_array_bytes, "k": k, "m": m, "sample_frac": sample_frac},
+            is_elementwise=False,
+        ).alias("membership_ratio_sample")
+    )
+
+
+"""
+Entropy Calculation
+"""
 
 def pairwise_joint_entropy(
     df: pl.DataFrame | pl.LazyFrame,
@@ -119,6 +179,51 @@ def pairwise_joint_entropy(
             is_elementwise=False,
         ).alias("pairwise_entropy")
     )
+
+def threeway_joint_entropy(
+    df: pl.DataFrame | pl.LazyFrame,
+    triplets: list[tuple[str, str, str]] | None = None,
+) -> pl.DataFrame:
+    """
+    Calculate 3-way joint entropy for column triplet combinations (v2).
+
+    Parameters
+    ----------
+    df : pl.DataFrame or pl.LazyFrame
+        Input data with columns to analyze. LazyFrames will be collected.
+    triplets : list of (str, str, str) tuples, optional
+        Specific column triplets to compute entropy for.
+        When None (default), computes all N-choose-3 combinations (up to 5000).
+
+    Returns
+    -------
+    pl.DataFrame
+        Single column "threeway_entropy" containing structs with:
+        - col_a: String - First column name
+        - col_b: String - Second column name
+        - col_c: String - Third column name
+        - entropy: f64 - Joint entropy H(A,B,C) in bits
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    kwargs_dict = {
+        "triplets": [list(t) for t in triplets] if triplets is not None else None
+    }
+
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="threeway_joint_entropy",
+            args=df.get_columns(),
+            kwargs=kwargs_dict,
+            is_elementwise=False,
+        ).alias("threeway_entropy")
+    )
+
+"""
+Chi Squared Independence Test
+"""
 
 def pairwise_chi_squared(
     df: pl.DataFrame | pl.LazyFrame,
@@ -162,44 +267,103 @@ def pairwise_chi_squared(
         ).alias("pairwise_chi_squared")
     )
 
+"""
+Min Hash LSH
+"""
 
-def threeway_joint_entropy(
+def minhash(
     df: pl.DataFrame | pl.LazyFrame,
-    triplets: list[tuple[str, str, str]] | None = None,
+    name: str,
+    num_perm: int = 128,
 ) -> pl.DataFrame:
     """
-    Calculate 3-way joint entropy for column triplet combinations (v2).
+    Compute MinHash signatures for all columns in a DataFrame.
 
-    Parameters
-    ----------
-    df : pl.DataFrame or pl.LazyFrame
-        Input data with columns to analyze. LazyFrames will be collected.
-    triplets : list of (str, str, str) tuples, optional
-        Specific column triplets to compute entropy for.
-        When None (default), computes all N-choose-3 combinations (up to 5000).
+    This function processes all columns in parallel using a Rust implementation,
+    returning a DataFrame with qualified names and MinHash signatures that is
+    directly compatible with find_lsh_candidates().
 
-    Returns
-    -------
-    pl.DataFrame
-        Single column "threeway_entropy" containing structs with:
-        - col_a: String - First column name
-        - col_b: String - Second column name
-        - col_c: String - Third column name
-        - entropy: f64 - Joint entropy H(A,B,C) in bits
+    Args:
+        df: DataFrame with columns to compute MinHash signatures for.
+            Each column should contain the unique values to hash.
+        name: Name prefix for qualified column names (e.g., "df0").
+              Column names will be formatted as "{name}|{column_name}".
+        num_perm: Number of hash permutations (default: 128).
+                 Higher values give more accurate similarity estimates.
+
+    Returns:
+        DataFrame with columns:
+        - qualified_name: String column with "{name}|{column_name}" format
+        - minhash: List[UInt32] column with MinHash signatures
+
+    Example:
+        >>> from analytics import compute_minhash_batch, find_lsh_candidates
+        >>> df = pl.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
+        >>> minhashes = compute_minhash_batch(df, "df0", num_perm=64)
+        >>> # minhashes has columns: qualified_name, minhash
+        >>> # Can be directly used with find_lsh_candidates
     """
-    if isinstance(df, pl.LazyFrame):
-        df = df.collect()
+    # Pack all columns into a struct expression
+    struct_expr = pl.struct(pl.all())
 
-    kwargs_dict = {
-        "triplets": [list(t) for t in triplets] if triplets is not None else None
-    }
-
-    return df.select(
+    # Call the plugin - returns M rows (one per column), using changes_length=True
+    # to allow output length to differ from input length
+    result = df.select(
         register_plugin_function(
             plugin_path=PLUGIN_PATH,
-            function_name="threeway_joint_entropy",
-            args=df.get_columns(),
-            kwargs=kwargs_dict,
+            function_name="minhash",
+            args=struct_expr,
+            kwargs={"df_name": name, "num_perm": num_perm},
             is_elementwise=False,
-        ).alias("threeway_entropy")
+            changes_length=True,
+        )
+    )
+
+    # Unnest the struct to get qualified_name and minhash columns
+    return result.unnest(result.columns[0]).collect()
+
+def lsh_candidates(
+    names: IntoExpr,
+    signatures: IntoExpr,
+    threshold: float = 0.5,
+    num_bands: int | None = None,
+    rows_per_band: int | None = None
+) -> pl.Expr:
+    """
+    Find candidate pairs using Locality Sensitive Hashing on MinHash signatures.
+
+    LSH partitions MinHash signatures into bands and finds items that
+    hash to the same bucket in at least one band.
+
+    Args:
+        names: Expression for the qualified names column (Utf8/String)
+        signatures: Expression for the MinHash signatures column (List[UInt32])
+        threshold: Jaccard similarity threshold (default: 0.5)
+        num_bands: Number of bands to partition signature into.
+        rows_per_band: Rows per band. If None, automatically computed.
+        num_perm: Number of permutations used for MinHash (default: 128).
+
+    Returns:
+        Polars expression returning candidate pairs as a Struct with
+        fields (col_a: Utf8, col_b: Utf8).
+
+    Example:
+        >>> from analytics import find_lsh_candidates
+        >>> df.select(find_lsh_candidates(
+        ...     pl.col("name"),
+        ...     pl.col("minhash"),
+        ...     threshold=0.6
+        ... ))
+    """
+
+    return register_plugin_function(
+        plugin_path=PLUGIN_PATH,
+        function_name="lsh_candidates",
+        args=[names, signatures],
+        kwargs={
+            "threshold": threshold,
+            "num_bands": num_bands,
+            "rows_per_band": rows_per_band,
+        },
+        is_elementwise=False,
     )

@@ -10,8 +10,8 @@ crate-type = ["cdylib"] # dynamic system library with a C-compatible Foreign Fun
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-bytes = { version = "1.10"}
-bitvec = { version = "1.0.1", features = ["serde"] }
+# bytes = { version = "1.10"}
+# bitvec = { version = "1.0.1", features = ["serde"] }
 
 #Polars and pyo3
 polars = { version = "0.51.0", features = ["lazy", "performant", "dtype-decimal"] }
@@ -20,12 +20,7 @@ pyo3 = { version = "0.25.0", features = ["extension-module", "abi3-py39"] }
 pyo3-polars = { version = "0.24.0", features = ["derive", "dtype-struct", "dtype-array", "dtype-categorical", "dtype-decimal", "lazy"] }
 
 #Concurrent hashmaps & hashing functions
-scc = "2"
-murmur3 = "0.5"
-wyhash = "0.5"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-ahash = "0.8"       # Fast non-cryptographic hashing for MinHash
-rustc-hash = "2.1"
 foldhash = "0.1"
 
 #Parallelism
@@ -34,10 +29,6 @@ rayon = "1.10"
 #SIMD
 wide = "0.7"        # Portable SIMD operations
 mimalloc = "0.1.48"
-
-#Random
-rand = "0.8"
-rand_xoshiro = "0.6"
 
 #Statistics
 statrs = "0.18"
