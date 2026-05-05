@@ -14,16 +14,13 @@ from pathlib import Path
 from itertools import combinations
 import sys
 
-# Add parent directory to path to import plugin
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from analytics import (
     pairwise_joint_entropy,
     threeway_joint_entropy,
 )
 
 # Data file path
-DATA_PATH = Path(__file__).parent.parent / "data/large_dataset.arrow"
+DATA_PATH = Path(__file__).parent / "data/large_dataset.arrow"
 
 
 def load_data() -> pl.LazyFrame:

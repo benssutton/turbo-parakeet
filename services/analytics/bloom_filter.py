@@ -1,5 +1,4 @@
 import math
-from typing import NamedTuple
 
 import polars as pl
 
@@ -7,8 +6,26 @@ import analytics
 
 class BloomFilter:
     """
-    Bloom filter backed by a Rust/Polars plugin for high-performance membership testing.
-    Operates on a single column; the caller is responsible for selecting the column to test.
+    Class to create and check membership against a Bloom filter
+
+    A note on Bloom filters...
+
+    Bloom filters are performant mechanisms for checking membership between two sets of data.
+    They achieve this by hashing values and permitting hash collisions with a given probability.
+
+    This means that Bloom filters may return false positives, but will never return false negatives,
+    i.e. if the membership function of a Bloom filter says an item is not present, then it is
+    deterministically not present.  However, if a Bloom filter is created with a 1% false positive
+    rate, if the Bloom filter membership function says and item is present, then it is 99% likely
+    to be present.
+
+    It is this ability to reason mathematically about the probability of hash collisions that
+    makes Bloom filters useful whilc still being probabilistic and performant.
+
+    See the following for more details:
+    https://www.geeksforgeeks.org/python/bloom-filters-introduction-and-python-implementation/
+    https://en.wikipedia.org/wiki/Bloom_filter
+
     """
     def __init__(self, expected_element_count: int, false_positive_rate: float = 0.01):
         self.expected_element_count = expected_element_count
@@ -26,13 +43,19 @@ class BloomFilter:
 
     @staticmethod
     def _calculate_bit_array_size(n: int, p: float) -> int:
-        """Calculate optimal bit array size in *bytes*."""
+        """
+        Calculate optimal bit array size in *bytes*, m, where
+        m = -(n *lg(p)) / (lg(2)^2) - rounded up to the nearest byte
+        """
         m = -(n * math.log(p)) / (math.log(2) ** 2)
         return (int(math.ceil(m)) + 7) // 8 * 8
 
     @staticmethod
     def _calculate_num_hash_functions(m: int, n: int) -> int:
-        """Calculate optimal number of hash functions."""
+        """
+        Calculate optimal number of hash functions, k, where 
+        k = (m/n) * lg(2) where m is the number of bits
+        """
         k = (m / n) * math.log(2)
         return max(1, int(math.ceil(k)))
 
@@ -52,7 +75,10 @@ class BloomFilter:
         self.num_elements_added += len(df)
 
     def membership(self, data: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
-        """Check membership for each item in the first column. Returns a Boolean Series."""
+        """
+        Check for membership for each item in the first column. Returns a Series of
+        True/False indicating membership.
+        """
         df = self._collect(data)
         col = df.columns[0]
         return df.select(
@@ -65,7 +91,8 @@ class BloomFilter:
 
     def membership_ratio(self, df: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
         """
-        Return the fraction of items in the first column found in the bloom filter.
+        Return the fraction of items found in the bloom filter for all columns
+        in the given LazyFrame.
         """
         result = analytics.membership_ratio(
             df,
@@ -81,16 +108,8 @@ class BloomFilter:
         sample_frac: float = 0.05,
     ) -> pl.DataFrame:
         """
-        Return the membership ratio for a random sample of items.
-
-        Used for early-exit optimisation: if a sample shows low membership,
-        skip checking the full dataset.
-
-        Parameters
-        ----------
-        data : LazyFrame or DataFrame
-        sample_frac : float
-            Fraction of items to sample (default 0.05 = 5%).
+        Return the membership ratio for a random sample of items for all
+        columns in the LazyFrame.
         """
         result = analytics.membership_ratio_sample(
             df,
@@ -102,5 +121,7 @@ class BloomFilter:
         return result.unnest("membership_ratio_sample")
 
     def __len__(self) -> int:
-        """Return the number of elements added to the filter."""
+        """
+        Return the number of elements added to the filter.
+        """
         return self.num_elements_added

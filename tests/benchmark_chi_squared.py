@@ -23,18 +23,13 @@ from pathlib import Path
 
 import polars as pl
 
-# chi_squared service is a pure-Python package; add its root to sys.path
-# so it can be imported without a prior `pip install`.
-_SERVICES_ROOT = Path(__file__).parent.parent.parent / "services" / "chi_squared"
-sys.path.insert(0, str(_SERVICES_ROOT))
-
-_ANALYTICS_ROOT = Path(__file__).parent.parent.parent / "services" / "analytics"
+_ANALYTICS_ROOT = Path(__file__).parent.parent / "services" / "analytics"
 sys.path.insert(0, str(_ANALYTICS_ROOT))
 
 from chi_squared import _get_suitable_columns, pairwise_chi_squared as pairwise_chi_squared_pds
 from analytics import pairwise_chi_squared as pairwise_chi_squared_rust
 
-DATA_PATH = Path(__file__).parent.parent / "data" / "large_dataset.arrow"
+DATA_PATH = Path(__file__).parent / "data" / "large_dataset.arrow"
 
 # Upper cardinality bound passed to pairwise_chi_squared and used to filter
 # columns. Chi-squared on near-unique columns is statistically meaningless and

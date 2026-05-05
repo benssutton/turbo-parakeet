@@ -6,10 +6,6 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use crate::shared::{NULL_SENTINEL, series_to_u64, build_column_cache_par};
 
-////////////////////////////////////////////////////////////////////////
-///  Bloom filter functions to calculate the membership of large sets
-////////////////////////////////////////////////////////////////////////
-
 /// Set a bit at the given index in a byte array
 #[inline(always)]
 fn set_bit(bytes: &mut [u8], bit_index: usize) {
@@ -48,10 +44,6 @@ struct MembershipRatioSampleKwargs {
     m: usize,
     sample_frac: f64,
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// bloom_filter
-// ─────────────────────────────────────────────────────────────────────────────
 
 fn bloom_filter_impl(series: &Series, kwargs: BloomFilterKwargs) -> PolarsResult<Vec<u8>> {
     let values = series_to_u64(series)?;
@@ -93,10 +85,6 @@ pub fn bloom_filter(inputs: &[Series], kwargs: BloomFilterKwargs) -> PolarsResul
     Ok(Series::new("bloom_filter".into(), &[bytes]))
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// membership
-// ─────────────────────────────────────────────────────────────────────────────
-
 fn membership_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<Series> {
     let values = series_to_u64(series)?;
     let bit_array = &kwargs.bit_array_bytes;
@@ -118,7 +106,6 @@ fn membership_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<S
 }
 
 /// Check membership for all items in a Polars Series against a Bloom filter.
-/// Returns a Boolean Series (one value per row).
 #[polars_expr(output_type=Boolean)]
 pub fn membership(inputs: &[Series], kwargs: MembershipKwargs) -> PolarsResult<Series> {
     membership_impl(&inputs[0], &kwargs)
