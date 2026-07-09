@@ -1,0 +1,6 @@
+*.pyc
+*.pyd
+*.pdb
+Cargo.lock
+__pycache__/
+target/
