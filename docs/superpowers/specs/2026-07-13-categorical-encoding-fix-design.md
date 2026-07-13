@@ -60,11 +60,18 @@ byte-identical to the `String` branch, which is the correct semantic.
 - **Resolve in Rust, not Python.** Rust already holds the rev-map; resolving
   inline avoids serializing category mappings across the FFI boundary and keeps
   the Python wrapper ignorant of categorical internals.
-- **Per-unique lookup, not per-row string hash.** Categoricals have few uniques,
-  so hash each distinct category once into a `Vec<u64>` indexed by code, then map
-  each row's code through the table: O(n_unique) hashes + O(n) lookups. This is
-  faster than the current per-row code cast's downstream cost and than a naive
-  per-row string hash.
+- **Cast to String, reuse the String branch.** Polars 0.51 reworked categorical
+  into a generic `CategoricalChunked<T>` (u8/u16/u32 physical widths) with
+  `get_mapping()`/`iter_str()` and no `get_rev_map`/always-u32 `physical()`. The
+  robust, version-stable way to resolve categories to strings is `series.cast(
+  &DataType::String)` — polars-core implements this cast for both `Categorical`
+  and `Enum`, preserving nulls, and handles all physical widths internally. The
+  encode arm then runs the identical logic as the existing `String` branch on the
+  cast result. This needs no categorical-specific accessors and cannot drift with
+  the categorical internals. Cost: one transient `String` ChunkedArray allocation
+  per categorical column encoded (~50K string views at project scale) plus a
+  per-row foldhash — negligible, and simpler than a per-unique lookup that would
+  have to handle the generic physical width by hand.
 
 ## Change
 
@@ -72,24 +79,25 @@ byte-identical to the `String` branch, which is the correct semantic.
 
 ```rust
 DataType::Categorical(_, _) | DataType::Enum(_, _) => {
+    // Resolve categories to their string values so a categorical "x" encodes
+    // identically to the string "x" (and identically across frames, regardless
+    // of per-Series physical code assignment). Casting to String is version-
+    // stable across the Polars 0.51 generic-categorical rework and preserves
+    // nulls; from here the logic is identical to the String branch.
     let build_hasher = FoldHashFixed::default();
-    let ca = series.categorical()?;
-    let rev_map = ca.get_rev_map();
-    // Hash each distinct category once; physical codes index into this table.
-    let code_hashes: Vec<u64> = (0..rev_map.len() as u32)
-        .map(|code| hash_one(&build_hasher, rev_map.get(code)))
-        .collect();
-    ca.physical()
+    let str_series = series.cast(&DataType::String)?;
+    str_series
+        .str()?
         .iter()
-        .map(|v| v.map_or((0, true), |code| (code_hashes[code as usize], false)))
+        .map(|v| v.map_or((0, true), |s| (hash_one(&build_hasher, s), false)))
         .unzip()
 }
 ```
 
-Exact Polars API names (`get_rev_map`, `physical`, `RevMapping::get`/`len`) and
-whether `Series::categorical()` accepts an `Enum` dtype are confirmed at build
-time. If `Enum` needs separate handling, it is branched out using the same
-string-resolution logic against the enum's category list.
+Verified against polars-core 0.51.0: `LogicalType::cast_with_options` for
+`CategoricalChunked` implements the `DataType::String` target for both
+`Categorical` and `Enum`, appending nulls as null. `Series::cast` and the
+`.str()` accessor on the resulting String series are stable core APIs.
 
 ### 2. Ripple updates
 
