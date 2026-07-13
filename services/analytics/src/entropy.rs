@@ -52,7 +52,7 @@ fn entropy_from_count_of_counts(coc: &[(u64, u64)], logr: f64, r_f: f64) -> f64 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pairwise (2-way) v2
+// Pairwise (2-way)
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn pairwise_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
@@ -214,7 +214,7 @@ fn pairwise_joint_entropy(inputs: &[Series], kwargs: PairwiseKwargs) -> PolarsRe
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Threeway (3-way) v2
+// Threeway (3-way)
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn threeway_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
@@ -236,7 +236,7 @@ pub(crate) fn threeway_joint_entropy_impl(
 ) -> PolarsResult<Series> {
     if inputs.len() < 3 {
         return Err(PolarsError::ComputeError(
-            "threeway_joint_entropy_v2 requires at least three columns".into(),
+            "threeway_joint_entropy requires at least three columns".into(),
         ));
     }
 

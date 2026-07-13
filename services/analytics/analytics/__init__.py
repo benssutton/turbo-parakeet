@@ -320,7 +320,7 @@ def minhash(
     )
 
     # Unnest the struct to get qualified_name and minhash columns
-    return result.unnest(result.columns[0]).collect()
+    return result.unnest(result.columns[0])
 
 def lsh_candidates(
     names: IntoExpr,

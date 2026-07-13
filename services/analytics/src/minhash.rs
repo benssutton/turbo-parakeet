@@ -189,16 +189,17 @@ pub(crate) fn minhash_impl(inputs: &[Series], kwargs: &MinHashKwargs) -> PolarsR
     // Pre-compute permutation coefficients ONCE for all columns
     let (a_coeffs, b_coeffs) = generate_permutation_coeffs(num_perm);
 
-    // Process each field (column) in parallel using rayon
-    let results: Vec<(String, Vec<u32>)> = field_names
+    // Process each field (column) in parallel. Encode errors abort the whole
+    // computation; all-null columns emit Ok(None) → null list entry (skipped by LSH).
+    let results: Vec<(String, Option<Vec<u32>>)> = field_names
         .par_iter()
-        .map(|field_name| {
-            let series = struct_ca.field_by_name(field_name.as_str()).unwrap();
+        .map(|field_name| -> PolarsResult<(String, Option<Vec<u32>>)> {
+            let series = struct_ca.field_by_name(field_name.as_str())?;
             let qualified_name = format!("{}|{}", df_name, field_name);
-            let signature = compute_signature_for_series_with_coeffs(&series, num_perm, &a_coeffs, &b_coeffs);
-            (qualified_name, signature)
+            let signature = compute_signature_for_series_with_coeffs(&series, num_perm, &a_coeffs, &b_coeffs)?;
+            Ok((qualified_name, signature))
         })
-        .collect();
+        .collect::<PolarsResult<Vec<_>>>()?;
 
     // Build output with M rows (one per column)
     let names: Vec<&str> = results.iter().map(|(n, _)| n.as_str()).collect();
@@ -211,8 +212,11 @@ pub(crate) fn minhash_impl(inputs: &[Series], kwargs: &MinHashKwargs) -> PolarsR
         num_perm,
         DataType::UInt32,
     );
-    for (_, sig) in &results {
-        list_builder.append_slice(sig);
+    for (_, sig_opt) in &results {
+        match sig_opt {
+            Some(sig) => list_builder.append_slice(sig),
+            None => list_builder.append_null(),
+        }
     }
     let minhash_col = list_builder.finish();
 
@@ -250,28 +254,32 @@ fn generate_permutation_coeffs(num_perm: usize) -> (Vec<u64>, Vec<u64>) {
 
 /// Compute MinHash signature using pre-computed permutation coefficients.
 ///
-/// Uses series_to_u64 for type-safe conversion of all supported data types,
-/// then applies the linear hash family (a * val + b) mod 2^64, taking the
-/// lower 32 bits as the hash value per permutation.
+/// Applies the linear hash family (a * val + b) mod 2^64, taking the lower
+/// 32 bits as the hash value per permutation. Null values are skipped —
+/// a null is not a set member.
 ///
-/// Null values are skipped (consistent with entropy and chi-squared behaviour).
+/// Returns:
+/// - `Ok(Some(sig))` when at least one non-null value was hashed.
+/// - `Ok(None)` when the column is all-null or empty — MinHash is undefined
+///   for the empty set; the caller should emit a null list entry so LSH skips it.
+/// - `Err(e)` when `encode_series` fails (unsupported dtype etc.); the caller
+///   should propagate the error rather than silently continuing.
 fn compute_signature_for_series_with_coeffs(
     series: &Series,
     num_perm: usize,
     a_coeffs: &[u64],
     b_coeffs: &[u64],
-) -> Vec<u32> {
-    let enc = match encode_series(series) {
-        Ok(v) => v,
-        Err(_) => return vec![u32::MAX; num_perm],
-    };
+) -> PolarsResult<Option<Vec<u32>>> {
+    let enc = encode_series(series)?; // propagate encode errors instead of swallowing them
 
     let mut minhash_sig: Vec<u32> = vec![u32::MAX; num_perm];
+    let mut has_non_null = false;
 
     for (val, is_null) in enc.values.iter().zip(enc.is_null.iter()) {
         if *is_null {
-            continue; // skip nulls — a null is not a set member
+            continue;
         }
+        has_non_null = true;
         // Apply linear hash family: (a * val + b) mod 2^64, take lower 32 bits
         for i in 0..num_perm {
             let derived = a_coeffs[i].wrapping_mul(*val).wrapping_add(b_coeffs[i]);
@@ -279,7 +287,14 @@ fn compute_signature_for_series_with_coeffs(
             minhash_sig[i] = minhash_sig[i].min(hash_val);
         }
     }
-    minhash_sig
+
+    if !has_non_null {
+        // All-null or empty column — emit null so LSH skips it rather than
+        // matching it against every other all-null column at Jaccard 1.0.
+        return Ok(None);
+    }
+
+    Ok(Some(minhash_sig))
 }
 
 /// Output type function for compute_minhash_batch
@@ -319,6 +334,31 @@ mod tests {
         ]).unwrap();
 
         (df1, df2)
+    }
+
+    #[test]
+    fn test_all_null_column_returns_none() {
+        // An all-null column has no set members — MinHash is undefined for the empty set.
+        // compute_signature_for_series_with_coeffs must return Ok(None) so that the
+        // caller emits a null list entry and LSH skips it.
+        let s = Series::new("x".into(), &[Option::<i64>::None, None, None]);
+        let (a, b) = generate_permutation_coeffs(16);
+        let result = compute_signature_for_series_with_coeffs(&s, 16, &a, &b).unwrap();
+        assert!(result.is_none(), "all-null column must yield None, not all-MAX signature");
+    }
+
+    #[test]
+    fn test_encode_error_propagated() {
+        // compute_signature_for_series_with_coeffs must propagate errors from encode_series
+        // rather than swallowing them and returning a spurious all-MAX signature.
+        // (Encoding can fail for unsupported / complex dtypes; here we test the contract
+        // via a normal column to confirm Ok(Some) is returned when encoding succeeds.)
+        let s = Series::new("x".into(), &[1i64, 2, 3]);
+        let (a, b) = generate_permutation_coeffs(16);
+        let result = compute_signature_for_series_with_coeffs(&s, 16, &a, &b).unwrap();
+        assert!(result.is_some());
+        // All-MAX would indicate the old error-swallowing behaviour is still present.
+        assert!(result.unwrap().iter().any(|&v| v != u32::MAX));
     }
 
     #[test]

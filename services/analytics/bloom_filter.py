@@ -70,10 +70,12 @@ class BloomFilter:
             pl.col(col).analytics.bloom_filter(
                 k=self.num_hash_functions,
                 m=self.bit_array_size,
-                existing_filter=list(self.bit_array) if self.bit_array else [],
+                existing_filter=self.bit_array if self.bit_array is not None else [],
             )
         )
-        self.bit_array = result.to_series()[0]
+        # Convert bytes → list[int] once here so membership calls pass it directly
+        # without a per-call list() copy (~60KB at fp=1%, n=50K).
+        self.bit_array = list(result.to_series()[0])
         self.num_elements_added += len(df)
 
     def membership(self, data: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
@@ -85,7 +87,7 @@ class BloomFilter:
         col = df.columns[0]
         return df.select(
             pl.col(col).analytics.membership(
-                bit_array_bytes=list(self.bit_array) if self.bit_array else [],
+                bit_array_bytes=self.bit_array if self.bit_array is not None else [],
                 k=self.num_hash_functions,
                 m=self.bit_array_size,
             )
@@ -98,7 +100,7 @@ class BloomFilter:
         """
         result = analytics.membership_ratio(
             df,
-            bit_array_bytes=list(self.bit_array) if self.bit_array else [],
+            bit_array_bytes=self.bit_array if self.bit_array is not None else [],
             k=self.num_hash_functions,
             m=self.bit_array_size,
         )
@@ -115,7 +117,7 @@ class BloomFilter:
         """
         result = analytics.membership_ratio_sample(
             df,
-            bit_array_bytes=list(self.bit_array) if self.bit_array else [],
+            bit_array_bytes=self.bit_array if self.bit_array is not None else [],
             k=self.num_hash_functions,
             m=self.bit_array_size,
             sample_frac=sample_frac,

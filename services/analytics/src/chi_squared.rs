@@ -19,6 +19,7 @@ fn chi_squared_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
         Field::new("chi2_stat".into(), DataType::Float64),
         Field::new("p_value".into(), DataType::Float64),
         Field::new("cramers_v".into(), DataType::Float64),
+        Field::new("low_expected_count".into(), DataType::Boolean),
     ];
     Ok(Field::new(
         "pairwise_chi_squared".into(),
@@ -93,7 +94,7 @@ pub(crate) fn pairwise_chi_squared_impl(
     let col_names: Vec<String> = inputs.iter().map(|s| s.name().to_string()).collect();
 
     // Compute chi-squared stats in parallel across all pairs.
-    let results: Vec<(String, String, f64, f64, f64)> = pairs
+    let results: Vec<(String, String, f64, f64, f64, bool)> = pairs
         .par_iter()
         .map(|(i, j)| {
             let col_a = &cache[*i];
@@ -101,8 +102,8 @@ pub(crate) fn pairwise_chi_squared_impl(
             let col_a_name = col_names[*i].clone();
             let col_b_name = col_names[*j].clone();
 
-            let (chi2, p, v) = compute_chi_squared(col_a, col_b);
-            (col_a_name, col_b_name, chi2, p, v)
+            let (chi2, p, v, low_exp) = compute_chi_squared(col_a, col_b);
+            (col_a_name, col_b_name, chi2, p, v, low_exp)
         })
         .collect();
 
@@ -112,13 +113,15 @@ pub(crate) fn pairwise_chi_squared_impl(
     let mut chi2_values = Vec::with_capacity(n_pairs);
     let mut p_values = Vec::with_capacity(n_pairs);
     let mut cramers_v_values = Vec::with_capacity(n_pairs);
+    let mut low_exp_values = Vec::with_capacity(n_pairs);
 
-    for (a, b, chi2, p, v) in results {
+    for (a, b, chi2, p, v, low_exp) in results {
         col_a_names.push(a);
         col_b_names.push(b);
         chi2_values.push(chi2);
         p_values.push(p);
         cramers_v_values.push(v);
+        low_exp_values.push(low_exp);
     }
 
     let col_a_s = StringChunked::from_iter(col_a_names.iter().map(|s| s.as_str()))
@@ -130,24 +133,31 @@ pub(crate) fn pairwise_chi_squared_impl(
     let chi2_s = Float64Chunked::from_vec("chi2_stat".into(), chi2_values).into_series();
     let p_s = Float64Chunked::from_vec("p_value".into(), p_values).into_series();
     let v_s = Float64Chunked::from_vec("cramers_v".into(), cramers_v_values).into_series();
+    let low_exp_s = BooleanChunked::from_iter(low_exp_values.into_iter())
+        .into_series()
+        .with_name("low_expected_count".into());
 
     let struct_ca = StructChunked::from_series(
         "pairwise_chi_squared".into(),
         n_pairs,
-        [col_a_s, col_b_s, chi2_s, p_s, v_s].iter(),
+        [col_a_s, col_b_s, chi2_s, p_s, v_s, low_exp_s].iter(),
     )?;
 
     Ok(struct_ca.into_series())
 }
 
-/// Compute chi-squared statistic, p-value, and Cramer's V for one column pair.
+/// Compute chi-squared statistic, p-value, Cramer's V, and low-expected-count flag
+/// for one column pair.
 ///
-/// Null policy: rows where either column is null are dropped (pairwise deletion,
-/// the standard treatment for contingency tables). Note this differs from the
-/// entropy plugin, which treats null as its own category — keep that in mind when
-/// deriving mutual information from the two outputs.
-/// Returns (chi2_stat, p_value, cramers_v); NaN for degenerate inputs.
-fn compute_chi_squared(col_a: &EncodedColumn, col_b: &EncodedColumn) -> (f64, f64, f64) {
+/// Null policy: rows where either column is null are dropped (pairwise deletion).
+/// Note this differs from the entropy plugin, which treats null as its own category
+/// — keep that in mind when deriving mutual information from the two outputs.
+///
+/// Returns (chi2_stat, p_value, cramers_v, low_expected_count); NaN for degenerate
+/// inputs. `low_expected_count` is true when the minimum expected cell count (rarest
+/// row marginal × rarest col marginal / N) is below 5, the standard threshold above
+/// which the chi-squared approximation is reliable.
+fn compute_chi_squared(col_a: &EncodedColumn, col_b: &EncodedColumn) -> (f64, f64, f64, bool) {
     // Single pass: build joint freq map + marginals, skipping null rows.
     let mut joint: HashMap<u128, u64, FoldHashFast> =
         HashMap::with_capacity_and_hasher(64, FoldHashFast::default());
@@ -170,7 +180,7 @@ fn compute_chi_squared(col_a: &EncodedColumn, col_b: &EncodedColumn) -> (f64, f6
     }
 
     if n_valid == 0 {
-        return (f64::NAN, f64::NAN, f64::NAN);
+        return (f64::NAN, f64::NAN, f64::NAN, false);
     }
 
     let unique_a = row_m.len();
@@ -178,36 +188,45 @@ fn compute_chi_squared(col_a: &EncodedColumn, col_b: &EncodedColumn) -> (f64, f6
 
     // Degenerate: constant column — chi-squared is undefined.
     if unique_a < 2 || unique_b < 2 {
-        return (f64::NAN, f64::NAN, f64::NAN);
+        return (f64::NAN, f64::NAN, f64::NAN, false);
     }
 
     let n_f = n_valid as f64;
 
-    // Second pass: iterate all (row, col) marginal combinations, including
-    // zero-observation cells (O=0 contributes E to the chi2 sum and must not be skipped).
+    // χ² = Σ O²/E − N, summing only over observed (non-zero) cells since zero-obs
+    // cells contribute 0 to Σ O²/E. This is O(observed pairs) rather than the
+    // O(unique_a × unique_b) nested-loop form, which hangs on high-cardinality columns.
     let mut chi2_stat = 0.0f64;
-    for (&a_key, &row_total) in &row_m {
-        for (&b_key, &col_total) in &col_m {
-            let key = (a_key as u128) << 64 | (b_key as u128);
-            let obs = *joint.get(&key).unwrap_or(&0);
-            let expected = row_total as f64 * col_total as f64 / n_f;
-            let diff = obs as f64 - expected;
-            chi2_stat += diff * diff / expected;
-        }
+    for (&key, &obs) in &joint {
+        let a_key = (key >> 64) as u64;
+        let b_key = key as u64;
+        let row_total = row_m[&a_key];
+        let col_total = col_m[&b_key];
+        let expected = row_total as f64 * col_total as f64 / n_f;
+        chi2_stat += (obs as f64 * obs as f64) / expected;
     }
+    chi2_stat -= n_f;
+
+    // low_expected_count: true when the minimum possible expected cell count falls
+    // below 5, the standard chi-squared validity threshold.
+    let min_row = *row_m.values().min().unwrap() as f64;
+    let min_col = *col_m.values().min().unwrap() as f64;
+    let low_expected_count = min_row * min_col / n_f < 5.0;
 
     // Degrees of freedom = (unique_a - 1) * (unique_b - 1).
     let df_val = ((unique_a - 1) * (unique_b - 1)) as f64;
 
+    // Use sf (survival function) rather than 1 - cdf to avoid catastrophic
+    // cancellation in the far tail where χ² is most significant.
     let p_value = match ChiSquared::new(df_val) {
-        Ok(dist) => 1.0 - dist.cdf(chi2_stat),
+        Ok(dist) => dist.sf(chi2_stat),
         Err(_) => f64::NAN,
     };
 
     let min_dim = (unique_a - 1).min(unique_b - 1) as f64;
     let cramers_v = (chi2_stat / (n_f * min_dim)).sqrt();
 
-    (chi2_stat, p_value, cramers_v)
+    (chi2_stat, p_value, cramers_v, low_expected_count)
 }
 
 fn build_empty_result() -> PolarsResult<Series> {
@@ -220,10 +239,13 @@ fn build_empty_result() -> PolarsResult<Series> {
     let chi2_s = Float64Chunked::from_vec("chi2_stat".into(), vec![]).into_series();
     let p_s = Float64Chunked::from_vec("p_value".into(), vec![]).into_series();
     let v_s = Float64Chunked::from_vec("cramers_v".into(), vec![]).into_series();
+    let low_exp_s = BooleanChunked::from_iter(std::iter::empty::<bool>())
+        .into_series()
+        .with_name("low_expected_count".into());
     let struct_ca = StructChunked::from_series(
         "pairwise_chi_squared".into(),
         0,
-        [col_a_s, col_b_s, chi2_s, p_s, v_s].iter(),
+        [col_a_s, col_b_s, chi2_s, p_s, v_s, low_exp_s].iter(),
     )?;
     Ok(struct_ca.into_series())
 }
@@ -317,6 +339,33 @@ mod tests {
         let s1 = Series::new("a".into(), &[1i32, 2, 3]);
         let result = pairwise_chi_squared_impl(&[s1], no_pairs()).unwrap();
         assert_eq!(result.len(), 0);
+    }
+
+    // low_expected_count is true when rarest marginal pair expected count < 5.
+    #[test]
+    fn test_low_expected_count_sparse() {
+        // 10 rows, 10 unique values in each column → most expected cells < 1.
+        let a: Vec<i32> = (0..10).collect();
+        let b: Vec<i32> = (0..10).collect();
+        let s1 = Series::new("a".into(), &a);
+        let s2 = Series::new("b".into(), &b);
+        let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
+        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
+        let low = df.column("low_expected_count").unwrap().bool().unwrap().get(0).unwrap();
+        assert!(low, "sparse contingency table must set low_expected_count");
+    }
+
+    #[test]
+    fn test_low_expected_count_dense() {
+        // 10000 rows split evenly across 2 categories → min expected = 2500, not low.
+        let a: Vec<i32> = (0..10000).map(|i| i % 2).collect();
+        let b: Vec<i32> = (0..10000).map(|i| i % 2).collect();
+        let s1 = Series::new("a".into(), &a);
+        let s2 = Series::new("b".into(), &b);
+        let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
+        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
+        let low = df.column("low_expected_count").unwrap().bool().unwrap().get(0).unwrap();
+        assert!(!low, "dense 2×2 table (n=10000) must not set low_expected_count");
     }
 
     // 3 columns → 3 pairs.
