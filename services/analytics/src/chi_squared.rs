@@ -1,5 +1,5 @@
 use crate::shared::{
-    NULL_SENTINEL, PairwiseKwargs, build_column_cache_par, resolve_pairs,
+    EncodedColumn, PairwiseKwargs, build_column_cache_par, resolve_pairs,
 };
 use foldhash::fast::RandomState as FoldHashFast;
 use polars::prelude::*;
@@ -142,9 +142,12 @@ pub(crate) fn pairwise_chi_squared_impl(
 
 /// Compute chi-squared statistic, p-value, and Cramer's V for one column pair.
 ///
-/// Null rows (either column is NULL_SENTINEL) are dropped before computing.
+/// Null policy: rows where either column is null are dropped (pairwise deletion,
+/// the standard treatment for contingency tables). Note this differs from the
+/// entropy plugin, which treats null as its own category — keep that in mind when
+/// deriving mutual information from the two outputs.
 /// Returns (chi2_stat, p_value, cramers_v); NaN for degenerate inputs.
-fn compute_chi_squared(col_a: &[u64], col_b: &[u64]) -> (f64, f64, f64) {
+fn compute_chi_squared(col_a: &EncodedColumn, col_b: &EncodedColumn) -> (f64, f64, f64) {
     // Single pass: build joint freq map + marginals, skipping null rows.
     let mut joint: HashMap<u128, u64, FoldHashFast> =
         HashMap::with_capacity_and_hasher(64, FoldHashFast::default());
@@ -154,14 +157,15 @@ fn compute_chi_squared(col_a: &[u64], col_b: &[u64]) -> (f64, f64, f64) {
         HashMap::with_capacity_and_hasher(32, FoldHashFast::default());
     let mut n_valid: u64 = 0;
 
-    for (a, b) in col_a.iter().zip(col_b.iter()) {
-        if *a == NULL_SENTINEL || *b == NULL_SENTINEL {
+    for idx in 0..col_a.len() {
+        if col_a.is_null[idx] || col_b.is_null[idx] {
             continue;
         }
-        let key = (*a as u128) << 64 | (*b as u128);
+        let (a, b) = (col_a.values[idx], col_b.values[idx]);
+        let key = (a as u128) << 64 | (b as u128);
         *joint.entry(key).or_insert(0) += 1;
-        *row_m.entry(*a).or_insert(0) += 1;
-        *col_m.entry(*b).or_insert(0) += 1;
+        *row_m.entry(a).or_insert(0) += 1;
+        *col_m.entry(b).or_insert(0) += 1;
         n_valid += 1;
     }
 

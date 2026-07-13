@@ -7,8 +7,8 @@ Determine patterns and relationships between columns, both within and between da
 - Polars as the primary dataframe library
 
 # Python Environment
-Conda environment: `C:\Users\Ben\.conda\envs\p312`
-Python exe: `C:\Users\Ben\.conda\envs\p312\python.exe`
+Conda environment: `C:\Users\Ben\miniconda3\envs\p312`
+Python exe: `C:\Users\Ben\miniconda3\envs\p312\python.exe`
 
 # Coding Style
 Prioritise performance & simplicity.
@@ -91,7 +91,7 @@ Chi-squared Rust plugin is complete and validated (~17x faster than polars-ds ba
 - Surface a warning (or a `low_expected_count` boolean field) when expected cell counts fall below 5. This is the standard chi-squared assumption and ignoring it can inflate χ² on sparse contingency tables.
 
 **[bloomfilter.rs](services/analytics/src/bloomfilter.rs)**
-- [bloomfilter.rs:53-57](services/analytics/src/bloomfilter.rs#L53-L57): when `existing_filter` length ≠ `m`, the code silently allocates a fresh array, **discarding prior state**. Replace the silent fallback with an explicit `PolarsError::ComputeError`.
+- ~~silent state discard on `existing_filter` length mismatch~~ **Fixed**: `m` is now consistently bits with `ceil(m/8)`-byte arrays; wrong-sized filters raise `ComputeError`, and `validate_bit_array` guards the unchecked bit reads.
 - [bloom_filter.py:71](services/analytics/bloom_filter.py#L71), [:86](services/analytics/bloom_filter.py#L86), [:99](services/analytics/bloom_filter.py#L99): replace `list(self.bit_array)` with a direct bytes pass-through. At fp=1%, n=50K the filter is ~60KB and is being copied to a Python list-of-ints on every membership call.
 
 **[minhash.rs](services/analytics/src/minhash.rs)**
@@ -103,5 +103,5 @@ Chi-squared Rust plugin is complete and validated (~17x faster than polars-ds ba
 - [line 31](services/analytics/MinHashLSHFilter.py#L31): `lsh_threshold = min(jaccard*0.9, overlap*0.45)`. Add a comment explaining the 0.45 fudge factor for using a Jaccard-based LSH index to recover Overlap-Coefficient candidates (the LSH s-curve is calibrated against Jaccard, so OC-only matches need a lower effective threshold to make it through the candidate stage).
 
 ## Cross-cutting notes (not bugs, worth documenting)
-- `series_to_u64` floats use `to_bits()`: distinct NaN bit patterns will produce distinct u64s. Not a concern for current analytics (NaN handling is upstream) but worth a comment in `shared.rs`.
-- String / list / decimal types route through xxh3 → u64. Collision probability at 50K rows is ~6×10⁻¹¹ per pair — negligible for entropy/χ², irrelevant for MinHash (deterministic seed across columns).
+- `encode_series` (formerly `series_to_u64`) returns `EncodedColumn { values, is_null }` — nulls are out-of-band (no in-band sentinel), floats are canonicalised (`-0.0`→`0.0`, all NaN payloads→one key). Null policy per module: entropy = null is a category; chi² = null rows dropped; minhash/bloom = nulls skipped. Keep this in mind when deriving MI from entropy + chi² outputs.
+- String / list / decimal types route through foldhash → u64. Collision probability at 50K rows is ~6×10⁻¹¹ per pair — negligible for entropy/χ², irrelevant for MinHash (deterministic seed across columns). foldhash `FixedState` is NOT stable across crate versions/platforms — don't persist bloom bit arrays or minhash signatures across rebuilds for hashed dtypes.

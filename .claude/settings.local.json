@@ -1,8 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo test)",
-      "Bash(CONDA_PREFIX=\"C:/Users/Ben/.conda/envs/p312\" PATH=\"C:/Users/Ben/.conda/envs/p312:C:/Users/Ben/.conda/envs/p312/Scripts:$PATH\" cargo test)"
+      "Bash(*)",
+      "PowerShell(*)",
+      "Read(*)"
     ]
   }
 }

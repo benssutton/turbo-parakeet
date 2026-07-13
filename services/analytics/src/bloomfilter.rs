@@ -4,7 +4,7 @@ use xxhash_rust::xxh3::xxh3_128;
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashSet;
-use crate::shared::{NULL_SENTINEL, series_to_u64, build_column_cache_par};
+use crate::shared::{EncodedColumn, build_column_cache_par, encode_series};
 
 /// Set a bit at the given index in a byte array
 #[inline(always)]
@@ -18,6 +18,40 @@ fn merge_bit_arrays(dest: &mut [u8], src: &[u8]) {
     for (d, s) in dest.iter_mut().zip(src.iter()) {
         *d |= *s;
     }
+}
+
+/// Number of bytes needed to hold `m` bits. `m` is always the filter size in
+/// BITS; the backing byte array is `ceil(m/8)` bytes.
+#[inline]
+fn n_bytes_for_bits(m: usize) -> usize {
+    m.div_ceil(8)
+}
+
+/// Rayon chunk size heuristic shared by all row-parallel bloom operations.
+#[inline]
+fn chunk_size(len: usize) -> usize {
+    (len / (rayon::current_num_threads() * 4)).clamp(100, 10000)
+}
+
+/// Ensure a supplied bit array matches the geometry implied by `m` bits.
+///
+/// This is the single guard that makes the `get_unchecked` byte access in
+/// `check_item_membership` sound: after this returns Ok, `bit_array.len()`
+/// equals `ceil(m/8)`, so every `idx/8` (idx < m) is in bounds.
+fn validate_bit_array(bit_array: &[u8], m: usize) -> PolarsResult<()> {
+    let n_bytes = n_bytes_for_bits(m);
+    if bit_array.len() != n_bytes {
+        return Err(PolarsError::ComputeError(
+            format!(
+                "bloom filter bit array has {} bytes but m={} bits requires {} bytes",
+                bit_array.len(),
+                m,
+                n_bytes
+            )
+            .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Kwargs struct for bloom_filter
@@ -46,26 +80,45 @@ struct MembershipRatioSampleKwargs {
 }
 
 fn bloom_filter_impl(series: &Series, kwargs: BloomFilterKwargs) -> PolarsResult<Vec<u8>> {
-    let values = series_to_u64(series)?;
-    let m = kwargs.m;
+    let enc = encode_series(series)?;
+    let m = kwargs.m; // filter size in BITS
     let k = kwargs.k;
+    let n_bytes = n_bytes_for_bits(m);
 
-    let mut bit_array = if kwargs.bit_array_bytes.len() == m {
+    // Start from the caller's filter when supplied. An empty array means "no
+    // prior state" (build a fresh filter); a non-empty array of the wrong size
+    // is a caller error and must fail loudly rather than silently discarding
+    // the accumulated bits.
+    let mut bit_array = if kwargs.bit_array_bytes.is_empty() {
+        vec![0u8; n_bytes]
+    } else if kwargs.bit_array_bytes.len() == n_bytes {
         kwargs.bit_array_bytes
     } else {
-        vec![0u8; m]
+        return Err(PolarsError::ComputeError(
+            format!(
+                "existing bloom filter has {} bytes but m={} bits requires {} bytes",
+                kwargs.bit_array_bytes.len(),
+                m,
+                n_bytes
+            )
+            .into(),
+        ));
     };
 
-    let chunk_size = (values.len() / (rayon::current_num_threads() * 4)).max(100).min(10000);
+    // Only non-null values are inserted (a null is not a set member).
+    let values: Vec<u64> = enc
+        .values
+        .iter()
+        .zip(enc.is_null.iter())
+        .filter_map(|(v, n)| if *n { None } else { Some(*v) })
+        .collect();
 
     let local_arrays: Vec<Vec<u8>> = values
-        .par_chunks(chunk_size)
+        .par_chunks(chunk_size(values.len()))
         .map(|chunk| {
-            let mut local = vec![0u8; m];
+            let mut local = vec![0u8; n_bytes];
             for &v in chunk {
-                if v != NULL_SENTINEL {
-                    add_item_to_bits(&v.to_le_bytes(), &mut local, k, m);
-                }
+                add_item_to_bits(&v.to_le_bytes(), &mut local, k, m);
             }
             local
         })
@@ -86,23 +139,28 @@ pub fn bloom_filter(inputs: &[Series], kwargs: BloomFilterKwargs) -> PolarsResul
 }
 
 fn membership_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<Series> {
-    let values = series_to_u64(series)?;
     let bit_array = &kwargs.bit_array_bytes;
     let k = kwargs.k;
     let m = kwargs.m;
+    validate_bit_array(bit_array, m)?;
 
-    let chunk_size = (values.len() / (rayon::current_num_threads() * 4)).max(100).min(10000);
+    let enc = encode_series(series)?;
+    let n = enc.len();
 
-    let results: Vec<bool> = values
-        .par_chunks(chunk_size)
-        .flat_map(|chunk| {
-            chunk.iter().map(|&v| {
-                v != NULL_SENTINEL && check_item_membership(&v.to_le_bytes(), bit_array, k, m)
-            }).collect::<Vec<bool>>()
+    // One result per input row (nulls → false). with_min_len preserves ordering
+    // while chunking the parallel work.
+    let results: Vec<bool> = (0..n)
+        .into_par_iter()
+        .with_min_len(chunk_size(n))
+        .map(|idx| {
+            !enc.is_null[idx]
+                && check_item_membership(&enc.values[idx].to_le_bytes(), bit_array, k, m)
         })
         .collect();
 
-    Ok(BooleanChunked::from_iter(results.into_iter()).into_series().with_name(series.name().clone()))
+    Ok(BooleanChunked::from_iter(results.into_iter())
+        .into_series()
+        .with_name(series.name().clone()))
 }
 
 /// Check membership for all items in a Polars Series against a Bloom filter.
@@ -119,21 +177,21 @@ pub fn membership(inputs: &[Series], kwargs: MembershipKwargs) -> PolarsResult<S
 ///
 /// - ratio_all:       found / total_rows      (nulls count in denominator)
 /// - ratio_non_null:  found / non_null_rows   (nulls excluded from denominator)
-fn compute_ratio(col: &[u64], bit_array: &[u8], k: usize, m: usize) -> (f64, f64) {
+/// Caller must have validated `bit_array` length against `m` (validate_bit_array).
+fn compute_ratio(col: &EncodedColumn, bit_array: &[u8], k: usize, m: usize) -> (f64, f64) {
     let total = col.len();
     if total == 0 {
         return (0.0, 0.0);
     }
-    let null_count = col.iter().filter(|&&v| v == NULL_SENTINEL).count();
-    let chunk_size = (total / (rayon::current_num_threads() * 4)).max(100).min(10000);
-    let found: usize = col
-        .par_chunks(chunk_size)
-        .map(|chunk| {
-            chunk.iter().filter(|&&v| {
-                v != NULL_SENTINEL && check_item_membership(&v.to_le_bytes(), bit_array, k, m)
-            }).count()
+    let null_count = col.is_null.iter().filter(|&&n| n).count();
+    let found: usize = (0..total)
+        .into_par_iter()
+        .with_min_len(chunk_size(total))
+        .filter(|&idx| {
+            !col.is_null[idx]
+                && check_item_membership(&col.values[idx].to_le_bytes(), bit_array, k, m)
         })
-        .sum();
+        .count();
     let ratio_all = found as f64 / total as f64;
     let ratio_non_null = if total == null_count {
         0.0
@@ -145,8 +203,9 @@ fn compute_ratio(col: &[u64], bit_array: &[u8], k: usize, m: usize) -> (f64, f64
 
 /// Single-series membership ratio (used by test helpers and sample impl).
 fn membership_ratio_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<(f64, f64)> {
-    let values = series_to_u64(series)?;
-    Ok(compute_ratio(&values, &kwargs.bit_array_bytes, kwargs.k, kwargs.m))
+    validate_bit_array(&kwargs.bit_array_bytes, kwargs.m)?;
+    let enc = encode_series(series)?;
+    Ok(compute_ratio(&enc, &kwargs.bit_array_bytes, kwargs.k, kwargs.m))
 }
 
 /// Single-series sampled membership ratio.
@@ -184,6 +243,7 @@ fn membership_ratio_multi_impl(
     inputs: &[Series],
     kwargs: &MembershipKwargs,
 ) -> PolarsResult<Series> {
+    validate_bit_array(&kwargs.bit_array_bytes, kwargs.m)?;
     let n = inputs.len();
     let needed: HashSet<usize> = (0..n).collect();
     let cache = build_column_cache_par(inputs, &needed)?;
@@ -298,7 +358,11 @@ fn check_item_membership(item_bytes: &[u8], bit_array: &[u8], hash_count: usize,
     let hash2 = (hash128 as u64) as usize;
     for i in 0..hash_count {
         let idx = hash1.wrapping_add(i.wrapping_mul(hash2)) % size;
-        // SAFETY: idx is always < size, and bit_array length == size (in bytes)
+        // SAFETY: `size` is the filter's bit count, so idx < size and therefore
+        // idx/8 < ceil(size/8). Every entry point (membership_impl,
+        // membership_ratio_impl, membership_ratio_multi_impl) calls
+        // validate_bit_array first, guaranteeing bit_array.len() == ceil(size/8),
+        // so this byte index is always in bounds.
         if unsafe { *bit_array.get_unchecked(idx / 8) } & (1u8 << (idx % 8)) == 0 {
             return false;
         }

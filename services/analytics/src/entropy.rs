@@ -154,13 +154,16 @@ pub(crate) fn pairwise_joint_entropy_impl(
             let col_a_name = col_names[*i].clone();
             let col_b_name = col_names[*j].clone();
 
-            // 5a+5b: pack into u128 keys, build frequency map.
-            let mut freq: HashMap<u128, u64, FoldHashFast> =
+            // 5a+5b: build the joint frequency map. The key folds each column's
+            // null-ness into a 2-bit mask so a null is a distinct category from
+            // every real value (including value 0) — never an aliased sentinel.
+            let mut freq: HashMap<(u64, u64, u8), u64, FoldHashFast> =
                 HashMap::with_capacity_and_hasher(r, FoldHashFast::default());
-            col_a.iter().zip(col_b.iter()).for_each(|(a, b)| {
-                let key = (*a as u128) << 64 | (*b as u128);
+            for idx in 0..r {
+                let mask = (col_a.is_null[idx] as u8) | ((col_b.is_null[idx] as u8) << 1);
+                let key = (col_a.values[idx], col_b.values[idx], mask);
                 *freq.entry(key).or_insert(0) += 1;
-            });
+            }
 
             // 5c: count-of-counts.
             let mut coc_map: HashMap<u64, u64, FoldHashFast> =
@@ -305,17 +308,20 @@ pub(crate) fn threeway_joint_entropy_impl(
             let col_b_name = col_names[*j].clone();
             let col_c_name = col_names[*k].clone();
 
-            // 5a+5b: pack into [u64; 3] keys, build frequency map.
-            let mut freq: HashMap<[u64; 3], u64, FoldHashFast> =
+            // 5a+5b: build the joint frequency map. The key folds each column's
+            // null-ness into a 3-bit mask so nulls are a distinct category.
+            let mut freq: HashMap<([u64; 3], u8), u64, FoldHashFast> =
                 HashMap::with_capacity_and_hasher(r, FoldHashFast::default());
-            col_a
-                .iter()
-                .zip(col_b.iter())
-                .zip(col_c.iter())
-                .for_each(|((a, b), c)| {
-                    let key = [*a, *b, *c];
-                    *freq.entry(key).or_insert(0) += 1;
-                });
+            for idx in 0..r {
+                let mask = (col_a.is_null[idx] as u8)
+                    | ((col_b.is_null[idx] as u8) << 1)
+                    | ((col_c.is_null[idx] as u8) << 2);
+                let key = (
+                    [col_a.values[idx], col_b.values[idx], col_c.values[idx]],
+                    mask,
+                );
+                *freq.entry(key).or_insert(0) += 1;
+            }
 
             // 5c: count-of-counts.
             let mut coc_map: HashMap<u64, u64, FoldHashFast> =
@@ -377,7 +383,6 @@ fn threeway_joint_entropy(inputs: &[Series], kwargs: ThreewayKwargs) -> PolarsRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::*;
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -432,38 +437,88 @@ mod tests {
         );
     }
 
-    // ── Null-safe conversion ───────────────────────────────────────────────
+    // ── Null encoding (out-of-band mask) ───────────────────────────────────
 
     #[test]
-    fn test_null_max_sentinel() {
+    fn test_null_marked_in_mask() {
         let s = Series::new("test".into(), &[Some(1i32), None, Some(3)]);
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result, vec![1u64, NULL_SENTINEL, 3]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values, vec![1u64, 0, 3]); // null value canonicalised to 0
+        assert_eq!(enc.is_null, vec![false, true, false]);
     }
 
     #[test]
     fn test_null_does_not_collide_with_zero() {
+        // A real 0 and a null both store value 0; only the mask distinguishes them.
         let s = Series::new("test".into(), &[Some(0i32), None]);
-        let result = series_to_u64(&s).unwrap();
-        assert_ne!(result[0], result[1], "Null must not collide with zero");
-        assert_eq!(result[0], 0);
-        assert_eq!(result[1], NULL_SENTINEL);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], 0);
+        assert!(!enc.is_null[0]);
+        assert!(enc.is_null[1]);
     }
 
     #[test]
-    fn test_string_null_max() {
+    fn test_negative_one_is_not_null() {
+        // Regression: -1 at every signed width sign-extends to u64::MAX, which used
+        // to collide with the old NULL_SENTINEL. It must now be a real, non-null value.
+        for s in [
+            Series::new("i8".into(), &[Some(-1i8), Some(0)]),
+            Series::new("i16".into(), &[Some(-1i16), Some(0)]),
+            Series::new("i32".into(), &[Some(-1i32), Some(0)]),
+            Series::new("i64".into(), &[Some(-1i64), Some(0)]),
+        ] {
+            let dtype = s.dtype().clone();
+            let enc = encode_series(&s).unwrap();
+            assert!(!enc.is_null[0], "-1 must not be treated as null ({:?})", dtype);
+            assert_eq!(enc.values[0], u64::MAX, "-1 sign-extends to u64::MAX ({:?})", dtype);
+            assert_ne!(enc.values[0], enc.values[1]);
+        }
+    }
+
+    #[test]
+    fn test_u64_max_is_not_null() {
+        let s = Series::new("test".into(), &[Some(u64::MAX), None, Some(7u64)]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], u64::MAX);
+        assert!(!enc.is_null[0], "u64::MAX is a legal value, not null");
+        assert!(enc.is_null[1]);
+    }
+
+    #[test]
+    fn test_string_null_in_mask() {
         let s = Series::new("test".into(), &[Some("a"), None, Some("b")]);
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result[1], NULL_SENTINEL);
-        assert_ne!(result[0], NULL_SENTINEL);
+        let enc = encode_series(&s).unwrap();
+        assert!(enc.is_null[1]);
+        assert!(!enc.is_null[0]);
+        assert_ne!(enc.values[0], enc.values[2]);
     }
 
     #[test]
-    fn test_float_null_max() {
+    fn test_float_value_and_null() {
         let s = Series::new("test".into(), &[Some(1.5f64), None]);
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result[0], 1.5f64.to_bits());
-        assert_eq!(result[1], NULL_SENTINEL);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], 1.5f64.to_bits());
+        assert!(!enc.is_null[0]);
+        assert!(enc.is_null[1]);
+    }
+
+    #[test]
+    fn test_float_zero_canonicalised() {
+        // +0.0 and -0.0 compare equal, so they must share one key.
+        let s = Series::new("test".into(), &[Some(0.0f64), Some(-0.0f64)]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], enc.values[1], "+0.0 and -0.0 must share a key");
+        assert_eq!(enc.values[0], 0);
+    }
+
+    #[test]
+    fn test_nan_canonicalised() {
+        // Distinct NaN bit patterns must collapse to a single key.
+        let nan2 = f64::from_bits(0x7ff8_0000_0000_0001);
+        assert!(nan2.is_nan());
+        let s = Series::new("test".into(), &[Some(f64::NAN), Some(nan2)]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], enc.values[1], "all NaNs must share a key");
     }
 
     // ── Pairwise v2 ───────────────────────────────────────────────────────
@@ -699,9 +754,9 @@ mod tests {
         let s = Series::new("cat".into(), &["x", "y", "x", "z"])
             .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
             .unwrap();
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result[0], result[2]); // "x" == "x"
-        assert_ne!(result[0], result[1]); // "x" != "y"
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], enc.values[2]); // "x" == "x"
+        assert_ne!(enc.values[0], enc.values[1]); // "x" != "y"
     }
 
     #[test]
@@ -711,18 +766,20 @@ mod tests {
         let s = Series::new("cat".into(), &[Some("a"), None, Some("b")])
             .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
             .unwrap();
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result[1], NULL_SENTINEL);
+        let enc = encode_series(&s).unwrap();
+        assert!(enc.is_null[1]);
     }
 
     #[test]
     fn test_boolean_to_u64() {
         let s = Series::new("test".into(), &[Some(true), Some(false), None]);
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result[0], 1u64);
-        assert_eq!(result[1], 0u64);
-        assert_eq!(result[2], NULL_SENTINEL);
-        assert_ne!(result[0], result[1]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], 1u64);
+        assert_eq!(enc.values[1], 0u64);
+        assert!(!enc.is_null[0]);
+        assert!(!enc.is_null[1]);
+        assert!(enc.is_null[2]);
+        assert_ne!(enc.values[0], enc.values[1]);
     }
 
     #[test]
@@ -730,11 +787,11 @@ mod tests {
         let s = Series::new("test".into(), &[Some(1_000_000i64), Some(2_000_000i64), None])
             .cast(&DataType::Time)
             .unwrap();
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result[0], 1_000_000u64);
-        assert_eq!(result[1], 2_000_000u64);
-        assert_eq!(result[2], NULL_SENTINEL);
-        assert_ne!(result[0], result[1]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], 1_000_000u64);
+        assert_eq!(enc.values[1], 2_000_000u64);
+        assert!(enc.is_null[2]);
+        assert_ne!(enc.values[0], enc.values[1]);
     }
 
     #[test]
@@ -742,16 +799,16 @@ mod tests {
         let s = Series::new("test".into(), &[Some(1i64), Some(2i64), None])
             .cast(&DataType::Int128)
             .unwrap();
-        let result = series_to_u64(&s).unwrap();
-        assert_ne!(result[0], result[1]); // distinct values → distinct hashes
-        assert_eq!(result[2], NULL_SENTINEL);
+        let enc = encode_series(&s).unwrap();
+        assert_ne!(enc.values[0], enc.values[1]); // distinct values → distinct hashes
+        assert!(enc.is_null[2]);
 
         // Same value in a separate series must hash identically (fixed seed)
         let s2 = Series::new("test2".into(), &[Some(1i64)])
             .cast(&DataType::Int128)
             .unwrap();
-        let result2 = series_to_u64(&s2).unwrap();
-        assert_eq!(result[0], result2[0]);
+        let enc2 = encode_series(&s2).unwrap();
+        assert_eq!(enc.values[0], enc2.values[0]);
     }
 
     #[test]
@@ -759,9 +816,9 @@ mod tests {
         let s = Series::new("test".into(), &[1i32, 2, 1])
             .cast(&DataType::Decimal(Some(10), Some(0)))
             .unwrap();
-        let result = series_to_u64(&s).unwrap();
-        assert_ne!(result[0], result[1]); // 1 ≠ 2
-        assert_eq!(result[0], result[2]); // 1 == 1 → same hash
+        let enc = encode_series(&s).unwrap();
+        assert_ne!(enc.values[0], enc.values[1]); // 1 ≠ 2
+        assert_eq!(enc.values[0], enc.values[2]); // 1 == 1 → same hash
     }
 
     #[test]
@@ -778,10 +835,10 @@ mod tests {
             false,
         )
         .unwrap();
-        let result = series_to_u64(&s).unwrap();
-        assert_eq!(result[0], result[1]); // [1,2] == [1,2]
-        assert_ne!(result[0], result[2]); // [1,2] != [3]
-        assert_eq!(result[3], NULL_SENTINEL);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], enc.values[1]); // [1,2] == [1,2]
+        assert_ne!(enc.values[0], enc.values[2]); // [1,2] != [3]
+        assert!(enc.is_null[3]);
     }
 
     #[test]
@@ -796,8 +853,8 @@ mod tests {
             false,
         )
         .unwrap();
-        let result = series_to_u64(&s).unwrap();
-        assert_ne!(result[0], result[1]);
+        let enc = encode_series(&s).unwrap();
+        assert_ne!(enc.values[0], enc.values[1]);
     }
 
     #[test]

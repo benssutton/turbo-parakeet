@@ -6,7 +6,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use foldhash::fast::{FixedState as FoldHashFixed, RandomState as FoldHashFast};
 use rayon::prelude::*;
 
-use crate::shared::{series_to_u64, NULL_SENTINEL};
+use crate::shared::encode_series;
 
 /// Parameters for LSH candidate finding
 #[derive(Deserialize, Debug)]
@@ -261,20 +261,20 @@ fn compute_signature_for_series_with_coeffs(
     a_coeffs: &[u64],
     b_coeffs: &[u64],
 ) -> Vec<u32> {
-    let values = match series_to_u64(series) {
+    let enc = match encode_series(series) {
         Ok(v) => v,
         Err(_) => return vec![u32::MAX; num_perm],
     };
 
     let mut minhash_sig: Vec<u32> = vec![u32::MAX; num_perm];
 
-    for val in values {
-        if val == NULL_SENTINEL {
-            continue; // skip nulls
+    for (val, is_null) in enc.values.iter().zip(enc.is_null.iter()) {
+        if *is_null {
+            continue; // skip nulls — a null is not a set member
         }
         // Apply linear hash family: (a * val + b) mod 2^64, take lower 32 bits
         for i in 0..num_perm {
-            let derived = a_coeffs[i].wrapping_mul(val).wrapping_add(b_coeffs[i]);
+            let derived = a_coeffs[i].wrapping_mul(*val).wrapping_add(b_coeffs[i]);
             let hash_val = derived as u32;
             minhash_sig[i] = minhash_sig[i].min(hash_val);
         }

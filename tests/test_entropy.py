@@ -51,13 +51,18 @@ def _pair_tokens(i: int, kind: str):
 
     Non-null tokens are unique per index, so all 36 pairs stay distinct even after
     inserting nulls: null-a pairs differ by b, null-b pairs differ by a, and (None, None)
-    occurs exactly once. Integer tokens are positive only — -1 would map to u64::MAX,
-    which the plugin uses as its NULL_SENTINEL.
+    occurs exactly once.
+
+    Regression pin for the old NULL_SENTINEL scheme: for the int kind, pair 0 is
+    (-1, 1005) — the same b token as pair 5's (None, 1005). -1 sign-extends to
+    u64::MAX, so a sentinel-based encoding would alias it with null and MERGE the
+    two pairs (35 keys instead of 36), shifting the entropy. With out-of-band null
+    tracking they stay distinct and the entropy matches EXPECTED_ENTROPY.
     """
     if kind == "str":
         a, b = f"a{i}", f"b{i}"
     elif kind == "int":
-        a, b = i, 1000 + i
+        a, b = (-1, 1005) if i == 0 else (i, 1000 + i)
     elif kind == "mixed":
         a, b = f"a{i}", 1000 + i
     else:  # pragma: no cover - guard against typos in parametrize

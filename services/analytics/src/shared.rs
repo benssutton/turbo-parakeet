@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared utilities — used by entropy.rs and chi_squared.rs
+// Shared utilities — used by entropy.rs, chi_squared.rs, minhash.rs, bloomfilter.rs
 // ─────────────────────────────────────────────────────────────────────────────
 
 use foldhash::fast::FixedState as FoldHashFixed;
@@ -24,204 +24,253 @@ pub(crate) struct ThreewayKwargs {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Null sentinel — u64::MAX marks missing values
+// Null representation
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Nulls are tracked OUT OF BAND via a parallel validity mask, never with an
+// in-band sentinel value. This is deliberate and load-bearing: every consumer
+// works over the full u64 range — `-1i64` encodes to `u64::MAX`, and `u64::MAX`
+// is itself a legal value — so no in-band sentinel can be reserved without
+// aliasing real data. (The previous `NULL_SENTINEL = u64::MAX` scheme silently
+// treated every `-1` and every `u64::MAX` as null, corrupting counts on real
+// data while passing synthetic tests that never used those values.)
+//
+// Each consumer applies its own documented null policy on top of the mask:
+//   - entropy:       null is a distinct category (the mask is folded into the
+//                    group key, so (null, x), (x, null), (null, null) are all
+//                    distinct joint keys).
+//   - chi-squared:   null rows are dropped (pairwise deletion — the standard
+//                    treatment for contingency tables).
+//   - minhash/bloom: null rows are skipped (a null is not a set member).
+
+/// A column encoded to `u64` keys plus a parallel null mask.
+///
+/// `values[i]` is only meaningful where `is_null[i]` is false; null positions
+/// are canonicalised to `0` so a leftover payload can never alias a real value.
+pub(crate) struct EncodedColumn {
+    pub values: Vec<u64>,
+    pub is_null: Vec<bool>,
+}
+
+impl EncodedColumn {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+}
+
+/// Canonicalise an `f64` before taking its bit pattern:
+///   - `+0.0` and `-0.0` collapse to the same key (they compare equal),
+///   - every NaN (regardless of sign/payload) collapses to one key.
+/// This matches how Polars `value_counts` groups floats and keeps the plugin's
+/// entropy/chi-squared consistent with a Polars reference on real float data.
+#[inline]
+fn canon_f64(x: f64) -> u64 {
+    if x == 0.0 {
+        0
+    } else if x.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        x.to_bits()
+    }
+}
+
+#[inline]
+fn canon_f32(x: f32) -> u64 {
+    if x == 0.0 {
+        0
+    } else if x.is_nan() {
+        f32::NAN.to_bits() as u64
+    } else {
+        x.to_bits() as u64
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Null-safe column conversion (values + out-of-band null mask)
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub(crate) const NULL_SENTINEL: u64 = u64::MAX;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Null-safe column conversion (nulls → NULL_SENTINEL)
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub(crate) fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
-    match series.dtype() {
-        DataType::Int8 => Ok(series
+pub(crate) fn encode_series(series: &Series) -> PolarsResult<EncodedColumn> {
+    let (values, is_null): (Vec<u64>, Vec<bool>) = match series.dtype() {
+        DataType::Int8 => series
             .i8()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Int16 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::Int16 => series
             .i16()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Int32 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::Int32 => series
             .i32()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Int64 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::Int64 => series
             .i64()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
         DataType::Int128 => {
             let build_hasher = FoldHashFixed::default();
-            Ok(series
+            series
                 .i128()?
                 .iter()
-                .map(|v| match v {
-                    None => NULL_SENTINEL,
-                    Some(x) => {
-                        let mut hasher = build_hasher.build_hasher();
-                        x.hash(&mut hasher);
-                        hasher.finish()
-                    }
-                })
-                .collect())
+                .map(|v| v.map_or((0, true), |x| (hash_one(&build_hasher, x), false)))
+                .unzip()
         }
-        DataType::UInt8 => Ok(series
+        DataType::UInt8 => series
             .u8()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::UInt16 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::UInt16 => series
             .u16()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::UInt32 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::UInt32 => series
             .u32()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::UInt64 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::UInt64 => series
             .u64()?
             .iter()
-            .map(|v| v.unwrap_or(NULL_SENTINEL))
-            .collect()),
-        DataType::Boolean => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x, false)))
+            .unzip(),
+        DataType::Boolean => series
             .bool()?
             .iter()
-            .map(|v| match v {
-                Some(true) => 1u64,
-                Some(false) => 0u64,
-                None => NULL_SENTINEL,
-            })
-            .collect()),
-        DataType::Float32 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::Float32 => series
             .f32()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x.to_bits() as u64))
-            .collect()),
-        DataType::Float64 => Ok(series
+            .map(|v| v.map_or((0, true), |x| (canon_f32(x), false)))
+            .unzip(),
+        DataType::Float64 => series
             .f64()?
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x.to_bits()))
-            .collect()),
-        DataType::Date => Ok(series
+            .map(|v| v.map_or((0, true), |x| (canon_f64(x), false)))
+            .unzip(),
+        DataType::Date => series
             .date()?
             .phys
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Datetime(_, _) => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::Datetime(_, _) => series
             .datetime()?
             .phys
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Duration(_) => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::Duration(_) => series
             .duration()?
             .phys
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
-        DataType::Time => Ok(series
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
+        DataType::Time => series
             .time()?
             .phys
             .iter()
-            .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-            .collect()),
+            .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+            .unzip(),
         DataType::String => {
             let build_hasher = FoldHashFixed::default();
-            Ok(series
+            series
                 .str()?
                 .iter()
-                .map(|v| match v {
-                    Some(s) => {
-                        let mut hasher = build_hasher.build_hasher();
-                        s.hash(&mut hasher);
-                        hasher.finish()
-                    }
-                    None => NULL_SENTINEL,
-                })
-                .collect())
+                .map(|v| v.map_or((0, true), |s| (hash_one(&build_hasher, s), false)))
+                .unzip()
         }
         DataType::Categorical(_, _) | DataType::Enum(_, _) => {
             let phys = series.to_physical_repr();
-            Ok(phys
-                .u32()?
+            phys.u32()?
                 .iter()
-                .map(|v| v.map_or(NULL_SENTINEL, |x| x as u64))
-                .collect())
+                .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+                .unzip()
         }
         // Decimal is physically i128 with a fixed scale per-Series; hash the raw integer.
         DataType::Decimal(_, _) => {
             let build_hasher = FoldHashFixed::default();
             let phys = series.to_physical_repr();
-            Ok(phys
-                .i128()?
+            phys.i128()?
                 .iter()
-                .map(|v| match v {
-                    None => NULL_SENTINEL,
-                    Some(x) => {
-                        let mut hasher = build_hasher.build_hasher();
-                        x.hash(&mut hasher);
-                        hasher.finish()
-                    }
-                })
-                .collect())
+                .map(|v| v.map_or((0, true), |x| (hash_one(&build_hasher, x), false)))
+                .unzip()
         }
-        // List and Array: hash ordered element sequence so [1,2] != [2,1].
+        // List and Array: hash the ordered element sequence so [1,2] != [2,1].
         DataType::List(_) => {
             let build_hasher = FoldHashFixed::default();
             let list_ca = series.list()?;
-            let mut out = Vec::with_capacity(list_ca.len());
+            let mut values = Vec::with_capacity(list_ca.len());
+            let mut is_null = Vec::with_capacity(list_ca.len());
             for opt_inner in list_ca.amortized_iter() {
                 match opt_inner {
-                    None => out.push(NULL_SENTINEL),
+                    None => {
+                        values.push(0);
+                        is_null.push(true);
+                    }
                     Some(inner) => {
-                        let vals = series_to_u64(inner.as_ref())?;
-                        let mut h = build_hasher.build_hasher();
-                        vals.len().hash(&mut h);
-                        for v in vals {
-                            v.hash(&mut h);
-                        }
-                        out.push(h.finish());
+                        values.push(hash_nested(&build_hasher, inner.as_ref())?);
+                        is_null.push(false);
                     }
                 }
             }
-            Ok(out)
+            (values, is_null)
         }
         DataType::Array(_, _) => {
             let build_hasher = FoldHashFixed::default();
             let arr_ca = series.array()?;
-            let mut out = Vec::with_capacity(arr_ca.len());
+            let mut values = Vec::with_capacity(arr_ca.len());
+            let mut is_null = Vec::with_capacity(arr_ca.len());
             for opt_inner in arr_ca.amortized_iter() {
                 match opt_inner {
-                    None => out.push(NULL_SENTINEL),
+                    None => {
+                        values.push(0);
+                        is_null.push(true);
+                    }
                     Some(inner) => {
-                        let vals = series_to_u64(inner.as_ref())?;
-                        let mut h = build_hasher.build_hasher();
-                        vals.len().hash(&mut h);
-                        for v in vals {
-                            v.hash(&mut h);
-                        }
-                        out.push(h.finish());
+                        values.push(hash_nested(&build_hasher, inner.as_ref())?);
+                        is_null.push(false);
                     }
                 }
             }
-            Ok(out)
+            (values, is_null)
         }
-        _ => Err(PolarsError::ComputeError(
-            format!(
-                "Unsupported data type: {:?}.",
-                series.dtype()
-            )
-            .into(),
-        )),
+        _ => {
+            return Err(PolarsError::ComputeError(
+                format!("Unsupported data type: {:?}.", series.dtype()).into(),
+            ));
+        }
+    };
+
+    Ok(EncodedColumn { values, is_null })
+}
+
+/// Hash a single `Hash`-able value with the fixed-seed hasher.
+#[inline]
+fn hash_one<T: Hash>(build_hasher: &FoldHashFixed, value: T) -> u64 {
+    let mut hasher = build_hasher.build_hasher();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Hash the ordered element sequence of a nested (List/Array) inner series,
+/// folding in each element's null-ness so nulls never alias real elements.
+fn hash_nested(build_hasher: &FoldHashFixed, inner: &Series) -> PolarsResult<u64> {
+    let enc = encode_series(inner)?;
+    let mut h = build_hasher.build_hasher();
+    enc.len().hash(&mut h);
+    for (v, n) in enc.values.iter().zip(enc.is_null.iter()) {
+        n.hash(&mut h);
+        v.hash(&mut h);
     }
+    Ok(h.finish())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -231,22 +280,27 @@ pub(crate) fn series_to_u64(series: &Series) -> PolarsResult<Vec<u64>> {
 pub(crate) fn build_column_cache_par(
     inputs: &[Series],
     needed: &HashSet<usize>,
-) -> PolarsResult<Vec<Vec<u64>>> {
+) -> PolarsResult<Vec<EncodedColumn>> {
     let tasks: Vec<(usize, &Series)> = inputs
         .iter()
         .enumerate()
         .filter(|(idx, _)| needed.contains(idx))
         .collect();
 
-    let converted: Vec<(usize, Vec<u64>)> = tasks
+    let converted: Vec<(usize, EncodedColumn)> = tasks
         .into_par_iter()
         .map(|(idx, series)| {
-            let data = series_to_u64(series)?;
+            let data = encode_series(series)?;
             Ok((idx, data))
         })
         .collect::<PolarsResult<Vec<_>>>()?;
 
-    let mut cache: Vec<Vec<u64>> = (0..inputs.len()).map(|_| Vec::new()).collect();
+    let mut cache: Vec<EncodedColumn> = (0..inputs.len())
+        .map(|_| EncodedColumn {
+            values: Vec::new(),
+            is_null: Vec::new(),
+        })
+        .collect();
     for (idx, data) in converted {
         cache[idx] = data;
     }
@@ -310,4 +364,3 @@ pub(crate) fn resolve_triplets(
         })
         .collect()
 }
-

@@ -44,8 +44,10 @@ class BloomFilter:
     @staticmethod
     def _calculate_bit_array_size(n: int, p: float) -> int:
         """
-        Calculate optimal bit array size in *bytes*, m, where
-        m = -(n *lg(p)) / (lg(2)^2) - rounded up to the nearest byte
+        Calculate optimal bit array size m in *bits*, where
+        m = -(n * ln(p)) / (ln(2)^2), rounded up to a multiple of 8 so the
+        backing byte array is exactly m/8 bytes. The Rust plugin expects m in
+        bits and a byte array of ceil(m/8) bytes.
         """
         m = -(n * math.log(p)) / (math.log(2) ** 2)
         return (int(math.ceil(m)) + 7) // 8 * 8
@@ -79,7 +81,7 @@ class BloomFilter:
         Check for membership for each item in the first column. Returns a Series of
         True/False indicating membership.
         """
-        df = self._collect(data)
+        df = data.collect() if isinstance(data, pl.LazyFrame) else data
         col = df.columns[0]
         return df.select(
             pl.col(col).analytics.membership(
