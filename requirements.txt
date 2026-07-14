@@ -18,3 +18,4 @@ polars-ds>=0.5
 # Benchmark alternatives — optional; benchmarks degrade gracefully if absent
 scipy>=1.11
 fastbloom-rs>=0.5.10
+scikit-learn>=1.3

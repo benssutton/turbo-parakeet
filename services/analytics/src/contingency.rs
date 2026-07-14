@@ -202,8 +202,10 @@ mod tests {
     #[test]
     fn test_flat_and_hash_paths_agree() {
         // 1500 distinct ids per column → space 2.25M > FLAT_MAX → hash path.
-        // Verify against a brute-force reference; also run a truncated (small)
-        // version of the same data through the flat path and cross-check.
+        // Verify the hash-map counting path against an independent brute-force
+        // reference computed directly from the dense ids. The flat path is
+        // covered separately by test_basic_counts, test_null_rows_dropped,
+        // and test_sums_consistent, which all use small joint spaces.
         let va: Vec<i32> = (0..1500).collect();
         let vb: Vec<i32> = (0..1500).map(|i| (i * 7) % 1500).collect();
         let a = dense(&Series::new("a".into(), &va));
