@@ -98,7 +98,7 @@ class MinHashLSHFilter:
                 num_bands=self.b,
                 rows_per_band=self.r,
             ).alias("candidates")
-        ).unnest("candidates")
+        ).unnest("candidates").collect()
         self.lsh_time = (time.perf_counter_ns() - start_time) / 1000 ** 3
         # Extract candidate pairs as list of tuples
         self.candidates = list(zip(

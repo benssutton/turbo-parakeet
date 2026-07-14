@@ -1,3 +1,20 @@
-maturin
-polars
-pyarrow
+# Build — Rust extension via pyo3/maturin
+maturin>=1.0
+
+# Data / columnar format
+polars>=1.0
+pyarrow>=14.0
+numpy>=1.26
+
+# Testing
+pytest>=7.4
+pytest-cov>=7.1
+
+# Baseline implementations
+# (datasketch: minhash_lsh_filter_datasketch.py; polars-ds: chi_squared_polarsds.py)
+datasketch>=1.6
+polars-ds>=0.5
+
+# Benchmark alternatives — optional; benchmarks degrade gracefully if absent
+scipy>=1.11
+fastbloom-rs>=0.5.10

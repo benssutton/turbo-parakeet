@@ -1,6 +1,7 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python.defaultInterpreterPath": "C:\\Users\\Ben\\miniconda3\\envs\\p312\\python.exe",
     "python.testing.pytestArgs": [
         "tests"
     ],

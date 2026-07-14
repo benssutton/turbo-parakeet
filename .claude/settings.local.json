@@ -3,7 +3,9 @@
     "allow": [
       "Bash(*)",
       "PowerShell(*)",
-      "Read(*)"
+      "Read(*)",
+      "find(*)"
     ]
   }
 }
+

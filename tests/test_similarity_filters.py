@@ -23,9 +23,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from services.analytics.DeterministicSimilarityFilter import DeterministicSimilarityFilter
-from services.analytics.MinHashLSHFilter import MinHashLSHFilter
-from services.analytics.MinHashLSHFilter_datasketch import MinHashLSHFilter_datasketch
+from services.analytics.deterministic_similarity_filter import DeterministicSimilarityFilter
+from services.analytics.minhash_lsh_filter import MinHashLSHFilter
+from services.analytics.minhash_lsh_filter_datasketch import MinHashLSHFilter_datasketch
 
 
 JACCARD_THRESHOLD = 0.6

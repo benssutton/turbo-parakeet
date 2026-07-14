@@ -1,6 +1,9 @@
 *.pyc
 *.pyd
 *.pdb
-Cargo.lock
 __pycache__/
+
+.coverage
+
+Cargo.lock
 target/
