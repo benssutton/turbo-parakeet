@@ -221,6 +221,43 @@ def threeway_joint_entropy(
         ).alias("threeway_entropy")
     )
 
+def marginal_entropy(
+    df: pl.DataFrame | pl.LazyFrame,
+) -> pl.DataFrame:
+    """
+    Calculate marginal (single-column) entropy for every column independently.
+
+    Diagnostic/independent cross-check: computed via the shared null-safe
+    encoder and the SIMD entropy reduction, but deliberately NOT the dense-id
+    counting path pairwise/threeway joint entropy use — useful for isolating
+    whether a discrepancy originates in per-column encoding/SIMD reduction
+    versus the joint-entropy-specific counting machinery.
+
+    Parameters
+    ----------
+    df : pl.DataFrame or pl.LazyFrame
+        Input data with columns to analyze. LazyFrames will be collected.
+
+    Returns
+    -------
+    pl.DataFrame
+        Single column "marginal_entropy" containing structs with:
+        - col_name: String - Column name
+        - entropy: f64 - Marginal entropy H(col) in bits
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="marginal_entropy",
+            args=df.get_columns(),
+            kwargs={},
+            is_elementwise=False,
+        ).alias("marginal_entropy")
+    )
+
 """
 Chi Squared Independence Test
 """

@@ -6,7 +6,16 @@
       "Bash(*)",
       "PowerShell(*)",
       "Read(*)",
-      "find(*)"
+      "Bash(bash \"C:/Users/Ben/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.1/skills/subagent-driven-development/scripts/review-package\" f0e5a66 e7a41ea)",
+      "Bash(bash \"C:/Users/Ben/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.1/skills/subagent-driven-development/scripts/task-brief\" docs/superpowers/plans/2026-07-14-adjusted-rand-index.md 4)",
+      "Bash(PATH=/c/Users/Ben/miniconda3/envs/p312:__TRACKED_VAR__ PYO3_PYTHON=C:/Users/Ben/miniconda3/envs/p312/python.exe cargo test --release ari)",
+      "Bash(tasklist)",
+      "Bash(git commit *)",
+      "Bash(bash \"C:/Users/Ben/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.1/skills/subagent-driven-development/scripts/review-package\" e7a41ea 6ed31b3)",
+      "Bash(bash \"C:/Users/Ben/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.1/skills/subagent-driven-development/scripts/task-brief\" docs/superpowers/plans/2026-07-14-adjusted-rand-index.md 5)",
+      "Bash(C:/Users/Ben/miniconda3/envs/p312/python.exe -m maturin develop --release)",
+      "Bash(C:/Users/Ben/miniconda3/envs/p312/python.exe -c ' *)",
+      "Bash(bash \"C:/Users/Ben/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.1/skills/subagent-driven-development/scripts/review-package\" 6ed31b3 69e0161)"
     ]
   }
 }

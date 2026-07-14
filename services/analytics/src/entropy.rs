@@ -482,6 +482,120 @@ fn threeway_joint_entropy(inputs: &[Series], kwargs: ThreewayKwargs) -> PolarsRe
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Marginal (single-column)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// H(col) for every input column independently — one row per column, no
+// combinatorics. Deliberately built on the shared null-safe encoder
+// (encode_series via build_column_cache_par) and a plain frequency HashMap,
+// NOT the dense-id/flat-array machinery pairwise/threeway use above: this
+// keeps the marginal path an independent cross-check of the SIMD entropy
+// reduction (entropy_from_counts_iter / entropy_from_count_of_counts) and the
+// encoder, uncoupled from the newer dense re-encoding counting strategy.
+
+fn marginal_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
+    let fields = vec![
+        Field::new("col_name".into(), DataType::String),
+        Field::new("entropy".into(), DataType::Float64),
+    ];
+    Ok(Field::new(
+        "marginal_entropy".into(),
+        DataType::Struct(fields),
+    ))
+}
+
+thread_local! {
+    static FREQ_MARGINAL: RefCell<HashMap<(u64, bool), u64, FoldHashFast>> =
+        RefCell::new(HashMap::with_hasher(FoldHashFast::default()));
+}
+
+pub(crate) fn marginal_entropy_impl(inputs: &[Series]) -> PolarsResult<Series> {
+    if inputs.is_empty() {
+        return Err(PolarsError::ComputeError(
+            "marginal_entropy requires at least one column".into(),
+        ));
+    }
+
+    let n_cols = inputs.len();
+
+    // Step 1: row count and log2(r), computed once.
+    let r = inputs[0].len();
+    if r == 0 {
+        return Err(PolarsError::ComputeError(
+            "Cannot calculate entropy on empty columns".into(),
+        ));
+    }
+    let r_f = r as f64;
+    let logr = r_f.log2();
+
+    // Validate all columns have the same length.
+    for (idx, series) in inputs.iter().enumerate() {
+        if series.len() != r {
+            return Err(PolarsError::ShapeMismatch(
+                format!(
+                    "All columns must have the same length: column {} has length {} but expected {}",
+                    idx,
+                    series.len(),
+                    r
+                )
+                .into(),
+            ));
+        }
+    }
+
+    // Step 2: parallel column cache (every column is needed).
+    let needed: HashSet<usize> = (0..n_cols).collect();
+    let cache = build_column_cache_par(inputs, &needed)?;
+    let col_names: Vec<String> = inputs.iter().map(|s| s.name().to_string()).collect();
+
+    // Step 3: parallel entropy calculation, one column at a time.
+    let results: Vec<(String, f64)> = (0..n_cols)
+        .into_par_iter()
+        .map(|i| {
+            let col = &cache[i];
+
+            // The key folds is_null in directly so a null is a distinct
+            // category from every real value, matching pairwise/threeway's
+            // null policy.
+            let entropy = FREQ_MARGINAL.with(|freq_cell| {
+                let mut freq = freq_cell.borrow_mut();
+                freq.clear();
+                for idx in 0..r {
+                    let key = (col.values[idx], col.is_null[idx]);
+                    *freq.entry(key).or_insert(0) += 1;
+                }
+                entropy_from_counts_iter(freq.values().copied(), logr, r_f)
+            });
+
+            (col_names[i].clone(), entropy)
+        })
+        .collect();
+
+    // Step 4: build struct series.
+    let col_name_s = StringChunked::from_iter(results.iter().map(|(name, _)| name.as_str()))
+        .into_series()
+        .with_name("col_name".into());
+    let entropy_s = Float64Chunked::from_vec(
+        "entropy".into(),
+        results.iter().map(|(_, e)| *e).collect(),
+    )
+    .into_series();
+
+    let struct_ca = StructChunked::from_series(
+        "marginal_entropy".into(),
+        n_cols,
+        [col_name_s, entropy_s].iter(),
+    )?;
+
+    Ok(struct_ca.into_series())
+}
+
+#[polars_expr(output_type_func=marginal_entropy_output_type)]
+fn marginal_entropy(inputs: &[Series]) -> PolarsResult<Series> {
+    marginal_entropy_impl(inputs)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -850,6 +964,88 @@ mod tests {
             .collect();
         let result = threeway_joint_entropy_impl(&series, no_triplets()).unwrap();
         assert_eq!(result.len(), 9880);
+    }
+
+    // ── Marginal (single-column) ───────────────────────────────────────────
+
+    #[test]
+    fn test_marginal_uniform() {
+        // 4 distinct values, each once → H = log2(4) = 2.0
+        let s = Series::new("a".into(), &[0i32, 1, 2, 3]);
+        let result = marginal_entropy_impl(&[s]).unwrap();
+        assert_eq!(result.len(), 1);
+
+        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+        assert!((h - 2.0).abs() < 1e-10, "Expected 2.0, got {}", h);
+    }
+
+    #[test]
+    fn test_marginal_deterministic() {
+        let s = Series::new("a".into(), &[7i32; 100]);
+        let result = marginal_entropy_impl(&[s]).unwrap();
+
+        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+        assert!(h.abs() < 1e-10, "Expected 0.0, got {}", h);
+    }
+
+    #[test]
+    fn test_marginal_multiple_columns() {
+        let s1 = Series::new("a".into(), &[1i32, 2, 3, 4]);
+        let s2 = Series::new("b".into(), &[1i32, 1, 1, 1]);
+        let s3 = Series::new("c".into(), &[1i32, 1, 2, 2]);
+        let result = marginal_entropy_impl(&[s1, s2, s3]).unwrap();
+        assert!(matches!(result.dtype(), DataType::Struct(_)));
+        assert_eq!(result.len(), 3);
+
+        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let names: Vec<&str> = df
+            .column("col_name")
+            .unwrap()
+            .str()
+            .unwrap()
+            .into_no_null_iter()
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_marginal_null_is_distinct_category() {
+        // [1, 1, null, null, 2]: 3 categories (1, null, 2) with counts (2,2,1)
+        // over r=5 → H = -(2/5*log2(2/5)*2 + 1/5*log2(1/5)).
+        let s = Series::new("a".into(), &[Some(1i32), Some(1), None, None, Some(2)]);
+        let result = marginal_entropy_impl(&[s]).unwrap();
+        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+
+        let p1: f64 = 2.0 / 5.0;
+        let p2: f64 = 1.0 / 5.0;
+        let expected = -(2.0 * p1 * p1.log2() + p2 * p2.log2());
+        assert!((h - expected).abs() < 1e-10, "Expected {}, got {}", expected, h);
+    }
+
+    #[test]
+    fn test_marginal_empty_inputs() {
+        let result = marginal_entropy_impl(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_marginal_length_mismatch() {
+        let s1 = Series::new("a".into(), &[1i32, 2, 3]);
+        let s2 = Series::new("b".into(), &[1i32, 2]);
+        let result = marginal_entropy_impl(&[s1, s2]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_marginal_boolean_column() {
+        let s = Series::new("a".into(), &[true, false, true, false, true]);
+        let result = marginal_entropy_impl(&[s]).unwrap();
+        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+        assert!(h >= 0.0 && h <= 1.0);
     }
 
     #[test]

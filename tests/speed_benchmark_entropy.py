@@ -17,6 +17,7 @@ import sys
 from analytics import (
     pairwise_joint_entropy,
     threeway_joint_entropy,
+    marginal_entropy,
 )
 
 # Data file path
@@ -30,6 +31,24 @@ def load_data() -> pl.LazyFrame:
         print("Please ensure large_dataset.arrow exists in the project root.")
         sys.exit(1)
     return pl.scan_ipc(DATA_PATH)
+
+
+def benchmark_native_polars_marginal(lf: pl.LazyFrame, col: str) -> tuple[float, float]:
+    """
+    Benchmark native Polars marginal (single-column) entropy using
+    value_counts + Series.entropy(base=2).
+
+    Returns:
+        tuple[float, float]: (entropy_value, duration_seconds)
+    """
+    start = time.perf_counter()
+
+    s = lf.select(col).collect().to_series()
+    counts = s.value_counts().get_column("count")
+    entropy_value = counts.entropy(base=2, normalize=True)
+
+    duration = time.perf_counter() - start
+    return entropy_value, duration
 
 
 def benchmark_native_polars(lf: pl.LazyFrame, col_a: str, col_b: str) -> tuple[float, float]:
@@ -64,6 +83,20 @@ def validate_entropy_match(e1: float, e2: float, rtol: float = 1e-5) -> bool:
     """Check if two entropy values match within relative tolerance."""
     import math
     return math.isclose(e1, e2, rel_tol=rtol)
+
+
+def _run_marginal_plugin(plugin_fn, lf: pl.LazyFrame) -> tuple[dict, float]:
+    """Run the marginal plugin function and return (entropy_dict, duration)."""
+    start = time.perf_counter()
+    result = plugin_fn(lf.collect())
+    duration = time.perf_counter() - start
+
+    unnested = result.unnest(result.columns[0])
+    entropy_dict = {
+        row["col_name"]: row["entropy"]
+        for row in unnested.iter_rows(named=True)
+    }
+    return entropy_dict, duration
 
 
 def _run_batch_plugin(plugin_fn, lf: pl.LazyFrame) -> tuple[dict, float]:
@@ -128,6 +161,31 @@ def main():
     columns = list(lf.collect_schema().keys())
     column_pairs = list(combinations(columns, 2))
 
+    # -- Marginal plugin (3 runs) -----------------------------------------------
+    print(f"Running marginal plugin ({len(columns)} columns, 3 runs)...")
+    entropy_marginal: dict = {}
+    marginal_times = []
+    for _ in range(3):
+        entropy_marginal, t = _run_marginal_plugin(marginal_entropy, lf)
+        marginal_times.append(t)
+    time_marginal = sum(marginal_times) / len(marginal_times)
+
+    # -- Native Polars per-column ------------------------------------------------
+    print(f"Running native Polars per-column ({len(columns)} columns)...")
+    total_time_marginal_native = 0.0
+    marginal_mismatches = 0
+    marginal_tested = 0
+    for col in columns:
+        try:
+            entropy_native, time_native = benchmark_native_polars_marginal(lf, col)
+            total_time_marginal_native += time_native
+            marginal_tested += 1
+        except Exception:
+            continue
+        plugin_val = entropy_marginal.get(col)
+        if plugin_val is not None and not validate_entropy_match(entropy_native, plugin_val):
+            marginal_mismatches += 1
+
     # -- Pairwise plugin (3 runs) ----------------------------------------------
     print(f"Running pairwise plugin ({len(column_pairs)} pairs, 3 runs)...")
     entropy_plugin: dict = {}
@@ -189,6 +247,13 @@ def main():
     print("JOINT ENTROPY BENCHMARK")
     print(f"{len(column_pairs)} pairs | {actual_triplets} triplets | {len(columns)} columns")
     print()
+    print(f"Marginal (single-column)")
+    print(f"{'Method':<{W}}  {'Avg time (3 runs)':>18}  {'vs plugin':>10}")
+    print("-" * (W + 32))
+    print(f"{'Plugin batch':<{W}}  {time_marginal * 1000:>17.1f}ms  {'1.0x':>10}")
+    if marginal_tested > 0:
+        print(f"{'Native Polars (per-column)':<{W}}  {total_time_marginal_native * 1000:>17.1f}ms  {total_time_marginal_native / time_marginal:>9.1f}x")
+    print()
     print(f"Pairwise (2-way)")
     print(f"{'Method':<{W}}  {'Avg time (3 runs)':>18}  {'vs plugin':>10}")
     print("-" * (W + 32))
@@ -207,6 +272,7 @@ def main():
         print(f"{'Native Polars (10K sample)':<{W}}  {extrap_ms:>17.1f}ms  {extrap_speedup:>9.1f}x  (extrap.)")
     print()
     print("Correctness vs native Polars  (rtol=1e-5)")
+    print(f"  Marginal: {'yes' if marginal_mismatches == 0 else f'no  ({marginal_mismatches}/{marginal_tested} mismatches)'}")
     print(f"  Pairwise: {'yes' if pair_mismatches == 0 else f'no  ({pair_mismatches}/{pairs_tested} mismatches)'}")
     print(f"  3-way:    {'yes' if triplet_mismatches == 0 else f'no  ({triplet_mismatches}/{triplets_tested} mismatches)'}")
     print()
