@@ -1117,7 +1117,7 @@ Pairwise Adjusted Rand Index correctness tests: Rust plugin vs scikit-learn.
 Eligible columns from the shared 18-column dataset (see conftest.make_dataset):
     boolean_*   (3 columns) — Boolean
     uint32_*    (3 columns) — UInt32
-    cat_*       (3 columns) — Categorical
+    categorical_* (3 columns) — Categorical
     float64_*   (3 columns) — Float64 (discrete labels; ARI is defined for any labelling)
 
 Excluded: list_* and arr_* (nested types; sklearn cannot label them).
@@ -1133,7 +1133,6 @@ Skipped automatically if scikit-learn is not installed.
 """
 
 import math
-from itertools import combinations
 
 import polars as pl
 import pytest
@@ -1144,7 +1143,7 @@ _analytics = pytest.importorskip("analytics")
 pairwise_adjusted_rand = _analytics.pairwise_adjusted_rand
 
 
-_ARI_ELIGIBLE_PREFIXES = ("boolean_", "uint32_", "cat_", "float64_")
+_ARI_ELIGIBLE_PREFIXES = ("boolean_", "uint32_", "categorical_", "float64_")
 
 
 def ari_eligible_columns(df: pl.DataFrame) -> list[str]:
