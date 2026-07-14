@@ -25,7 +25,7 @@
       "Bash(\"C:/Users/Ben/miniconda3/envs/p312/python.exe\" -m pytest tests/test_entropy.py -v)",
       "Bash(PATH=/c/Users/Ben/miniconda3/envs/p312:__TRACKED_VAR__ PYO3_PYTHON=C:/Users/Ben/miniconda3/envs/p312/python.exe cargo test --release marginal)",
       "Bash(\"C:/Users/Ben/miniconda3/envs/p312/python.exe\" tests/speed_benchmark_entropy.py)",
-      "Bash(\"C:/Users/Ben/miniconda3/envs/p312/python.exe\" \"C:/Users/Ben/AppData/Local/Temp/claude/c--Users-Ben-turbo-parakeet/05a15042-9a6b-4d62-a884-571a7926c80d/scratchpad/check_rust_vs_rust_subadditivity.py\")"
+      "Bash(\"C:/Users/Ben/miniconda3/envs/p312/python.exe\" *)"
     ]
   }
 }
