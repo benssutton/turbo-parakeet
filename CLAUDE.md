@@ -15,7 +15,7 @@ Prioritise performance & simplicity.
 
 # Analytical Functions
 
-Five techniques for surfacing column relationships within and between dataframes:
+Six techniques for surfacing column relationships within and between dataframes:
 
 **1. Bloom filter — set membership / containment**
 Tests whether values from one column are present in another. High `membership_ratio(A → B)` ⇒ A is contained in B, suggesting A is a foreign key referencing B. The test is **asymmetric**: PK-PK relationships require reciprocal containment of *unique* values in both directions (run two filters).
@@ -31,6 +31,9 @@ The plugin returns joint entropy H(A,B) and three-way H(A,B,C). Combined with ma
 
 **5. Run-length spans — REE compression candidacy**
 Quantifies spans of consecutive identical values in physical column order. Average span > 2 (compression ratio > 2×) flags columns that benefit from Apache Arrow Run-End Encoding.
+
+**6. Adjusted Rand Index — partition agreement**
+Treats each column as a partition of the rows and measures chance-corrected agreement between two partitions (ARI ∈ [−0.5, 1]; 1 = identical partitions, ≈0 = chance-level). Unlike NMI it is chance-adjusted, and unlike χ²/Cramér's V it measures *partition identity*, not just association. Null policy: rows where either column is null are dropped; `n_valid` reports the surviving row count so scores over tiny overlaps can be discounted.
 
 # Project Structure
 
@@ -48,6 +51,8 @@ turbo-parakeet/
 │       │   ├── shared.rs           # Shared utils (encode_series, build_column_cache_par, densify, build_dense_cache_par)
 │       │   ├── entropy.rs          # Joint entropy (2-way and 3-way), dense-id encoded
 │       │   ├── chi_squared.rs      # Chi-squared independence test
+│       │   ├── contingency.rs      # Shared drop-null contingency-table builder (chi², ARI)
+│       │   ├── ari.rs              # Pairwise Adjusted Rand Index
 │       │   ├── bloomfilter.rs      # Bloom filter
 │       │   └── minhash.rs          # MinHash + LSH candidates
 │       ├── bloom_filter.py         # BloomFilter Python wrapper
@@ -61,9 +66,11 @@ turbo-parakeet/
     ├── data/
     │   └── large_dataset.arrow     # 50K rows, 101 columns
     ├── test_similarity_filters.py  # Correctness + recall tests for similarity filters
+    ├── test_adjusted_rand.py       # ARI correctness vs scikit-learn
     ├── benchmark_bloom_filter.py   # Bloom filter benchmark vs fastbloom-rs
     ├── benchmark_chi_squared.py    # Chi-squared benchmark: Rust vs polars-ds vs scipy
     ├── benchmark_entropy.py        # Joint entropy benchmark: plugin vs native Polars
+    ├── speed_benchmark_adjusted_rand.py  # ARI benchmark vs scikit-learn
     └── benchmark_rle.py            # Run-length analysis benchmark (column_run_stats)
 ```
 
@@ -73,14 +80,15 @@ Build: `maturin develop --release` from `services/analytics/`
 Exposed functions:
 - `pairwise_joint_entropy(df)` — all column pairs
 - `threeway_joint_entropy(df)` — all column triplets (no cap; C(101,3) = 166,650 at 101 cols, ~65s at 50K rows)
-- `pairwise_chi_squared(df, pairs)` — chi-squared + p-value + Cramer's V
+- `pairwise_chi_squared(df, pairs)` — chi-squared + p-value + Cramer's V + low_expected_count + n_valid
+- `pairwise_adjusted_rand(df, pairs)` — Adjusted Rand Index + n_valid
 - `minhash(df, ...)` / `lsh_candidates(...)` — MinHash signatures and LSH buckets
 - `membership_ratio(df)` — Bloom filter membership across n columns
 
 # Current Focus
 Chi-squared Rust plugin is complete and validated (~17x faster than polars-ds baseline, matches scipy at rtol=1e-4). MinHashLSH similarity filters are complete with correctness and recall tests passing. Run-length analysis (Approach A, pure Python via `polars.Expr.rle()`) is complete: ~142 ms / 101 cols / 50K rows.
 
-Joint entropy (2-way and 3-way) is dense-id encoded (see below): 83.5µs/pair, 170.3µs/triplet at 50K rows/101 cols — roughly 2x faster than the original hash-tuple implementation, and the 3-way/2-way speedup-vs-native-Polars gap that motivated the change is closed (3-way now outpaces 2-way's multiplier rather than trailing it).
+Joint entropy (2-way and 3-way) is dense-id encoded (see below): 83.5µs/pair, 170.3µs/triplet at 50K rows/101 cols — roughly 2x faster than the original hash-tuple implementation, and the 3-way/2-way speedup-vs-native-Polars gap that motivated the change is closed (3-way now outpaces 2-way's multiplier rather than trailing it). ARI (`pairwise_adjusted_rand`) is complete and validated against scikit-learn; chi² now shares the same dense contingency builder and reports `n_valid`.
 
 ## Entropy dense re-encoding (shared.rs + entropy.rs)
 Columns feeding `pairwise_joint_entropy`/`threeway_joint_entropy` are dictionary-encoded to dense ids `0..card` via `densify`/`build_dense_cache_par` (nulls become their own id, so the per-row loop carries no separate null mask). Joint keys are then combined arithmetically (`(a·Kb + b)·Kc + c`) instead of hashing multi-field tuples:
@@ -93,9 +101,6 @@ This encoding is entropy/chi²-only — it's value-relabeling and has no cross-c
 # Next Steps
 
 ## Implementation cleanups
-
-**[chi_squared.rs](services/analytics/src/chi_squared.rs)**
-- Follow-up (not yet done): surface a warning (or a `low_expected_count` boolean field) when expected cell counts fall below 5. This is the standard chi-squared assumption and ignoring it can inflate χ² on sparse contingency tables. The same dense re-encoding used for entropy could also speed up chi²'s contingency-table build, since it has the identical relabeling-invariance property — worth doing alongside the warning.
 
 **[bloomfilter.rs](services/analytics/src/bloomfilter.rs)**
 - ~~silent state discard on `existing_filter` length mismatch~~ **Fixed**: `m` is now consistently bits with `ceil(m/8)`-byte arrays; wrong-sized filters raise `ComputeError`, and `validate_bit_array` guards the unchecked bit reads.
@@ -112,3 +117,4 @@ This encoding is entropy/chi²-only — it's value-relabeling and has no cross-c
 ## Cross-cutting notes (not bugs, worth documenting)
 - `encode_series` (formerly `series_to_u64`) returns `EncodedColumn { values, is_null }` — nulls are out-of-band (no in-band sentinel), floats are canonicalised (`-0.0`→`0.0`, all NaN payloads→one key). Null policy per module: entropy = null is a category; chi² = null rows dropped; minhash/bloom = nulls skipped. Keep this in mind when deriving MI from entropy + chi² outputs. Entropy additionally densifies `EncodedColumn` → `DenseColumn` (`0..card` ids) via `densify` — see "Entropy dense re-encoding" above.
 - `String / categorical / enum / list / decimal types route through foldhash → u64` (categorical/enum are cast to their string value first, so a categorical `"x"` hashes identically to the string `"x"` and identically across frames regardless of physical code). Collision probability at 50K rows is ~6×10⁻¹¹ per pair — negligible for entropy/χ², irrelevant for MinHash (deterministic seed across columns). foldhash `FixedState` is NOT stable across crate versions/platforms — don't persist bloom bit arrays or minhash signatures across rebuilds for hashed dtypes.
+- chi² and ARI share `build_contingency` (contingency.rs): dense-id counting, drop-null policy, marginals + non-zero cells. Entropy keeps its own counting (null-as-category — different policy by design).
