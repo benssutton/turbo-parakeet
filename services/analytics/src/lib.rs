@@ -4,6 +4,7 @@ mod shared;
 mod entropy;
 mod chi_squared;
 mod contingency;
+mod ari;
 
 use mimalloc::MiMalloc;
 
