@@ -102,6 +102,8 @@ def _make_negatives(col: str) -> list:
 
 def _fastbloom_key(value, col: str):
     """Canonical key for fastbloom-rs (accepts str | int | bytes)."""
+    # str() on a Polars categorical element returns the label string, which
+    # matches encode_series's cast-to-String path for Categorical/Enum.
     return int(value) if _dtype_spec(col) == "uint32" else str(value)
 
 
@@ -166,6 +168,14 @@ def test_cross_frame_categorical_membership() -> None:
     assert shared_found == len(shared), (
         f"cross-frame categorical: {shared_found}/{len(shared)} shared values "
         "found; a categorical must be identified by string value, not code"
+    )
+    pad_found = int(result.slice(0, len(pad)).sum())
+    # FP rate should be roughly FP_RATE on a negative set of 50 items,
+    # allowing 3× tolerance as in the other tests.
+    max_acceptable_fps = int(len(pad) * FP_RATE * FP_RATE_TOLERANCE) + 1
+    assert pad_found <= max_acceptable_fps, (
+        f"cross-frame categorical: {pad_found}/{len(pad)} pad values incorrectly "
+        f"found (exceeds tolerance of {max_acceptable_fps})"
     )
 
 
