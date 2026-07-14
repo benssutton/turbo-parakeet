@@ -9,19 +9,9 @@ Cross-implementation comparison is at the FP-rate level only. The two
 implementations use incompatible hash functions, so per-item membership
 decisions on false positives are expected to differ and are not compared.
 
-Note on Categorical FP rate testing
-------------------------------------
-The custom Rust plugin encodes Categorical values by their physical u32 code
-(see encode_series in shared.rs), NOT by their string value. Categorical codes
-are small consecutive integers (0, 1, 2, ...). Feeding small sequential u64
-keys into xxh3_128 and a small bloom filter produces correlated bit patterns
-that inflate the empirical FP rate well above the configured target — this is a
-hash-clustering artefact, not a correctness bug (the no-false-negatives
-guarantee still holds). FP rate tests for the custom filter therefore exclude
-Categorical; the no-false-negatives tests still exercise that dtype.
-
-fastbloom-rs hashes the string representation of each value, bypassing the code
-issue entirely, so its categorical FP rate tests are unaffected.
+Categorical/enum columns encode by string value (encode_series casts to String
+and hashes with foldhash), so they behave like string columns here and are
+covered by every test group below.
 """
 
 import sys
@@ -52,28 +42,9 @@ NON_BOOLEAN_COLS = [
     for dtype in ("float64", "uint32", "categorical", "list", "arr")
     for shape in ("skewed", "high_unique", "sparse")
 ]
-
-# FP rate testing excludes Categorical for the custom filter: physical u32 codes
-# are small sequential integers, and xxh3_128 on those keys in a small filter
-# produces clustered bit patterns that inflate the empirical FP rate.
-CUSTOM_FP_RATE_COLS = [
-    f"{dtype}_{shape}"
-    for dtype in ("float64", "uint32", "list", "arr")
-    for shape in ("skewed", "high_unique", "sparse")
-]
-
 SCALAR_NON_BOOLEAN_COLS = [
     f"{dtype}_{shape}"
     for dtype in ("float64", "uint32", "categorical")
-    for shape in ("skewed", "high_unique", "sparse")
-]
-
-# Cross-implementation FP rate comparison excludes Categorical: the custom
-# filter hashes physical codes while fastbloom-rs hashes string representations,
-# making a rate comparison meaningless.
-CROSS_IMPL_FP_COLS = [
-    f"{dtype}_{shape}"
-    for dtype in ("float64", "uint32")
     for shape in ("skewed", "high_unique", "sparse")
 ]
 
@@ -200,7 +171,7 @@ def test_cross_frame_categorical_membership() -> None:
 
 # ── False positive rate ───────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("col", CUSTOM_FP_RATE_COLS)
+@pytest.mark.parametrize("col", NON_BOOLEAN_COLS)
 def test_false_positive_rate_custom(dataset: pl.DataFrame, col: str) -> None:
     """Custom filter FP rate must stay within FP_RATE_TOLERANCE × the configured rate."""
     dtype = dataset[col].dtype
@@ -249,14 +220,14 @@ def test_false_positive_rate_fastbloom(dataset: pl.DataFrame, col: str) -> None:
 # ── Cross-implementation FP rate agreement ────────────────────────────────────
 
 @pytest.mark.skipif(not FASTBLOOM_AVAILABLE, reason="fastbloom-rs not installed")
-@pytest.mark.parametrize("col", CROSS_IMPL_FP_COLS)
+@pytest.mark.parametrize("col", SCALAR_NON_BOOLEAN_COLS)
 def test_fp_rate_agreement_vs_fastbloom(dataset: pl.DataFrame, col: str) -> None:
     """
     Custom and fastbloom-rs must both achieve a FP rate within tolerance.
 
-    Categorical is excluded: the custom filter hashes physical u32 codes while
-    fastbloom-rs hashes string representations, making a rate comparison
-    meaningless (see module docstring).
+    Categorical is included: both implementations now hash the string value
+    (the custom filter casts categorical to String in encode_series), so the
+    rate comparison is meaningful.
 
     Per-item membership results on negatives are deliberately NOT compared — the
     two implementations use different hash functions, so per-item disagreement on
