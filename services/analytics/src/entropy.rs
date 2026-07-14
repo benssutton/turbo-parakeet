@@ -3,9 +3,163 @@ use rayon::prelude::*;
 use wide::f64x4;
 use polars::prelude::*;
 use pyo3_polars::derive::polars_expr;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::shared::*;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Thread-local scratch buffers
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Each pair/triplet counts joint frequencies. Under Rayon these closures run
+// thousands of times per worker thread (C(101,3) = 166650 triplets), so scratch
+// storage is kept per worker thread and reset between calls — capacity is
+// retained, so steady-state cost is zero allocations.
+//
+// Columns are dictionary-encoded to dense ids 0..card (see DenseColumn), so a
+// joint key is a single integer: (a·Kb + b)·Kc + c. Two counting strategies:
+//   - joint space ≤ FLAT_MAX → flat array indexing, no hashing at all;
+//     `touched` records used slots so reset is O(distinct), not O(space).
+//   - larger → hash map keyed by the combined u64 (u128 when Ka·Kb·Kc
+//     overflows u64 — only possible past ~2.6M rows).
+const FLAT_MAX: u64 = 1 << 20; // 4 MB of u32 counts per worker thread
+
+thread_local! {
+    static FLAT_COUNTS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    static TOUCHED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    static FREQ: RefCell<HashMap<u64, u64, FoldHashFast>> =
+        RefCell::new(HashMap::with_hasher(FoldHashFast::default()));
+    static FREQ_WIDE: RefCell<HashMap<u128, u64, FoldHashFast>> =
+        RefCell::new(HashMap::with_hasher(FoldHashFast::default()));
+    static COC: RefCell<HashMap<u64, u64, FoldHashFast>> =
+        RefCell::new(HashMap::with_hasher(FoldHashFast::default()));
+}
+
+/// Reduce per-key counts to entropy via the shared count-of-counts scratch map.
+fn entropy_from_counts_iter(
+    counts: impl Iterator<Item = u64>,
+    logr: f64,
+    r_f: f64,
+) -> f64 {
+    COC.with(|coc_cell| {
+        let mut coc_map = coc_cell.borrow_mut();
+        coc_map.clear();
+        for count in counts {
+            *coc_map.entry(count).or_insert(0) += 1;
+        }
+        let coc: Vec<(u64, u64)> = coc_map.drain().collect();
+        entropy_from_count_of_counts(&coc, logr, r_f)
+    })
+}
+
+/// Count joint frequencies of pre-combined keys in the flat scratch array.
+/// Caller guarantees every key < `space` and `space` ≤ FLAT_MAX.
+fn entropy_flat(
+    keys: impl Iterator<Item = usize>,
+    space: usize,
+    logr: f64,
+    r_f: f64,
+) -> f64 {
+    FLAT_COUNTS.with(|counts_cell| {
+        TOUCHED.with(|touched_cell| {
+            let mut counts = counts_cell.borrow_mut();
+            let mut touched = touched_cell.borrow_mut();
+            if counts.len() < space {
+                counts.resize(space, 0);
+            }
+            for key in keys {
+                let slot = &mut counts[key];
+                if *slot == 0 {
+                    touched.push(key as u32);
+                }
+                *slot += 1;
+            }
+            let h = entropy_from_counts_iter(
+                touched.iter().map(|&t| counts[t as usize] as u64),
+                logr,
+                r_f,
+            );
+            for &t in touched.iter() {
+                counts[t as usize] = 0;
+            }
+            touched.clear();
+            h
+        })
+    })
+}
+
+/// Joint entropy of two dense-encoded columns.
+fn joint_entropy_pair(a: &DenseColumn, b: &DenseColumn, r: usize, logr: f64, r_f: f64) -> f64 {
+    let kb = b.card as u64;
+    // Cards are u32, so the pair product always fits u64.
+    let space = (a.card as u64) * kb;
+    if space <= FLAT_MAX {
+        entropy_flat(
+            (0..r).map(|i| (a.ids[i] as u64 * kb + b.ids[i] as u64) as usize),
+            space as usize,
+            logr,
+            r_f,
+        )
+    } else {
+        FREQ.with(|freq_cell| {
+            let mut freq = freq_cell.borrow_mut();
+            freq.clear();
+            for i in 0..r {
+                let key = a.ids[i] as u64 * kb + b.ids[i] as u64;
+                *freq.entry(key).or_insert(0) += 1;
+            }
+            entropy_from_counts_iter(freq.values().copied(), logr, r_f)
+        })
+    }
+}
+
+/// Joint entropy of three dense-encoded columns.
+fn joint_entropy_triple(
+    a: &DenseColumn,
+    b: &DenseColumn,
+    c: &DenseColumn,
+    r: usize,
+    logr: f64,
+    r_f: f64,
+) -> f64 {
+    let kb = b.card as u64;
+    let kc = c.card as u64;
+    let space = a.card as u128 * kb as u128 * kc as u128;
+    if space <= FLAT_MAX as u128 {
+        entropy_flat(
+            (0..r).map(|i| {
+                ((a.ids[i] as u64 * kb + b.ids[i] as u64) * kc + c.ids[i] as u64) as usize
+            }),
+            space as usize,
+            logr,
+            r_f,
+        )
+    } else if space <= u64::MAX as u128 {
+        FREQ.with(|freq_cell| {
+            let mut freq = freq_cell.borrow_mut();
+            freq.clear();
+            for i in 0..r {
+                let key = (a.ids[i] as u64 * kb + b.ids[i] as u64) * kc + c.ids[i] as u64;
+                *freq.entry(key).or_insert(0) += 1;
+            }
+            entropy_from_counts_iter(freq.values().copied(), logr, r_f)
+        })
+    } else {
+        // Ka·Kb·Kc overflows u64: pack the three ids into a u128 instead.
+        FREQ_WIDE.with(|freq_cell| {
+            let mut freq = freq_cell.borrow_mut();
+            freq.clear();
+            for i in 0..r {
+                let key = ((a.ids[i] as u128) << 64)
+                    | ((b.ids[i] as u128) << 32)
+                    | (c.ids[i] as u128);
+                *freq.entry(key).or_insert(0) += 1;
+            }
+            entropy_from_counts_iter(freq.values().copied(), logr, r_f)
+        })
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SIMD entropy from count-of-counts
@@ -17,11 +171,11 @@ use crate::shared::*;
 ///   - `count_value` (c): how many times a particular key appeared
 ///   - `multiplicity` (n): how many distinct keys share that count
 ///
-/// Formula: H = -Σ n * c * (log2(c) - log2(r)) / r
+/// Formula: H = log2(r) - Σ n * c * log2(c) / r
+///   (logr hoisted out: Σ n·c = r, so the logr term reduces to a constant)
 ///
 /// Uses SIMD f64x4 processing 4 (c, n) pairs per iteration with scalar tail.
 fn entropy_from_count_of_counts(coc: &[(u64, u64)], logr: f64, r_f: f64) -> f64 {
-    let logr_vec = f64x4::from([logr; 4]);
     let mut acc = f64x4::ZERO;
     let full_chunks = coc.len() / 4;
 
@@ -39,16 +193,16 @@ fn entropy_from_count_of_counts(coc: &[(u64, u64)], logr: f64, r_f: f64) -> f64 
             coc[base + 2].1 as f64,
             coc[base + 3].1 as f64,
         ]);
-        acc -= n * c * (c.log2() - logr_vec);
+        acc += n * c * c.log2();
     }
 
-    let mut entropy: f64 = acc.reduce_add();
+    let mut sum: f64 = acc.reduce_add();
     for &(c_val, n_val) in &coc[full_chunks * 4..] {
         let c = c_val as f64;
         let n = n_val as f64;
-        entropy -= n * c * (c.log2() - logr);
+        sum += n * c * c.log2();
     }
-    entropy / r_f
+    logr - sum / r_f
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,9 +292,11 @@ pub(crate) fn pairwise_joint_entropy_impl(
 
     let n_pairs = pairs.len();
 
-    // Step 3: parallel column cache (convert only needed columns, in parallel).
+    // Step 3: parallel dense cache (encode + dictionary-encode needed columns).
+    // Nulls are folded in as their own dense id, so the per-pair loop needs no
+    // null mask; a null is still a distinct category from every real value.
     let needed: HashSet<usize> = pairs.iter().flat_map(|(i, j)| [*i, *j]).collect();
-    let cache = build_column_cache_par(inputs, &needed)?;
+    let cache = build_dense_cache_par(inputs, &needed)?;
 
     // Pre-collect column names to avoid per-thread allocations inside par_iter.
     let col_names: Vec<String> = inputs.iter().map(|s| s.name().to_string()).collect();
@@ -149,34 +305,8 @@ pub(crate) fn pairwise_joint_entropy_impl(
     let results: Vec<_> = pairs
         .par_iter()
         .map(|(i, j)| {
-            let col_a = &cache[*i];
-            let col_b = &cache[*j];
-            let col_a_name = col_names[*i].clone();
-            let col_b_name = col_names[*j].clone();
-
-            // 5a+5b: build the joint frequency map. The key folds each column's
-            // null-ness into a 2-bit mask so a null is a distinct category from
-            // every real value (including value 0) — never an aliased sentinel.
-            let mut freq: HashMap<(u64, u64, u8), u64, FoldHashFast> =
-                HashMap::with_capacity_and_hasher(r, FoldHashFast::default());
-            for idx in 0..r {
-                let mask = (col_a.is_null[idx] as u8) | ((col_b.is_null[idx] as u8) << 1);
-                let key = (col_a.values[idx], col_b.values[idx], mask);
-                *freq.entry(key).or_insert(0) += 1;
-            }
-
-            // 5c: count-of-counts.
-            let mut coc_map: HashMap<u64, u64, FoldHashFast> =
-                HashMap::with_capacity_and_hasher(freq.len(), FoldHashFast::default());
-            for count in freq.values() {
-                *coc_map.entry(*count).or_insert(0) += 1;
-            }
-            let coc: Vec<(u64, u64)> = coc_map.into_iter().collect();
-
-            // 5d: SIMD entropy from count-of-counts.
-            let entropy = entropy_from_count_of_counts(&coc, logr, r_f);
-
-            Ok((col_a_name, col_b_name, entropy))
+            let entropy = joint_entropy_pair(&cache[*i], &cache[*j], r, logr, r_f);
+            Ok((col_names[*i].clone(), col_names[*j].clone(), entropy))
         })
         .collect::<PolarsResult<Vec<_>>>()?;
 
@@ -287,12 +417,14 @@ pub(crate) fn threeway_joint_entropy_impl(
 
     let n_triplets = triplets.len();
 
-    // Step 3: parallel column cache.
+    // Step 3: parallel dense cache (encode + dictionary-encode needed columns).
+    // Nulls are folded in as their own dense id, so the per-triplet loop needs
+    // no null mask; a null is still a distinct category from every real value.
     let needed: HashSet<usize> = triplets
         .iter()
         .flat_map(|(i, j, k)| [*i, *j, *k])
         .collect();
-    let cache = build_column_cache_par(inputs, &needed)?;
+    let cache = build_dense_cache_par(inputs, &needed)?;
 
     // Pre-collect column names to avoid per-thread allocations inside par_iter.
     let col_names: Vec<String> = inputs.iter().map(|s| s.name().to_string()).collect();
@@ -301,40 +433,13 @@ pub(crate) fn threeway_joint_entropy_impl(
     let results: Vec<_> = triplets
         .par_iter()
         .map(|(i, j, k)| {
-            let col_a = &cache[*i];
-            let col_b = &cache[*j];
-            let col_c = &cache[*k];
-            let col_a_name = col_names[*i].clone();
-            let col_b_name = col_names[*j].clone();
-            let col_c_name = col_names[*k].clone();
-
-            // 5a+5b: build the joint frequency map. The key folds each column's
-            // null-ness into a 3-bit mask so nulls are a distinct category.
-            let mut freq: HashMap<([u64; 3], u8), u64, FoldHashFast> =
-                HashMap::with_capacity_and_hasher(r, FoldHashFast::default());
-            for idx in 0..r {
-                let mask = (col_a.is_null[idx] as u8)
-                    | ((col_b.is_null[idx] as u8) << 1)
-                    | ((col_c.is_null[idx] as u8) << 2);
-                let key = (
-                    [col_a.values[idx], col_b.values[idx], col_c.values[idx]],
-                    mask,
-                );
-                *freq.entry(key).or_insert(0) += 1;
-            }
-
-            // 5c: count-of-counts.
-            let mut coc_map: HashMap<u64, u64, FoldHashFast> =
-                HashMap::with_capacity_and_hasher(freq.len(), FoldHashFast::default());
-            for count in freq.values() {
-                *coc_map.entry(*count).or_insert(0) += 1;
-            }
-            let coc: Vec<(u64, u64)> = coc_map.into_iter().collect();
-
-            // 5d: SIMD entropy from count-of-counts.
-            let entropy = entropy_from_count_of_counts(&coc, logr, r_f);
-
-            Ok((col_a_name, col_b_name, col_c_name, entropy))
+            let entropy = joint_entropy_triple(&cache[*i], &cache[*j], &cache[*k], r, logr, r_f);
+            Ok((
+                col_names[*i].clone(),
+                col_names[*j].clone(),
+                col_names[*k].clone(),
+                entropy,
+            ))
         })
         .collect::<PolarsResult<Vec<_>>>()?;
 
@@ -521,7 +626,7 @@ mod tests {
         assert_eq!(enc.values[0], enc.values[1], "all NaNs must share a key");
     }
 
-    // ── Pairwise v2 ───────────────────────────────────────────────────────
+    // ── Pairwise ────────────────────────────────────────────────────────────
 
     #[test]
     fn test_pairwise_uniform() {
@@ -631,7 +736,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── Threeway v2 ────────────────────────────────────────────────────────
+    // ── Threeway ────────────────────────────────────────────────────────────
 
     #[test]
     fn test_threeway_basic() {
@@ -855,6 +960,92 @@ mod tests {
         .unwrap();
         let enc = encode_series(&s).unwrap();
         assert_ne!(enc.values[0], enc.values[1]);
+    }
+
+    // ── Dense re-encoding paths ────────────────────────────────────────────
+
+    #[test]
+    fn test_densify_nulls_get_own_id() {
+        // [1, null, 1, 2] → 3 distinct categories (null is one of them).
+        let s = Series::new("test".into(), &[Some(1i32), None, Some(1), Some(2)]);
+        let enc = encode_series(&s).unwrap();
+        let dense = densify(&enc);
+        assert_eq!(dense.card, 3);
+        assert_eq!(dense.ids[0], dense.ids[2]); // 1 == 1
+        assert_ne!(dense.ids[0], dense.ids[1]); // 1 != null
+        assert_ne!(dense.ids[1], dense.ids[3]); // null != 2
+    }
+
+    #[test]
+    fn test_pairwise_null_category_flat_path() {
+        // Flat path (tiny joint space). Joint keys (0,1),(null,1),(0,2),(null,2)
+        // are 4 distinct categories, each once → H = 2.0. Guards the null-as-
+        // category policy through the dense encoding.
+        let s1 = Series::new("a".into(), &[Some(0i32), None, Some(0), None]);
+        let s2 = Series::new("b".into(), &[1i32, 1, 2, 2]);
+        let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
+        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+        assert!((h - 2.0).abs() < 1e-10, "Expected 2.0, got {}", h);
+    }
+
+    #[test]
+    fn test_pairwise_high_cardinality_hash_path() {
+        // 2000 distinct values per column → joint space 4M > FLAT_MAX,
+        // exercising the u64 hash path. Rows are unique pairs → H = log2(2000).
+        let v: Vec<i32> = (0..2000).collect();
+        let s1 = Series::new("a".into(), &v);
+        let s2 = Series::new("b".into(), &v);
+        let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
+        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+        let expected = 2000f64.log2();
+        assert!((h - expected).abs() < 1e-10, "Expected {}, got {}", expected, h);
+    }
+
+    #[test]
+    fn test_threeway_high_cardinality_hash_path() {
+        // 200 distinct values per column → joint space 8M > FLAT_MAX,
+        // exercising the u64 hash path. Rows are unique triplets → H = log2(200).
+        let v: Vec<i32> = (0..200).collect();
+        let s1 = Series::new("a".into(), &v);
+        let s2 = Series::new("b".into(), &v);
+        let s3 = Series::new("c".into(), &v);
+        let result = threeway_joint_entropy_impl(&[s1, s2, s3], no_triplets()).unwrap();
+        let df = result.into_frame().unnest(["threeway_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+        let expected = 200f64.log2();
+        assert!((h - expected).abs() < 1e-10, "Expected {}, got {}", expected, h);
+    }
+
+    #[test]
+    fn test_flat_and_hash_paths_agree() {
+        // Same data pushed through both paths must give identical entropy.
+        // 1500 rows, 40 distinct values per column: joint space 1600 → flat;
+        // forcing the hash path via entropy_flat vs FREQ is implicit — instead
+        // compare against the analytic value from a reference frequency count.
+        let v1: Vec<i32> = (0..1500).map(|i| i % 40).collect();
+        let v2: Vec<i32> = (0..1500).map(|i| (i / 3) % 40).collect();
+        let s1 = Series::new("a".into(), &v1);
+        let s2 = Series::new("b".into(), &v2);
+        let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
+        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
+
+        // Reference: brute-force count.
+        let mut counts: HashMap<(i32, i32), u64> = HashMap::new();
+        for i in 0..1500 {
+            *counts.entry((v1[i], v2[i])).or_insert(0) += 1;
+        }
+        let r_f = 1500.0f64;
+        let h_ref: f64 = counts
+            .values()
+            .map(|&c| {
+                let p = c as f64 / r_f;
+                -p * p.log2()
+            })
+            .sum();
+        assert!((h - h_ref).abs() < 1e-10, "Expected {}, got {}", h_ref, h);
     }
 
     #[test]

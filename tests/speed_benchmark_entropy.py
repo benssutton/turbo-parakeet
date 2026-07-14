@@ -123,216 +123,93 @@ def benchmark_threeway_native(lf: pl.LazyFrame, col_a: str, col_b: str, col_c: s
 
 
 def main():
-    print("=" * 70)
-    print("PAIRWISE & 3-WAY JOINT ENTROPY BENCHMARK")
-    print()
-    print("PAIRWISE (2-way):")
-    print("  1. Native Polars group_by")
-    print("  2. Batch Plugin (pairwise_joint_entropy)")
-    print()
-    print("3-WAY:")
-    print("  3. Batch Plugin (threeway_joint_entropy)")
-    print("  4. Native Polars group_by (for comparison)")
-    print("=" * 70)
-    print()
-
-    # Load dataset
     print("Loading dataset...")
     lf = load_data()
-
-    # Get column names (requires minimal collect to inspect schema)
-    schema = lf.schema
-    columns = list(schema.keys())
-
-    print(f"Dataset: {len(columns)} columns")
-    print(f"Columns: {', '.join(columns)}")
-
-    # Generate all column pairs
+    columns = list(lf.collect_schema().keys())
     column_pairs = list(combinations(columns, 2))
-    print(f"Total pairs: {len(column_pairs)}")
-    print()
 
-    # ========================================================================
-    # PAIRWISE BENCHMARKS
-    # ========================================================================
-
-    # Batch plugin (average of 3 runs)
-    print("Running Batch Plugin (all pairs at once, 3 runs)...")
+    # -- Pairwise plugin (3 runs) ----------------------------------------------
+    print(f"Running pairwise plugin ({len(column_pairs)} pairs, 3 runs)...")
     entropy_plugin: dict = {}
     plugin_times = []
-    for run in range(3):
+    for _ in range(3):
         entropy_plugin, t = _run_batch_plugin(pairwise_joint_entropy, lf)
         plugin_times.append(t)
-        print(f"  Run {run + 1}: {t*1000:.2f}ms")
     time_plugin = sum(plugin_times) / len(plugin_times)
-    print(f"  Average: {time_plugin*1000:.2f}ms")
-    print()
 
-    # Native Polars per-pair
-    results = []
-    for idx, (col_a, col_b) in enumerate(column_pairs, 1):
+    # -- Native Polars per-pair ------------------------------------------------
+    print(f"Running native Polars per-pair ({len(column_pairs)} pairs)...")
+    total_time_native = 0.0
+    pair_mismatches = 0
+    pairs_tested = 0
+    for col_a, col_b in column_pairs:
         try:
             entropy_native, time_native = benchmark_native_polars(lf, col_a, col_b)
+            total_time_native += time_native
+            pairs_tested += 1
         except Exception:
             continue
+        plugin_val = entropy_plugin.get((col_a, col_b))
+        if plugin_val is not None and not validate_entropy_match(entropy_native, plugin_val):
+            pair_mismatches += 1
 
-        entropy_plugin_pair = entropy_plugin.get((col_a, col_b))
-
-        # Validate plugin vs native
-        if entropy_plugin_pair is not None:
-            if not validate_entropy_match(entropy_native, entropy_plugin_pair):
-                diff = abs(entropy_native - entropy_plugin_pair)
-                print(f"  Mismatch ({col_a}, {col_b}): diff = {diff:.6f}")
-
-        results.append({
-            "col_a": col_a,
-            "col_b": col_b,
-            "entropy_native": entropy_native,
-            "entropy_plugin": entropy_plugin_pair,
-            "time_native": time_native,
-        })
-
-    # Pairwise summary
-    if results:
-        print()
-        print("=" * 70)
-        print("PAIRWISE SUMMARY")
-        print("=" * 70)
-        print()
-
-        total_time_native = sum(r["time_native"] for r in results)
-
-        print(f"Tested pairs:                          {len(results)}")
-        print()
-        print(f"Total time (native Polars):            {total_time_native*1000:.2f}ms")
-        print(f"Total time (plugin batch):             {time_plugin*1000:.2f}ms")
-        print()
-
-        speedup = total_time_native / time_plugin if time_plugin > 0 else float('inf')
-
-        print(f"Plugin speedup vs native:              {speedup:.2f}x")
-        print()
-
-        mismatches = sum(
-            1 for r in results
-            if r["entropy_plugin"] is not None
-            and not validate_entropy_match(r["entropy_native"], r["entropy_plugin"])
-        )
-
-        if mismatches == 0:
-            print("Plugin vs native: All entropy values matched")
-        else:
-            print(f"Plugin vs native: {mismatches} pair(s) mismatched")
-
-        print()
-        print("=" * 70)
-    else:
-        print("No results to display.")
-
-    # ========================================================================
-    # 3-WAY ENTROPY BENCHMARKS
-    # ========================================================================
-
-    print()
-    print()
-    print("=" * 70)
-    print("3-WAY JOINT ENTROPY BENCHMARK")
-    print("=" * 70)
-    print()
-
-    # Generate triplet combinations (will be limited to 5000 by plugin)
-    all_triplets = list(combinations(columns, 3))
-    total_possible_triplets = len(all_triplets)
-
-    print(f"Total possible triplets: {len(columns)} choose 3 = {total_possible_triplets}")
-    print(f"Benchmark limit: 5000 triplets")
-    print()
-
-    # 3-way plugin (average of 3 runs)
-    print("Running 3-Way Plugin (batch - up to 5000 triplets, 3 runs)...")
+    # -- 3-way plugin (3 runs) -------------------------------------------------
+    # C(101,3) = 166,650 triplets: each run takes on the order of a minute.
+    print("Running 3-way plugin (3 runs)...")
     entropy_3way: dict = {}
     threeway_times = []
     for run in range(3):
         entropy_3way, t = _run_threeway_plugin(threeway_joint_entropy, lf)
         threeway_times.append(t)
-        print(f"  Run {run + 1}: {t*1000:.2f}ms")
+        print(f"  run {run + 1}/3 done in {t:.1f}s ({len(entropy_3way):,} triplets)")
     time_3way = sum(threeway_times) / len(threeway_times)
     actual_triplets = len(entropy_3way)
-    print(f"  Average over 3 runs: {time_3way*1000:.2f}ms ({actual_triplets} triplets)")
-    print(f"  Average per triplet: {(time_3way*1000)/actual_triplets:.3f}ms")
-    print()
 
-    # Native Polars per-triplet
-    print(f"Running Native Polars for {actual_triplets} triplets (for comparison)...")
-    triplets_to_benchmark = list(entropy_3way.keys())
-
-    threeway_results = []
+    # -- Native Polars per-triplet (capped sample) ----------------------------
+    MAX_NATIVE_TRIPLETS = 10_000
+    native_triplet_sample = list(entropy_3way.keys())[:MAX_NATIVE_TRIPLETS]
+    print(f"Running native Polars per-triplet ({len(native_triplet_sample):,} of {actual_triplets:,} triplets)...")
     total_time_3way_native = 0.0
-    mismatches_3way = 0
-
-    for idx, (col_a, col_b, col_c) in enumerate(triplets_to_benchmark, 1):
-        if idx % 500 == 0 or idx == actual_triplets:
-            print(f"  Progress: {idx}/{actual_triplets} triplets...")
-
+    triplet_mismatches = 0
+    triplets_tested = 0
+    for col_a, col_b, col_c in native_triplet_sample:
         try:
             entropy_native, time_native = benchmark_threeway_native(lf, col_a, col_b, col_c)
             total_time_3way_native += time_native
-
-            entropy_plugin_val = entropy_3way.get((col_a, col_b, col_c))
-
-            if entropy_plugin_val is not None:
-                if not validate_entropy_match(entropy_plugin_val, entropy_native):
-                    diff = abs(entropy_plugin_val - entropy_native)
-                    print(f"  Mismatch ({col_a}, {col_b}, {col_c}): diff = {diff:.6f}")
-                    mismatches_3way += 1
-
-            threeway_results.append({
-                "cols": (col_a, col_b, col_c),
-                "entropy_plugin": entropy_plugin_val,
-                "entropy_native": entropy_native,
-                "time_native": time_native,
-            })
-
-        except Exception as e:
-            print(f"  Error for ({col_a}, {col_b}, {col_c}): {e}")
+            triplets_tested += 1
+        except Exception:
             continue
+        plugin_val = entropy_3way.get((col_a, col_b, col_c))
+        if plugin_val is not None and not validate_entropy_match(plugin_val, entropy_native):
+            triplet_mismatches += 1
 
+    # -- Summary ---------------------------------------------------------------
+    W = 32
     print()
-
-    # 3-way summary
-    if threeway_results:
-        print("=" * 70)
-        print("3-WAY SUMMARY")
-        print("=" * 70)
-        print()
-
-        print(f"Tested triplets:                       {len(threeway_results)}")
-        print()
-        print(f"Total time (native Polars):            {total_time_3way_native*1000:.2f}ms")
-        print(f"Total time (plugin batch):             {time_3way*1000:.2f}ms")
-        print()
-
-        speedup_3way = total_time_3way_native / time_3way if time_3way > 0 else float('inf')
-
-        print(f"Plugin speedup vs native:              {speedup_3way:.2f}x")
-        print()
-
-        # Average times
-        avg_plugin = (time_3way * 1000) / len(threeway_results)
-        avg_native = (total_time_3way_native * 1000) / len(threeway_results)
-
-        print(f"Average time per triplet:")
-        print(f"  Plugin:    {avg_plugin:.3f}ms")
-        print(f"  Native:    {avg_native:.3f}ms")
-        print()
-
-        if mismatches_3way == 0:
-            print("Plugin vs native: All entropy values matched")
-        else:
-            print(f"Plugin vs native: {mismatches_3way} triplet(s) mismatched")
-
-        print()
-        print("=" * 70)
+    print("JOINT ENTROPY BENCHMARK")
+    print(f"{len(column_pairs)} pairs | {actual_triplets} triplets | {len(columns)} columns")
+    print()
+    print(f"Pairwise (2-way)")
+    print(f"{'Method':<{W}}  {'Avg time (3 runs)':>18}  {'vs plugin':>10}")
+    print("-" * (W + 32))
+    print(f"{'Plugin batch':<{W}}  {time_plugin * 1000:>17.1f}ms  {'1.0x':>10}")
+    if pairs_tested > 0:
+        print(f"{'Native Polars (per-pair)':<{W}}  {total_time_native * 1000:>17.1f}ms  {total_time_native / time_plugin:>9.1f}x")
+    print()
+    print(f"3-way")
+    print(f"{'Method':<{W}}  {'Avg time (3 runs)':>18}  {'vs plugin':>10}")
+    print("-" * (W + 32))
+    print(f"{'Plugin batch':<{W}}  {time_3way * 1000:>17.1f}ms  {'1.0x':>10}")
+    if triplets_tested > 0:
+        avg_native_ms = total_time_3way_native * 1000 / triplets_tested
+        extrap_ms = avg_native_ms * actual_triplets
+        extrap_speedup = extrap_ms / (time_3way * 1000)
+        print(f"{'Native Polars (10K sample)':<{W}}  {extrap_ms:>17.1f}ms  {extrap_speedup:>9.1f}x  (extrap.)")
+    print()
+    print("Correctness vs native Polars  (rtol=1e-5)")
+    print(f"  Pairwise: {'yes' if pair_mismatches == 0 else f'no  ({pair_mismatches}/{pairs_tested} mismatches)'}")
+    print(f"  3-way:    {'yes' if triplet_mismatches == 0 else f'no  ({triplet_mismatches}/{triplets_tested} mismatches)'}")
+    print()
 
 
 if __name__ == "__main__":

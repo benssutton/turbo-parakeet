@@ -26,7 +26,7 @@ import polars as pl
 _ANALYTICS_ROOT = Path(__file__).parent.parent / "services" / "analytics"
 sys.path.insert(0, str(_ANALYTICS_ROOT))
 
-from chi_squared import _get_suitable_columns, pairwise_chi_squared as pairwise_chi_squared_pds
+from chi_squared_polarsds import _get_suitable_columns, pairwise_chi_squared as pairwise_chi_squared_pds
 from analytics import pairwise_chi_squared as pairwise_chi_squared_rust
 
 DATA_PATH = Path(__file__).parent / "data" / "large_dataset.arrow"
@@ -135,161 +135,74 @@ def validate_chi2_match(v1: float, v2: float, rtol: float = 1e-4) -> bool:
 
 
 def main() -> None:
-    print("=" * 70)
-    print("PAIRWISE CHI-SQUARED INDEPENDENCE TEST BENCHMARK")
-    print()
-    print("  1. Rust plugin     (pairwise_chi_squared — analytics)")
-    print("  2. polars-ds batch (pairwise_chi_squared — chi_squared service)")
-    print("  3. scipy per-pair  (chi2_contingency, correction=False)")
-    print("=" * 70)
-    print()
-
     print("Loading dataset...")
     lf = load_data()
     df = lf.collect()
 
-    all_cols = list(df.schema.keys())
     suitable_cols = _get_suitable_columns(df, include_integer=True, min_unique=2, max_unique=_MAX_UNIQUE)
     all_pairs = list(combinations(suitable_cols, 2))
-
-    print(f"Dataset columns (total):                   {len(all_cols)}")
-    print(f"Suitable columns (max_unique={_MAX_UNIQUE}):         {len(suitable_cols)}")
-    print(f"  {', '.join(suitable_cols)}")
-    print(f"Total pairs:                               {len(all_pairs)}")
-    print()
+    n_pairs = len(all_pairs)
+    n_rows = len(df)
 
     if not all_pairs:
-        print("No suitable column pairs found. Exiting.")
+        print("No suitable column pairs found.")
         return
 
-    # =========================================================================
-    # RUST PLUGIN
-    # =========================================================================
-    print("Running Rust plugin (3 runs)...")
+    print(f"Running Rust plugin ({n_pairs} pairs, 3 runs)...")
     rust_result: dict = {}
     rust_times: list[float] = []
-    for run in range(3):
+    for _ in range(3):
         rust_result, t = _run_batch_rust(df, all_pairs)
         rust_times.append(t)
-        print(f"  Run {run + 1}: {t * 1000:.2f}ms")
-
     time_rust = sum(rust_times) / len(rust_times)
-    print(f"  Average: {time_rust * 1000:.2f}ms")
-    print()
 
-    # =========================================================================
-    # POLARS-DS BATCH
-    # =========================================================================
-    print("Running polars-ds batch (3 runs)...")
+    print("Running polars-ds (3 runs)...")
     pds_result: dict = {}
     pds_times: list[float] = []
-    for run in range(3):
+    for _ in range(3):
         pds_result, t = _run_batch_pds(df)
         pds_times.append(t)
-        print(f"  Run {run + 1}: {t * 1000:.2f}ms")
-
     time_pds = sum(pds_times) / len(pds_times)
-    print(f"  Average: {time_pds * 1000:.2f}ms")
-    print()
 
-    # =========================================================================
-    # SCIPY PER-PAIR
-    # =========================================================================
-    scipy_results: list[dict] = []
+    print(f"Running scipy validation ({n_pairs} pairs)...")
     total_time_scipy = 0.0
     rust_mismatches = 0
     pds_mismatches = 0
-    skipped = 0
+    tested = 0
 
-    print(f"Running scipy per-pair ({len(all_pairs)} pairs)...")
-    for idx, (col_a, col_b) in enumerate(all_pairs, 1):
-        if idx % 10 == 0 or idx == len(all_pairs):
-            print(f"  Progress: {idx}/{len(all_pairs)} pairs...")
-
+    for col_a, col_b in all_pairs:
         try:
-            chi2_scipy, pval_scipy, t = benchmark_scipy_pair(df, col_a, col_b)
+            chi2_scipy, _, t = benchmark_scipy_pair(df, col_a, col_b)
             total_time_scipy += t
-        except Exception as e:
-            print(f"  scipy error for ({col_a}, {col_b}): {e}")
-            skipped += 1
+            tested += 1
+        except Exception:
             continue
 
         rust_val = rust_result.get((col_a, col_b))
-        if rust_val is not None:
-            if not validate_chi2_match(chi2_scipy, rust_val["chi2_stat"]):
-                diff = abs(chi2_scipy - rust_val["chi2_stat"])
-                print(f"  Rust mismatch ({col_a}, {col_b}): "
-                      f"scipy={chi2_scipy:.6f}  rust={rust_val['chi2_stat']:.6f}  "
-                      f"diff={diff:.6f}")
-                rust_mismatches += 1
+        if rust_val is not None and not validate_chi2_match(chi2_scipy, rust_val["chi2_stat"]):
+            rust_mismatches += 1
 
         pds_val = pds_result.get((col_a, col_b))
-        if pds_val is not None:
-            if not validate_chi2_match(chi2_scipy, pds_val["chi2_stat"]):
-                diff = abs(chi2_scipy - pds_val["chi2_stat"])
-                print(f"  polars-ds mismatch ({col_a}, {col_b}): "
-                      f"scipy={chi2_scipy:.6f}  pds={pds_val['chi2_stat']:.6f}  "
-                      f"diff={diff:.6f}")
-                pds_mismatches += 1
+        if pds_val is not None and not validate_chi2_match(chi2_scipy, pds_val["chi2_stat"]):
+            pds_mismatches += 1
 
-        scipy_results.append({
-            "col_a": col_a,
-            "col_b": col_b,
-            "chi2_scipy": chi2_scipy,
-            "pval_scipy": pval_scipy,
-            "time": t,
-        })
-
-    tested = len(scipy_results)
+    W = 24
     print()
-
-    # =========================================================================
-    # SUMMARY
-    # =========================================================================
-    print("=" * 70)
-    print("SUMMARY")
-    print("=" * 70)
+    print("PAIRWISE CHI-SQUARED BENCHMARK")
+    print(f"{n_pairs} pairs | {n_rows:,} rows | {len(suitable_cols)} columns")
     print()
-    print(f"Total pairs (suitable columns):            {len(all_pairs)}")
-    print(f"Pairs compared (scipy):                    {tested}")
-    if skipped:
-        print(f"Pairs skipped (errors):                    {skipped}")
-    print()
-    print(f"Total time (Rust plugin, avg 3 runs):      {time_rust * 1000:.2f}ms")
-    print(f"Total time (polars-ds batch, avg 3 runs):  {time_pds * 1000:.2f}ms")
+    print(f"{'Method':<{W}}  {'Avg time (3 runs)':>18}  {'vs Rust':>8}")
+    print("-" * (W + 30))
+    print(f"{'Rust plugin':<{W}}  {time_rust * 1000:>17.1f}ms  {'1.0x':>8}")
+    print(f"{'polars-ds':<{W}}  {time_pds * 1000:>17.1f}ms  {time_pds / time_rust:>7.1f}x")
     if tested > 0:
-        print(f"Total time (scipy per-pair):               {total_time_scipy * 1000:.2f}ms")
+        print(f"{'scipy (per-pair)':<{W}}  {total_time_scipy * 1000:>17.1f}ms  {total_time_scipy / time_rust:>7.1f}x")
     print()
-
     if tested > 0:
-        if time_rust > 0:
-            print(f"Speedup Rust vs polars-ds:                 {time_pds / time_rust:.2f}x")
-            print(f"Speedup Rust vs scipy:                     {total_time_scipy / time_rust:.2f}x")
-        print()
-
-        if rust_mismatches == 0:
-            print("Rust vs scipy:      All chi2 values matched  (rtol=1e-4)")
-        else:
-            print(f"Rust vs scipy:      {rust_mismatches} pair(s) mismatched")
-
-        if pds_mismatches == 0:
-            print("polars-ds vs scipy: All chi2 values matched  (rtol=1e-4)")
-        else:
-            print(f"polars-ds vs scipy: {pds_mismatches} pair(s) mismatched")
-
+        print("Correctness vs scipy  (rtol=1e-4)")
+        print(f"  Rust:      {'yes' if rust_mismatches == 0 else f'no  ({rust_mismatches}/{tested} mismatches)'}")
+        print(f"  polars-ds: {'yes' if pds_mismatches == 0 else f'no  ({pds_mismatches}/{tested} mismatches)'}")
     print()
-
-    # Sample of results (Rust)
-    print("Sample results — Rust (first 5 pairs):")
-    sample_pairs = list(rust_result.items())[:5]
-    for (ca, cb), vals in sample_pairs:
-        print(f"  ({ca}, {cb}): "
-              f"chi2={vals['chi2_stat']:.4f}  "
-              f"p={vals['p_value']:.4f}  "
-              f"V={vals['cramers_v']:.4f}")
-
-    print()
-    print("=" * 70)
 
 
 if __name__ == "__main__":

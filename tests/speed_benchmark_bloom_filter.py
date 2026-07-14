@@ -186,81 +186,69 @@ def benchmark_fastbloom(
 
 def print_comparison(
     custom: BenchmarkResult,
-    fastbloom: Optional[BenchmarkResult] = None,
-):
-    """Print side-by-side comparison with speedup factors."""
-    print("\n" + "="*100)
-    print("PERFORMANCE COMPARISON")
-    print("="*100)
-
-    header = f"{'Metric':<25} {'Custom':<15}"
+    fastbloom: Optional[BenchmarkResult],
+    fp_rate: float,
+    n_items: int,
+    n_columns: int,
+) -> None:
+    W = 28
+    print()
+    print("BLOOM FILTER BENCHMARK")
+    print(f"{n_items:,} items | {n_columns} columns | FP target: {fp_rate*100:.2f}%")
+    print()
+    print(f"{'Method':<{W}}  {'Construct':>10}  {'Insert':>10}  {'Query':>10}  {'Memory':>10}")
+    print("-" * (W + 48))
+    print(
+        f"{'Custom (Rust, batch)':<{W}}"
+        f"  {custom.construction_time*1000:>9.1f}ms"
+        f"  {custom.insertion_time*1000:>9.1f}ms"
+        f"  {custom.query_time*1000:>9.1f}ms"
+        f"  {custom.memory_peak_mb:>8.1f} MB"
+    )
     if fastbloom:
-        header += f" {'fastbloom':<15} {'vs Custom':<15}"
-    print(header)
-    print("-"*100)
+        print(
+            f"{'fastbloom-rs (loop)':<{W}}"
+            f"  {fastbloom.construction_time*1000:>9.1f}ms"
+            f"  {fastbloom.insertion_time*1000:>9.1f}ms"
+            f"  {fastbloom.query_time*1000:>9.1f}ms"
+            f"  {fastbloom.memory_peak_mb:>8.1f} MB"
+        )
 
-    def row(label, attr):
-        val = getattr(custom, attr)
-        line = f"{label:<25} {val*1000:<15.2f}"
-        if fastbloom:
-            fv = getattr(fastbloom, attr)
-            speedup = fv / val if val > 0 else 0
-            line += f" {fv*1000:<15.2f} {speedup:<15.2f}×"
-        return line
+        def _speedup(a: float, b: float) -> str:
+            return f"{b/a:.1f}x" if a > 0 else "—"
 
-    print(row("Construction (ms)", "construction_time"))
-    print(row("Insertion (ms)", "insertion_time"))
-    print(row("Query (ms)", "query_time"))
+        print(
+            f"{'Speedup (Custom)':<{W}}"
+            f"  {_speedup(custom.construction_time, fastbloom.construction_time):>10}"
+            f"  {_speedup(custom.insertion_time, fastbloom.insertion_time):>10}"
+            f"  {_speedup(custom.query_time, fastbloom.query_time):>10}"
+            f"  {'n/a':>10}"
+        )
 
-    line = f"{'Peak Memory (MB)':<25} {custom.memory_peak_mb:<15.2f}"
+    print()
+    fp_tol = fp_rate * 3.0
+    custom_ok = custom.false_positive_rate <= fp_tol
     if fastbloom:
-        ratio = custom.memory_peak_mb / fastbloom.memory_peak_mb if fastbloom.memory_peak_mb > 0 else 0
-        line += f" {fastbloom.memory_peak_mb:<15.2f} {ratio:<15.2f}×"
-    print(line)
-
-    line = f"{'False Positive Rate':<25} {custom.false_positive_rate*100:<15.4f}%"
-    if fastbloom:
-        line += f" {fastbloom.false_positive_rate*100:<15.4f}% {'':<15}"
-    print(line)
-
-    print("="*100)
+        fast_ok = fastbloom.false_positive_rate <= fp_tol
+        print(f"FP rate within tolerance (<={fp_tol*100:.2f}%): {'yes' if (custom_ok and fast_ok) else 'no'}")
+        print(f"  Custom:       {custom.false_positive_rate*100:.3f}%")
+        print(f"  fastbloom-rs: {fastbloom.false_positive_rate*100:.3f}%")
+    else:
+        print(f"FP rate within tolerance (<={fp_tol*100:.2f}%): {'yes' if custom_ok else 'no'}")
+        print(f"  Custom: {custom.false_positive_rate*100:.3f}%")
+    print()
 
 
 def main():
     """Run benchmarks on multiple dataset sizes."""
-    n_columns = 50  # number of test columns to check per bloom filter
-
-    if not FASTBLOOM_AVAILABLE:
-        print("\nCannot run benchmarks without comparison library.")
-        print("Install: pip install fastbloom-rs")
-        sys.exit(1)
-
+    n_columns = 50
     dataset_sizes = [50000]
     fp_rate = 0.01
 
-    print("="*100)
-    print("BLOOM FILTER PERFORMANCE BENCHMARK")
-    print("="*100)
-    print(f"Custom: Rust-optimized (batch {n_columns}-column membership_ratio call)")
-    print(f"fastbloom-rs: Rust-based (column-by-column loop)")
-    print(f"\nTest columns (n): {n_columns}")
-    print(f"False Positive Rate Target: {fp_rate*100}%")
-    print(f"Dataset Sizes: {dataset_sizes}")
-    print("="*100)
-
     for size in dataset_sizes:
-        print(f"\n{'#'*100}")
-        print(f"# Dataset Size: {size:,} items  |  {n_columns} test columns")
-        print(f"{'#'*100}")
-
         training, test = generate_dataset(size, n_columns)
-        training_len = training.select(pl.len()).collect()[0, 0]
-        test_len = test.select(pl.len()).collect()[0, 0]
-        print(f"Training set: {training_len:,} items (1 column)")
-        print(f"Test set:     {test_len:,} rows × {n_columns} columns "
-              f"({test_len//2:,} positives + {test_len - test_len//2:,} negatives per column)")
 
-        print("\nBenchmarking Custom Bloom Filter...")
+        print(f"Benchmarking custom filter ({size:,} items, {n_columns} columns)...")
         custom_result = benchmark_custom_bloom(training, test, size, fp_rate)
 
         fastbloom_result = None
@@ -268,14 +256,7 @@ def main():
             print("Benchmarking fastbloom-rs...")
             fastbloom_result = benchmark_fastbloom(training, test, size, fp_rate)
 
-        print(custom_result)
-        if fastbloom_result:
-            print(fastbloom_result)
-        print_comparison(custom_result, fastbloom_result)
-
-    print("\n" + "="*100)
-    print("BENCHMARK COMPLETE")
-    print("="*100)
+        print_comparison(custom_result, fastbloom_result, fp_rate, size, n_columns)
 
 
 if __name__ == "__main__":

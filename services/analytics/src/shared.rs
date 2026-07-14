@@ -281,6 +281,70 @@ fn hash_nested(build_hasher: &FoldHashFixed, inner: &Series) -> PolarsResult<u64
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Dense re-encoding (dictionary encoding to 0..card ids)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A column dictionary-encoded to dense ids `0..card`.
+///
+/// Nulls are folded in as their own id (consistent with the entropy null
+/// policy: null is a distinct category), so consumers need no separate null
+/// mask. Dense ids are only meaningful *within* one column of one call —
+/// they carry no cross-column or cross-frame identity, which is exactly why
+/// they are fine for entropy/chi² (invariant under relabelling) and wrong
+/// for bloom/minhash (which compare actual values across columns/frames).
+pub(crate) struct DenseColumn {
+    pub ids: Vec<u32>,
+    pub card: u32,
+}
+
+/// Dictionary-encode an `EncodedColumn` into dense ids.
+pub(crate) fn densify(col: &EncodedColumn) -> DenseColumn {
+    let mut map: HashMap<(u64, bool), u32, FoldHashFixed> =
+        HashMap::with_capacity_and_hasher(col.len(), FoldHashFixed::default());
+    let mut ids = Vec::with_capacity(col.len());
+    for i in 0..col.len() {
+        let next = map.len() as u32;
+        let id = *map.entry((col.values[i], col.is_null[i])).or_insert(next);
+        ids.push(id);
+    }
+    DenseColumn {
+        ids,
+        card: map.len() as u32,
+    }
+}
+
+/// Encode + densify the needed columns in parallel.
+pub(crate) fn build_dense_cache_par(
+    inputs: &[Series],
+    needed: &HashSet<usize>,
+) -> PolarsResult<Vec<DenseColumn>> {
+    let tasks: Vec<(usize, &Series)> = inputs
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| needed.contains(idx))
+        .collect();
+
+    let converted: Vec<(usize, DenseColumn)> = tasks
+        .into_par_iter()
+        .map(|(idx, series)| {
+            let enc = encode_series(series)?;
+            Ok((idx, densify(&enc)))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let mut cache: Vec<DenseColumn> = (0..inputs.len())
+        .map(|_| DenseColumn {
+            ids: Vec::new(),
+            card: 0,
+        })
+        .collect();
+    for (idx, data) in converted {
+        cache[idx] = data;
+    }
+    Ok(cache)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Parallel column cache
 // ─────────────────────────────────────────────────────────────────────────────
 
