@@ -295,6 +295,10 @@ fn hash_nested(build_hasher: &FoldHashFixed, inner: &Series) -> PolarsResult<u64
 pub(crate) struct DenseColumn {
     pub ids: Vec<u32>,
     pub card: u32,
+    /// Dense id assigned to nulls, if the column has any. Consumers with a
+    /// drop-null policy (contingency-based stats) skip rows carrying this id;
+    /// consumers treating null as a category (entropy) ignore it.
+    pub null_id: Option<u32>,
 }
 
 /// Dictionary-encode an `EncodedColumn` into dense ids.
@@ -302,14 +306,19 @@ pub(crate) fn densify(col: &EncodedColumn) -> DenseColumn {
     let mut map: HashMap<(u64, bool), u32, FoldHashFixed> =
         HashMap::with_capacity_and_hasher(col.len(), FoldHashFixed::default());
     let mut ids = Vec::with_capacity(col.len());
+    let mut null_id: Option<u32> = None;
     for i in 0..col.len() {
         let next = map.len() as u32;
         let id = *map.entry((col.values[i], col.is_null[i])).or_insert(next);
+        if col.is_null[i] && null_id.is_none() {
+            null_id = Some(id);
+        }
         ids.push(id);
     }
     DenseColumn {
         ids,
         card: map.len() as u32,
+        null_id,
     }
 }
 
@@ -336,6 +345,7 @@ pub(crate) fn build_dense_cache_par(
         .map(|_| DenseColumn {
             ids: Vec::new(),
             card: 0,
+            null_id: None,
         })
         .collect();
     for (idx, data) in converted {

@@ -974,6 +974,15 @@ mod tests {
         assert_eq!(dense.ids[0], dense.ids[2]); // 1 == 1
         assert_ne!(dense.ids[0], dense.ids[1]); // 1 != null
         assert_ne!(dense.ids[1], dense.ids[3]); // null != 2
+        assert_eq!(dense.null_id, Some(dense.ids[1])); // null id recorded
+    }
+
+    #[test]
+    fn test_densify_no_nulls_has_no_null_id() {
+        let s = Series::new("test".into(), &[1i32, 2, 3]);
+        let enc = encode_series(&s).unwrap();
+        let dense = densify(&enc);
+        assert_eq!(dense.null_id, None);
     }
 
     #[test]
