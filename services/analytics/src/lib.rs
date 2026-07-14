@@ -3,6 +3,7 @@ mod minhash;
 mod shared;
 mod entropy;
 mod chi_squared;
+mod contingency;
 
 use mimalloc::MiMalloc;
 
