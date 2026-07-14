@@ -61,7 +61,7 @@ turbo-parakeet/
     ├── data/
     │   └── large_dataset.arrow     # 50K rows, 101 columns
     ├── test_similarity_filters.py  # Correctness + recall tests for similarity filters
-    ├── benchmark_bloom_filter.py   # Bloom filter benchmark vs pybloom-live / fastbloom-rs
+    ├── benchmark_bloom_filter.py   # Bloom filter benchmark vs fastbloom-rs
     ├── benchmark_chi_squared.py    # Chi-squared benchmark: Rust vs polars-ds vs scipy
     ├── benchmark_entropy.py        # Joint entropy benchmark: plugin vs native Polars
     └── benchmark_rle.py            # Run-length analysis benchmark (column_run_stats)
@@ -104,4 +104,4 @@ Chi-squared Rust plugin is complete and validated (~17x faster than polars-ds ba
 
 ## Cross-cutting notes (not bugs, worth documenting)
 - `encode_series` (formerly `series_to_u64`) returns `EncodedColumn { values, is_null }` — nulls are out-of-band (no in-band sentinel), floats are canonicalised (`-0.0`→`0.0`, all NaN payloads→one key). Null policy per module: entropy = null is a category; chi² = null rows dropped; minhash/bloom = nulls skipped. Keep this in mind when deriving MI from entropy + chi² outputs.
-- String / list / decimal types route through foldhash → u64. Collision probability at 50K rows is ~6×10⁻¹¹ per pair — negligible for entropy/χ², irrelevant for MinHash (deterministic seed across columns). foldhash `FixedState` is NOT stable across crate versions/platforms — don't persist bloom bit arrays or minhash signatures across rebuilds for hashed dtypes.
+- `String / categorical / enum / list / decimal types route through foldhash → u64` (categorical/enum are cast to their string value first, so a categorical `"x"` hashes identically to the string `"x"` and identically across frames regardless of physical code). Collision probability at 50K rows is ~6×10⁻¹¹ per pair — negligible for entropy/χ², irrelevant for MinHash (deterministic seed across columns). foldhash `FixedState` is NOT stable across crate versions/platforms — don't persist bloom bit arrays or minhash signatures across rebuilds for hashed dtypes.

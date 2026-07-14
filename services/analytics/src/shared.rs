@@ -187,11 +187,18 @@ pub(crate) fn encode_series(series: &Series) -> PolarsResult<EncodedColumn> {
                 .map(|v| v.map_or((0, true), |s| (hash_one(&build_hasher, s), false)))
                 .unzip()
         }
+        // Resolve categories to their string values so a categorical "x" encodes
+        // identically to the string "x" — and identically across frames, whatever
+        // per-Series physical code each frame assigned. Casting to String is
+        // version-stable across the Polars 0.51 generic-categorical rework and
+        // preserves nulls; from here the logic is identical to the String arm.
         DataType::Categorical(_, _) | DataType::Enum(_, _) => {
-            let phys = series.to_physical_repr();
-            phys.u32()?
+            let build_hasher = FoldHashFixed::default();
+            let str_series = series.cast(&DataType::String)?;
+            str_series
+                .str()?
                 .iter()
-                .map(|v| v.map_or((0, true), |x| (x as u64, false)))
+                .map(|v| v.map_or((0, true), |s| (hash_one(&build_hasher, s), false)))
                 .unzip()
         }
         // Decimal is physically i128 with a fixed scale per-Series; hash the raw integer.
