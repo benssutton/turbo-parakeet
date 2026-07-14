@@ -249,6 +249,8 @@ def pairwise_chi_squared(
         - chi2_stat: f64 - Chi-squared test statistic
         - p_value: f64 - P-value for the independence test
         - cramers_v: f64 - Cramer's V effect size (0=no association, 1=perfect)
+        - low_expected_count: bool - True when min expected cell count < 5
+        - n_valid: u32 - Rows remaining after null-dropping
     """
     if isinstance(df, pl.LazyFrame):
         df = df.collect()
@@ -265,6 +267,61 @@ def pairwise_chi_squared(
             kwargs=kwargs_dict,
             is_elementwise=False,
         ).alias("pairwise_chi_squared")
+    )
+
+"""
+Adjusted Rand Index
+"""
+
+def pairwise_adjusted_rand(
+    df: pl.DataFrame | pl.LazyFrame,
+    pairs: list[tuple[str, str]] | None = None,
+) -> pl.DataFrame:
+    """
+    Calculate pairwise Adjusted Rand Index using the Rust plugin.
+
+    Each column is treated as a partition of the rows (rows sharing a value
+    form one cluster). ARI measures chance-corrected agreement between two
+    partitions: 1.0 = identical partitions, ~0 = chance-level agreement,
+    negative (floor -0.5) = worse than chance.
+
+    Null policy: rows where either column is null are dropped (pairwise
+    deletion). Edge conventions match sklearn.metrics.adjusted_rand_score:
+    no overlapping non-null rows -> NaN; degenerate denominator (e.g. both
+    columns constant) -> 1.0.
+
+    Parameters
+    ----------
+    df : pl.DataFrame or pl.LazyFrame
+        Input data. LazyFrames will be collected.
+    pairs : list of (str, str) tuples, optional
+        Specific column pairs to score.
+        When None (default), computes all N-choose-2 combinations.
+
+    Returns
+    -------
+    pl.DataFrame
+        Single column "pairwise_adjusted_rand" containing structs with:
+        - col_a: String - First column name
+        - col_b: String - Second column name
+        - ari: f64 - Adjusted Rand Index
+        - n_valid: u32 - Rows remaining after null-dropping
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    kwargs_dict = {
+        "pairs": [list(p) for p in pairs] if pairs is not None else None
+    }
+
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="pairwise_adjusted_rand",
+            args=df.get_columns(),
+            kwargs=kwargs_dict,
+            is_elementwise=False,
+        ).alias("pairwise_adjusted_rand")
     )
 
 """
