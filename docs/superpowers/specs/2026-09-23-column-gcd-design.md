@@ -5,11 +5,8 @@
 
 ## Purpose
 
-Identify columns that would benefit from ClickHouse's `GCD` compression codec.
-The codec divides every value in a block by the block's greatest common divisor;
-it is pointless when that GCD is 0 or 1. We compute the whole-column GCD, which
-divides every per-block GCD — so a column GCD > 1 guarantees every block
-benefits.
+Compute the whole-column greatest common divisor of every integer-backed column
+in a DataFrame, using the same method as ClickHouse's `GCD` compression codec.
 
 ## Semantics (matches ClickHouse `CompressionCodecGCD`)
 
@@ -20,8 +17,7 @@ benefits.
 - **All-null, all-zero, or zero-row column → `0`** (matches `math.gcd()` and
   `numpy.gcd.reduce` on empty input).
 - **Results are in physical units.** Hourly `Datetime(us)` → `3_600_000_000`;
-  `Decimal(10,2)` in 0.25 steps → `25`. The `dtype` output field lets callers
-  interpret the units.
+  `Decimal(10,2)` in 0.25 steps → `25`.
 - **No early exit** when the running GCD reaches 1. Performance comes from rayon
   parallelism.
 
@@ -85,8 +81,7 @@ def column_gcd(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame
 Mirrors `pairwise_adjusted_rand`: collects a LazyFrame, passes
 `df.get_columns()` to `register_plugin_function(..., function_name="column_gcd",
 is_elementwise=False, changes_length=True)`, returns a single struct column
-`column_gcd`. The docstring documents physical units, the null policy, and the
-0/1 "codec pointless" interpretation.
+`column_gcd`. The docstring documents physical units and the null policy.
 
 ## Testing — strict accuracy / performance split
 
@@ -160,11 +155,9 @@ Update `CLAUDE.md`:
 - the project-structure tree (`gcd.rs`, `tests/test_gcd.py`,
   `tests/performance/`);
 - "Exposed functions": `column_gcd(df)`;
-- a seventh analytical technique: GCD, for ClickHouse GCD-codec candidacy.
+- a seventh analytical technique: whole-column GCD (ClickHouse GCD-codec method).
 
 ## Out of scope
 
-- Per-block GCD (ClickHouse's actual granularity). The whole-column GCD is a
-  safe lower bound.
 - Offset-invariant (step) GCD.
 - Float columns.
