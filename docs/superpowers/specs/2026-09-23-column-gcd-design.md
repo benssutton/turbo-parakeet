@@ -18,8 +18,7 @@ in a DataFrame, using the same method as ClickHouse's `GCD` compression codec.
   `numpy.gcd.reduce` on empty input).
 - **Results are in physical units.** Hourly `Datetime(us)` → `3_600_000_000`;
   `Decimal(10,2)` in 0.25 steps → `25`.
-- **No early exit** when the running GCD reaches 1. Performance comes from rayon
-  parallelism.
+- **No early exit** Performance comes from rayon parallelism.
 
 ### Supported dtypes
 
@@ -52,7 +51,7 @@ possible when every non-zero value is `i128::MIN`) cannot be represented in
 
   Output: `Struct { column: String, dtype: String, gcd: Int128 }`, one row per
   input column, in input column order. `dtype` is the Polars dtype's `Display`
-  string (e.g. `"Datetime(us)"`, `"Decimal(10,2)"`).
+  string (e.g. `"i64"`, `"datetime[μs]"`, `"decimal[10,2]"`, `"date"`).
 
 - **Dispatch:** `series.to_physical_repr()`, then match the physical dtype to
   the u64 or u128 kernel. `encode_series` is *not* reused. It hashes decimals
