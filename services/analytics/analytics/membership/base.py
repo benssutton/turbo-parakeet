@@ -117,7 +117,11 @@ class BloomMembership(Membership):
                     continue
                 false_pos += (got - want) * n
                 negatives += (1.0 - want) * n
-        if negatives and false_pos / negatives > self.FP_TOLERANCE * self.fp_rate:
+        # Below ~100 negatives, a single false positive can push the observed rate well
+        # past FP_TOLERANCE x fp_rate by chance (e.g. 1/14 = 0.071 vs a 3% bound) — not
+        # evidence the filter is miscalibrated. The no-false-negative check above still
+        # always applies.
+        if negatives >= 100 and false_pos / negatives > self.FP_TOLERANCE * self.fp_rate:
             problems.append(
                 f"false-positive rate {false_pos / negatives:.4f} > {self.FP_TOLERANCE} × fp_rate {self.fp_rate}"
             )

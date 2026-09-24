@@ -8,11 +8,16 @@ FP_TOLERANCE × fp_rate of exact containment.
 """
 
 import math
+import subprocess
+import sys
+import textwrap
 
 import polars as pl
 import pytest
 
-from analytics.membership import Membership
+from analytics import _plugin
+from analytics.membership import BloomMembership, Membership
+from analytics.membership.rust import bloom_geometry
 from datagen import mixed_dtypes, related_frames
 from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
 
@@ -111,6 +116,93 @@ def test_false_positive_rate_on_disjoint_sets(impl):
 def test_fp_rate_validation(impl):
     with pytest.raises(ValueError):
         load(impl)(fp_rate=0.0)
+
+
+# ── optional-dependency import isolation ────────────────────────────────────
+
+def test_import_and_use_without_fastbloom_rs():
+    """analytics.membership must import, and BloomRust/MembershipExact must work,
+    when fastbloom_rs cannot be imported (it's an optional reference impl, lazily
+    imported by BloomFastbloom only). Run in a subprocess so faking the ImportError
+    can't leak into other tests via sys.modules."""
+    script = textwrap.dedent(
+        """
+        import sys
+        sys.modules["fastbloom_rs"] = None  # forces ImportError on `import fastbloom_rs`
+        import polars as pl
+        import analytics.membership as mem
+
+        frames = {"x": pl.DataFrame({"a": [1, 2, 3]}), "y": pl.DataFrame({"a": [1, 2, 4]})}
+        assert mem.BloomRust().add(frames).result().height == 1
+        assert mem.MembershipExact().add({n: f for n, f in frames.items()}).result().height == 1
+
+        try:
+            mem.BloomFastbloom
+        except ImportError:
+            pass
+        else:
+            raise SystemExit("BloomFastbloom should have raised ImportError")
+        print("OK")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout
+
+
+# ── BloomMembership.agreement FP-rate bound ─────────────────────────────────
+
+class _ConcreteBloom(BloomMembership):
+    """BloomMembership is abstract (_compute); agreement() never calls it."""
+
+    def _compute(self, frames, combos):
+        raise NotImplementedError
+
+
+def _bloom_frames(ratio: float, n: int):
+    Fixed = with_metrics(
+        BloomMembership,
+        ratio_a_in_b=[ratio],
+        ratio_b_in_a=[ratio],
+        n_distinct_a=[n],
+        n_distinct_b=[n],
+        n_non_null_a=[n],
+        n_non_null_b=[n],
+    )
+    return Fixed().add({"t": pl.DataFrame({"a": [1], "b": [1]})}).result()
+
+
+def test_bloom_agreement_skips_rate_check_below_min_negatives():
+    # n=14, 1 false positive per side (13/14 exact vs 14/14 observed): the aggregate
+    # rate is 1/14 ~ 0.071, way above FP_TOLERANCE(3) x fp_rate(0.01) = 0.03, but the
+    # tiny sample (well under 100 negatives) makes that bound meaningless.
+    result, reference = _bloom_frames(1.0, 14), _bloom_frames(13 / 14, 14)
+    assert _ConcreteBloom().agreement(result, reference) == []
+
+
+def test_bloom_agreement_rate_check_still_fires_above_min_negatives():
+    # n=1000, ratio 0.9 -> 1.0: 100 negatives per side, aggregate FP rate 1.0 far
+    # above the 0.03 bound - large enough that the check must still fire.
+    result, reference = _bloom_frames(1.0, 1000), _bloom_frames(0.9, 1000)
+    problems = _ConcreteBloom().agreement(result, reference)
+    assert any("false-positive rate" in p for p in problems)
+
+
+# ── plugin-level regression: bloom_filter_bits on a multi-chunk Series ──────
+
+def test_bloom_filter_bits_multi_chunk_matches_rechunked():
+    """Task 9 fixed a bug where is_elementwise=True let Polars invoke the plugin
+    once per physical chunk, silently building the filter from one chunk's rows
+    only. bloom_filter_bits (is_elementwise=False) must give identical results on
+    a multi-chunk Series and its rechunked equivalent."""
+    a = pl.Series("v", list(range(0, 500)))
+    b = pl.Series("v", list(range(500, 1000)))
+    multi = pl.concat([a, b], rechunk=False)
+    assert multi.n_chunks() > 1
+    rechunked = multi.rechunk()
+    assert rechunked.n_chunks() == 1
+    m, k = bloom_geometry(multi.len(), 0.01)
+    assert _plugin.bloom_filter_bits(multi, k=k, m=m) == _plugin.bloom_filter_bits(rechunked, k=k, m=m)
 
 
 def test_conclusions_default_override_and_nan():
