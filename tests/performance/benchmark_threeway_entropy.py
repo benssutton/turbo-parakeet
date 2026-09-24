@@ -16,6 +16,10 @@ if __name__ == "__main__":
         "analytics.threeway_entropy",
         [
             large_dataset(columns=40),
+            # All 101 columns -> C(101, 3) = 166,650 triplets. ThreewayEntropyPolars
+            # cannot finish that many one-triplet-at-a-time value_counts calls within
+            # budget, so it's excluded; only the Rust implementation is timed here.
+            large_dataset(exclude=("ThreewayEntropyPolars",)),
             Dataset("narrow 1M x 5", lambda: {"t": low_cardinality(1_000_000, 5)}),
             Dataset("wide 20K x 30", lambda: {"t": low_cardinality(20_000, 30)}),
         ],

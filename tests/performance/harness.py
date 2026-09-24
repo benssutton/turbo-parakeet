@@ -57,7 +57,7 @@ class Dataset:
     exclude: tuple[str, ...] = ()  # implementations not run on this dataset (e.g. would exhaust memory)
 
 
-def large_dataset(columns: int | None = None) -> Dataset:
+def large_dataset(columns: int | None = None, exclude: tuple[str, ...] = ()) -> Dataset:
     """tests/data/large_dataset.arrow (50K rows × 101 cols), optionally only its first `columns`."""
     label = "large_dataset.arrow" + (f" (first {columns} cols)" if columns else "")
 
@@ -65,7 +65,7 @@ def large_dataset(columns: int | None = None) -> Dataset:
         df = pl.read_ipc(LARGE_DATASET)
         return {"large": df.select(df.columns[:columns]) if columns else df}
 
-    return Dataset(label, make)
+    return Dataset(label, make, exclude)
 
 
 def time_call(fn: Callable[[], object], runs: int, budget_s: float) -> tuple[list[float] | None, object]:
