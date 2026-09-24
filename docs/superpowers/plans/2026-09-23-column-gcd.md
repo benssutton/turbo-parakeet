@@ -4,7 +4,7 @@
 
 **Goal:** Add a Rust plugin function `column_gcd(df)` that returns the whole-column GCD of every integer-backed column (ClickHouse GCD-codec method). Also introduce a strict accuracy/performance split in `tests/`.
 
-**Architecture:** A new `src/gcd.rs` reads each column's physical integer buffer directly (not through `encode_series`). It folds magnitudes with Stein's binary GCD from the `gcd` crate, runs columns in parallel and 64K-value chunks within each column in parallel with rayon, and masks null slots to 0 (the GCD identity). The result is a struct Series `{column: String, dtype: String, gcd: Int128}` with one row per input column, exposed to Python through `analytics.column_gcd`.
+**Architecture:** A new `src/gcd.rs` reads each column's physical integer buffer directly (not through `encode_series`). It folds magnitudes with Stein's binary GCD from the `gcd` crate, runs columns in parallel and 64K-value chunks within each column in parallel with rayon, and masks null slots to 0 (the GCD identity). A shared per-column flag stops the scan once the running GCD reaches 1, the minimum increment for every supported dtype. The result is a struct Series `{column: String, dtype: String, gcd: Int128}` with one row per input column, exposed to Python through `analytics.column_gcd`.
 
 **Tech Stack:** Rust (polars 0.51, polars-arrow 0.51, pyo3-polars 0.24, rayon, `gcd` 2.3), Python 3.12 (polars 1.41, numpy, pyarrow, pytest).
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - The GCD is taken over the **raw physical integer values' magnitudes**, never over differences from an offset.
-- **No early exit** when the running GCD reaches 1.
+- **Early exit at the dtype's minimum increment, which is physical `1` for every supported dtype.** Once the running GCD reaches 1, the column's scan stops. While it is above 1, the scan continues. `BLOCK = 1 << 10` values are folded between checks of the shared flag.
 - Nulls are skipped. All-null, all-zero and zero-row columns give `0`.
 - Supported logical dtypes: `Int8/16/32/64`, `UInt8/16/32/64`, `Int128`, `Decimal`, `Date`, `Datetime`, `Duration`, `Time`. **Every other dtype, including Categorical/Enum (whose physical type is integer codes), gives `gcd = null`.**
 - Output struct field names and types, exactly: `column: String`, `dtype: String`, `gcd: Int128`. The struct is named `column_gcd`. `dtype` is Rust `DataType`'s `Display` string (`"i64"`, `"datetime[μs]"`, `"decimal[10,2]"`, `"date"`).
@@ -34,7 +34,7 @@
 ## Review Focus
 
 1. **Categorical / Enum columns.** Their physical representation is u32 codes, so a physical-type-only dispatch would report a bogus GCD. They must give `null`. Pinned in Task 2 (`non_integer_dtypes_are_none`) and Task 3 (`test_non_integer_dtypes_are_null`).
-2. **Null slots carrying non-zero payloads** (Arrow data from pyarrow keeps whatever bytes sit under a null). The payloads must be ignored. Pinned in Task 2 (`masked_null_payloads_ignored`) and Task 3 (`test_null_payloads_ignored`).
+2. **Null slots carrying non-zero payloads** (Arrow data from pyarrow keeps whatever bytes sit under a null). The payloads must be ignored, and a `1` under a null must not trigger the early exit. Pinned in Task 2 (`masked_null_payloads_ignored`) and Task 3 (`test_null_payloads_ignored`).
 3. **Sliced series with offsets that aren't multiples of 8.** The validity bitmap must stay aligned with the values. Pinned in Task 3 (`test_sliced_series`).
 4. **Zero-row and zero-column frames.** These must not crash: zero-row gives 0 for integer columns, and zero-column gives an empty result with the right schema. Pinned in Task 3 (`test_zero_row_frame`, `test_zero_column_frame`).
 5. **Timezone-aware Datetime.** It must behave like naive Datetime, using the physical i64. Pinned in Task 3 (the `Datetime_ns_UTC` case in `CASES`).
@@ -220,26 +220,78 @@ mod tests {
         assert_eq!(gcd_of(Series::new("a".into(), &[i128::MIN])), None);
     }
 
-    #[test]
-    fn masked_null_payloads_ignored() {
-        // The 7s sit under null slots; a correct mask must ignore them (else gcd = 1).
-        let values = vec![12u64, 7, 18, 7];
-        let validity = Bitmap::from_iter([true, false, true, false]);
-        assert_eq!(gcd_slice(&values[..], Some(&validity), |v: u64| v, binary_u64), 6);
+    fn slice_gcd(values: &[u64], validity: Option<&Bitmap>) -> u64 {
+        gcd_slice(values, validity, |v: u64| v, binary_u64, &AtomicBool::new(false))
     }
 
     #[test]
-    fn crosses_parallel_chunk_boundaries() {
+    fn masked_null_payloads_ignored() {
+        // 1s sit under null slots. A correct mask ignores them: the result stays
+        // 6, and they must not trigger the gcd == 1 early exit either.
+        let values = vec![12u64, 1, 18, 1];
+        let validity = Bitmap::from_iter([true, false, true, false]);
+        assert_eq!(slice_gcd(&values, Some(&validity)), 6);
+    }
+
+    #[test]
+    fn crosses_parallel_chunk_and_block_boundaries() {
         let n = 3 * CHUNK + 17;
         let mut values = vec![12u64; n];
-        values[2 * CHUNK + 5] = 18;
-        assert_eq!(gcd_slice(&values[..], None, |v: u64| v, binary_u64), 6);
+        values[2 * CHUNK + BLOCK + 5] = 18;
+        assert_eq!(slice_gcd(&values, None), 6);
 
-        // A masked spoiler just past the first chunk boundary.
+        // A masked spoiler just past the first chunk boundary, and a valid 18
+        // in a later block of the same chunk (bit iterator must stay aligned).
         let mut masked = vec![12u64; n];
-        masked[CHUNK + 3] = 7;
+        masked[CHUNK + 3] = 1;
+        masked[CHUNK + 3 * BLOCK + 1] = 18;
         let validity = Bitmap::from_iter((0..n).map(|i| i != CHUNK + 3));
-        assert_eq!(gcd_slice(&masked[..], Some(&validity), |v: u64| v, binary_u64), 12);
+        assert_eq!(slice_gcd(&masked, Some(&validity)), 6);
+    }
+
+    #[test]
+    fn early_exit_stops_scanning() {
+        use std::sync::atomic::AtomicUsize;
+        // A 1 in the first block: the column's GCD is final after BLOCK values.
+        let n = 64 * CHUNK;
+        let mut values = vec![12u64; n];
+        values[0] = 1;
+        let visited = AtomicUsize::new(0);
+        let mag = |v: u64| {
+            visited.fetch_add(1, Ordering::Relaxed);
+            v
+        };
+        let g = gcd_slice(&values[..], None, mag, binary_u64, &AtomicBool::new(false));
+        assert_eq!(g, 1);
+        // Chunks already running when the flag is set stop at their next block,
+        // so only a small fraction of the n values is ever read.
+        let seen = visited.load(Ordering::Relaxed);
+        assert!(seen < n / 4, "early exit did not stop the scan: visited {seen} of {n}");
+    }
+
+    #[test]
+    fn no_early_exit_while_gcd_above_one() {
+        // GCD bottoms out at 2 (never 1), so every value must be read.
+        use std::sync::atomic::AtomicUsize;
+        let n = 4 * CHUNK;
+        let mut values = vec![4u64; n];
+        values[n - 1] = 2;
+        let visited = AtomicUsize::new(0);
+        let mag = |v: u64| {
+            visited.fetch_add(1, Ordering::Relaxed);
+            v
+        };
+        assert_eq!(gcd_slice(&values[..], None, mag, binary_u64, &AtomicBool::new(false)), 2);
+        assert_eq!(visited.load(Ordering::Relaxed), n);
+    }
+
+    #[test]
+    fn early_exit_across_arrow_chunks() {
+        // Chunk 1 reaches 1; chunk 2 (a huge multiple of 12) must not change it.
+        let mut s = Series::new("a".into(), &[12i64, 7]);
+        s.append(&Series::new("a".into(), vec![12i64; 2 * CHUNK])).unwrap();
+        assert_eq!(s.n_chunks(), 2);
+        assert_eq!(gcd_of(s), Some(1));
     }
 
     #[test]
@@ -310,15 +362,24 @@ Add this above the test module in `services/analytics/src/gcd.rs`:
 // reinterprets signed bits, destroying the magnitudes a GCD needs.
 //
 // Parallelism: columns in parallel, and each column's values in CHUNK-sized
-// slices in parallel (GCD is associative and commutative). No early exit.
+// slices in parallel (GCD is associative and commutative).
+//
+// Early exit: the smallest non-zero GCD any supported dtype can have is one
+// physical unit — physical 1 (1 for integers, 10^-scale for Decimal, 1 day
+// for Date, 1 time-unit for Datetime/Duration, 1 ns for Time). Once any block
+// of a column reaches 1 the column's GCD is final, so a shared flag stops
+// every other chunk at its next block boundary.
 
 use gcd::{binary_u128, binary_u64};
 use polars::prelude::*;
 use polars_arrow::bitmap::Bitmap;
 use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const CHUNK: usize = 1 << 16;
+/// Values folded between checks of the early-exit flag.
+const BLOCK: usize = 1 << 10;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Output type
@@ -343,42 +404,70 @@ fn gcd_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
 /// (Arrow slices carry their own offsets), so chunk `i` covers bits
 /// `i*CHUNK .. i*CHUNK + len`. Null slots contribute 0 via a select, not a
 /// branch; without nulls the mask is skipped entirely.
-fn gcd_slice<T, U, M, G>(values: &[T], validity: Option<&Bitmap>, mag: M, gcd: G) -> U
+///
+/// Early exit: each chunk folds BLOCK values at a time, checking `done` before
+/// each block and setting it when its running GCD reaches 1. A chunk that sees
+/// `done` returns 1 — correct, because another chunk's GCD is 1, so the whole
+/// column's is. Masked (null) slots contribute 0, so a 1 stored under a null
+/// can never trigger the exit.
+fn gcd_slice<T, U, M, G>(
+    values: &[T],
+    validity: Option<&Bitmap>,
+    mag: M,
+    gcd: G,
+    done: &AtomicBool,
+) -> U
 where
     T: Copy + Sync,
-    U: Copy + Send + Sync + Default,
+    U: Copy + Send + Sync + Default + PartialEq + From<u8>,
     M: Fn(T) -> U + Sync,
     G: Fn(U, U) -> U + Sync + Send,
 {
     let zero = U::default();
-    match validity.filter(|bm| bm.unset_bits() > 0) {
-        None => values
-            .par_chunks(CHUNK)
-            .map(|c| c.iter().fold(zero, |g, &v| gcd(g, mag(v))))
-            .reduce(|| zero, &gcd),
-        Some(bm) => values
-            .par_chunks(CHUNK)
-            .enumerate()
-            .map(|(i, c)| {
-                let bits = bm.clone().sliced(i * CHUNK, c.len());
-                c.iter()
-                    .zip(bits.iter())
-                    .fold(zero, |g, (&v, ok)| gcd(g, if ok { mag(v) } else { zero }))
-            })
-            .reduce(|| zero, &gcd),
-    }
+    let one = U::from(1u8);
+    let validity = validity.filter(|bm| bm.unset_bits() > 0);
+    values
+        .par_chunks(CHUNK)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let chunk_bits = validity.map(|bm| bm.clone().sliced(i * CHUNK, chunk.len()));
+            let mut bits = chunk_bits.as_ref().map(|bm| bm.iter());
+            let mut g = zero;
+            for block in chunk.chunks(BLOCK) {
+                if done.load(Ordering::Relaxed) {
+                    return one;
+                }
+                g = match bits.as_mut() {
+                    None => block.iter().fold(g, |g, &v| gcd(g, mag(v))),
+                    // `zip` pulls from `block` first, so `it` advances exactly
+                    // block.len() bits and stays aligned for the next block.
+                    Some(it) => block
+                        .iter()
+                        .zip(it.by_ref())
+                        .fold(g, |g, (&v, ok)| gcd(g, if ok { mag(v) } else { zero })),
+                };
+                if g == one {
+                    done.store(true, Ordering::Relaxed);
+                    return one;
+                }
+            }
+            g
+        })
+        .reduce(|| zero, &gcd)
 }
 
-/// GCD across every Arrow chunk of a ChunkedArray.
+/// GCD across every Arrow chunk of a ChunkedArray. One early-exit flag spans
+/// all of the column's Arrow chunks.
 fn ca_gcd<T, U, M, G>(ca: &ChunkedArray<T>, mag: M, gcd: G) -> U
 where
     T: PolarsNumericType,
-    U: Copy + Send + Sync + Default,
+    U: Copy + Send + Sync + Default + PartialEq + From<u8>,
     M: Fn(T::Native) -> U + Sync + Copy,
     G: Fn(U, U) -> U + Sync + Send + Copy,
 {
+    let done = AtomicBool::new(false);
     ca.downcast_iter()
-        .map(|arr| gcd_slice(arr.values().as_slice(), arr.validity(), mag, gcd))
+        .map(|arr| gcd_slice(arr.values().as_slice(), arr.validity(), mag, gcd, &done))
         .fold(U::default(), gcd)
 }
 
@@ -477,7 +566,7 @@ fn column_gcd(inputs: &[Series]) -> PolarsResult<Series> {
 ```bash
 cd services/analytics && cargo test --lib gcd:: 2>&1 | tail -5
 ```
-Expected: `test result: ok. 10 passed; 0 failed`.
+Expected: `test result: ok. 13 passed; 0 failed`.
 
 - [ ] **Step 6: Confirm the release build compiles cleanly**
 
@@ -720,12 +809,13 @@ def test_long_series_crosses_parallel_chunks():
 
 
 def test_null_payloads_ignored():
-    # 7s live under null slots. pyarrow keeps the payload bytes; a correct
-    # null mask must ignore them (otherwise the GCD collapses to 1).
-    values = np.tile(np.array([12, 7, 18, 7], dtype=np.int64), 50_000)
-    mask = values == 7
+    # 1s live under null slots. pyarrow keeps the payload bytes; a correct
+    # null mask must ignore them — otherwise the GCD collapses to 1, and a
+    # masked 1 would also wrongly trigger the gcd == 1 early exit.
+    values = np.tile(np.array([12, 1, 18, 1], dtype=np.int64), 50_000)
+    mask = values == 1
     arr = pa.array(values, mask=mask)
-    assert np.frombuffer(arr.buffers()[1], dtype=np.int64)[1] == 7  # payload really is there
+    assert np.frombuffer(arr.buffers()[1], dtype=np.int64)[1] == 1  # payload really is there
     s = pl.from_arrow(arr)
     assert plugin_gcd(s) == ref_gcd(s) == 6
 
@@ -995,6 +1085,10 @@ Shapes:
  1. 10M rows × 4 Int64 columns of k·g, no nulls  — narrow & long (intra-column parallelism)
  2. 1M rows × 100 Int64 columns of k·g          — wide (inter-column parallelism)
  3. tests/data/large_dataset.arrow (50K × 101)  — realistic mix; adds a math.gcd baseline
+ 4. 10M rows × 4 random Int64 columns (GCD 1)    — early exit at the minimum increment
+
+Shapes 1–2 have GCD 3600 > 1, so the plugin must scan every value (full scan).
+Shape 4 shows the early exit; numpy.gcd.reduce has none and always scans in full.
 
 Baselines receive pre-extracted numpy arrays / Python lists (extraction is
 not timed); the plugin is timed end-to-end from a DataFrame. RUNS runs averaged.
@@ -1046,6 +1140,13 @@ def make_multiples(n_rows: int, n_cols: int) -> pl.DataFrame:
     )
 
 
+def make_random(n_rows: int, n_cols: int) -> pl.DataFrame:
+    rng = np.random.default_rng(SEED)
+    return pl.DataFrame(
+        {f"c{i}": rng.integers(-(2**62), 2**62, n_rows, dtype=np.int64) for i in range(n_cols)}
+    )
+
+
 def run_shape(name: str, df: pl.DataFrame, with_math: bool) -> None:
     cols = integer_columns(df)
     arrays = {c: df[c].to_physical().drop_nulls().to_numpy() for c in cols}
@@ -1074,6 +1175,7 @@ def main() -> None:
     run_shape("Shape 1 — narrow/long", make_multiples(10_000_000, 4), with_math=False)
     run_shape("Shape 2 — wide", make_multiples(1_000_000, 100), with_math=False)
     run_shape("Shape 3 — large_dataset.arrow", pl.read_ipc(DATA_PATH), with_math=True)
+    run_shape("Shape 4 — early exit (GCD 1)", make_random(10_000_000, 4), with_math=False)
 
 
 if __name__ == "__main__":
@@ -1085,7 +1187,7 @@ if __name__ == "__main__":
 ```bash
 python tests/performance/benchmark_gcd.py
 ```
-Expected: three sections, each ending in `results match`, with plugin timings and speedups printed. Exit code 0.
+Expected: four sections, each ending in `results match`, with plugin timings and speedups printed. Exit code 0.
 
 - [ ] **Step 3: Confirm pytest doesn't collect it**
 
@@ -1119,7 +1221,7 @@ Change `Six techniques for surfacing column relationships within and between dat
 
 ```markdown
 **7. Whole-column GCD — ClickHouse GCD-codec method**
-For each integer-backed column (Int/UInt 8–64, Int128, Decimal, Date, Datetime, Duration, Time), the GCD of the magnitudes of its raw physical values — the quantity ClickHouse's `GCD` codec divides by. Results are in physical units (Decimal → unscaled integer, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; other dtypes (incl. Categorical/Enum) → null; magnitude 2¹²⁷ (only `i128::MIN`) → null.
+For each integer-backed column (Int/UInt 8–64, Int128, Decimal, Date, Datetime, Duration, Time), the GCD of the magnitudes of its raw physical values — the quantity ClickHouse's `GCD` codec divides by. Results are in physical units (Decimal → unscaled integer, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; other dtypes (incl. Categorical/Enum) → null; magnitude 2¹²⁷ (only `i128::MIN`) → null. Early exit once the running GCD reaches physical 1 (the dtype's minimum increment); rayon-parallel across columns and 64K-value chunks.
 ```
 
 - [ ] **Step 2: Project Structure tree**

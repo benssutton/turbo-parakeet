@@ -18,7 +18,12 @@ in a DataFrame, using the same method as ClickHouse's `GCD` compression codec.
   `numpy.gcd.reduce` on empty input).
 - **Results are in physical units.** Hourly `Datetime(us)` → `3_600_000_000`;
   `Decimal(10,2)` in 0.25 steps → `25`.
-- **No early exit** Performance comes from rayon parallelism.
+- **Early exit at the dtype's minimum increment.** Once the running GCD
+  reaches the smallest non-zero value the dtype can express (one physical
+  unit), no further value can lower it, so the scan stops. For every
+  supported dtype that unit is physical `1`: 1 for integers, `10^-scale` for
+  `Decimal`, 1 day for `Date`, 1 time-unit for `Datetime`/`Duration`, 1 ns
+  for `Time`. While the running GCD is above 1, the scan continues.
 
 ### Supported dtypes
 
@@ -65,11 +70,17 @@ possible when every non-zero value is `i128::MIN`) cannot be represented in
   - Mask null slots to `0` branch-free (GCD identity), so the inner loop has
     no null check. When a chunk has no validity bitmap, skip masking entirely.
   - Combine chunk results with `binary_gcd`.
+  - **Early exit:** each parallel chunk folds in blocks of 1,024 values. One
+    `AtomicBool` is shared across all of a column's chunks and Arrow arrays.
+    It is checked before each block and set as soon as any block's running
+    GCD reaches 1; once it is set, every chunk returns 1 at its next check.
+    A `1` stored under a null slot is masked out and never triggers the exit.
 - **Parallelism:** outer `par_iter` over columns, inner `par_chunks` within a
   column. rayon's work stealing covers both wide frames (many columns) and
   narrow, long frames (few columns).
 - **Rust unit tests** (`#[cfg(test)]`): kernel on known multiples, coprimes,
-  zeros, signed extremes, masked nulls.
+  zeros, signed extremes, masked nulls, early exit (stops scanning; a masked
+  `1` does not trigger it).
 
 ## Python API — `services/analytics/analytics/__init__.py`
 
@@ -144,6 +155,9 @@ baselines.
 - **Stress shape 1:** 10M rows × 4 `Int64` columns of `k·g`, no nulls.
 - **Stress shape 2:** 1M rows × 100 `Int64` columns.
 - **Realistic:** `tests/data/large_dataset.arrow` (50K rows × 101 columns).
+- **Early exit:** 10M rows × 4 random `Int64` columns (GCD 1).
+
+Shapes 1–2 have GCD `g` > 1, so they measure a full scan.
 - **Baselines:** `numpy.gcd.reduce` per column (C ufunc); `math.gcd(*col)`
   on the realistic dataset only.
 
