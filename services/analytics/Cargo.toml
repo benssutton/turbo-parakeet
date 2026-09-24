@@ -33,6 +33,9 @@ mimalloc = "0.1.48"
 #Statistics
 statrs = "0.18"
 
+#GCD (Stein's binary algorithm)
+gcd = "2.3"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
