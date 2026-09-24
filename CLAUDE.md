@@ -15,7 +15,7 @@ Prioritise performance & simplicity.
 
 # Analytical Functions
 
-Six techniques for surfacing column relationships within and between dataframes:
+Seven techniques for surfacing column properties and relationships within and between dataframes:
 
 **1. Bloom filter — set membership / containment**
 Tests whether values from one column are present in another. High `membership_ratio(A → B)` ⇒ A is contained in B, suggesting A is a foreign key referencing B. The test is **asymmetric**: PK-PK relationships require reciprocal containment of *unique* values in both directions (run two filters).
@@ -35,6 +35,9 @@ Quantifies spans of consecutive identical values in physical column order. Avera
 **6. Adjusted Rand Index — partition agreement**
 Treats each column as a partition of the rows and measures chance-corrected agreement between two partitions (ARI ∈ [−0.5, 1]; 1 = identical partitions, ≈0 = chance-level). Unlike NMI it is chance-adjusted, and unlike χ²/Cramér's V it measures *partition identity*, not just association. Null policy: rows where either column is null are dropped; `n_valid` reports the surviving row count so scores over tiny overlaps can be discounted.
 
+**7. Whole-column GCD — ClickHouse GCD-codec method**
+For each integer-backed column (Int/UInt 8–64, Int128, Decimal, Date, Datetime, Duration, Time), the GCD of the magnitudes of its raw physical values — the quantity ClickHouse's `GCD` codec divides by. Results are in physical units (Decimal → unscaled integer, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; other dtypes (incl. Categorical/Enum) → null; magnitude 2¹²⁷ (only `i128::MIN`) → null. Early exit once the running GCD reaches physical 1 (the dtype's minimum increment); rayon-parallel across columns and 64K-value chunks. Each fold step is `binary_gcd(g, v % g)` — Stein's algorithm after one hardware remainder; pure Stein on (small g, large v) costs ~log₂(v) rounds per value and was slower than numpy's Euclid.
+
 # Project Structure
 
 ```
@@ -53,6 +56,7 @@ turbo-parakeet/
 │       │   ├── chi_squared.rs      # Chi-squared independence test
 │       │   ├── contingency.rs      # Shared drop-null contingency-table builder (chi², ARI)
 │       │   ├── ari.rs              # Pairwise Adjusted Rand Index
+│       │   ├── gcd.rs              # Whole-column GCD (binary/Stein, rayon-parallel, early exit at 1)
 │       │   ├── bloomfilter.rs      # Bloom filter
 │       │   └── minhash.rs          # MinHash + LSH candidates
 │       ├── bloom_filter.py         # BloomFilter Python wrapper
@@ -62,16 +66,22 @@ turbo-parakeet/
 │       ├── MinHashLSHFilter_datasketch.py     # Probabilistic filter (datasketch)
 │       └── run_length.py           # Pure-Python REE compression analysis
 └── tests/
-    ├── conftest.py                 # pytest markers (slow)
+    ├── conftest.py                 # pytest markers (slow), shared dataset fixture
     ├── data/
     │   └── large_dataset.arrow     # 50K rows, 101 columns
     ├── test_similarity_filters.py  # Correctness + recall tests for similarity filters
     ├── test_adjusted_rand.py       # ARI correctness vs scikit-learn
-    ├── benchmark_bloom_filter.py   # Bloom filter benchmark vs fastbloom-rs
-    ├── benchmark_chi_squared.py    # Chi-squared benchmark: Rust vs polars-ds vs scipy
-    ├── benchmark_entropy.py        # Joint entropy benchmark: plugin vs native Polars
-    ├── speed_benchmark_adjusted_rand.py  # ARI benchmark vs scikit-learn
-    └── benchmark_rle.py            # Run-length analysis benchmark (column_run_stats)
+    ├── test_bloom_filter.py        # Bloom filter correctness
+    ├── test_chi_squared.py         # Chi-squared correctness vs scipy
+    ├── test_entropy.py             # Joint entropy correctness
+    ├── test_gcd.py                 # Column GCD correctness vs math.gcd / numpy.gcd
+    └── performance/                # Benchmarks only — never collected by pytest
+        ├── benchmark_adjusted_rand.py  # ARI benchmark vs scikit-learn
+        ├── benchmark_bloom_filter.py   # Bloom filter benchmark vs fastbloom-rs
+        ├── benchmark_chi_squared.py    # Chi-squared: Rust vs polars-ds vs scipy
+        ├── benchmark_entropy.py        # Joint entropy: plugin vs native Polars
+        ├── benchmark_jaccard.py        # MinHash/Jaccard similarity benchmark
+        └── benchmark_gcd.py            # Column GCD vs numpy.gcd.reduce / math.gcd
 ```
 
 # Rust Plugin (analytics)
@@ -84,9 +94,15 @@ Exposed functions:
 - `pairwise_adjusted_rand(df, pairs)` — Adjusted Rand Index + n_valid
 - `minhash(df, ...)` / `lsh_candidates(...)` — MinHash signatures and LSH buckets
 - `membership_ratio(df)` — Bloom filter membership across n columns
+- `column_gcd(df)` — whole-column GCD per column (struct: `column`, `dtype`, `gcd: Int128`)
+
+# Testing Convention
+- `tests/test_*.py` — **accuracy only**: assert correctness against off-the-shelf reference implementations (scipy, scikit-learn, `math.gcd`, numpy, …). Never time anything.
+- `tests/performance/benchmark_*.py` — **performance only**: standalone scripts (`python tests/performance/benchmark_x.py`). May sanity-check results, but are never the correctness gate. Excluded from pytest collection via `norecursedirs` in `pytest.ini`.
+- Rust unit tests: `cargo test --lib <module>::` from `services/analytics/` with `PYO3_PYTHON` set to the env's `python.exe` and the env dir on `PATH` (else `STATUS_DLL_NOT_FOUND`).
 
 # Current Focus
-Chi-squared Rust plugin is complete and validated (~17x faster than polars-ds baseline, matches scipy at rtol=1e-4). MinHashLSH similarity filters are complete with correctness and recall tests passing. Run-length analysis (Approach A, pure Python via `polars.Expr.rle()`) is complete: ~142 ms / 101 cols / 50K rows.
+Chi-squared Rust plugin is complete and validated (~17x faster than polars-ds baseline, matches scipy at rtol=1e-4). MinHashLSH similarity filters are complete with correctness and recall tests passing. Run-length analysis (Approach A, pure Python via `polars.Expr.rle()`) is complete: ~142 ms / 101 cols / 50K rows. Whole-column GCD (`column_gcd`) is complete: validated against `math.gcd`/`numpy.gcd.reduce`; 28 ms for 10M rows × 4 Int64 cols (5.1x faster than numpy.gcd.reduce), 6 ms on large_dataset.arrow (3.4x numpy, 11x math.gcd), and <1 ms when the early exit fires on 10M × 4 GCD-1 columns.
 
 Joint entropy (2-way and 3-way) is dense-id encoded (see below): 83.5µs/pair, 170.3µs/triplet at 50K rows/101 cols — roughly 2x faster than the original hash-tuple implementation, and the 3-way/2-way speedup-vs-native-Polars gap that motivated the change is closed (3-way now outpaces 2-way's multiplier rather than trailing it). ARI (`pairwise_adjusted_rand`) is complete and validated against scikit-learn; chi² now shares the same dense contingency builder and reports `n_valid`.
 

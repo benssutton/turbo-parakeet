@@ -70,6 +70,10 @@ possible when every non-zero value is `i128::MIN`) cannot be represented in
   - Mask null slots to `0` branch-free (GCD identity), so the inner loop has
     no null check. When a chunk has no validity bitmap, skip masking entirely.
   - Combine chunk results with `binary_gcd`.
+  - **Fold step** (added during implementation): `gcd(g, v) = binary_gcd(g, v % g)`.
+    Pure Stein on a small running `g` and a large `v` needs ~log₂(v) rounds per
+    value and benchmarked slower than numpy's Euclid; one hardware remainder
+    first leaves Stein two small operands (10M × 4 Int64: 494 ms → 28 ms).
   - **Early exit:** each parallel chunk folds in blocks of 1,024 values. One
     `AtomicBool` is shared across all of a column's chunks and Arrow arrays.
     It is checked before each block and set as soon as any block's running
