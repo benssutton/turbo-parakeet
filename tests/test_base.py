@@ -96,6 +96,14 @@ def test_enumerate_ordered_triplets():
     assert TripletToy.enumerate(FRAMES) == [(F_A, F_BB, F_S)]
 
 
+def test_enumerate_unknown_scope_raises():
+    class BadScope(Toy):
+        SCOPE = "bogus"
+
+    with pytest.raises(ValueError, match="unknown SCOPE"):
+        BadScope.enumerate(FRAMES)
+
+
 def test_key_columns():
     assert PerColumnToy.key_columns() == ["df_a", "col_a"]
     assert TripletToy.key_columns() == ["df_a", "col_a", "df_b", "col_b", "df_c", "col_c"]
@@ -145,6 +153,44 @@ def test_descriptors_are_filled_on_every_row():
     assert out.columns == ["df_a", "col_a", "status", "dtype", "score", "high"]
     assert out["dtype"].to_list() == ["Int64", "Int64", "String", "Int64", "Int64"]
     assert out.filter(pl.col("col_a") == "s")["status"].item() == "ineligible"
+
+
+def test_schema_is_hoisted_once_per_frame_not_per_combination():
+    """I1: result() must build the dtype lookup once per frame, not rebuild the
+    frame's whole Schema for every column of every combination (a real cost: ~70us
+    per Schema build at 101 columns, 29s of overhead on ThreewayEntropy)."""
+
+    class CountingFrame(pl.DataFrame):
+        count = 0
+
+        @property
+        def schema(self):
+            CountingFrame.count += 1
+            return super().schema
+
+    class Wide(MultiSetToy):
+        pass
+
+    n_cols = 30
+    frame = CountingFrame({f"c{i}": [1, 2] for i in range(n_cols)})
+    combos = Wide.enumerate({"f": frame})
+    assert len(combos) == n_cols * (n_cols - 1) // 2  # 435 — old code touched schema ~2x per combo
+
+    Wide().add({"f": frame}).result()
+    assert CountingFrame.count <= 3, f"schema was rebuilt {CountingFrame.count} times for {len(combos)} combinations"
+
+
+def test_compatible_receives_the_actual_column_dtypes():
+    seen = []
+
+    class RecordingCompatible(MultiSetToy):
+        def compatible(self, dtypes):
+            seen.append(list(dtypes))
+            return True
+
+    frame = pl.DataFrame({"a": pl.Series([1], dtype=pl.Int32), "b": pl.Series([1], dtype=pl.Int64)})
+    RecordingCompatible().add({"f": frame}).result()
+    assert seen == [[pl.Int32(), pl.Int64()]]
 
 
 def test_frame_with_no_columns_gives_empty_result_with_schema():

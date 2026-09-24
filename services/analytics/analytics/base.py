@@ -27,7 +27,7 @@ import importlib
 import math
 from abc import ABC, abstractmethod
 from itertools import combinations
-from typing import Callable, ClassVar, Literal, Sequence
+from typing import Callable, ClassVar, Literal, Self, Sequence
 
 import polars as pl
 
@@ -54,7 +54,7 @@ class Technique(ABC):
 
     # ── public API ────────────────────────────────────────────────────────────
 
-    def add(self, frames: dict[str, pl.DataFrame | pl.LazyFrame]) -> Technique:
+    def add(self, frames: dict[str, pl.DataFrame | pl.LazyFrame]) -> Self:
         """Register named frames. Names are unique for the life of the instance."""
         for name, frame in frames.items():
             if not isinstance(name, str) or not name:
@@ -76,9 +76,10 @@ class Technique(ABC):
         self._collected = frames
         try:
             ok = {(n, c): self.eligible(f[c]) for n, f in frames.items() for c in f.columns}
+            dtypes = {(n, c): dt for n, f in frames.items() for c, dt in f.schema.items()}
             combos = self.enumerate(frames)
             usable = [
-                all(ok[col] for col in k) and self.compatible([frames[n].schema[c] for n, c in k])
+                all(ok[col] for col in k) and self.compatible([dtypes[col] for col in k])
                 for k in combos
             ]
             good = [k for k, u in zip(combos, usable) if u]
@@ -103,6 +104,7 @@ class Technique(ABC):
             return out.select(*keys, "status", *self.DESCRIPTORS, *self.METRICS, *self.CONCLUSIONS)
         finally:
             self._collected = {}
+            self._on_result_end()
 
     # ── row builders (used by implementations) ────────────────────────────────
 
@@ -121,7 +123,9 @@ class Technique(ABC):
                 for n, f in frames.items()
                 for k in combinations([(n, c) for c in f.columns], cls.ARITY)
             ]
-        return list(combinations([(n, c) for n, f in frames.items() for c in f.columns], cls.ARITY))
+        if cls.SCOPE == "multi_set":
+            return list(combinations([(n, c) for n, f in frames.items() for c in f.columns], cls.ARITY))
+        raise ValueError(f"unknown SCOPE {cls.SCOPE!r}")
 
     @classmethod
     def keys_frame(cls, combos: Sequence[Combo]) -> pl.DataFrame:
@@ -142,7 +146,7 @@ class Technique(ABC):
         statuses = [status] * len(combos) if isinstance(status, str) else list(status)
         return cls.keys_frame(combos).with_columns(
             pl.Series("status", statuses, dtype=STATUS),
-            *(pl.Series(name, list(metrics[name]), dtype=dtype, strict=False) for name, dtype in cls.METRICS.items()),
+            *(pl.Series(name, list(metrics[name]), dtype=dtype, strict=True) for name, dtype in cls.METRICS.items()),
         )
 
     @classmethod
@@ -181,6 +185,10 @@ class Technique(ABC):
 
     def _on_add(self) -> None:
         """Called after every add(); e.g. clears per-instance caches."""
+
+    def _on_result_end(self) -> None:
+        """Called when result() returns or raises; e.g. clears per-instance caches
+        populated during _compute so nothing stays warm/stale between calls."""
 
     def agreement(self, result: pl.DataFrame, reference: pl.DataFrame) -> list[str]:
         """Problems found comparing `result` with the reference implementation's result."""

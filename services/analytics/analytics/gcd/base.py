@@ -33,7 +33,8 @@ class Gcd(Technique):
         return isinstance(series.dtype, INTEGER_BACKED)
 
     def describe(self, frames, combos):
-        return {"dtype": [str(frames[n].schema[c]) for ((n, c),) in combos]}
+        dtypes = {(n, c): str(dt) for n, f in frames.items() for c, dt in f.schema.items()}
+        return {"dtype": [dtypes[n, c] for ((n, c),) in combos]}
 
     def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:
         return out.with_columns(gcd_compressible=computed(pl.col("gcd") > 1))
