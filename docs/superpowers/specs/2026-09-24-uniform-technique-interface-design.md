@@ -326,3 +326,27 @@ The old test and benchmark files for each technique are deleted in the same comm
 | GCD | Free function + UInt128 workaround | numpy/math, inline | Hand-built edge cases | 4 synthetic shapes; mean of 3 runs |
 
 Other problems: three different import styles; key columns named differently (`col_a`, `col_name`, `column`); the three similarity classes repeat the same ~40-line verification loop; `DeterministicSimilarityFilter` accepts an unused `num_perm`; the class-level `lru_cache` on bound methods.
+
+## 10. Amendments made while planning (2026-09-24)
+
+Probing the plugin and Polars while writing the implementation plan changed these details. Where they conflict with earlier sections, **this section wins**.
+
+1. **One file for each base class.** Each technique package puts its base class in `base.py`, and `__init__.py` re-exports it. This avoids circular imports between `__init__.py` and the implementation files.
+2. **Entropy becomes two packages:** `analytics/pairwise_entropy/` and `analytics/threeway_entropy/`. Each package holds exactly one technique, so `REFERENCE` stays a single name. `ThreewayEntropyPolars` reuses `entropy_bits` from `pairwise_entropy/polars.py`.
+3. **Row order.** Results come back in the canonical enumeration order: frames in insertion order, then column order within each frame, then `itertools.combinations` order. They are not sorted, so input column order is preserved, as GCD did before.
+4. **`DESCRIPTORS` column group.** It sits between `status` and the metrics, and is filled on **every** row, including ineligible rows. GCD's `dtype` is its only member, and now uses Python's `str(dtype)` (for example `"Int64"`, not the Rust `"i64"`), so all implementations agree.
+5. **A `compatible(dtypes)` hook.** It judges a combination as a whole. Multi-set pairs whose columns come from different **value families** are `ineligible`. The families are:
+   - integers of 64 bits or fewer;
+   - String, Categorical and Enum;
+   - otherwise, the exact dtype.
+
+   Without this rule, Rust (which hashes physical values) and the exact Python sets would disagree. For example, `Date` 19000 and `Int32` 19000 are the same key in Rust but different values in Python.
+6. **An `agreement(result, reference) -> list[str]` method** on the technique base, using `RTOL`/`ATOL` class attributes. Accuracy tests and the benchmark sanity check both call it:
+   - `BloomMembership` overrides it with the no-false-negative plus aggregate false-positive-rate bound.
+   - `Similarity` overrides it with the exact-candidates plus recall bound.
+7. **Zero-row frames.** Ordered techniques mark columns of zero-row frames `ineligible`, because the Rust plugins raise `"Cannot calculate … on empty columns"`.
+8. **NaN metrics make boolean conclusions `False`.** Polars orders NaN above every number, so a bare `NaN >= t` would evaluate to `True`.
+9. **`cache_size` lives on the `Similarity` base**, because the per-instance LRU serves verification for all three similarity implementations.
+10. **`Dataset.exclude` in benchmarks.** It lists implementations a script does not run on that dataset, which are reported as `excluded`. For example, `GcdMath` is excluded from 10⁸-value datasets, where `to_list()` alone would exhaust memory.
+11. **No Python test for Bloom size mismatches.** `BloomRust` always sizes its own filters, so a size mismatch can't happen through the class. The Rust unit tests keep covering it.
+12. **Distinct values come from Polars `unique()`,** which treats `-0.0` and `0.0` as one value and all NaNs as one value, matching the Rust encoder. The pure-Python implementations then "freeze" them into set members: one shared NaN object, and tuples for nested values.
