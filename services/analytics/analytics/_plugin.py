@@ -11,42 +11,29 @@ PLUGIN_PATH = Path(__file__).parent
 Bloom Filter
 """
 
-@pl.api.register_expr_namespace("analytics")
-class AnalyticFunctions:
-    def __init__(self, expr: pl.Expr) -> None:
-        self._expr = expr
-    #TODO: pyo3 supports bytes in version 27 and above, however pyo3-polars currently requires version 26.  When pyo3-polars upgrades to pyo3 v27 or above, pass bytes between python and the rust plugin
-    def bloom_filter(self,
-                        existing_filter: list[int],
-                        k: int,
-                        m: int) -> pl.Expr:
-        return register_plugin_function(
+def bloom_filter_bits(series: pl.Series, k: int, m: int) -> list[int]:
+    """Build a fresh k-hash, m-bit Bloom filter over `series`; returns its ceil(m/8)
+    bytes as ints. (pyo3-polars 0.24 pins pyo3 < 0.27, so kwargs cannot carry bytes.)
+
+    is_elementwise=False (not True as its name might suggest): `bloom_filter` is a
+    full-column reduction (N rows -> 1 row), not a row-to-row map. With
+    is_elementwise=True, Polars is free to invoke the plugin once per physical
+    chunk and concatenate/keep results independently; a multi-chunk Series (e.g.
+    the output of Categorical.unique(), routinely 2+ chunks) then silently builds
+    the filter over one chunk's rows only, since bit_array_bytes is not threaded
+    between calls. is_elementwise=False forces one call over the whole column.
+    """
+    out = series.to_frame().select(
+        register_plugin_function(
             plugin_path=PLUGIN_PATH,
             function_name="bloom_filter",
-            args=self._expr,
-            kwargs={
-                "bit_array_bytes": existing_filter or [],
-                "k": k,
-                "m": m
-            },
-            is_elementwise=True,
+            args=pl.col(series.name),
+            kwargs={"bit_array_bytes": [], "k": k, "m": m},
+            is_elementwise=False,
         )
+    )
+    return list(out.to_series()[0])
 
-    def membership(self,
-                        bit_array_bytes: list[int],
-                        k: int,
-                        m: int) -> pl.Expr:
-        return register_plugin_function(
-            plugin_path=PLUGIN_PATH,
-            function_name="membership",
-            args=self._expr,
-            kwargs={
-                "bit_array_bytes": bit_array_bytes,
-                "k": k,
-                "m": m
-            },
-            is_elementwise=True,
-        )
 
 def membership_ratio(
     df: pl.DataFrame | pl.LazyFrame,
@@ -88,51 +75,6 @@ def membership_ratio(
             is_elementwise=False,
         ).alias("membership_ratio")
     )
-
-def membership_ratio_sample(
-    df: pl.DataFrame | pl.LazyFrame,
-    bit_array_bytes: list[int],
-    k: int,
-    m: int,
-    sample_frac: float = 0.05,
-) -> pl.DataFrame:
-    """
-    Calculate membership ratio for each column independently, using a random sample.
-
-    Parameters
-    ----------
-    df : pl.DataFrame or pl.LazyFrame
-        Input data. LazyFrames will be collected.
-    bit_array_bytes : list[int]
-        The bloom filter bit array as a list of bytes.
-    k : int
-        Number of hash functions used in the bloom filter.
-    m : int
-        Size of the bloom filter bit array in bytes.
-    sample_frac : float, optional
-        Fraction of each column to sample (default 0.05 = 5%).
-
-    Returns
-    -------
-    pl.DataFrame
-        Single column "membership_ratio_sample" containing structs with:
-        - col_name: String - Column name
-        - ratio_all: f64 - Fraction found in sample (nulls in denominator)
-        - ratio_non_null: f64 - Fraction found in sample (nulls excluded)
-    """
-    if isinstance(df, pl.LazyFrame):
-        df = df.collect()
-
-    return df.select(
-        register_plugin_function(
-            plugin_path=PLUGIN_PATH,
-            function_name="membership_ratio_sample",
-            args=df.get_columns(),
-            kwargs={"bit_array_bytes": bit_array_bytes, "k": k, "m": m, "sample_frac": sample_frac},
-            is_elementwise=False,
-        ).alias("membership_ratio_sample")
-    )
-
 
 """
 Entropy Calculation
