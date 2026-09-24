@@ -144,7 +144,7 @@ The base does the enumeration and eligibility checks, so **every implementation 
 | METRICS | `dtype: String`, `gcd: Int128` |
 | CONCLUSIONS | `gcd_compressible: Boolean` = `gcd > 1` |
 | eligible | Integer-backed dtypes: Int/UInt 8–64, Int128, Decimal, Date, Datetime, Duration, Time. UInt128 → ineligible (the plugin's Rust polars can't take it across the FFI boundary). |
-| Implementations | `GcdRust` (`column_gcd`), `GcdNumpy` (`np.gcd.reduce` on ≤64-bit physical values; returns NaN-free null where the magnitude can't be represented), ★`GcdMath` (`math.gcd`, arbitrary precision) |
+| Implementations | `GcdRust` (`column_gcd`), `GcdNumpy` (`np.gcd.reduce`: native int64/uint64 arrays for ≤64-bit physical values; object-dtype arrays of Python ints for Int128, wide Decimal and i64::MIN magnitudes, so it covers every eligible column and must match ★ exactly), ★`GcdMath` (`math.gcd`, arbitrary precision) |
 
 Semantics are unchanged from today (physical units, nulls skipped, all-null/all-zero → 0, magnitude 2¹²⁷ → null). The `dtype` metric is still reported for ineligible columns, because it is a property of the column rather than the result of a computation. It is the one metric exempt from the "null when not computed" rule.
 
@@ -157,7 +157,7 @@ Semantics are unchanged from today (physical units, nulls skipped, all-null/all-
 | Thresholds | `containment_threshold=0.95` |
 | METRICS | `ratio_a_in_b`, `ratio_b_in_a` (fraction of A's distinct non-null values found in B, and the reverse), `n_distinct_a`, `n_distinct_b`, `n_non_null_a`, `n_non_null_b` |
 | CONCLUSIONS | `unique_a`, `unique_b` (n_distinct = n_non_null); `relationship ∈ {pk_pk, fk_pk, pk_fk, mutual, a_in_b, b_in_a, none}` |
-| eligible | Every dtype except nested types that the encoder can't hash |
+| eligible | Every dtype. Each implementation encodes values itself (`MembershipExact`/`BloomFastbloom` turn List/Array values into tuples or strings; `BloomRust` uses `encode_series`) |
 | Implementations | `BloomRust` (param `fp_rate=0.01`): builds one filter per column over its distinct values, then runs `membership_ratio` in both directions. `BloomFastbloom` (same `fp_rate`). ★`MembershipExact`: exact `is_in` on distinct values. Bloom implementations have `EXACT=False`. |
 
 `relationship` rules, with `t = containment_threshold`:
@@ -243,7 +243,7 @@ Edge cases specific to a technique are kept as additional tests in the same file
   - It joins on the keys.
   - It requires identical `status` values.
   - It treats NaN as equal to NaN and null as equal to null.
-  - It compares floats with the tolerance each technique declares (χ² `rtol=1e-4`, entropy `rtol=1e-9`, ARI `rel_tol=1e-9`, GCD exact).
+  - It compares floats with the tolerance each technique declares (the same tolerances as today's tests: χ² `rtol=1e-4`, entropy `rtol=1e-5`, ARI `rtol=1e-9, atol=1e-12`, GCD exact).
 - Non-exact implementations:
   - Bloom: `ratio_exact ≤ ratio_bloom ≤ ratio_exact + fp_slack`, since Bloom filters produce no false negatives.
   - MinHash: recall of `passes_jaccard | passes_overlap` against ★ is ≥ 0.85 (the medium-scale test is marked `slow`); pairs that aren't pruned have exactly the reference's metrics, since verification is exact.
