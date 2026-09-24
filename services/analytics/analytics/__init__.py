@@ -362,6 +362,55 @@ def pairwise_adjusted_rand(
     )
 
 """
+Column GCD
+"""
+
+_COLUMN_GCD_SCHEMA = pl.Struct({"column": pl.String, "dtype": pl.String, "gcd": pl.Int128})
+
+
+def column_gcd(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
+    """
+    Whole-column greatest common divisor, using the Rust plugin.
+
+    Follows ClickHouse's GCD codec: the GCD of the magnitudes of each column's
+    raw physical integer values. Results are in physical units — Decimal uses
+    the unscaled integer (Decimal(10,2) in 0.25 steps -> 25), Date uses days,
+    Datetime/Duration use their time unit, Time uses nanoseconds.
+
+    Null policy: nulls are skipped. All-null, all-zero and zero-row columns
+    -> 0. Non-integer-backed dtypes (float, string, boolean, categorical,
+    nested, ...) -> null. A magnitude of 2**127 (only i128::MIN values) is not
+    representable as Int128 -> null.
+
+    Parameters
+    ----------
+    df : pl.DataFrame or pl.LazyFrame
+        Input data. LazyFrames will be collected.
+
+    Returns
+    -------
+    pl.DataFrame
+        Single column "column_gcd" containing one struct per input column,
+        in input order:
+        - column: String - Column name
+        - dtype: String - Polars dtype (Rust Display form, e.g. "datetime[μs]")
+        - gcd: Int128 - Whole-column GCD, or null if not applicable
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+    if df.width == 0:
+        return pl.DataFrame(schema={"column_gcd": _COLUMN_GCD_SCHEMA})
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="column_gcd",
+            args=df.get_columns(),
+            is_elementwise=False,
+            changes_length=True,
+        ).alias("column_gcd")
+    )
+
+"""
 Min Hash LSH
 """
 
