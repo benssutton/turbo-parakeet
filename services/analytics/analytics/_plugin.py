@@ -4,7 +4,6 @@ Only the *Rust implementation classes call these; the public API is the techniqu
 classes in the analytics.<technique> subpackages.
 """
 
-from typing import TYPE_CHECKING, Any, Sequence
 from pathlib import Path
 
 import polars as pl
@@ -59,7 +58,8 @@ def membership_ratio(
     k : int
         Number of hash functions used in the bloom filter.
     m : int
-        Size of the bloom filter bit array in bytes.
+        Size of the bloom filter bit array in bits (bit_array_bytes holds
+        ceil(m/8) bytes).
 
     Returns
     -------
@@ -139,7 +139,8 @@ def threeway_joint_entropy(
         Input data with columns to analyze. LazyFrames will be collected.
     triplets : list of (str, str, str) tuples, optional
         Specific column triplets to compute entropy for.
-        When None (default), computes all N-choose-3 combinations (up to 5000).
+        When None (default), computes all N-choose-3 combinations — no cap either
+        way (C(101, 3) = 166,650 at 101 columns, ~65s at 50K rows).
 
     Returns
     -------
@@ -411,12 +412,15 @@ def minhash(
         - qualified_name: String column with "{name}|{column_name}" format
         - minhash: List[UInt32] column with MinHash signatures
 
+    This is a private wrapper around the compiled Rust plugin; the public API is
+    analytics.similarity.MinHashRust, which calls it internally.
+
     Example:
-        >>> from analytics import compute_minhash_batch, find_lsh_candidates
+        >>> from analytics._plugin import minhash
         >>> df = pl.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
-        >>> minhashes = compute_minhash_batch(df, "df0", num_perm=64)
+        >>> minhashes = minhash(df, "df0", num_perm=64)
         >>> # minhashes has columns: qualified_name, minhash
-        >>> # Can be directly used with find_lsh_candidates
+        >>> # Can be directly used with lsh_candidates
     """
     # Pack all columns into a struct expression
     struct_expr = pl.struct(pl.all())
@@ -462,9 +466,12 @@ def lsh_candidates(
         Polars expression returning candidate pairs as a Struct with
         fields (col_a: Utf8, col_b: Utf8).
 
+    This is a private wrapper around the compiled Rust plugin; the public API is
+    analytics.similarity.MinHashRust, which calls it internally.
+
     Example:
-        >>> from analytics import find_lsh_candidates
-        >>> df.select(find_lsh_candidates(
+        >>> from analytics._plugin import lsh_candidates
+        >>> df.select(lsh_candidates(
         ...     pl.col("name"),
         ...     pl.col("minhash"),
         ...     threshold=0.6
