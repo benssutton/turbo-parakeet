@@ -1,3 +1,9 @@
+"""Private thin wrappers around the compiled Rust plugin (analytics.pyd).
+
+Only the *Rust implementation classes call these; the public API is the technique
+classes in the analytics.<technique> subpackages.
+"""
+
 from typing import TYPE_CHECKING, Any, Sequence
 from pathlib import Path
 

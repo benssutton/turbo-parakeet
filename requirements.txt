@@ -11,7 +11,7 @@ pytest>=7.4
 pytest-cov>=7.1
 
 # Baseline implementations
-# (datasketch: minhash_lsh_filter_datasketch.py; polars-ds: chi_squared_polarsds.py)
+# (datasketch: analytics/similarity/datasketch.py; polars-ds: analytics/chi_squared/polars_ds.py)
 datasketch>=1.6
 polars-ds>=0.5
 

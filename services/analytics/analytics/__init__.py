@@ -1,15 +1,16 @@
-__version__ = "0.1.0"
+"""
+Column-relationship analytics. Every technique is a subpackage with one class per
+implementation, all used the same way:
 
-# Transitional: the plugin wrappers stay importable from the top-level package
-# until every technique has moved to its class (removed in Task 11).
-from analytics._plugin import (  # noqa: E402,F401
-    column_gcd,
-    lsh_candidates,
-    marginal_entropy,
-    membership_ratio,
-    minhash,
-    pairwise_adjusted_rand,
-    pairwise_chi_squared,
-    pairwise_joint_entropy,
-    threeway_joint_entropy,
-)
+    from analytics.chi_squared import ChiSquaredRust
+    result = ChiSquaredRust(cramers_v_threshold=0.3).add({"sales": df}).result()
+
+Per-column: analytics.gcd
+Multi-set:  analytics.membership, analytics.similarity
+Ordered:    analytics.chi_squared, analytics.pairwise_entropy,
+            analytics.threeway_entropy, analytics.adjusted_rand
+
+The Rust plugin wrappers in analytics._plugin are private.
+"""
+
+__version__ = "0.1.0"
