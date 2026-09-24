@@ -1,109 +1,109 @@
 """
-Pairwise chi-squared correctness tests: Rust plugin vs polars-ds baseline.
+Pairwise chi-squared accuracy tests — every implementation in analytics.chi_squared.
 
-Eligible columns from the shared 18-column dataset (see conftest.make_dataset):
-    boolean_*     (3 columns) — Boolean
-    uint32_*      (3 columns) — UInt32 (integer type)
-    cat_*         (3 columns) — Categorical
-
-Excluded: float64_* (continuous), list_* and arr_* (nested types).
-
-9 eligible columns → C(9,2) = 36 pairs tested.
-
-Skipped automatically if polars-ds is not installed.
+Reference: ChiSquaredScipy (scipy.stats.chi2_contingency, correction=False, after
+dropping rows where either column is null). Eligible columns in mixed_dtypes:
+boolean_*, uint32_*, categorical_* (9) → C(9,2) = 36 computed pairs; float64_*,
+list_*, arr_* are ineligible.
 """
 
 import math
-from itertools import combinations
 
 import polars as pl
 import pytest
 
-pytest.importorskip("polars_ds")  # skip entire module if polars-ds not installed
+from analytics.chi_squared import ChiSquared
+from datagen import mixed_dtypes
+from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
 
-_analytics = pytest.importorskip("analytics")
-pairwise_chi_squared_rust = _analytics.pairwise_chi_squared
-
-from chi_squared_polarsds import pairwise_chi_squared as pairwise_chi_squared_pds
-
-
-# ── Column filter ─────────────────────────────────────────────────────────────
-
-_CHI2_ELIGIBLE = (
-    pl.Boolean,
-    pl.String,
-    pl.Categorical,
-    pl.Enum,
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-)
+PKG = "analytics.chi_squared"
+ALL = implementation_params(PKG)
+OTHERS = implementation_params(PKG, include_reference=False)
+NAN = float("nan")
 
 
-def chi2_eligible_columns(df: pl.DataFrame) -> list[str]:
-    """Column names whose dtype is suitable for chi-squared independence testing."""
-    return [c for c, dtype in df.schema.items() if isinstance(dtype, _CHI2_ELIGIBLE)]
+# 1. Contract
+@pytest.mark.parametrize("impl", ALL)
+def test_contract(impl):
+    frames = {"t": mixed_dtypes(200)}
+    cls = load(impl)
+    out = run(cls, frames)
+    assert_contract(cls, out, frames)
+    assert (out["status"] == "computed").sum() == 36
 
 
-# ── Assertion helper ──────────────────────────────────────────────────────────
-
-def assert_chi2_matches(rust_result: pl.DataFrame, pds_result: pl.DataFrame) -> None:
-    """Assert that Rust and polars-ds chi-squared results agree within rtol=1e-4."""
-    rust_rows = rust_result.unnest(rust_result.columns[0])
-    pds_rows = pds_result.unnest(pds_result.columns[0])
-
-    pds_map = {
-        (row["col_a"], row["col_b"]): row
-        for row in pds_rows.iter_rows(named=True)
-    }
-
-    failures = []
-    for row in rust_rows.iter_rows(named=True):
-        col_a, col_b = row["col_a"], row["col_b"]
-        pds_row = pds_map.get((col_a, col_b))
-        if pds_row is None:
-            failures.append(f"  ({col_a}, {col_b}): pair missing from polars-ds result")
-            continue
-
-        r_chi2, p_chi2 = row["chi2_stat"], pds_row["chi2_stat"]
-        r_v, p_v = row["cramers_v"], pds_row["cramers_v"]
-
-        # Both NaN → degenerate pair (e.g. constant column after null-drop); skip
-        if math.isnan(r_chi2) and math.isnan(p_chi2):
-            continue
-
-        if math.isnan(r_chi2) != math.isnan(p_chi2):
-            failures.append(
-                f"  ({col_a}, {col_b}): chi2_stat NaN mismatch"
-                f" rust={r_chi2} pds={p_chi2}"
-            )
-            continue
-
-        if not math.isclose(r_chi2, p_chi2, rel_tol=1e-4):
-            failures.append(
-                f"  ({col_a}, {col_b}): chi2_stat rust={r_chi2:.8f} pds={p_chi2:.8f}"
-                f"  diff={abs(r_chi2 - p_chi2):.3e}"
-            )
-
-        if not (math.isnan(r_v) and math.isnan(p_v)):
-            if not math.isclose(r_v, p_v, rel_tol=1e-4):
-                failures.append(
-                    f"  ({col_a}, {col_b}): cramers_v rust={r_v:.8f} pds={p_v:.8f}"
-                    f"  diff={abs(r_v - p_v):.3e}"
-                )
-
-    if failures:
-        raise AssertionError("Chi-squared mismatch (Rust vs polars-ds):\n" + "\n".join(failures))
+# 2. Reference agreement
+@pytest.mark.parametrize("impl", OTHERS)
+def test_agrees_with_reference(impl):
+    frames = {"t": mixed_dtypes(1_000)}
+    cls = load(impl)
+    assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+# 3. Known answers
+@pytest.mark.parametrize("impl", ALL)
+def test_known_2x2_table(impl):
+    # [[20, 30], [30, 20]], N=100: every expected count is 25 → χ² = 4 × (5²/25) = 4.
+    a = ["x"] * 50 + ["y"] * 50
+    b = ["p"] * 20 + ["q"] * 30 + ["p"] * 30 + ["q"] * 20
+    row = run(load(impl), {"t": pl.DataFrame({"a": a, "b": b})}).row(0, named=True)
+    assert row["chi2_stat"] == pytest.approx(4.0)
+    assert row["p_value"] == pytest.approx(0.04550026389635842)
+    assert row["cramers_v"] == pytest.approx(0.2)
+    assert row["low_expected_count"] is False
+    assert row["n_valid"] == 100
 
-@pytest.mark.slow
-def test_pairwise_chi_squared(dataset):
-    """C(9,2) = 36 pairs; Rust plugin chi2_stat and cramers_v match polars-ds."""
-    eligible = chi2_eligible_columns(dataset)
-    pairs = list(combinations(eligible, 2))
 
-    rust_result = pairwise_chi_squared_rust(dataset, pairs=pairs)
-    pds_result = pairwise_chi_squared_pds(dataset, pairs=pairs, max_unique=None)
+@pytest.mark.parametrize("impl", ALL)
+def test_nulls_dropped_and_constant_column_undefined(impl):
+    df = pl.DataFrame({"a": ["x", "y", "x", "y", None], "b": ["p", "p", "q", "q", "p"], "c": ["k"] * 5})
+    rows = {(r["col_a"], r["col_b"]): r for r in run(load(impl), {"t": df}).iter_rows(named=True)}
+    assert rows[("a", "b")]["n_valid"] == 4
+    assert rows[("a", "b")]["low_expected_count"] is True
+    for pair in [("a", "c"), ("b", "c")]:
+        r = rows[pair]
+        assert math.isnan(r["chi2_stat"]) and math.isnan(r["p_value"]) and math.isnan(r["cramers_v"])
+        assert r["low_expected_count"] is False
+        assert r["associated"] is False
+    assert rows[("a", "c")]["n_valid"] == 4
 
-    assert_chi2_matches(rust_result, pds_result)
+
+# 4. Conclusions
+def test_conclusions_default_override_and_nan():
+    Fixed = with_metrics(
+        ChiSquared,
+        chi2_stat=[1.0] * 3,
+        p_value=[0.5] * 3,
+        cramers_v=[0.29, 0.3, NAN],
+        low_expected_count=[False] * 3,
+        n_valid=[10] * 3,
+    )
+    df = pl.DataFrame({"a": [1, 2], "b": [1, 2], "c": [1, 2]})
+    assert Fixed().add({"t": df}).result()["associated"].to_list() == [False, True, False]
+    assert Fixed(cramers_v_threshold=0.2).add({"t": df}).result()["associated"].to_list() == [True, True, False]
+
+
+def test_threshold_validation():
+    Fixed = with_metrics(ChiSquared)
+    with pytest.raises(ValueError):
+        Fixed(cramers_v_threshold=1.5)
+    with pytest.raises(ValueError):
+        Fixed(max_unique=1)
+
+
+# Eligibility
+@pytest.mark.parametrize("impl", ALL)
+def test_zero_row_frame_is_ineligible(impl):
+    df = pl.DataFrame({"a": pl.Series([], dtype=pl.String), "b": pl.Series([], dtype=pl.Int64)})
+    assert run(load(impl), {"t": df})["status"].to_list() == ["ineligible"]
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_cardinality_cap_and_dtype_eligibility(impl):
+    df = pl.DataFrame({"a": [1, 2, 3, 1], "b": [1, 1, 2, 2], "f": [1.0, 2.0, 3.0, 4.0]})
+    out = run(load(impl), {"t": df}, max_unique=2)
+    assert out.select("col_a", "col_b", "status").rows() == [
+        ("a", "b", "ineligible"),  # a has 3 distinct values > max_unique
+        ("a", "f", "ineligible"),
+        ("b", "f", "ineligible"),  # Float64 is not categorical
+    ]
