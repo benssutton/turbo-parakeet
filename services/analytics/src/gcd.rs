@@ -49,6 +49,24 @@ fn gcd_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
 // Kernel
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Running-GCD step: `gcd(g, v)` = `binary_gcd(g, v % g)`.
+///
+/// Folding a column keeps a small running GCD `g` against large values `v`.
+/// Stein's algorithm alone clears roughly one bit of `v` per subtract/shift
+/// round (~50 rounds for a 52-bit value); one hardware remainder first brings
+/// `v` below `g`, leaving Stein only a few rounds on two small operands.
+/// `binary_gcd(g, 0) = g`, and `g == 0` (nothing folded yet) returns `v`.
+#[inline]
+fn step_u64(g: u64, v: u64) -> u64 {
+    if g == 0 { v } else { binary_u64(g, v % g) }
+}
+
+/// u128 twin of [`step_u64`] (Int128 / Decimal).
+#[inline]
+fn step_u128(g: u128, v: u128) -> u128 {
+    if g == 0 { v } else { binary_u128(g, v % g) }
+}
+
 /// GCD of `mag(v)` over the valid slots of one Arrow array's values.
 ///
 /// `values` and `validity` are both indexed from the array's logical start
@@ -156,15 +174,15 @@ pub(crate) fn series_gcd(s: &Series) -> PolarsResult<Option<i128>> {
     }
     let phys = s.to_physical_repr();
     let g: u128 = match phys.dtype() {
-        DataType::Int8 => ca_gcd(phys.i8()?, |v: i8| v.unsigned_abs() as u64, binary_u64) as u128,
-        DataType::Int16 => ca_gcd(phys.i16()?, |v: i16| v.unsigned_abs() as u64, binary_u64) as u128,
-        DataType::Int32 => ca_gcd(phys.i32()?, |v: i32| v.unsigned_abs() as u64, binary_u64) as u128,
-        DataType::Int64 => ca_gcd(phys.i64()?, |v: i64| v.unsigned_abs(), binary_u64) as u128,
-        DataType::UInt8 => ca_gcd(phys.u8()?, |v: u8| v as u64, binary_u64) as u128,
-        DataType::UInt16 => ca_gcd(phys.u16()?, |v: u16| v as u64, binary_u64) as u128,
-        DataType::UInt32 => ca_gcd(phys.u32()?, |v: u32| v as u64, binary_u64) as u128,
-        DataType::UInt64 => ca_gcd(phys.u64()?, |v: u64| v, binary_u64) as u128,
-        DataType::Int128 => ca_gcd(phys.i128()?, |v: i128| v.unsigned_abs(), binary_u128),
+        DataType::Int8 => ca_gcd(phys.i8()?, |v: i8| v.unsigned_abs() as u64, step_u64) as u128,
+        DataType::Int16 => ca_gcd(phys.i16()?, |v: i16| v.unsigned_abs() as u64, step_u64) as u128,
+        DataType::Int32 => ca_gcd(phys.i32()?, |v: i32| v.unsigned_abs() as u64, step_u64) as u128,
+        DataType::Int64 => ca_gcd(phys.i64()?, |v: i64| v.unsigned_abs(), step_u64) as u128,
+        DataType::UInt8 => ca_gcd(phys.u8()?, |v: u8| v as u64, step_u64) as u128,
+        DataType::UInt16 => ca_gcd(phys.u16()?, |v: u16| v as u64, step_u64) as u128,
+        DataType::UInt32 => ca_gcd(phys.u32()?, |v: u32| v as u64, step_u64) as u128,
+        DataType::UInt64 => ca_gcd(phys.u64()?, |v: u64| v, step_u64) as u128,
+        DataType::Int128 => ca_gcd(phys.i128()?, |v: i128| v.unsigned_abs(), step_u128),
         dt => {
             return Err(PolarsError::ComputeError(
                 format!("column_gcd: unexpected physical dtype {dt}").into(),
@@ -258,8 +276,26 @@ mod tests {
         assert_eq!(gcd_of(Series::new("a".into(), &[i128::MIN])), None);
     }
 
+    #[test]
+    fn step_matches_binary_gcd() {
+        let pairs_64 = [
+            (0u64, 0u64), (0, 7), (7, 0), (3_600, (1u64 << 52) + 7_200), (12, 18),
+            (u64::MAX, 3), (3, u64::MAX), (1u64 << 63, 1u64 << 62), (1, u64::MAX),
+        ];
+        for (g, v) in pairs_64 {
+            assert_eq!(step_u64(g, v), binary_u64(g, v), "step_u64({g}, {v})");
+        }
+        let pairs_128 = [
+            (0u128, 0u128), (0, 5), (5, 0), (10u128.pow(20), 10u128.pow(35) + 10u128.pow(20)),
+            (1u128 << 127, 1u128 << 126), (u128::MAX, 15), (1u128 << 127, 0),
+        ];
+        for (g, v) in pairs_128 {
+            assert_eq!(step_u128(g, v), binary_u128(g, v), "step_u128({g}, {v})");
+        }
+    }
+
     fn slice_gcd(values: &[u64], validity: Option<&Bitmap>) -> u64 {
-        gcd_slice(values, validity, |v: u64| v, binary_u64, &AtomicBool::new(false))
+        gcd_slice(values, validity, |v: u64| v, step_u64, &AtomicBool::new(false))
     }
 
     #[test]
@@ -299,7 +335,7 @@ mod tests {
             visited.fetch_add(1, Ordering::Relaxed);
             v
         };
-        let g = gcd_slice(&values[..], None, mag, binary_u64, &AtomicBool::new(false));
+        let g = gcd_slice(&values[..], None, mag, step_u64, &AtomicBool::new(false));
         assert_eq!(g, 1);
         // Chunks already running when the flag is set stop at their next block,
         // so only a small fraction of the n values is ever read.
@@ -319,7 +355,7 @@ mod tests {
             visited.fetch_add(1, Ordering::Relaxed);
             v
         };
-        assert_eq!(gcd_slice(&values[..], None, mag, binary_u64, &AtomicBool::new(false)), 2);
+        assert_eq!(gcd_slice(&values[..], None, mag, step_u64, &AtomicBool::new(false)), 2);
         assert_eq!(visited.load(Ordering::Relaxed), n);
     }
 
