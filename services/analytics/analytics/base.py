@@ -1,0 +1,276 @@
+"""Uniform contract shared by every analytical technique.
+
+Every technique is used the same way:
+
+    result = Impl(**params).add({"name": frame, ...}).result()
+
+and returns one flat table, in canonical combination order:
+
+    df_a, col_a[, df_b, col_b[, df_c, col_c]] | status | DESCRIPTORS | METRICS | CONCLUSIONS
+
+The base enumerates column combinations and decides eligibility, so every
+implementation of a technique computes metrics for exactly the same rows. An
+implementation supplies only `_compute`; the technique base supplies
+`eligible` / `compatible` / `describe` / `_conclude`.
+
+status: "computed"   metrics filled in
+        "ineligible" a column's dtype/content (or the pair's value families) do not
+                     qualify - metrics and conclusions null
+        "pruned"     a probabilistic implementation chose not to evaluate the
+                     combination - metrics and conclusions null
+Null means "not computed"; NaN means "computed but mathematically undefined".
+"""
+
+from __future__ import annotations
+
+import importlib
+import math
+from abc import ABC, abstractmethod
+from itertools import combinations
+from typing import Callable, ClassVar, Literal, Sequence
+
+import polars as pl
+
+Scope = Literal["per_column", "multi_set", "ordered"]
+Column = tuple[str, str]  # (frame name, column name)
+Combo = tuple[Column, ...]  # ARITY columns
+STATUS = pl.Enum(["computed", "ineligible", "pruned"])
+_SUFFIXES = ("a", "b", "c")
+
+
+class Technique(ABC):
+    SCOPE: ClassVar[Scope]
+    ARITY: ClassVar[int]
+    METRICS: ClassVar[dict[str, pl.DataType]]
+    DESCRIPTORS: ClassVar[dict[str, pl.DataType]] = {}
+    CONCLUSIONS: ClassVar[dict[str, pl.DataType]] = {}
+    EXACT: ClassVar[bool] = True
+    RTOL: ClassVar[float] = 0.0
+    ATOL: ClassVar[float] = 0.0
+
+    def __init__(self) -> None:
+        self._frames: dict[str, pl.DataFrame | pl.LazyFrame] = {}
+        self._collected: dict[str, pl.DataFrame] = {}
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def add(self, frames: dict[str, pl.DataFrame | pl.LazyFrame]) -> Technique:
+        """Register named frames. Names are unique for the life of the instance."""
+        for name, frame in frames.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"frame names must be non-empty strings, got {name!r}")
+            if not isinstance(frame, (pl.DataFrame, pl.LazyFrame)):
+                raise TypeError(
+                    f"frame {name!r} must be a polars DataFrame or LazyFrame, got {type(frame).__name__}"
+                )
+            if name in self._frames:
+                raise ValueError(f"frame {name!r} already added")
+        self._frames.update(frames)
+        self._on_add()
+        return self
+
+    def result(self) -> pl.DataFrame:
+        if not self._frames:
+            raise ValueError(f"{type(self).__name__}.result() called before add()")
+        frames = {n: f.collect() if isinstance(f, pl.LazyFrame) else f for n, f in self._frames.items()}
+        self._collected = frames
+        try:
+            ok = {(n, c): self.eligible(f[c]) for n, f in frames.items() for c in f.columns}
+            combos = self.enumerate(frames)
+            usable = [
+                all(ok[col] for col in k) and self.compatible([frames[n].schema[c] for n, c in k])
+                for k in combos
+            ]
+            good = [k for k, u in zip(combos, usable) if u]
+            bad = [k for k, u in zip(combos, usable) if not u]
+            rows = self._compute(frames, good) if good else self.null_frame([], "computed")
+            self._check(rows, len(good))
+            keys = self.key_columns()
+            columns = [*keys, "status", *self.METRICS]
+            out = self.keys_frame(combos).join(
+                pl.concat([rows.select(columns), self.null_frame(bad, "ineligible")]),
+                on=keys,
+                how="left",
+                maintain_order="left",
+            )
+            if out.height != len(combos) or out["status"].null_count():
+                raise ValueError(
+                    f"{type(self).__name__}._compute must return exactly one row per eligible combination"
+                )
+            described = self.describe(frames, combos)
+            out = out.with_columns([pl.Series(k, v, dtype=self.DESCRIPTORS[k]) for k, v in described.items()])
+            out = self._conclude(out)
+            return out.select(*keys, "status", *self.DESCRIPTORS, *self.METRICS, *self.CONCLUSIONS)
+        finally:
+            self._collected = {}
+
+    # ── row builders (used by implementations) ────────────────────────────────
+
+    @classmethod
+    def key_columns(cls) -> list[str]:
+        return [f"{p}_{s}" for s in _SUFFIXES[: cls.ARITY] for p in ("df", "col")]
+
+    @classmethod
+    def enumerate(cls, frames: dict[str, pl.DataFrame]) -> list[Combo]:
+        """Canonical combinations: frame insertion order, then column order."""
+        if cls.SCOPE == "per_column":
+            return [((n, c),) for n, f in frames.items() for c in f.columns]
+        if cls.SCOPE == "ordered":
+            return [
+                k
+                for n, f in frames.items()
+                for k in combinations([(n, c) for c in f.columns], cls.ARITY)
+            ]
+        return list(combinations([(n, c) for n, f in frames.items() for c in f.columns], cls.ARITY))
+
+    @classmethod
+    def keys_frame(cls, combos: Sequence[Combo]) -> pl.DataFrame:
+        data: dict[str, list[str]] = {}
+        for i, s in enumerate(_SUFFIXES[: cls.ARITY]):
+            data[f"df_{s}"] = [k[i][0] for k in combos]
+            data[f"col_{s}"] = [k[i][1] for k in combos]
+        return pl.DataFrame(data, schema={k: pl.String for k in cls.key_columns()})
+
+    @classmethod
+    def metrics_frame(
+        cls,
+        combos: Sequence[Combo],
+        metrics: dict[str, Sequence],
+        status: str | Sequence[str] = "computed",
+    ) -> pl.DataFrame:
+        """keys + status + METRICS, one row per combo, values in combo order."""
+        statuses = [status] * len(combos) if isinstance(status, str) else list(status)
+        return cls.keys_frame(combos).with_columns(
+            pl.Series("status", statuses, dtype=STATUS),
+            *(pl.Series(name, list(metrics[name]), dtype=dtype, strict=False) for name, dtype in cls.METRICS.items()),
+        )
+
+    @classmethod
+    def null_frame(cls, combos: Sequence[Combo], status: str) -> pl.DataFrame:
+        return cls.metrics_frame(combos, {m: [None] * len(combos) for m in cls.METRICS}, status)
+
+    @classmethod
+    def rows_from_plugin(cls, frame: str, plugin_rows: pl.DataFrame) -> pl.DataFrame:
+        """Plugin output keyed by col_a[, col_b[, col_c]] -> keys + computed status + METRICS."""
+        return plugin_rows.with_columns(
+            *(pl.lit(frame).alias(f"df_{s}") for s in _SUFFIXES[: cls.ARITY]),
+            pl.lit("computed", dtype=STATUS).alias("status"),
+        ).select(*cls.key_columns(), "status", *(pl.col(m).cast(dt) for m, dt in cls.METRICS.items()))
+
+    # ── hooks ─────────────────────────────────────────────────────────────────
+
+    def eligible(self, series: pl.Series) -> bool:
+        """Technique base: may this column take part at all?"""
+        return True
+
+    def compatible(self, dtypes: Sequence[pl.DataType]) -> bool:
+        """Technique base: may these columns be compared with each other?"""
+        return True
+
+    def describe(self, frames: dict[str, pl.DataFrame], combos: list[Combo]) -> dict[str, list]:
+        """Technique base: DESCRIPTORS values for every combo (eligible or not)."""
+        return {}
+
+    @abstractmethod
+    def _compute(self, frames: dict[str, pl.DataFrame], combos: list[Combo]) -> pl.DataFrame:
+        """Implementation: keys + status ("computed"/"pruned") + METRICS for exactly `combos`."""
+
+    def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:
+        """Technique base: add CONCLUSIONS (null unless status == computed)."""
+        return out
+
+    def _on_add(self) -> None:
+        """Called after every add(); e.g. clears per-instance caches."""
+
+    def agreement(self, result: pl.DataFrame, reference: pl.DataFrame) -> list[str]:
+        """Problems found comparing `result` with the reference implementation's result."""
+        return metric_mismatches(result, reference, self.key_columns(), list(self.METRICS), self.RTOL, self.ATOL)
+
+    # ── internal ──────────────────────────────────────────────────────────────
+
+    def _check(self, rows: pl.DataFrame, expected_rows: int) -> None:
+        name = type(self).__name__
+        expected = {**{k: pl.String for k in self.key_columns()}, "status": STATUS, **self.METRICS}
+        if dict(rows.schema) != expected:
+            raise TypeError(f"{name}._compute returned schema {dict(rows.schema)}, expected {expected}")
+        if rows.height != expected_rows:
+            raise ValueError(f"{name}._compute returned {rows.height} rows for {expected_rows} combinations")
+        if (rows["status"] == "ineligible").any():
+            raise ValueError(f"{name}._compute may only return status 'computed' or 'pruned'")
+
+
+# ── helpers for technique bases and implementations ─────────────────────────────
+
+def computed(expr: pl.Expr) -> pl.Expr:
+    """`expr` where status == computed, null elsewhere."""
+    return pl.when(pl.col("status") == "computed").then(expr)
+
+
+def at_least(column: str, threshold: float) -> pl.Expr:
+    """column >= threshold, with NaN -> False (Polars orders NaN above every number)."""
+    return pl.col(column).is_not_nan() & (pl.col(column) >= threshold)
+
+
+def check_unit(name: str, value: float) -> None:
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be in [0, 1], got {value}")
+
+
+def columns_of(combos: Sequence[Combo]) -> list[Column]:
+    """Distinct columns used by `combos`, in first-seen order."""
+    return list(dict.fromkeys(col for k in combos for col in k))
+
+
+def group_by_frame(combos: Sequence[Combo]) -> dict[str, list[Combo]]:
+    """Combos grouped by the frame of their first column (ordered/per-column scopes)."""
+    groups: dict[str, list[Combo]] = {}
+    for k in combos:
+        groups.setdefault(k[0][0], []).append(k)
+    return groups
+
+
+def same_value(got, want, rtol: float, atol: float) -> bool:
+    if got is None or want is None:
+        return got is None and want is None
+    if isinstance(got, float) or isinstance(want, float):
+        if math.isnan(got) or math.isnan(want):
+            return math.isnan(got) and math.isnan(want)
+        return math.isclose(got, want, rel_tol=rtol, abs_tol=atol)
+    return got == want
+
+
+def metric_mismatches(
+    result: pl.DataFrame,
+    reference: pl.DataFrame,
+    keys: list[str],
+    metrics: list[str],
+    rtol: float,
+    atol: float,
+) -> list[str]:
+    """Row-by-row differences in status and `metrics`; both frames in canonical order."""
+    key_rows = result.select(keys).rows()
+    if key_rows != reference.select(keys).rows():
+        return ["key columns differ from the reference"]
+    labels = [" ~ ".join(f"{r[i]}.{r[i + 1]}" for i in range(0, len(r), 2)) for r in key_rows]
+    problems = [
+        f"{label}: status {got} != {want}"
+        for label, got, want in zip(labels, result["status"], reference["status"])
+        if got != want
+    ]
+    for m in metrics:
+        for label, got, want in zip(labels, result[m].to_list(), reference[m].to_list()):
+            if not same_value(got, want, rtol, atol):
+                problems.append(f"{label}: {m} {got!r} != {want!r}")
+    return problems
+
+
+def lazy_attributes(package: str, modules: dict[str, str]) -> Callable[[str], type]:
+    """Module-level __getattr__ that imports optional implementations on first use,
+    so `import analytics.<technique>` never needs third-party reference libraries."""
+
+    def __getattr__(name: str) -> type:
+        if name in modules:
+            return getattr(importlib.import_module(modules[name], package), name)
+        raise AttributeError(f"module {package!r} has no attribute {name!r}")
+
+    return __getattr__
