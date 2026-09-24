@@ -366,6 +366,18 @@ Column GCD
 """
 
 _COLUMN_GCD_SCHEMA = pl.Struct({"column": pl.String, "dtype": pl.String, "gcd": pl.Int128})
+_UINT128 = getattr(pl, "UInt128", None)
+
+
+def _contains_uint128(dtype: pl.DataType) -> bool:
+    """True if `dtype` is, or nests, UInt128 (unknown to the plugin's Rust polars)."""
+    if _UINT128 is not None and dtype == _UINT128:
+        return True
+    if isinstance(dtype, (pl.List, pl.Array)):
+        return _contains_uint128(dtype.inner)
+    if isinstance(dtype, pl.Struct):
+        return any(_contains_uint128(f.dtype) for f in dtype.fields)
+    return False
 
 
 def column_gcd(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
@@ -381,6 +393,11 @@ def column_gcd(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
     -> 0. Non-integer-backed dtypes (float, string, boolean, categorical,
     nested, ...) -> null. A magnitude of 2**127 (only i128::MIN values) is not
     representable as Int128 -> null.
+
+    UInt128 columns (and nested types containing UInt128) are not passed to the
+    plugin — its Rust polars has no UInt128, and crossing the FFI with one
+    aborts the interpreter. They get gcd = null and their Python dtype name
+    (e.g. "UInt128") as the dtype label.
 
     Parameters
     ----------
@@ -400,6 +417,15 @@ def column_gcd(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
         df = df.collect()
     if df.width == 0:
         return pl.DataFrame(schema={"column_gcd": _COLUMN_GCD_SCHEMA})
+    skipped = {c: str(dt) for c, dt in df.schema.items() if _contains_uint128(dt)}
+    if skipped:
+        computed = column_gcd(df.drop(list(skipped))).unnest("column_gcd")
+        by_name = {r["column"]: r for r in computed.iter_rows(named=True)}
+        rows = [
+            by_name[c] if c in by_name else {"column": c, "dtype": skipped[c], "gcd": None}
+            for c in df.columns
+        ]
+        return pl.DataFrame({"column_gcd": rows}, schema={"column_gcd": _COLUMN_GCD_SCHEMA})
     return df.select(
         register_plugin_function(
             plugin_path=PLUGIN_PATH,

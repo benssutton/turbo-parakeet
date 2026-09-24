@@ -356,3 +356,26 @@ def test_seeded_fuzz(seed):
     assert got == ref_gcd(s), f"seed={seed} dtype={dtype} g={g} n={n}"
     if numpy_applicable(s):
         assert got == numpy_gcd(s), f"numpy mismatch seed={seed}"
+
+
+@pytest.mark.skipif(not hasattr(pl, "UInt128"), reason="polars build without UInt128")
+def test_uint128_columns_are_null_not_crash():
+    # Rust polars 0.51 (pyo3-polars 0.24) has no UInt128: handing one to the
+    # plugin aborts the interpreter. Such columns must come back as null rows,
+    # in input order, alongside correctly computed neighbours.
+    df = pl.DataFrame(
+        {
+            "a": pl.Series([12, 18], dtype=pl.Int64),
+            "u128": pl.Series([12, 18], dtype=pl.UInt128),
+            "b": pl.Series([10, 15], dtype=pl.UInt8),
+            "lu128": pl.Series([[1], [2]], dtype=pl.List(pl.UInt128)),
+        }
+    )
+    out = column_gcd(df)
+    assert out.schema == pl.Schema(
+        {"column_gcd": pl.Struct({"column": pl.String, "dtype": pl.String, "gcd": pl.Int128})}
+    )
+    rows = out.unnest("column_gcd")
+    assert rows["column"].to_list() == ["a", "u128", "b", "lu128"]
+    assert rows["gcd"].to_list() == [6, None, 5, None]
+    assert rows["dtype"].to_list() == ["i64", str(pl.UInt128), "u8", str(pl.List(pl.UInt128))]
