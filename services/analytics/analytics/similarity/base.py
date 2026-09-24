@@ -46,6 +46,13 @@ class Similarity(Technique):
     def _on_add(self) -> None:
         self._distinct.cache_clear()
 
+    def _on_result_end(self) -> None:
+        """Snapshot cache_info (tests observe hits/misses from the run just finished)
+        before clearing, so a second result() never sees a warm/stale cache and
+        cached sets aren't retained after result() returns."""
+        self.last_cache_info = self._distinct.cache_info()
+        self._distinct.cache_clear()
+
     def _distinct_values(self, frame: str, column: str) -> frozenset:
         return frozenset(distinct_values(self._collected[frame][column]))
 

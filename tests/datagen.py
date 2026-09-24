@@ -163,6 +163,33 @@ def related_frames(n_rows: int = 1_000, seed: int = 42) -> dict[str, pl.DataFram
     return {"customers": customers, "orders": orders, "archive": archive}
 
 
+def containment_pairs(
+    n_pairs: int = 20, small_size: int = 5, large_size: int = 200, seed: int = 42
+) -> dict[str, pl.DataFrame]:
+    """`n_pairs` column pairs (small.small_i, large.large_i) where the small column's
+    values are a subset of the large column's — overlap == 1.0 (fully contained) but
+    Jaccard = small_size / large_size (~0.025 at the defaults), far below the MinHash
+    LSH candidate threshold (~0.43). Each pair draws from its own disjoint numeric
+    range, so off-diagonal pairs (small_i vs large_j, i != j; small_i vs small_j) are
+    ~disjoint and contribute no accidental truth positives.
+
+    Exercises the documented containment-recall gap on MinHashRust/MinHashDatasketch
+    (CLAUDE.md Next Steps / I2): the LSH candidate threshold is Jaccard-calibrated, so
+    a small-in-large containment pair with low Jaccard is pruned before verification
+    ever runs, even though its Overlap Coefficient is 1.0.
+    """
+    rng = np.random.default_rng(seed)
+    span = large_size * 10
+    small_cols, large_cols = {}, {}
+    for i in range(n_pairs):
+        base = i * span
+        pool = rng.choice(np.arange(base, base + span), size=large_size, replace=False)
+        small = rng.choice(pool, size=small_size, replace=False)
+        small_cols[f"small_{i:02d}"] = small.tolist()
+        large_cols[f"large_{i:02d}"] = pool.tolist()
+    return {"small": pl.DataFrame(small_cols), "large": pl.DataFrame(large_cols)}
+
+
 def similar_frames(
     n_similar: int = 8,
     n_independent: int = 12,

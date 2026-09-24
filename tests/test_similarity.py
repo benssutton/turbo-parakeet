@@ -12,13 +12,16 @@ Run slow tests:   pytest -m slow
 
 import gc
 import math
+import subprocess
+import sys
+import textwrap
 import weakref
 
 import polars as pl
 import pytest
 
 from analytics.similarity import Similarity, SimilarityExactLRU
-from datagen import related_frames, similar_frames
+from datagen import containment_pairs, related_frames, similar_frames
 from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
 
 PKG = "analytics.similarity"
@@ -52,6 +55,24 @@ def test_agrees_with_reference(impl, make):
 @pytest.mark.parametrize("impl", OTHERS)
 def test_recall_medium_scale(impl):
     frames = similar_frames()
+    cls = load(impl)
+    assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "I2 / known limitation (CLAUDE.md Next Steps): the LSH candidate threshold is "
+        "calibrated against Jaccard, so a containment pair (overlap == 1.0) with low "
+        "Jaccard — small set fully inside a much larger one — is pruned before "
+        "verification ever runs. The threshold heuristic is intentionally unchanged "
+        "(controller ruling: behaviour-preserving refactor); this test documents the "
+        "gap so a future recall fix makes it start passing (and stops being xfail)."
+    ),
+)
+@pytest.mark.parametrize("impl", OTHERS)
+def test_recall_on_containment_pairs(impl):
+    frames = containment_pairs()
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -114,16 +135,62 @@ def test_conclusions_default_override_and_nan():
     assert out["passes_overlap"].to_list() == [False, False, False]
 
 
+# ── optional-dependency import isolation ────────────────────────────────────
+
+def test_import_and_use_without_datasketch():
+    """analytics.similarity must import, and MinHashRust/SimilarityExactLRU must
+    work, when datasketch cannot be imported (it's an optional reference impl,
+    lazily imported by MinHashDatasketch only). Run in a subprocess so faking the
+    ImportError can't leak into other tests via sys.modules."""
+    script = textwrap.dedent(
+        """
+        import sys
+        sys.modules["datasketch"] = None  # forces ImportError on `import datasketch`
+        import polars as pl
+        import analytics.similarity as sim
+
+        frames = {"x": pl.DataFrame({"a": [1, 2, 3]}), "y": pl.DataFrame({"a": [1, 2, 4]})}
+        assert sim.MinHashRust().add(frames).result().height == 1
+        assert sim.SimilarityExactLRU().add({n: f for n, f in frames.items()}).result().height == 1
+
+        try:
+            sim.MinHashDatasketch
+        except ImportError:
+            pass
+        else:
+            raise SystemExit("MinHashDatasketch should have raised ImportError")
+        print("OK")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout
+
+
 # ── the deliberate LRU cache ────────────────────────────────────────────────
 
 def test_lru_is_per_instance_and_cleared_on_add():
     a, b = SimilarityExactLRU(), SimilarityExactLRU()
     assert a._distinct is not b._distinct
     a.add(SMALL).result()
-    info = a._distinct.cache_info()
+    # result() clears the cache once it's done (see test_lru_cleared_after_result), so
+    # hits/misses from the run just finished are observed via the snapshot it leaves.
+    info = a.last_cache_info
     assert info.currsize == 6 and info.hits == 24  # 15 pairs × 2 lookups, 6 misses
+    assert a._distinct.cache_info().currsize == 0
     a.add({"df3": pl.DataFrame({"A": [1]})})
     assert a._distinct.cache_info().currsize == 0
+
+
+def test_lru_cleared_after_result():
+    t = SimilarityExactLRU()
+    t.add(SMALL).result()
+    assert t._distinct.cache_info().currsize == 0
+    assert t._distinct.cache_info().hits == 0 and t._distinct.cache_info().misses == 0
+    # a second result() must not see a warm/stale cache from the first run
+    t.result()
+    assert t.last_cache_info.hits == 24 and t.last_cache_info.misses == 6
+    assert t._distinct.cache_info().currsize == 0
 
 
 def test_cache_size_bounds_the_lru():
