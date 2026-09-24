@@ -7,3 +7,5 @@ __pycache__/
 
 Cargo.lock
 target/
+
+tests/performance/results/
