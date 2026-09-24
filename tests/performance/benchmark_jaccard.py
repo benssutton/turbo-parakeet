@@ -17,7 +17,7 @@ from pathlib import Path
 
 import polars as pl
 
-_ANALYTICS_ROOT = Path(__file__).parent.parent / "services" / "analytics"
+_ANALYTICS_ROOT = Path(__file__).parents[2] / "services" / "analytics"
 sys.path.insert(0, str(_ANALYTICS_ROOT))
 
 from deterministic_similarity_filter import DeterministicSimilarityFilter
@@ -30,7 +30,7 @@ try:
 except ImportError:
     print("WARNING: datasketch not installed. Install with: pip install datasketch")
 
-DATA_PATH = Path(__file__).parent / "data" / "large_dataset.arrow"
+DATA_PATH = Path(__file__).parents[1] / "data" / "large_dataset.arrow"
 
 JACCARD_THRESHOLD = 0.6
 OVERLAP_THRESHOLD = 0.95

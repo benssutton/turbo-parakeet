@@ -21,7 +21,7 @@ from analytics import (
 )
 
 # Data file path
-DATA_PATH = Path(__file__).parent / "data/large_dataset.arrow"
+DATA_PATH = Path(__file__).parents[1] / "data" / "large_dataset.arrow"
 
 
 def load_data() -> pl.LazyFrame:

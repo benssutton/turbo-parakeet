@@ -23,13 +23,13 @@ from pathlib import Path
 
 import polars as pl
 
-_ANALYTICS_ROOT = Path(__file__).parent.parent / "services" / "analytics"
+_ANALYTICS_ROOT = Path(__file__).parents[2] / "services" / "analytics"
 sys.path.insert(0, str(_ANALYTICS_ROOT))
 
 from chi_squared_polarsds import _get_suitable_columns, pairwise_chi_squared as pairwise_chi_squared_pds
 from analytics import pairwise_chi_squared as pairwise_chi_squared_rust
 
-DATA_PATH = Path(__file__).parent / "data" / "large_dataset.arrow"
+DATA_PATH = Path(__file__).parents[1] / "data" / "large_dataset.arrow"
 
 # Upper cardinality bound passed to pairwise_chi_squared and used to filter
 # columns. Chi-squared on near-unique columns is statistically meaningless and

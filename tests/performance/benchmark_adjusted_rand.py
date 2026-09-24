@@ -21,12 +21,12 @@ from pathlib import Path
 import polars as pl
 from sklearn.metrics import adjusted_rand_score
 
-_ANALYTICS_ROOT = Path(__file__).parent.parent / "services" / "analytics"
+_ANALYTICS_ROOT = Path(__file__).parents[2] / "services" / "analytics"
 sys.path.insert(0, str(_ANALYTICS_ROOT))
 
 from analytics import pairwise_adjusted_rand
 
-DATA_PATH = Path(__file__).parent / "data" / "large_dataset.arrow"
+DATA_PATH = Path(__file__).parents[1] / "data" / "large_dataset.arrow"
 
 
 def load_data() -> pl.DataFrame:
