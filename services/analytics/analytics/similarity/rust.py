@@ -32,10 +32,19 @@ class MinHashRust(Similarity):
         if num_perm < 1:
             raise ValueError(f"num_perm must be >= 1, got {num_perm}")
         self.num_perm = num_perm
-        # The LSH S-curve is calibrated against Jaccard. A pair that passes only on
-        # the Overlap Coefficient (a small set inside a large one) can have a low
-        # Jaccard, so the candidate stage uses 0.45 × the overlap threshold to let
-        # such pairs through; exact verification then applies the real thresholds.
+        # The LSH S-curve is calibrated against Jaccard, not Overlap Coefficient, so a
+        # pair that passes only on Overlap (a small set inside a large one, Jaccard
+        # low) needs a lower candidate threshold to survive the candidate stage.
+        # 0.45 × the overlap threshold (carried over unchanged from the deleted
+        # minhash_lsh_filter.py) is a fixed discount, not a guarantee: at the default
+        # thresholds it resolves to min(0.54, 0.4275) = 0.4275 (bands=28, rows=3), i.e.
+        # LSH only surfaces pairs whose Jaccard is roughly >= 0.43. A containment pair
+        # (overlap == 1.0) with Jaccard below that is pruned before verification ever
+        # runs, even for ordinary low-cardinality columns with no extreme size skew
+        # (e.g. 3 vs 9 distinct values, Jaccard 0.33 < 0.43) — not only pairs with huge
+        # cardinality differences. Measured on large_dataset.arrow: recall 0.62
+        # (389/625), all 236 misses are containment pairs with Jaccard from 0.00002 to
+        # 0.36 (median 0.10) that never became LSH candidates.
         self.lsh_threshold = min(self.jaccard_threshold * 0.9, self.overlap_threshold * 0.45)
         self.bands, self.rows_per_band = optimal_lsh_params(self.lsh_threshold, num_perm)
 

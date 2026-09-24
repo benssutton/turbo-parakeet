@@ -16,7 +16,12 @@ class MinHashDatasketch(Similarity):
         if num_perm < 1:
             raise ValueError(f"num_perm must be >= 1, got {num_perm}")
         self.num_perm = num_perm
-        # Kept from the original datasketch filter: 0.45 × the lower threshold (see MinHashRust).
+        # Kept from the original datasketch filter: 0.45 × the lower threshold. This is
+        # a different formula from MinHashRust's (min(jaccard*0.9, overlap*0.45)), not
+        # the same rule restated — at the defaults it resolves to min(0.6, 0.95)*0.45 =
+        # 0.27, versus MinHashRust's 0.4275, so the two implementations run at
+        # different candidate thresholds and benchmark comparisons between them are at
+        # different operating points, not an apples-to-apples LSH configuration.
         self.lsh_threshold = min(self.jaccard_threshold, self.overlap_threshold) * 0.45
 
     def _compute(self, frames, combos):
