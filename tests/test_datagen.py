@@ -5,6 +5,9 @@ from polars.testing import assert_frame_equal
 
 from datagen import (
     describe_mixed,
+    describe_narrow,
+    describe_nested,
+    describe_wide,
     integer_multiples,
     integer_random,
     low_cardinality,
@@ -77,3 +80,13 @@ def test_stringified_casts_only_castable_columns():
     assert all(dt == pl.String or dt == pl.List(pl.String) for dt in s.dtypes)
     assert {"i32", "f64", "dec", "date", "dt_tz", "time", "bool", "list_i64"} <= set(s.columns)
     assert not {"dur", "bin", "struct", "arr_i32", "str_int", "cat", "all_null"} & set(s.columns)
+
+
+
+def test_describe_benchmark_shapes():
+    narrow = describe_narrow(1_000)
+    assert narrow.columns == ["int", "float", "num_str", "iso_str"] and narrow.height == 1_000
+    wide = describe_wide(100, 8)
+    assert wide.width == 8 and [str(dt) for dt in wide.dtypes[:4]] == ["Int64", "Float64", "String", "Date"]
+    nested = describe_nested(500)
+    assert nested.schema == {"list_i64": pl.List(pl.Int64), "list_str": pl.List(pl.String), "struct": pl.Struct({"a": pl.Int64, "b": pl.String})}

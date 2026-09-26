@@ -26,6 +26,8 @@ how column combinations are enumerated.
 
 **GCD — `analytics.gcd`** (`GcdRust`, `GcdNumpy`, ★`GcdMath`). ClickHouse GCD-codec method: the GCD of the magnitudes of each integer-backed column's raw physical values (Int/UInt 8–64, Int128, Decimal → unscaled, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; magnitude 2¹²⁷ → null; other dtypes (incl. Categorical/Enum, UInt128) → ineligible. Descriptor `dtype` (Python `str(dtype)`) on every row. Conclusion `gcd_compressible` = gcd > 1. Rust: rayon-parallel across columns and 64K-value chunks, `binary_gcd(g, v % g)` fold with early exit at 1.
 
+**Describe — `analytics.describe`** (`DescribeRust`, `DescribeDataFusion`, ★`DescribePolars`). Profile for choosing narrower / more compressible Arrow types (spec: docs/superpowers/specs/2026-09-26-describe-technique-design.md). Metrics: counts, entropy (null as a category), f1/f2, first-occurrence argmin/argmax and top-5 (indices; the base renders values), byte/list lengths, float stats (NaN/inf/fractional, decimal places, f32 round trip), numeric-string and ISO 8601 counts (Rust byte scanners / Rust-regex elsewhere — linear time), Datetime local-midnight count, Arrow IPC sizes (classic layout, plain + ZSTD) and Polars sizes, and the same for list inner values. Conclusions: rendered min/max/top-5, `unique`, Chao1 / Schnabel (3-way seeded split) / Duj1 with 95% intervals and `est_cardinality` picked by rule (exact → Duj1 → Schnabel → Chao1), `estimates_agree`, and `class` ∈ {null, constant, boolean, ordinal, categorical, discrete}. Keywords: `population_rows=None`, `categorical_threshold=10_000`, `zstd_level=1`, `seed=0`. Agreement: exact except entropy (1e-9), ZSTD sizes (1%), Schnabel (10%).
+
 ## 2. Multi-set (distinct-value sets; pairs may span frames)
 
 Pairs are compared only within one **value family** (ints ≤64-bit; String/Categorical/Enum; otherwise exact dtype) — other pairs are ineligible.
@@ -53,14 +55,15 @@ turbo-parakeet/
 ├── services/analytics/
 │   ├── pyproject.toml, Cargo.toml          # maturin build (editable install via analytics.pth)
 │   ├── src/                                # Rust plugin — lib.rs, shared.rs, entropy.rs, chi_squared.rs,
-│   │                                       #   contingency.rs, ari.rs, gcd.rs, bloomfilter.rs, minhash.rs
+│   │                                       #   contingency.rs, ari.rs, gcd.rs, bloomfilter.rs, minhash.rs,
+│   │                                       #   describe/ (frequency, patterns, numeric, range, sizes)
 │   └── analytics/
 │       ├── __init__.py                     # __version__ only
 │       ├── analytics.pyd                   # compiled plugin
 │       ├── _plugin.py                      # PRIVATE plugin wrappers (called only by *Rust classes)
 │       ├── _dtypes.py, _sets.py            # dtype groupings / value families; canonical distinct values
 │       ├── base.py                         # Technique contract, helpers, metric_mismatches
-│       └── <technique>/                    # gcd, membership, similarity, chi_squared,
+│       └── <technique>/                    # gcd, describe, membership, similarity, chi_squared,
 │           ├── __init__.py                 #   pairwise_entropy, threeway_entropy, adjusted_rand
 │           ├── base.py                     # technique base: METRICS, eligibility, conclusions, RTOL/ATOL
 │           └── rust.py, <library>.py …     # one file per implementation
@@ -82,7 +85,8 @@ Build: `maturin develop --release` from `services/analytics/`. Python changes ne
 Private — reached only through `analytics._plugin`, only by the `*Rust` classes:
 `column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
 `pairwise_joint_entropy`, `threeway_joint_entropy` (the classes always pass explicit triplets, so the plugin's 5000-triplet default cap for `triplets=None` never applies; C(101,3) = 166,650 at 101 cols, ~65 s at 50K rows),
-`bloom_filter_bits` + `membership_ratio`, `minhash` + `lsh_candidates`.
+`bloom_filter_bits` + `membership_ratio`, `minhash` + `lsh_candidates`,
+`describe_columns` + `column_sizes`.
 (`membership`, `membership_ratio_sample` remain compiled but unused.)
 
 # Testing Convention
