@@ -6,7 +6,8 @@ Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
 
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -414,6 +415,55 @@ def test_sizes_through_the_technique(impl):
     assert (r["size_bytes"], r["size_polars_bytes"]) == (4_000, 4_000)
     assert r["size_zstd_bytes"] == approx(1_912, rel=0.01)
     assert profile(impl, pl.Series("x", [None if i % 3 == 0 else i for i in range(1_000)], dtype=pl.Int32))["size_bytes"] == 4_128
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_gcd_metric(impl):
+    assert profile(impl, pl.Series("x", [10, None, 20, 30]))["gcd"] == 10
+    assert profile(impl, pl.Series("x", [None, None], dtype=pl.Int32))["gcd"] == 0
+    assert profile(impl, pl.Series("x", [Decimal("1.20"), Decimal("3.40")], dtype=pl.Decimal(10, 2)))["gcd"] == 20
+    days = pl.Series("x", [datetime(2024, 1, 1), datetime(2024, 1, 2)], dtype=pl.Datetime("us"))
+    assert profile(impl, days)["gcd"] == 86_400_000_000
+    assert profile(impl, pl.Series("x", [1.5, 2.5]))["gcd"] is None
+    assert profile(impl, pl.Series("x", ["a"], dtype=pl.Categorical))["gcd"] is None
+    lists = profile(impl, pl.Series("x", [[4, 8], None, [12]]))
+    assert (lists["gcd"], lists["inner_gcd"]) == (None, 4)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_sum_len_metrics(impl):
+    r = profile(impl, pl.Series("x", ["ab", "ab", "c", None, "héllo"]))
+    assert (r["sum_len"], r["sum_len_unique"]) == (11, 9)  # 2+2+1+6, 2+1+6
+    c = profile(impl, pl.Series("x", ["ab", "ab", "c"], dtype=pl.Categorical))
+    assert (c["sum_len"], c["sum_len_unique"]) == (5, 3)
+    b = profile(impl, pl.Series("x", [b"ab", b"ab", None]))
+    assert (b["sum_len"], b["sum_len_unique"]) == (4, 2)
+    assert profile(impl, pl.Series("x", [1, 2]))["sum_len"] is None
+    lists = profile(impl, pl.Series("x", [["ab", "c"], ["ab"]]))
+    assert (lists["sum_len"], lists["inner_sum_len"], lists["inner_sum_len_unique"]) == (None, 5, 3)
+    empty = profile(impl, pl.Series("x", [], dtype=pl.String))
+    assert (empty["sum_len"], empty["sum_len_unique"]) == (0, 0)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_numeric_fraction_and_significant_digits(impl):
+    r = profile(impl, pl.Series("x", ["1.50", "0.00120", "7", "abc", None]))
+    assert (r["numeric_min_frac_digits"], r["numeric_max_frac_digits"], r["numeric_max_sig_digits"]) == (0, 4, 2)
+    r = profile(impl, pl.Series("x", ["1200", "-0.0", "12.50"]))
+    assert (r["numeric_min_frac_digits"], r["numeric_max_sig_digits"]) == (0, 4)
+    r = profile(impl, pl.Series("x", ["0.25", "1.125"]))
+    assert (r["numeric_min_frac_digits"], r["numeric_max_sig_digits"]) == (2, 4)
+    r = profile(impl, pl.Series("x", ["abc"]))
+    assert (r["numeric_min_frac_digits"], r["numeric_max_sig_digits"]) == (None, None)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_iso_significant_fraction_digits(impl):
+    r = profile(impl, pl.Series("x", ["10:00:00.120", "2024-01-05T10:00:00.000", "2024-01-05", None]))
+    assert (r["iso_max_frac_digits"], r["iso_max_sig_frac_digits"]) == (3, 2)
+    r = profile(impl, pl.Series("x", ["2024-01-05 10:00", "2024-01-05T10:00:00.000000+02:00"]))
+    assert (r["iso_max_frac_digits"], r["iso_max_sig_frac_digits"]) == (6, 0)
+    assert profile(impl, pl.Series("x", ["2024-01-05"]))["iso_max_sig_frac_digits"] is None
 
 
 NUMERIC_CASES = [

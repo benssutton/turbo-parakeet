@@ -20,7 +20,8 @@ LU64 = pl.List(pl.UInt64)
 
 GROUP_A = {  # whole values — every eligible dtype
     "n_unique": U64, "entropy": F64, "f1": U64, "f2": U64, "argmin": U64, "argmax": U64,
-    "min_len": U64, "max_len": U64, "top5_idx": LU64, "top5_count": LU64, "capture_history": LU64,
+    "min_len": U64, "max_len": U64, "gcd": D38, "sum_len": U64, "sum_len_unique": U64,
+    "top5_idx": LU64, "top5_count": LU64, "capture_history": LU64,
 }
 GROUP_B = {  # Float32 / Float64 only
     "n_nan": U64, "n_inf": U64, "n_fractional": U64, "max_frac_digits": U32, "n_f32_inexact": U64,
@@ -29,8 +30,9 @@ GROUP_C = {  # String / Categorical / Enum only
     "n_numeric": U64, "n_numeric_int": U64, "n_leading_zero": U64,
     "numeric_int_min": D38, "numeric_int_max": D38,
     "numeric_max_int_digits": U32, "numeric_max_frac_digits": U32,
+    "numeric_min_frac_digits": U32, "numeric_max_sig_digits": U32,
     "n_iso_date": U64, "n_iso_time": U64, "n_iso_datetime": U64, "n_iso_datetime_tz": U64,
-    "iso_max_frac_digits": U32, "iso_n_offsets": U64, "iso_n_midnight": U64,
+    "iso_max_frac_digits": U32, "iso_max_sig_frac_digits": U32, "iso_n_offsets": U64, "iso_n_midnight": U64,
 }
 VALUE_METRICS = {**GROUP_A, **GROUP_B, **GROUP_C}  # computed on outer values and on inner values
 SIZE_METRICS = {"size_bytes": U64, "size_zstd_bytes": U64, "size_polars_bytes": U64, "size_polars_zstd_bytes": U64}

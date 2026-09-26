@@ -96,3 +96,21 @@ ISO_DATETIME_TZ = f"^{_DATE}[T ]{_TIME}{_OFFSET}$"
 ISO_FRACTION = r":[0-5][0-9]\.([0-9]+)"        # fractional-second digits as written
 ISO_OFFSET = r"(Z|[+-][0-9]{2}:[0-9]{2})$"
 ISO_MIDNIGHT = r"[T ]00:00(:00(\.0+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$"
+
+
+def byte_lengths(s: pl.Series) -> pl.Series | None:
+    """UTF-8 / binary byte length of each value (String, Categorical, Enum, Binary);
+    None for every other dtype."""
+    if isinstance(s.dtype, STRING_LIKE):
+        return s.cast(pl.String).str.len_bytes()
+    if s.dtype == pl.Binary:
+        return s.bin.size()
+    return None
+
+
+def sig_digits(numeric: pl.Series) -> pl.Series:
+    """Significant digits of numeric strings: leading zeros (across the dot) and
+    trailing fraction zeros removed ("0.00120" → 2, "1200" → 4, "-0.0" → 0)."""
+    int_part = numeric.str.extract(INT_DIGITS, 1)
+    frac = numeric.str.extract(FRAC_DIGITS, 1).fill_null("")
+    return (int_part + frac).str.strip_chars_start("0").str.len_bytes()

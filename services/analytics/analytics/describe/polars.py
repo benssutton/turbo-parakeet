@@ -23,13 +23,17 @@ from analytics.describe._values import (
     NUMERIC,
     NUMERIC_INT,
     STRING_LIKE,
+    byte_lengths,
     flatten,
     frac_digits,
     frequency_summary,
     n_midnight,
+    sig_digits,
     subsets,
 )
 from analytics.describe.base import GROUP_B, GROUP_C, VALUE_METRICS, Describe
+from analytics.gcd.base import INTEGER_BACKED
+from analytics.gcd.math import math_gcd
 
 
 class DescribePolars(Describe):
@@ -55,7 +59,18 @@ def profile(s: pl.Series, seed: int) -> dict:
     """Every VALUE_METRICS entry for one series (outer column or flattened inner values)."""
     freq = frequencies(s, seed)
     summary = frequency_summary(freq["count"].to_numpy(), freq["first"].to_numpy(), freq["mask"].to_numpy(), s.len(), s.null_count())
-    return {**summary, **extremes(s, freq), **lengths(s), **float_stats(s), **string_stats(s)}
+    return {**summary, **extremes(s, freq), **lengths(s), **totals(s, freq), **float_stats(s), **string_stats(s)}
+
+
+def totals(s: pl.Series, freq: pl.DataFrame) -> dict:
+    """gcd of the physical values (as the Gcd technique) and the byte totals of all /
+    distinct string or binary values."""
+    lens = byte_lengths(s)
+    return {
+        "gcd": math_gcd(s) if isinstance(s.dtype, INTEGER_BACKED) else None,
+        "sum_len": None if lens is None else int(lens.sum()),
+        "sum_len_unique": None if lens is None else int(byte_lengths(freq["v"]).sum()),
+    }
 
 
 def frequencies(s: pl.Series, seed: int) -> pl.DataFrame:
@@ -142,11 +157,14 @@ def string_stats(s: pl.Series) -> dict:
         "numeric_int_max": parsed.max() if parsed is not None else None,
         "numeric_max_int_digits": numeric.str.extract(INT_DIGITS, 1).str.len_bytes().max(),
         "numeric_max_frac_digits": numeric.str.extract(FRAC_DIGITS, 1).str.len_bytes().fill_null(0).max(),
+        "numeric_min_frac_digits": numeric.str.extract(FRAC_DIGITS, 1).str.len_bytes().fill_null(0).min(),
+        "numeric_max_sig_digits": sig_digits(numeric).max(),
         "n_iso_date": int(is_date.sum()),
         "n_iso_time": int(is_time.sum()),
         "n_iso_datetime": int(is_dt.sum()),
         "n_iso_datetime_tz": int(is_tz.sum()),
         "iso_max_frac_digits": timed.str.extract(ISO_FRACTION, 1).str.len_bytes().fill_null(0).max(),
+        "iso_max_sig_frac_digits": timed.str.extract(ISO_FRACTION, 1).str.strip_chars_end("0").str.len_bytes().fill_null(0).max(),
         "iso_n_offsets": offsets.n_unique(),
         "iso_n_midnight": int(stamped.str.contains(ISO_MIDNIGHT).sum()),
     }
