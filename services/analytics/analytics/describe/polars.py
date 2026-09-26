@@ -8,7 +8,27 @@ import numpy as np
 import polars as pl
 
 from analytics.describe._sizes import column_sizes
-from analytics.describe._values import FLOATS, STRING_LIKE, flatten, frac_digits, frequency_summary, n_midnight, subsets
+from analytics.describe._values import (
+    FLOATS,
+    FRAC_DIGITS,
+    INT_DIGITS,
+    ISO_DATE,
+    ISO_DATETIME,
+    ISO_DATETIME_TZ,
+    ISO_FRACTION,
+    ISO_MIDNIGHT,
+    ISO_OFFSET,
+    ISO_TIME,
+    LEADING_ZERO,
+    NUMERIC,
+    NUMERIC_INT,
+    STRING_LIKE,
+    flatten,
+    frac_digits,
+    frequency_summary,
+    n_midnight,
+    subsets,
+)
 from analytics.describe.base import GROUP_B, GROUP_C, VALUE_METRICS, Describe
 
 
@@ -92,5 +112,38 @@ def float_stats(s: pl.Series) -> dict:
 
 
 def string_stats(s: pl.Series) -> dict:
-    """Group C — the numeric-string and ISO scanners (implemented in Task 6)."""
-    return dict.fromkeys(GROUP_C)
+    """Group C: numeric-string and ISO 8601 counts over non-null values."""
+    if not isinstance(s.dtype, STRING_LIKE):
+        return dict.fromkeys(GROUP_C)
+    v = s.cast(pl.String).drop_nulls()
+    numeric = v.filter(v.str.contains(NUMERIC))
+    ints = v.filter(v.str.contains(NUMERIC_INT))
+    int_digits = ints.str.extract(INT_DIGITS, 1).str.len_bytes()
+    in_range = ints.len() > 0 and int_digits.max() <= 38
+    parsed = ints.str.to_integer(dtype=pl.Int128) if in_range else None
+
+    date_ok = v.str.slice(0, 10).str.to_date("%Y-%m-%d", strict=False).is_not_null()
+    is_date = v.str.contains(ISO_DATE) & date_ok
+    is_time = v.str.contains(ISO_TIME)
+    is_dt = v.str.contains(ISO_DATETIME) & date_ok
+    is_tz = v.str.contains(ISO_DATETIME_TZ) & date_ok
+    timed = v.filter(is_time | is_dt | is_tz)
+    offsets = v.filter(is_tz).str.extract(ISO_OFFSET, 1).replace({"Z": "+00:00", "-00:00": "+00:00"})
+    stamped = v.filter(is_dt | is_tz)
+
+    return {
+        "n_numeric": numeric.len(),
+        "n_numeric_int": ints.len(),
+        "n_leading_zero": int(v.str.contains(LEADING_ZERO).sum()),
+        "numeric_int_min": parsed.min() if parsed is not None else None,
+        "numeric_int_max": parsed.max() if parsed is not None else None,
+        "numeric_max_int_digits": numeric.str.extract(INT_DIGITS, 1).str.len_bytes().max(),
+        "numeric_max_frac_digits": numeric.str.extract(FRAC_DIGITS, 1).str.len_bytes().fill_null(0).max(),
+        "n_iso_date": int(is_date.sum()),
+        "n_iso_time": int(is_time.sum()),
+        "n_iso_datetime": int(is_dt.sum()),
+        "n_iso_datetime_tz": int(is_tz.sum()),
+        "iso_max_frac_digits": timed.str.extract(ISO_FRACTION, 1).str.len_bytes().fill_null(0).max(),
+        "iso_n_offsets": offsets.n_unique(),
+        "iso_n_midnight": int(stamped.str.contains(ISO_MIDNIGHT).sum()),
+    }

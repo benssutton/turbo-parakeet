@@ -67,3 +67,32 @@ def n_midnight(s: pl.Series) -> int | None:
     if not isinstance(s.dtype, pl.Datetime):
         return None
     return int((s.dt.time() == time(0)).sum())
+
+
+# ── string grammar ───────────────────────────────────────────────────────────
+# Anchored and ASCII-only. Polars' str.* and DataFusion's regexp_* run these on the
+# Rust `regex` engine (finite automata, no backtracking), so run time is linear in
+# the input for any string — hostile input cannot trigger catastrophic
+# backtracking. Never evaluate them with Python's `re`. The Rust kernel
+# (src/describe/patterns.rs) implements the same grammar with byte scanners.
+#
+# Leading zeros: an integer-looking string with a leading zero ("007") must stay a
+# String; a value with a decimal point is judged on numeric equality only. See
+# the rationale in src/describe/patterns.rs.
+
+NUMERIC = r"^-?[0-9]+(\.[0-9]+)?$"
+NUMERIC_INT = r"^-?[0-9]+$"
+LEADING_ZERO = r"^-?0[0-9]+$"
+INT_DIGITS = r"^-?0*([0-9]*)"          # significant integer-part digits
+FRAC_DIGITS = r"\.([0-9]*?)0*$"        # fraction digits without trailing zeros
+
+_DATE = r"[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"  # days-per-month checked by parsing
+_TIME = r"([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]{1,9})?)?"
+_OFFSET = r"(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])"
+ISO_DATE = f"^{_DATE}$"
+ISO_TIME = f"^{_TIME}$"
+ISO_DATETIME = f"^{_DATE}[T ]{_TIME}$"
+ISO_DATETIME_TZ = f"^{_DATE}[T ]{_TIME}{_OFFSET}$"
+ISO_FRACTION = r":[0-5][0-9]\.([0-9]+)"        # fractional-second digits as written
+ISO_OFFSET = r"(Z|[+-][0-9]{2}:[0-9]{2})$"
+ISO_MIDNIGHT = r"[T ]00:00(:00(\.0+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$"

@@ -414,3 +414,97 @@ def test_sizes_through_the_technique(impl):
     assert (r["size_bytes"], r["size_polars_bytes"]) == (4_000, 4_000)
     assert r["size_zstd_bytes"] == approx(1_912, rel=0.01)
     assert profile(impl, pl.Series("x", [None if i % 3 == 0 else i for i in range(1_000)], dtype=pl.Int32))["size_bytes"] == 4_128
+
+
+NUMERIC_CASES = [
+    pytest.param(["5.", ".5", "1.2.3", "+5", "1e5", " 5", "5 ", "٣"], dict(n_numeric=0, n_numeric_int=0, n_leading_zero=0, numeric_max_int_digits=None), id="rejected"),
+    pytest.param(["007", "-012"], dict(n_numeric=2, n_numeric_int=2, n_leading_zero=2, numeric_int_min=-12, numeric_int_max=7), id="leading_zero"),
+    pytest.param(["0", "-0"], dict(n_numeric=2, n_numeric_int=2, n_leading_zero=0, numeric_max_int_digits=0), id="zero_is_not_leading"),
+    pytest.param(["007.50"], dict(n_numeric=1, n_numeric_int=0, n_leading_zero=0, numeric_max_int_digits=1, numeric_max_frac_digits=1), id="decimal_ignores_zeros"),
+    pytest.param(["12", "-7", "300", "0.25"], dict(numeric_int_min=-7, numeric_int_max=300, numeric_max_int_digits=3, numeric_max_frac_digits=2), id="ranges"),
+    pytest.param(["1" + "0" * 38], dict(n_numeric_int=1, numeric_int_min=None, numeric_int_max=None, numeric_max_int_digits=39), id="39_digits"),
+]
+
+
+@pytest.mark.parametrize("impl", ALL)
+@pytest.mark.parametrize("values, expected", NUMERIC_CASES)
+def test_numeric_scanner(impl, values, expected):
+    r = profile(impl, pl.Series("x", values))
+    assert {k: r[k] for k in expected} == expected
+
+
+ISO_CASES = [
+    pytest.param(["2024-02-29", "2023-02-29", "2024-13-01", "2024-1-05"], dict(n_iso_date=1, iso_max_frac_digits=None), id="calendar"),
+    pytest.param(["23:59", "24:00", "23:59:60", "10:00:00.123456789", "10:00:00.1234567890", "10:00:00."], dict(n_iso_time=2, iso_max_frac_digits=9), id="times"),
+    pytest.param(["2024-01-05T10:00", "2024-01-05 10:00:00", "2024-01-05t10:00"], dict(n_iso_datetime=2, n_iso_datetime_tz=0, iso_max_frac_digits=0), id="separator"),
+    pytest.param(
+        ["2024-01-05T10:00:00Z", "2024-01-05 10:00:00+00:00", "2024-01-05T10:00-00:00", "2024-01-05T10:00+02:00", "2024-01-05T10:00+0200"],
+        dict(n_iso_datetime_tz=4, iso_n_offsets=2), id="offsets",
+    ),
+    pytest.param(["2024-01-05T00:00:00.000", "2024-01-05T00:00", "2024-01-05T00:00:01", "2024-01-05T00:00Z"], dict(n_iso_datetime=3, n_iso_datetime_tz=1, iso_n_midnight=3), id="midnight"),
+]
+
+
+@pytest.mark.parametrize("impl", ALL)
+@pytest.mark.parametrize("values, expected", ISO_CASES)
+def test_iso_scanner(impl, values, expected):
+    r = profile(impl, pl.Series("x", values))
+    assert {k: r[k] for k in expected} == expected
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_scanners_on_categorical_and_non_strings(impl):
+    c = profile(impl, pl.Series("x", ["12", "007", "x"], dtype=pl.Categorical))
+    assert (c["n_numeric"], c["n_leading_zero"]) == (2, 1)
+    assert profile(impl, pl.Series("x", [1, 2]))["n_numeric"] is None
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_adversarial_long_strings(impl):
+    s = pl.Series("x", ["0" * 10**6 + "." + "0" * 10**6 + ".", "0" * 10**6, "2024-01-05T" + "0" * 10**6, "9" * 39])
+    r = profile(impl, s)
+    assert (r["n_numeric"], r["n_numeric_int"], r["n_leading_zero"]) == (2, 2, 1)
+    assert r["numeric_int_min"] is None  # "9"*39 has more than 38 significant digits
+    assert r["n_iso_date"] == r["n_iso_datetime"] == r["n_iso_datetime_tz"] == 0
+
+
+def _non_null(frame: pl.DataFrame, col: str) -> int:
+    return frame[col].len() - frame[col].null_count()
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_stringified_describe_mixed(impl):
+    source = describe_mixed(500)
+    text = stringified(source)
+    out = {r["col_a"]: r for r in run(load(impl), {"s": text}).iter_rows(named=True)}
+    for c in ("i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "codes"):
+        assert out[c]["n_numeric_int"] == _non_null(source, c), c
+        assert out[c]["n_leading_zero"] == 0, c
+    assert out["date"]["n_iso_date"] == _non_null(source, "date")
+    assert out["dt_naive"]["n_iso_datetime"] == _non_null(source, "dt_naive")  # "2024-01-05 10:00:00.000000"
+    assert out["dt_tz"]["n_iso_datetime_tz"] == _non_null(source, "dt_tz")  # "…+00:00" / "…+01:00"
+    assert out["dt_tz"]["iso_n_offsets"] == 2  # GMT and BST across 2024
+    assert out["time"]["n_iso_time"] == _non_null(source, "time")
+    assert out["f64_price"]["n_numeric"] == _non_null(source, "f64_price")
+    assert out["dec"]["n_numeric"] == _non_null(source, "dec") and out["dec"]["numeric_max_frac_digits"] <= 2
+    # Polars writes "1e-7", "1.5e+20", "inf", "NaN": exponent and special forms are deliberately not numeric.
+    assert out["f64"]["n_numeric"] == int(text["f64"].is_in(["0.0", "-0.0", "0.1"]).sum())
+    assert out["bool"]["n_numeric"] == 0 and out["bool"]["n_iso_date"] == 0  # "true" / "false"
+    lst = out["list_i64"]
+    assert lst["inner_n_numeric_int"] == lst["inner_n_values"] - lst["inner_n_null"]
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_stringified_large_dataset_columns(impl):
+    large = pl.read_ipc(LARGE).head(5_000)
+    cols = [c for c, dt in large.schema.items() if dt in (pl.Int32, pl.Int64, pl.Date, pl.Float64)][:25]
+    source = large.select(cols)
+    out = {r["col_a"]: r for r in run(load(impl), {"s": stringified(source)}).iter_rows(named=True)}
+    for c in cols:
+        n = _non_null(source, c)
+        if source[c].dtype in (pl.Int32, pl.Int64):
+            assert out[c]["n_numeric_int"] == n, c
+        elif source[c].dtype == pl.Date:
+            assert out[c]["n_iso_date"] == n, c
+        else:
+            assert out[c]["n_numeric"] <= n, c
