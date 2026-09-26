@@ -6,6 +6,7 @@ mod chi_squared;
 mod contingency;
 mod ari;
 mod gcd;
+mod describe;
 
 use mimalloc::MiMalloc;
 

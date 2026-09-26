@@ -14,7 +14,7 @@ serde = { version = "1", features = ["derive"] }
 # bitvec = { version = "1.0.1", features = ["serde"] }
 
 #Polars and pyo3
-polars = { version = "0.51.0", features = ["lazy", "performant", "dtype-decimal"] }
+polars = { version = "0.51.0", features = ["lazy", "performant", "dtype-decimal", "dtype-struct", "dtype-array", "dtype-categorical", "timezones"] }
 polars-arrow = { version = "0.51.0", default-features = false }
 pyo3 = { version = "0.25.0", features = ["extension-module", "abi3-py39"] }
 pyo3-polars = { version = "0.24.0", features = ["derive", "dtype-struct", "dtype-array", "dtype-categorical", "dtype-decimal", "lazy"] }
@@ -35,6 +35,13 @@ statrs = "0.18"
 
 #GCD (Stein's binary algorithm)
 gcd = "2.3"
+
+#describe: IPC ZSTD sizes, shortest float repr, time zones, buffer casts
+zstd = "0.13"
+ryu = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
+bytemuck = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

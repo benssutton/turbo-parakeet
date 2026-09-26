@@ -249,6 +249,41 @@ pub(crate) fn encode_series(series: &Series) -> PolarsResult<EncodedColumn> {
             }
             (values, is_null)
         }
+        DataType::Binary => {
+            let build_hasher = FoldHashFixed::default();
+            series
+                .binary()?
+                .iter()
+                .map(|v| v.map_or((0, true), |b| (hash_one(&build_hasher, b), false)))
+                .unzip()
+        }
+        // Struct: the whole value is one key — a hash of every field's key and
+        // null-ness — so equal structs match and a null struct never aliases a
+        // struct whose fields are all null (the outer validity is checked first).
+        DataType::Struct(_) => {
+            let build_hasher = FoldHashFixed::default();
+            let ca = series.struct_()?;
+            let fields = ca
+                .fields_as_series()
+                .iter()
+                .map(encode_series)
+                .collect::<PolarsResult<Vec<_>>>()?;
+            let validity = ca.rechunk_validity();
+            (0..ca.len())
+                .map(|i| {
+                    if validity.as_ref().is_some_and(|bm| !bm.get_bit(i)) {
+                        return (0, true);
+                    }
+                    let mut h = build_hasher.build_hasher();
+                    fields.len().hash(&mut h);
+                    for f in &fields {
+                        f.is_null[i].hash(&mut h);
+                        f.values[i].hash(&mut h);
+                    }
+                    (h.finish(), false)
+                })
+                .unzip()
+        }
         _ => {
             return Err(PolarsError::ComputeError(
                 format!("Unsupported data type: {:?}.", series.dtype()).into(),
