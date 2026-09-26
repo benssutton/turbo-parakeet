@@ -596,10 +596,10 @@ impl StringStats {
 // describe — column profile assembly and the `describe_columns` plugin entry
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Row = Vec<AnyValue<'static>>;
+pub(crate) type Row = Vec<AnyValue<'static>>;
 
 /// Metrics computed on any value series, in output order (base.py VALUE_METRICS).
-fn value_fields() -> Vec<(&'static str, DataType)> {
+pub(crate) fn value_fields() -> Vec<(&'static str, DataType)> {
     use DataType::{Float64 as F64, UInt32 as U32, UInt64 as U64};
     let list = DataType::List(Box::new(U64));
     // Arrow has no plain 128-bit integer; parse_i128 caps values at 38 digits.
@@ -615,7 +615,7 @@ fn value_fields() -> Vec<(&'static str, DataType)> {
     ]
 }
 
-fn fields() -> Vec<(String, DataType)> {
+pub(crate) fn fields() -> Vec<(String, DataType)> {
     let mut f = vec![("column".to_string(), DataType::String), ("n_rows".into(), DataType::UInt64), ("n_null".into(), DataType::UInt64)];
     f.extend(value_fields().into_iter().map(|(n, d)| (n.to_string(), d)));
     f.push(("n_midnight".into(), DataType::UInt64));
@@ -661,36 +661,91 @@ fn strings(s: &Series) -> PolarsResult<Option<StringStats>> {
     ))
 }
 
-/// Every value metric for one series, in `value_fields()` order.
-fn profile(s: &Series, seed: u64) -> PolarsResult<Row> {
-    let f = frequencies(&encode_series(s)?, seed);
-    let r = range(s)?;
-    let mut row: Row = vec![
-        AnyValue::UInt64(f.n_unique), AnyValue::Float64(f.entropy), AnyValue::UInt64(f.f1), AnyValue::UInt64(f.f2),
-        u64v(r.argmin), u64v(r.argmax), u64v(r.min_len), u64v(r.max_len),
-        listv(&f.top5_idx), listv(&f.top5_count), listv(&f.capture_history),
-    ];
-    match float_stats(s)? {
-        Some(fl) => row.extend([
-            AnyValue::UInt64(fl.n_nan), AnyValue::UInt64(fl.n_inf), AnyValue::UInt64(fl.n_fractional), u32v(fl.max_frac_digits),
-            if s.dtype() == &DataType::Float32 { AnyValue::Null } else { AnyValue::UInt64(fl.n_f32_inexact) },
-        ]),
-        None => row.extend(nulls(5)),
-    }
-    match strings(s)? {
-        Some(st) => {
-            let (lo, hi) = if st.int_overflow { (None, None) } else { (st.int_min, st.int_max) };
-            row.extend([
-                AnyValue::UInt64(st.n_numeric), AnyValue::UInt64(st.n_numeric_int), AnyValue::UInt64(st.n_leading_zero),
-                d38v(lo), d38v(hi), u32v(st.max_int_digits), u32v(st.max_frac_digits),
-                AnyValue::UInt64(st.n_iso_date), AnyValue::UInt64(st.n_iso_time), AnyValue::UInt64(st.n_iso_datetime),
-                AnyValue::UInt64(st.n_iso_datetime_tz), u32v(st.iso_max_frac_digits),
-                AnyValue::UInt64(st.offsets.len() as u64), AnyValue::UInt64(st.iso_n_midnight),
-            ])
+/// Every value metric of one series (the column, or its list's inner values).
+pub(crate) struct Profile {
+    pub freq: Frequencies,
+    pub range: Range,
+    pub floats: Option<FloatStats>,
+    pub strings: Option<StringStats>,
+    /// Float32 series: `n_f32_inexact` does not apply.
+    pub is_f32: bool,
+}
+
+pub(crate) fn profile(s: &Series, seed: u64) -> PolarsResult<Profile> {
+    Ok(Profile {
+        freq: frequencies(&encode_series(s)?, seed),
+        range: range(s)?,
+        floats: float_stats(s)?,
+        strings: strings(s)?,
+        is_f32: s.dtype() == &DataType::Float32,
+    })
+}
+
+impl Profile {
+    /// The metrics in `value_fields()` order.
+    fn row(&self) -> Row {
+        let (f, r) = (&self.freq, &self.range);
+        let mut row: Row = vec![
+            AnyValue::UInt64(f.n_unique), AnyValue::Float64(f.entropy), AnyValue::UInt64(f.f1), AnyValue::UInt64(f.f2),
+            u64v(r.argmin), u64v(r.argmax), u64v(r.min_len), u64v(r.max_len),
+            listv(&f.top5_idx), listv(&f.top5_count), listv(&f.capture_history),
+        ];
+        match self.floats {
+            Some(fl) => row.extend([
+                AnyValue::UInt64(fl.n_nan), AnyValue::UInt64(fl.n_inf), AnyValue::UInt64(fl.n_fractional), u32v(fl.max_frac_digits),
+                if self.is_f32 { AnyValue::Null } else { AnyValue::UInt64(fl.n_f32_inexact) },
+            ]),
+            None => row.extend(nulls(5)),
         }
-        None => row.extend(nulls(14)),
+        match &self.strings {
+            Some(st) => {
+                let (lo, hi) = if st.int_overflow { (None, None) } else { (st.int_min, st.int_max) };
+                row.extend([
+                    AnyValue::UInt64(st.n_numeric), AnyValue::UInt64(st.n_numeric_int), AnyValue::UInt64(st.n_leading_zero),
+                    d38v(lo), d38v(hi), u32v(st.max_int_digits), u32v(st.max_frac_digits),
+                    AnyValue::UInt64(st.n_iso_date), AnyValue::UInt64(st.n_iso_time), AnyValue::UInt64(st.n_iso_datetime),
+                    AnyValue::UInt64(st.n_iso_datetime_tz), u32v(st.iso_max_frac_digits),
+                    AnyValue::UInt64(st.offsets.len() as u64), AnyValue::UInt64(st.iso_n_midnight),
+                ])
+            }
+            None => row.extend(nulls(14)),
+        }
+        row
     }
-    Ok(row)
+}
+
+/// A list column's values one level down (`flatten`) and their profile.
+pub(crate) struct Inner {
+    pub values: Series,
+    pub profile: Profile,
+}
+
+/// Everything Describe measures on one column (sizes excepted — sizes.rs).
+pub(crate) struct Described {
+    pub name: PlSmallStr,
+    pub n_rows: u64,
+    pub n_null: u64,
+    pub outer: Profile,
+    pub n_midnight: Option<u64>,
+    pub inner: Option<Inner>,
+}
+
+impl Described {
+    /// One output row in `fields()` order.
+    pub(crate) fn row(&self) -> Row {
+        let mut row: Row = vec![AnyValue::StringOwned(self.name.clone()), AnyValue::UInt64(self.n_rows), AnyValue::UInt64(self.n_null)];
+        row.extend(self.outer.row());
+        row.push(u64v(self.n_midnight));
+        match &self.inner {
+            Some(i) => {
+                row.push(AnyValue::UInt64(i.values.len() as u64));
+                row.push(AnyValue::UInt64(i.values.null_count() as u64));
+                row.extend(i.profile.row());
+            }
+            None => row.extend(nulls(2 + value_fields().len())),
+        }
+        row
+    }
 }
 
 /// Datetime values at exactly 00:00:00 local time (column time zone, else naive).
@@ -743,36 +798,40 @@ fn flatten(s: &Series) -> PolarsResult<Option<Series>> {
     Ok(Some(inner.take_slice(&idx)?))
 }
 
-fn describe_one(s: &Series, seed: u64) -> PolarsResult<Row> {
-    let mut row: Row = vec![
-        AnyValue::StringOwned(s.name().clone()),
-        AnyValue::UInt64(s.len() as u64),
-        AnyValue::UInt64(s.null_count() as u64),
-    ];
-    row.extend(profile(s, seed)?);
-    row.push(u64v(n_midnight(s)?));
-    match flatten(s)? {
-        Some(inner) => {
-            row.push(AnyValue::UInt64(inner.len() as u64));
-            row.push(AnyValue::UInt64(inner.null_count() as u64));
-            row.extend(profile(&inner, seed)?);
+pub(crate) fn describe_one(s: &Series, seed: u64) -> PolarsResult<Described> {
+    let inner = match flatten(s)? {
+        Some(values) => {
+            let profile = profile(&values, seed)?;
+            Some(Inner { values, profile })
         }
-        None => row.extend(nulls(2 + value_fields().len())),
-    }
-    Ok(row)
+        None => None,
+    };
+    Ok(Described {
+        name: s.name().clone(),
+        n_rows: s.len() as u64,
+        n_null: s.null_count() as u64,
+        outer: profile(s, seed)?,
+        n_midnight: n_midnight(s)?,
+        inner,
+    })
+}
+
+/// A Struct series `name` with one field per `fields` entry and one row per `rows` entry.
+pub(crate) fn assemble(name: &str, fields: &[(String, DataType)], rows: &[Row]) -> PolarsResult<Series> {
+    let columns = fields
+        .iter()
+        .enumerate()
+        .map(|(j, (field, dtype))| {
+            let values: Vec<AnyValue> = rows.iter().map(|r| r[j].clone()).collect();
+            Series::from_any_values_and_dtype(field.as_str().into(), &values, dtype, true)
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
+    Ok(StructChunked::from_series(name.into(), rows.len(), columns.iter())?.into_series())
 }
 
 pub(crate) fn describe_columns_impl(inputs: &[Series], seed: u64) -> PolarsResult<Series> {
-    let rows: Vec<Row> = inputs.par_iter().map(|s| describe_one(s, seed)).collect::<PolarsResult<_>>()?;
-    let columns = fields()
-        .iter()
-        .enumerate()
-        .map(|(j, (name, dtype))| {
-            let values: Vec<AnyValue> = rows.iter().map(|r| r[j].clone()).collect();
-            Series::from_any_values_and_dtype(name.as_str().into(), &values, dtype, true)
-        })
-        .collect::<PolarsResult<Vec<_>>>()?;
-    Ok(StructChunked::from_series("describe".into(), inputs.len(), columns.iter())?.into_series())
+    let rows: Vec<Row> = inputs.par_iter().map(|s| describe_one(s, seed).map(|d| d.row())).collect::<PolarsResult<_>>()?;
+    assemble("describe", &fields(), &rows)
 }
 
 #[derive(Deserialize)]
@@ -965,5 +1024,16 @@ mod tests {
         let long = format!("{}.{}.", "0".repeat(1_000_000), "0".repeat(1_000_000));
         assert_eq!(num(&long), None);
         assert_eq!(iso(&format!("2024-01-05T{}", "0".repeat(1_000_000))), None);
+    }
+
+    #[test]
+    fn described_row_matches_fields() {
+        let list = Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None]);
+        let d = describe_one(&list, 0).unwrap();
+        assert_eq!(d.row().len(), fields().len());
+        assert_eq!(d.inner.as_ref().unwrap().values.len(), 2);
+        let floats = describe_one(&Series::new("y".into(), &[1.5f64]), 0).unwrap();
+        assert_eq!(floats.row().len(), fields().len());
+        assert!(floats.inner.is_none() && floats.outer.floats.is_some());
     }
 }
