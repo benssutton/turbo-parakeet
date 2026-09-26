@@ -32,7 +32,6 @@ use std::collections::{HashMap, HashSet};
 // strings, nested and struct values hashed — collisions ~6e-11 per pair at 50K
 // rows, accepted as documented in CLAUDE.md).
 
-
 pub(crate) const CHUNK: usize = 1 << 16;
 
 #[derive(Clone, Copy)]
@@ -151,7 +150,6 @@ pub(crate) fn frequencies(col: &EncodedColumn, seed: u64) -> Frequencies {
 // physical code); List, Array and Struct by Polars' row encoding — the encoding
 // its sort uses. Ties keep the lowest row index.
 
-
 pub(crate) struct Range {
     pub argmin: Option<u64>,
     pub argmax: Option<u64>,
@@ -252,8 +250,6 @@ pub(crate) fn range(s: &Series) -> PolarsResult<Range> {
 // Decimal places come from the shortest round-trip representation (ryu) in the
 // column's own width — f32 digits for Float32 — exponent-aware:
 // max(0, fraction digits without trailing zeros − exponent).
-
-
 
 #[derive(Default, Clone, Copy)]
 pub(crate) struct FloatStats {
@@ -368,7 +364,6 @@ pub(crate) fn float_stats(s: &Series) -> PolarsResult<Option<FloatStats>> {
 // them. A value with a single decimal point ("007.50") is unlikely to be an
 // identifier, so only numeric equivalence matters for it — differing leading or
 // trailing zeros are acceptable.
-
 
 pub(crate) struct Numeric {
     pub is_int: bool,
@@ -597,6 +592,10 @@ impl StringStats {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// describe — column profile assembly and the `describe_columns` plugin entry
+// ─────────────────────────────────────────────────────────────────────────────
+
 type Row = Vec<AnyValue<'static>>;
 
 /// Metrics computed on any value series, in output order (base.py VALUE_METRICS).
@@ -790,7 +789,6 @@ fn describe_columns(inputs: &[Series], kwargs: DescribeKwargs) -> PolarsResult<S
 mod tests {
     use super::*;
 
-
     fn freq(s: Series) -> Frequencies {
         frequencies(&encode_series(&s).unwrap(), 0)
     }
@@ -857,7 +855,6 @@ mod tests {
         assert_eq!(freq(bin).n_unique, 1);
     }
 
-
     fn r(s: Series) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
         let x = range(&s).unwrap();
         (x.argmin, x.argmax, x.min_len, x.max_len)
@@ -881,7 +878,6 @@ mod tests {
         assert_eq!(r(s), (Some(3), Some(1), Some(0), Some(2)));
     }
 
-
     #[test]
     fn decimal_places_of_shortest_reprs() {
         for (repr, want) in [("0.1", 1), ("1e-7", 7), ("1.5e20", 0), ("1.5e+20", 0), ("3.0", 0), ("-0.0", 0), ("123.45", 2), ("1.25e-3", 5)] {
@@ -904,7 +900,6 @@ mod tests {
         assert!(float_stats(&Series::new("x".into(), &[1i32])).unwrap().is_none());
         assert_eq!(float_stats(&Series::new("x".into(), &[f64::NAN])).unwrap().unwrap().max_frac_digits, None);
     }
-
 
     fn num(s: &str) -> Option<(bool, bool, u32, u32)> {
         scan_numeric(s.as_bytes()).map(|n| (n.is_int, n.leading_zero, n.int_digits, n.frac_digits))
