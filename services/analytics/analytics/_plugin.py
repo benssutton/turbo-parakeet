@@ -489,3 +489,39 @@ def lsh_candidates(
         },
         is_elementwise=False,
     )
+
+"""
+Describe
+"""
+
+
+def describe_columns(df: pl.DataFrame, seed: int) -> pl.DataFrame:
+    """One row per column of `df`: `column` + describe's value metrics for the column
+    and its inner values (see analytics.describe.base). `seed` fixes the 3-way split
+    behind the capture history. Private — called only by DescribeRust."""
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="describe_columns",
+            args=df.get_columns(),
+            kwargs={"seed": seed},
+            is_elementwise=False,
+            changes_length=True,
+        ).alias("describe")
+    ).unnest("describe")
+
+
+def column_sizes(df: pl.DataFrame, zstd_level: int) -> pl.DataFrame:
+    """One row per column of `df`: Arrow IPC body bytes (classic layout, plain and
+    ZSTD) and Polars sizes (estimated_size, ZSTD IPC of the native layout).
+    Private — called only by DescribeRust."""
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="column_sizes",
+            args=df.get_columns(),
+            kwargs={"zstd_level": zstd_level},
+            is_elementwise=False,
+            changes_length=True,
+        ).alias("column_sizes")
+    ).unnest("column_sizes")

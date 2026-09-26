@@ -508,3 +508,34 @@ def test_stringified_large_dataset_columns(impl):
             assert out[c]["n_iso_date"] == n, c
         else:
             assert out[c]["n_numeric"] <= n, c
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_multi_chunk_and_sliced_input(impl):
+    parts = [pl.Series("x", ["b", None]), pl.Series("x", ["a", "c"]), pl.Series("x", ["a"])]
+    s = pl.concat(parts, rechunk=False)
+    assert s.n_chunks() == 3
+    r = profile(impl, s)
+    assert (r["n_unique"], r["argmin"], r["argmax"], r["top5_idx"]) == (3, 2, 3, [2, 0, 3])
+    sliced = pl.Series("x", [[9], [1, 2], None, [3]], dtype=pl.List(pl.Int64)).slice(1, 3)
+    q = profile(impl, sliced)
+    assert (q["inner_n_values"], q["inner_argmin"], q["size_bytes"]) == (3, 0, profile(impl, pl.Series("x", [[1, 2], None, [3]], dtype=pl.List(pl.Int64)))["size_bytes"])
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_first_occurrence_across_parallel_chunks(impl):
+    chunk = 1 << 16
+    values = np.full(3 * chunk + 17, 5, dtype=np.int64)
+    values[2 * chunk + 3] = 1   # first minimum, third chunk
+    values[3 * chunk + 1] = 1   # later minimum, fourth chunk
+    values[chunk + 7] = 9       # maximum, second chunk
+    r = profile(impl, pl.Series("x", values))
+    assert (r["argmin"], r["argmax"]) == (2 * chunk + 3, chunk + 7)
+    assert (r["top5_idx"], r["top5_count"]) == ([0, 2 * chunk + 3, chunk + 7], [len(values) - 3, 2, 1])
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+def test_categorical_and_enum_sizes_agree(impl):
+    frame = describe_mixed(1_000).select("cat", "enum", "str_free")
+    exact = ["col_a", "size_bytes", "size_polars_bytes"]
+    assert run(load(impl), {"t": frame}).select(exact).equals(run(reference(PKG), {"t": frame}).select(exact))
