@@ -15,7 +15,7 @@ Recasting production data is invasive, so **transparency** governs the design: e
 - `RecommendRust(**params).add(frames).result()` returns Describe's full table plus the recommendation columns (§6), on the uniform technique contract.
 - For every successful candidate, the predicted uncompressed size equals the measured size.
 - Recast sizes agree with independent oracles: pyarrow casting to `rec_arrow_type`, and Polars casting to `rec_polars_type`, each measured with `_sizes.py`.
-- The four new Describe metrics (§3) agree across `DescribeRust`, `DescribeDataFusion` and `DescribePolars` ★.
+- The six new Describe metrics (§3) agree across `DescribeRust`, `DescribeDataFusion` and `DescribePolars` ★.
 
 ### Decisions made during brainstorming
 
@@ -25,7 +25,7 @@ Recasting production data is invasive, so **transparency** governs the design: e
 | Architecture | All in Rust: one plugin entry `describe_and_recommend` computes Describe's metrics, estimates, recommends, casts, verifies and measures |
 | Rust layout | Flatten `src/describe/` into `src/describe.rs`; move `sizes.rs` to `src/`; new `src/cardinality_estimators.rs` and `src/recommend.rs` |
 | Estimators | Ported to Rust for the recommender; `estimators.py` stays as the Python reference; the two are agreement-tested |
-| Choosing a type | Candidates come from the type hierarchy; each has an analytically predicted size; they are tried **smallest projected size first, ties broken by hierarchy rank**; the first to cast and verify is chosen; on failure, the next candidate is tried. The original type is always the last candidate |
+| Choosing a type | Candidates come from the type hierarchy; each has an analytically predicted size; they are tried **smallest projected size first, ties broken by hierarchy rank**; the first to cast and verify is chosen; on failure, the next candidate is tried. The original type is a candidate like any other, ranked last among equal sizes, and cannot fail |
 | Sampling | Integer/decimal widths from observed values. Dictionary key width and the dictionary-vs-plain choice from population cardinality: `est_high` where an interval exists, else `est_cardinality`. Nullability from observed nulls |
 | Transparency | Any statistic a rule reads is a Describe metric in all three implementations; every candidate is reported with evidence |
 | Arrow-native | `recommend.rs` and `sizes.rs` operate on **arrow-rs** arrays; a thin adapter converts Polars Series zero-copy via the C Data Interface. The Python↔Rust boundary moving to Arrow tables later changes only the adapter |
@@ -69,8 +69,10 @@ Added to `Describe.METRICS` and computed by **all three** Describe implementatio
 | `sum_len` | UInt64 | String, Categorical, Enum (UTF-8 bytes), Binary | Total bytes over non-null values. Else null |
 | `sum_len_unique` | UInt64 | as `sum_len` | Total bytes over distinct non-null values (Rust: at each key's `first_idx` from the frequency map). Else null |
 | `iso_max_sig_frac_digits` | UInt32 | String, Categorical, Enum | Max fractional-second digits over ISO times and datetimes (both kinds) **after removing trailing zeros** (`"10:00:00.120"` → 2, `"10:00:00.000"` → 0); null if there are none |
+| `numeric_min_frac_digits` | UInt32 | String, Categorical, Enum | Min fraction digits over the `n_numeric` values after removing trailing zeros (integers count 0; `"1.50"` → 1). With `numeric_max_frac_digits` it shows whether decimal places vary. Null if `n_numeric = 0` |
+| `numeric_max_sig_digits` | UInt32 | String, Categorical, Enum | Max significant digits of a single `n_numeric` value: all digits after removing leading zeros (across the dot) and trailing fraction zeros (`"0.00120"` → 2, `"1200"` → 4, `"12.50"` → 3, `"0"` → 0). Decides whether a value can round-trip through Float32 (≤ 6) / Float64 (≤ 15). Null if `n_numeric = 0` |
 
-Placement: `gcd`, `sum_len`, `sum_len_unique` in group A after `max_len`; `iso_max_sig_frac_digits` in group C after `iso_max_frac_digits`.
+Placement: `gcd`, `sum_len`, `sum_len_unique` in group A after `max_len`; `iso_max_sig_frac_digits` in group C after `iso_max_frac_digits`; `numeric_min_frac_digits` and `numeric_max_sig_digits` in group C after `numeric_max_frac_digits`.
 
 Polars: `gcd` via the physical values (as `GcdMath`); `sum_len` = `str.len_bytes().sum()` / `bin.size()`; `sum_len_unique` on `unique()`; `iso_max_sig_frac_digits` from the captured fraction with `str.strip_chars_end("0")`. DataFusion: SQL where exact (`SUM(octet_length(...))`, over `DISTINCT` for unique), else pyarrow in the class, listed in its docstring (Spec A §5.3).
 
@@ -84,9 +86,9 @@ Polars: `gcd` via the physical values (as `GcdMath`); `sum_len` = `str.len_bytes
 
 Each rule emits candidates. Every candidate has a predicted frame size (§5.1) and a projected population size (§5.3). Candidates are tried in ascending projected population size; ties are broken by **hierarchy rank**:
 
-Null < Boolean < UInt < Int < Decimal < Float < Date32 < Time32/Time64 < Timestamp < timestamp_with_offset < Dictionary < Utf8/Binary < List < original.
+Null < Boolean < UInt < Int < Decimal < Float < Date32 < Time32/Time64 < Timestamp < timestamp_with_offset < Dictionary < Utf8/Binary < List < original (last among equal sizes).
 
-Within a signedness, only the narrowest fitting width is emitted (a wider one cannot succeed where the narrowest fails). The **original** Arrow type (Spec A's classic layout, `CompatLevel.oldest()`) is always the last candidate and cannot fail.
+Within a signedness, only the narrowest fitting width is emitted (a wider one cannot succeed where the narrowest fails). The **original** Arrow type (Spec A's classic layout, `CompatLevel.oldest()`) is always a candidate, ordered by its size like the others, and cannot fail — so a candidate larger than the original is never tried (e.g. a Float64 column needing Decimal128 keeps Float64).
 
 `rec_nullable = n_null > 0` (the Arrow field's `nullable` flag; the IPC layout already omits the validity buffer without nulls).
 
@@ -117,7 +119,7 @@ First matching row wins (then step 2 applies to whatever is still a string):
 |---|---|
 | `n_unique ≤ 2` and the distinct values (from top-5) match a `boolean_pairs` entry, case-insensitive | Boolean (first element of the pair → true) |
 | `n_numeric_int = n`, `n_leading_zero = 0`, `numeric_int_min/max` not null | Integer rules on `numeric_int_min/max` |
-| `n_numeric = n` | Decimal(p, s): `s = numeric_max_frac_digits`, `p = numeric_max_int_digits + s`, width by `p`, only if `p ≤ 38` |
+| `n_numeric = n` | Decimal(p, s): `s = numeric_max_frac_digits`, `p = numeric_max_int_digits + s`, width by `p`, only if `p ≤ 38`. **Plus**, when decimal places vary (`numeric_min_frac_digits < numeric_max_frac_digits`) and `p > 18` (no Decimal64 fits): Float32 if `numeric_max_sig_digits ≤ 6`, Float64 if `≤ 15`. Being smaller, the Float is tried before Decimal128, which remains the fallback if the Float fails verification |
 | `n_iso_date = n` | Date32 |
 | `n_iso_time = n` | Time32/Time64 with unit from `iso_max_sig_frac_digits`: 0 → s, ≤ 3 → ms, ≤ 6 → µs, else ns |
 | `n_iso_datetime = n` | Date32 if `iso_n_midnight = n`; else Timestamp(unit from `iso_max_sig_frac_digits`, no tz) |
@@ -127,7 +129,7 @@ First matching row wins (then step 2 applies to whatever is still a string):
 
 **Leading zeros** (comment required in `recommend.rs`, as in Spec A §5.1): an integer-looking string with a leading zero (`"007"`) must stay a String — identifiers such as UUID fragments, account numbers or zip codes can be all digits with significant leading zeros. A value with a decimal point (`"007.50"`) is unlikely to be an identifier, so only numeric equivalence matters for it; differing leading or trailing zeros set `rec_lossy_formatting`.
 
-Strings are never recommended as Float: every numeric string of ≤ 38 digits fits a Decimal, and exponent forms are not numeric (Spec A §4.3). A Timestamp(ns) outside 1677–2262 fails its cast; the next candidate is the string itself (a coarser unit would lose digits).
+Strings become Float only through the varying-decimal-places rule above: a column such as `1234567890.1` and `0.00000012345` needs Decimal128(21, 11), yet each value has ≤ 15 significant digits and is exact in Float64 at half the width. Float verification compares the scanner's exact decimal parse with the Float's value (`rec_lossy_formatting` is set when the text changes). Exponent forms are not numeric (Spec A §4.3). A Timestamp(ns) outside 1677–2262 fails its cast; the next candidate is the string itself (a coarser unit would lose digits).
 
 ### 4.4 Lists
 
@@ -245,12 +247,12 @@ The Rust cardinality estimates behind `c` appear in `evidence`; they must equal 
    - pyarrow: `pa.array(original).cast(<rec_arrow_type>)` measured by `_sizes.py` matches `rec_arrow_size_*` (ZSTD RTOL 0.01);
    - Polars: `series.cast(<rec_polars_type>)` measured by `_sizes.py` on `CompatLevel.newest()` matches `rec_polars_size_*` (ZSTD RTOL 0.01);
    - Rust estimates in `evidence` equal the Python estimators (RTOL 1e-9).
-3. **Known answers** — one case per rule row in §4.2–4.5, including: `{0,1}` ints → Boolean; UInt8 vs Int8 tie → UInt8; Int128 beyond 64 bits → Decimal128(p, 0); Decimal scale reduced by `gcd`, and to integers when `s' = 0`; floats → Decimal64 (`123.45`), → Int (whole), → Float32 (`0.5`, `0.25`: Float32 beats Decimal64 on size); Decimal32 beats Float32 on the tie; NaN keeps a Float; `"007"` stays String; `"1.50"` → Decimal with `rec_lossy_formatting`; `boolean_pairs` default and with `("y", "n")`; ISO date / time / naive / fixed offset / varying offsets (`timestamp_with_offset`); `"…00.000"` → Timestamp(s); ns out of range → String with a `failed` candidate; naive Datetime all-midnight → Date32, tz-aware → Timestamp; unit narrowing by `gcd` for Datetime / Duration / Time; single-item lists → scalar, and kept as List when null lists and null elements both occur; LargeList → List; dictionary key boundaries (256 / 257, 65,536 / 65,537 distinct); gate rejection above `categorical_threshold`; `population_rows` projection choosing plain over dictionary; Enum vs Categorical in `rec_polars_type`; all-null → Null.
+3. **Known answers** — one case per rule row in §4.2–4.5, including: `{0,1}` ints → Boolean; UInt8 vs Int8 tie → UInt8; Int128 beyond 64 bits → Decimal128(p, 0); Decimal scale reduced by `gcd`, and to integers when `s' = 0`; floats → Decimal64 (`123.45`), → Int (whole), → Float32 (`0.5`, `0.25`: Float32 beats Decimal64 on size); Decimal32 beats Float32 on the tie; NaN keeps a Float; `"007"` stays String; `"1.50"` → Decimal with `rec_lossy_formatting`; varying decimal places beyond Decimal64 → Float64 (≤ 15 significant digits), → Float32 (≤ 6), and → Decimal128 when a value exceeds 15 significant digits (Float candidate `failed` or absent); fixed decimal places beyond Decimal64 → Decimal128; a Float64 column needing Decimal128 keeps Float64; `boolean_pairs` default and with `("y", "n")`; ISO date / time / naive / fixed offset / varying offsets (`timestamp_with_offset`); `"…00.000"` → Timestamp(s); ns out of range → String with a `failed` candidate; naive Datetime all-midnight → Date32, tz-aware → Timestamp; unit narrowing by `gcd` for Datetime / Duration / Time; single-item lists → scalar, and kept as List when null lists and null elements both occur; LargeList → List; dictionary key boundaries (256 / 257, 65,536 / 65,537 distinct); gate rejection above `categorical_threshold`; `population_rows` projection choosing plain over dictionary; Enum vs Categorical in `rec_polars_type`; all-null → Null.
 4. **Conclusions** — inherited from Describe; one `with_metrics` check that REC columns are null on non-computed rows.
 
 ### 7.2 `tests/test_describe.py`
 
-The four new metrics join the reference-agreement block (exact) and get known answers (e.g. `gcd` of `[10, 20, 30]` = 10; `sum_len_unique` of `["ab", "ab", "c"]` = 3; `iso_max_sig_frac_digits` of `"10:00:00.120"` = 2). `size_polars_bytes` is re-tested under its new definition.
+The six new metrics join the reference-agreement block (exact) and get known answers (e.g. `numeric_min_frac_digits` / `numeric_max_sig_digits` of `["1.50", "0.00120", "7"]` = 0 / 2; `gcd` of `[10, 20, 30]` = 10; `sum_len_unique` of `["ab", "ab", "c"]` = 3; `iso_max_sig_frac_digits` of `"10:00:00.120"` = 2). `size_polars_bytes` is re-tested under its new definition.
 
 ### 7.3 Rust unit tests
 
