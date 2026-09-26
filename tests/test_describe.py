@@ -6,7 +6,7 @@ Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 

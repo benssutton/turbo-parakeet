@@ -98,16 +98,14 @@ def extremes(s: pl.Series, freq: pl.DataFrame) -> dict:
 
 def lengths(s: pl.Series) -> dict:
     dtype = s.dtype
-    if isinstance(dtype, STRING_LIKE):
-        lens = s.cast(pl.String).str.len_bytes()
-    elif dtype == pl.Binary:
-        lens = s.bin.size()
-    elif isinstance(dtype, pl.List):
-        lens = s.list.len()
-    elif isinstance(dtype, pl.Array):
-        lens = s.arr.len()
-    else:
-        return {"min_len": None, "max_len": None}
+    lens = byte_lengths(s)
+    if lens is None:
+        if isinstance(dtype, pl.List):
+            lens = s.list.len()
+        elif isinstance(dtype, pl.Array):
+            lens = s.arr.len()
+        else:
+            return {"min_len": None, "max_len": None}
     # drop_nulls first: Polars flags arr.len() as sorted even when a null row sits in
     # the middle, and max() of a "sorted" series returns its last element (None).
     lens = lens.drop_nulls()
