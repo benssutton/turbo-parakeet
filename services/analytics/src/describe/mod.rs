@@ -5,3 +5,4 @@ pub(crate) mod frequency;
 pub(crate) mod patterns;
 pub(crate) mod numeric;
 pub(crate) mod range;
+pub(crate) mod sizes;
