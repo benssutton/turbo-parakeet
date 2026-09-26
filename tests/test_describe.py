@@ -11,10 +11,11 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pyarrow as pa
 import pytest
 from pytest import approx
 
-from analytics.describe import Describe, estimators
+from analytics.describe import Describe, _sizes, estimators
 from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
 
 LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
@@ -205,3 +206,36 @@ def test_agreement_tolerances():
     assert any("n_unique" in p for p in compare(n_unique=11))
     # [5, 4, 0, 0, 0, 0, 1]: |S1| = 6, |S2| = 5, |S3| = 1, R = 2 → Schnabel 40/3 ≈ 13.3 vs 9.52 (> 10%)
     assert any("schnabel" in p for p in compare(capture_history=[5, 4, 0, 0, 0, 0, 1]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Known answers — the pyarrow size oracle itself
+
+def test_ipc_body_bytes_framing():
+    seq = pa.array(np.arange(1_000, dtype=np.int32))
+    assert _sizes.ipc_body_bytes(seq, None) == 4_000
+    assert _sizes.ipc_body_bytes(seq, 1) == 1_912  # 8-byte prefix + ZSTD frame, padded to 8
+    with_nulls = pa.array([None if i % 3 == 0 else i for i in range(1_000)], pa.int32())
+    assert _sizes.ipc_body_bytes(with_nulls, None) == 4_128  # + 125-byte validity padded to 128
+    assert _sizes.ipc_body_bytes(pa.array([], pa.int32()), None) == 0
+    assert _sizes.ipc_body_bytes(pa.array([1], pa.int32()), 1) == 24
+    assert _sizes.ipc_body_bytes(pa.array(["ab", None], pa.large_string()), None) == 40
+    assert _sizes.ipc_body_bytes(pa.array([], pa.large_string()), None) == 8  # offsets [0]
+
+
+def test_column_sizes_arrow_and_polars():
+    s = pl.Series("x", np.arange(1_000, dtype=np.int32))
+    assert _sizes.column_sizes(s, 1) == {
+        "size_bytes": 4_000, "size_zstd_bytes": 1_912, "size_polars_bytes": 4_000, "size_polars_zstd_bytes": 1_912,
+    }
+
+
+def test_column_sizes_int128_and_nested_int128():
+    assert _sizes.column_sizes(pl.Series("x", [1, None, 3], dtype=pl.Int128), 1)["size_bytes"] == 56  # 8 + 48
+    nested = pl.Series("x", [[1], None], dtype=pl.List(pl.Int128))
+    assert _sizes.column_sizes(nested, 1) == dict.fromkeys(_sizes.SIZE_KEYS)
+
+
+def test_categorical_size_includes_its_dictionary():
+    s = pl.Series("x", ["a", "b", "a"], dtype=pl.Categorical)
+    assert _sizes.column_sizes(s, 1)["size_bytes"] == 48  # dictionary batch 32 + keys 16
