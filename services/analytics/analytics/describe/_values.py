@@ -17,7 +17,7 @@ def flatten(s: pl.Series) -> pl.Series:
 
     Element i of the result is what `inner_argmin` / `inner_top5_idx` index into.
     Empty lists are filtered before exploding because explode turns them into a
-    null row. The Rust kernel (describe/mod.rs::flatten) uses the same definition.
+    null row. The Rust kernel (describe.rs::flatten) uses the same definition.
     """
     valid = s.drop_nulls()
     lengths = valid.list.len() if isinstance(s.dtype, pl.List) else valid.arr.len()
@@ -74,11 +74,11 @@ def n_midnight(s: pl.Series) -> int | None:
 # Rust `regex` engine (finite automata, no backtracking), so run time is linear in
 # the input for any string — hostile input cannot trigger catastrophic
 # backtracking. Never evaluate them with Python's `re`. The Rust kernel
-# (src/describe/patterns.rs) implements the same grammar with byte scanners.
+# (src/describe.rs) implements the same grammar with byte scanners.
 #
 # Leading zeros: an integer-looking string with a leading zero ("007") must stay a
 # String; a value with a decimal point is judged on numeric equality only. See
-# the rationale in src/describe/patterns.rs.
+# the rationale in src/describe.rs.
 
 NUMERIC = r"^-?[0-9]+(\.[0-9]+)?$"
 NUMERIC_INT = r"^-?[0-9]+$"

@@ -7,6 +7,7 @@ mod contingency;
 mod ari;
 mod gcd;
 mod describe;
+mod sizes;
 
 use mimalloc::MiMalloc;
 
