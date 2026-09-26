@@ -230,11 +230,19 @@ pub(crate) fn list_ranges(ca: &ListChunked) -> Vec<Option<(usize, usize)>> {
         .collect()
 }
 
-fn lengths(s: &Series) -> PolarsResult<(Option<u64>, Option<u64>)> {
+/// `min_len`/`max_len` for String/Categorical/Enum/Binary from an already-computed
+/// `byte_lengths` vector (0 at null rows — filtered out via the series' validity,
+/// not the value, so a genuine zero-length string still counts).
+fn min_max_bytes(s: &Series, byte_lens: &[u64]) -> (Option<u64>, Option<u64>) {
+    min_max(s.is_not_null().iter().zip(byte_lens).map(|(ok, &l)| (ok == Some(true)).then_some(l)))
+}
+
+/// `byte_lens` must be `Some` (from `byte_lengths`) for String/Categorical/Enum/Binary.
+fn lengths(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<(Option<u64>, Option<u64>)> {
     Ok(match s.dtype() {
-        DataType::String => min_max(s.str()?.iter().map(|v| v.map(|x| x.len() as u64))),
-        DataType::Categorical(_, _) | DataType::Enum(_, _) => return lengths(&s.cast(&DataType::String)?),
-        DataType::Binary => min_max(s.binary()?.iter().map(|v| v.map(|x| x.len() as u64))),
+        DataType::String | DataType::Categorical(_, _) | DataType::Enum(_, _) | DataType::Binary => {
+            min_max_bytes(s, byte_lens.expect("byte_lengths precomputed for String/Categorical/Enum/Binary"))
+        }
         DataType::List(_) => {
             let ca = s.list()?.rechunk();
             min_max(list_ranges(&ca).into_iter().map(|r| r.map(|(_, len)| len as u64)))
@@ -254,9 +262,9 @@ fn byte_lengths(s: &Series) -> PolarsResult<Option<Vec<u64>>> {
     })
 }
 
-pub(crate) fn range(s: &Series) -> PolarsResult<Range> {
+pub(crate) fn range(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<Range> {
     let (argmin, argmax) = arg_extremes(s)?;
-    let (min_len, max_len) = lengths(s)?;
+    let (min_len, max_len) = lengths(s, byte_lens)?;
     Ok(Range { argmin, argmax, min_len, max_len })
 }
 
@@ -714,7 +722,7 @@ pub(crate) struct Profile {
     pub strings: Option<StringStats>,
     /// GCD of the physical values (gcd.rs); None for non-integer dtypes or > 38 digits.
     pub gcd: Option<i128>,
-    /// Total byte length of the non-null values (string / binary columns).
+    /// Total byte length of the non-null values (String, Categorical, Enum or Binary columns).
     pub sum_len: Option<u64>,
     /// Float32 series: `n_f32_inexact` does not apply.
     pub is_f32: bool,
@@ -724,7 +732,7 @@ pub(crate) fn profile(s: &Series, seed: u64) -> PolarsResult<Profile> {
     let lengths = byte_lengths(s)?;
     Ok(Profile {
         freq: frequencies(&encode_series(s)?, seed, lengths.as_deref()),
-        range: range(s)?,
+        range: range(s, lengths.as_deref())?,
         floats: float_stats(s)?,
         strings: strings(s)?,
         gcd: crate::gcd::series_gcd(s)?,
@@ -969,7 +977,8 @@ mod tests {
     }
 
     fn r(s: Series) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
-        let x = range(&s).unwrap();
+        let lens = byte_lengths(&s).unwrap();
+        let x = range(&s, lens.as_deref()).unwrap();
         (x.argmin, x.argmax, x.min_len, x.max_len)
     }
 
@@ -1070,7 +1079,9 @@ mod tests {
         assert_eq!((m.n_numeric, m.n_numeric_int, m.n_leading_zero), (4, 3, 1));
         assert!(m.int_overflow);
         assert_eq!((m.max_int_digits, m.max_frac_digits), (Some(39), Some(2)));
+        assert_eq!((m.min_frac_digits, m.max_sig_digits), (Some(0), Some(39)));
         assert_eq!((m.n_iso_datetime_tz, m.offsets.len(), m.iso_n_midnight), (2, 2, 1));
+        assert_eq!(m.iso_max_sig_frac_digits, Some(0));
     }
 
     #[test]
