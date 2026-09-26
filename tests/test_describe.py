@@ -539,3 +539,11 @@ def test_categorical_and_enum_sizes_agree(impl):
     frame = describe_mixed(1_000).select("cat", "enum", "str_free")
     exact = ["col_a", "size_bytes", "size_polars_bytes"]
     assert run(load(impl), {"t": frame}).select(exact).equals(run(reference(PKG), {"t": frame}).select(exact))
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_nested_ordering_with_null_elements(impl):
+    s = pl.Series("x", [[2], [None], [1, None], [], [1]], dtype=pl.List(pl.Int64))
+    want = s.arg_sort(nulls_last=False)  # Polars order is the definition
+    r = profile(impl, s)
+    assert (r["argmin"], r["argmax"], r["n_unique"]) == (want[0], want[-1], 5)
