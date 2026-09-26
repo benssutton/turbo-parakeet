@@ -15,6 +15,7 @@ from analytics.describe._values import (
     flatten, frac_digits, frequency_summary, n_midnight, subsets,
 )
 from analytics.describe.base import GROUP_B, GROUP_C, VALUE_METRICS, Describe
+from analytics.describe.polars import profile as polars_profile
 
 
 class DescribeDataFusion(Describe):
@@ -31,6 +32,9 @@ class DescribeDataFusion(Describe):
       - n_midnight: Polars dt.time() (timezone-aware date_trunc is not relied on);
       - entropy / f1 / f2 / top-5 / capture history: numpy over the GROUP BY result;
       - min_len/max_len of Binary: pyarrow binary_length (octet_length takes only strings);
+      - every group A metric of List/Array/Struct columns whose values hold floats,
+        Enum, Categorical or Int128: the Polars reference helpers (SQL cannot key
+        nested -0.0/NaN, list-of-dictionary children, Enum order or Int128 exactly);
       - max_frac_digits: the shared parser over CAST(v AS VARCHAR) of distinct finite values.
     Int128 is registered as Decimal(38, 0); values beyond 38 digits are not supported.
     """
@@ -52,6 +56,8 @@ class DescribeDataFusion(Describe):
         return row | {f"inner_{k}": v for k, v in inner_profile.items()}
 
     def _profile(self, ctx: SessionContext, s: pl.Series) -> dict:
+        if _needs_polars(s.dtype):
+            return polars_profile(s, self.seed)
         n = s.len()
         v = s.cast(pl.String) if isinstance(s.dtype, (pl.Categorical, pl.Enum)) else s
         o = s.to_physical() if isinstance(s.dtype, pl.Enum) else v
@@ -61,6 +67,20 @@ class DescribeDataFusion(Describe):
             return {**_frequencies(ctx, s), **_extremes(ctx, s), **_lengths(ctx, s), **_floats(ctx, s), **_strings(ctx, s)}
         finally:
             ctx.deregister_table("t")
+
+
+_INEXACT_IN_SQL = (pl.Float32, pl.Float64, pl.Enum, pl.Categorical, pl.Int128)
+
+
+def _needs_polars(dtype: pl.DataType, nested: bool = False) -> bool:
+    """True for List/Array/Struct values that hold floats, Enum, Categorical or Int128:
+    DataFusion cannot key them exactly (-0.0 and NaN payloads inside nested values,
+    dictionary children in lists, Enum category order, Int128 export)."""
+    if isinstance(dtype, (pl.List, pl.Array)):
+        return _needs_polars(dtype.inner, True)
+    if isinstance(dtype, pl.Struct):
+        return any(_needs_polars(f.dtype, True) for f in dtype.fields)
+    return nested and isinstance(dtype, _INEXACT_IN_SQL)
 
 
 def _arrow(s: pl.Series) -> pa.Array:

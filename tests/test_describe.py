@@ -547,3 +547,65 @@ def test_nested_ordering_with_null_elements(impl):
     want = s.arg_sort(nulls_last=False)  # Polars order is the definition
     r = profile(impl, s)
     assert (r["argmin"], r["argmax"], r["n_unique"]) == (want[0], want[-1], 5)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Final-review regressions
+
+@pytest.mark.parametrize("impl", ALL)
+def test_array_lengths_with_null_rows(impl):
+    # Polars marks arr.len() sorted even with a null in the middle, so a naive .max() returns None.
+    r = profile(impl, pl.Series("x", [[1, 2], None, [3, 4]], dtype=pl.Array(pl.Int64, 2)))
+    assert (r["min_len"], r["max_len"]) == (2, 2)
+    nested = profile(impl, pl.Series("x", [[[1, 2], None, [3, 4]]], dtype=pl.List(pl.Array(pl.Int64, 2))))
+    assert (nested["inner_min_len"], nested["inner_max_len"]) == (2, 2)
+
+
+_SLICED = """
+import polars as pl
+from analytics import describe
+from harness import load, run
+fresh = pl.DataFrame({{
+    "arr": pl.Series([[3, 4], None, [5, None]], dtype=pl.Array(pl.Int64, 2)),
+    "st": pl.Series([{{"a": 2}}, None, {{"a": 3}}]),
+}})
+full = pl.DataFrame({{
+    "arr": pl.Series([[1, 2], [3, 4], None, [5, None]], dtype=pl.Array(pl.Int64, 2)),
+    "st": pl.Series([{{"a": 1}}, {{"a": 2}}, None, {{"a": 3}}]),
+}})
+cls = load("{impl}")
+got = run(cls, {{"t": full.slice(1, 3)}})
+want = run(cls, {{"t": fresh}})
+problems = cls().agreement(got, want)
+print("OK" if not problems else problems)
+"""
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_sliced_nested_with_nulls(impl):
+    """A sliced Array/Struct with nulls must describe exactly like the same rows built
+    fresh — and must never crash the interpreter (run in a subprocess to observe that)."""
+    import subprocess
+    import sys
+    tests_dir = Path(__file__).parent
+    code = _SLICED.format(impl=impl)
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tests_dir, timeout=300)
+    assert out.returncode == 0, f"exit {out.returncode}: {out.stderr[-2000:]}"
+    assert out.stdout.strip().endswith("OK"), out.stdout[-2000:]
+
+
+NESTED_CASES = [
+    pytest.param(pl.Series("x", [[0.0], [-0.0], [1.5]]), dict(n_unique=2, argmin=0, argmax=2), id="list_negzero"),
+    pytest.param(pl.Series("x", [{"a": 0.0}, {"a": -0.0}, {"a": 1.0}]), dict(n_unique=2, argmin=0, argmax=2), id="struct_negzero"),
+    pytest.param(pl.Series("x", [["a"], ["z"], ["a"]], dtype=pl.List(pl.Enum(["z", "a"]))), dict(n_unique=2, argmin=1, argmax=0), id="list_enum"),
+    pytest.param(pl.Series("x", [["b"], ["a"], ["b"]], dtype=pl.List(pl.Categorical)), dict(n_unique=2, argmin=1, argmax=0), id="list_categorical"),
+    pytest.param(pl.Series("x", [[1], [2], [1]], dtype=pl.List(pl.Int128)), dict(n_unique=2, argmin=0, argmax=1), id="list_int128"),
+    pytest.param(pl.Series("x", [{"e": "a"}, {"e": "z"}], dtype=pl.Struct({"e": pl.Enum(["z", "a"])})), dict(n_unique=2, argmin=1, argmax=0), id="struct_enum"),
+]
+
+
+@pytest.mark.parametrize("impl", ALL)
+@pytest.mark.parametrize("s, expected", NESTED_CASES)
+def test_nested_floats_enums_and_int128(impl, s, expected):
+    r = profile(impl, s)
+    assert {k: r[k] for k in expected} == expected

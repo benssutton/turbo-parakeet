@@ -93,6 +93,9 @@ def lengths(s: pl.Series) -> dict:
         lens = s.arr.len()
     else:
         return {"min_len": None, "max_len": None}
+    # drop_nulls first: Polars flags arr.len() as sorted even when a null row sits in
+    # the middle, and max() of a "sorted" series returns its last element (None).
+    lens = lens.drop_nulls()
     return {"min_len": lens.min(), "max_len": lens.max()}
 
 

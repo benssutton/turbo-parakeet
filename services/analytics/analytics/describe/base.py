@@ -111,6 +111,14 @@ class Describe(Technique):
         self.zstd_level = zstd_level
         self.seed = seed
 
+    def add(self, frames):
+        """Rebuild every column that holds an Array or Struct (at any depth) before it
+        is registered. py-polars 1.41 exports a *sliced* Array/Struct with nulls as
+        inconsistent Arrow (Array: slice offset applied twice; Struct: short child),
+        which aborts the Rust plugin's process and makes pyarrow/DataFusion raise.
+        A gather over every row produces a fresh, consistent buffer. Lazy-safe."""
+        return super().add({n: _normalise(f) for n, f in frames.items()})
+
     def _population(self, frame: str) -> int | None:
         if isinstance(self.population_rows, dict):
             return self.population_rows.get(frame)
@@ -192,6 +200,24 @@ class Describe(Technique):
         if est <= self.categorical_threshold:
             return "categorical"
         return "discrete"
+
+
+def _holds_array_or_struct(dtype: pl.DataType) -> bool:
+    if isinstance(dtype, (pl.Array, pl.Struct)):
+        return True
+    if isinstance(dtype, pl.List):
+        return _holds_array_or_struct(dtype.inner)
+    return False
+
+
+def _normalise(frame):
+    if not isinstance(frame, (pl.DataFrame, pl.LazyFrame)):
+        return frame  # Technique.add raises the TypeError
+    schema = frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
+    cols = [c for c, dt in schema.items() if _holds_array_or_struct(dt)]
+    if not cols:
+        return frame
+    return frame.with_columns(pl.col(c).gather(pl.int_range(pl.len())) for c in cols)
 
 
 def _whole_range(s: pl.Series, r: dict, p: str, n: int) -> tuple[float, float] | None:
