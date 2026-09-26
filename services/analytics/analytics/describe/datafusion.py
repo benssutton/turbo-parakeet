@@ -16,6 +16,8 @@ from analytics.describe._values import (
 )
 from analytics.describe.base import GROUP_B, GROUP_C, VALUE_METRICS, Describe
 from analytics.describe.polars import profile as polars_profile
+from analytics.gcd.base import INTEGER_BACKED
+from analytics.gcd.math import math_gcd
 
 
 class DescribeDataFusion(Describe):
@@ -36,6 +38,8 @@ class DescribeDataFusion(Describe):
         Enum, Categorical or Int128: the Polars reference helpers (SQL cannot key
         nested -0.0/NaN, list-of-dictionary children, Enum order or Int128 exactly);
       - max_frac_digits: the shared parser over CAST(v AS VARCHAR) of distinct finite values.
+      - gcd: Python math.gcd over the physical values (as GcdMath; SQL has no exact GCD aggregate);
+      - sum_len / sum_len_unique of Binary: pyarrow binary_length;
     Int128 is registered as Decimal(38, 0); values beyond 38 digits are not supported.
     """
 
@@ -64,7 +68,10 @@ class DescribeDataFusion(Describe):
         table = pa.table({"row": np.arange(n, dtype=np.uint64), "sub": subsets(n, self.seed), "v": _arrow(v), "o": _arrow(o)})
         ctx.register_record_batches("t", [table.to_batches() or [pa.RecordBatch.from_pylist([], schema=table.schema)]])
         try:
-            return {**_frequencies(ctx, s), **_extremes(ctx, s), **_lengths(ctx, s), **_floats(ctx, s), **_strings(ctx, s)}
+            return {
+                **_frequencies(ctx, s), **_extremes(ctx, s), **_lengths(ctx, s), **_totals(ctx, s),
+                **_floats(ctx, s), **_strings(ctx, s),
+            }
         finally:
             ctx.deregister_table("t")
 
@@ -138,6 +145,22 @@ def _lengths(ctx: SessionContext, s: pl.Series) -> dict:
     return {"min_len": r["lo"], "max_len": r["hi"]}
 
 
+def _totals(ctx: SessionContext, s: pl.Series) -> dict:
+    out = {"gcd": math_gcd(s) if isinstance(s.dtype, INTEGER_BACKED) else None, "sum_len": None, "sum_len_unique": None}
+    if s.dtype == pl.Binary:  # octet_length() accepts only strings in DataFusion SQL
+        arr = _arrow(s)
+        out["sum_len"] = pc.sum(pc.binary_length(arr)).as_py() or 0
+        out["sum_len_unique"] = pc.sum(pc.binary_length(pc.unique(arr.drop_null()))).as_py() or 0
+    elif isinstance(s.dtype, STRING_LIKE):
+        r = _one(
+            ctx,
+            "SELECT SUM(octet_length(v)) AS total, "
+            "(SELECT SUM(octet_length(u.v)) FROM (SELECT DISTINCT v FROM t WHERE v IS NOT NULL) u) AS uniq FROM t",
+        )
+        out["sum_len"], out["sum_len_unique"] = r["total"] or 0, r["uniq"] or 0
+    return out
+
+
 def _floats(ctx: SessionContext, s: pl.Series) -> dict:
     if not isinstance(s.dtype, FLOATS):
         return dict.fromkeys(GROUP_B)
@@ -185,11 +208,14 @@ def _strings(ctx: SessionContext, s: pl.Series) -> dict:
               MAX(CASE WHEN nint AND {sig} <= 38 THEN CAST(v AS DECIMAL(38, 0)) END) AS int_max,
               MAX(CASE WHEN num THEN length(regexp_match(v, '{INT_DIGITS}')[1]) END) AS int_digits,
               MAX(CASE WHEN num THEN COALESCE(length(regexp_match(v, '{FRAC_DIGITS}')[1]), 0) END) AS frac_digits,
+              MIN(CASE WHEN num THEN COALESCE(length(regexp_match(v, '{FRAC_DIGITS}')[1]), 0) END) AS min_frac,
+              MAX(CASE WHEN num THEN length(ltrim(concat(COALESCE(regexp_match(v, '{INT_DIGITS}')[1], ''), COALESCE(regexp_match(v, '{FRAC_DIGITS}')[1], '')), '0')) END) AS sig,
               SUM(CAST(d AND dok AS BIGINT)) AS n_iso_date,
               SUM(CAST(tm AS BIGINT)) AS n_iso_time,
               SUM(CAST(dt AND dok AS BIGINT)) AS n_iso_datetime,
               SUM(CAST(tz AND dok AS BIGINT)) AS n_iso_datetime_tz,
               MAX(CASE WHEN tm OR ((dt OR tz) AND dok) THEN COALESCE(length(regexp_match(v, '{ISO_FRACTION}')[1]), 0) END) AS iso_frac,
+              MAX(CASE WHEN tm OR ((dt OR tz) AND dok) THEN COALESCE(length(rtrim(regexp_match(v, '{ISO_FRACTION}')[1], '0')), 0) END) AS iso_sig,
               COUNT(DISTINCT CASE WHEN tz AND dok THEN (CASE WHEN {off} IN ('Z', '-00:00') THEN '+00:00' ELSE {off} END) END) AS iso_n_offsets,
               SUM(CAST((dt OR tz) AND dok AND regexp_like(v, '{ISO_MIDNIGHT}') AS BIGINT)) AS iso_n_midnight
             FROM s""",
@@ -203,11 +229,14 @@ def _strings(ctx: SessionContext, s: pl.Series) -> dict:
         "numeric_int_max": int(r["int_max"]) if in_range else None,
         "numeric_max_int_digits": r["int_digits"],
         "numeric_max_frac_digits": r["frac_digits"],
+        "numeric_min_frac_digits": r["min_frac"],
+        "numeric_max_sig_digits": r["sig"],
         "n_iso_date": r["n_iso_date"] or 0,
         "n_iso_time": r["n_iso_time"] or 0,
         "n_iso_datetime": r["n_iso_datetime"] or 0,
         "n_iso_datetime_tz": r["n_iso_datetime_tz"] or 0,
         "iso_max_frac_digits": r["iso_frac"],
+        "iso_max_sig_frac_digits": r["iso_sig"],
         "iso_n_offsets": r["iso_n_offsets"] or 0,
         "iso_n_midnight": r["iso_n_midnight"] or 0,
     }
