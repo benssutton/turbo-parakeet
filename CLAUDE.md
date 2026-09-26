@@ -18,13 +18,15 @@ Prioritise performance & simplicity.
 Every technique is used the same way — `Impl(**params).add({"name": frame, ...}).result()` —
 and returns one flat table: `df_a, col_a[, df_b, col_b[, df_c, col_c]] | status | descriptors | metrics | conclusions`.
 `status` ∈ {computed, ineligible, pruned}; null = not computed, NaN = computed but undefined.
-Ineligible columns/pairs are always listed, never dropped. Thresholds are keyword-only
+Ineligible columns/pairs are always listed, never dropped. Results must export to native Arrow
+(`result().to_arrow()`, checked in every contract test): never a Polars-only dtype such as Int128 —
+use Decimal(38, 0) for 128-bit integers. Thresholds are keyword-only
 constructor arguments with the defaults below. Techniques are grouped by **scope** —
 how column combinations are enumerated.
 
 ## 1. Per-column (one column at a time)
 
-**GCD — `analytics.gcd`** (`GcdRust`, `GcdNumpy`, ★`GcdMath`). ClickHouse GCD-codec method: the GCD of the magnitudes of each integer-backed column's raw physical values (Int/UInt 8–64, Int128, Decimal → unscaled, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; magnitude 2¹²⁷ → null; other dtypes (incl. Categorical/Enum, UInt128) → ineligible. Descriptor `dtype` (Python `str(dtype)`) on every row. Conclusion `gcd_compressible` = gcd > 1. Rust: rayon-parallel across columns and 64K-value chunks, `binary_gcd(g, v % g)` fold with early exit at 1.
+**GCD — `analytics.gcd`** (`GcdRust`, `GcdNumpy`, ★`GcdMath`). ClickHouse GCD-codec method: the GCD of the magnitudes of each integer-backed column's raw physical values (Int/UInt 8–64, Int128, Decimal → unscaled, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; `gcd` is Decimal(38, 0), so a GCD over 38 digits (Int128 only) → null; other dtypes (incl. Categorical/Enum, UInt128) → ineligible. Descriptor `dtype` (Python `str(dtype)`) on every row. Conclusion `gcd_compressible` = gcd > 1. Rust: rayon-parallel across columns and 64K-value chunks, `binary_gcd(g, v % g)` fold with early exit at 1.
 
 **Describe — `analytics.describe`** (`DescribeRust`, `DescribeDataFusion`, ★`DescribePolars`). Profile for choosing narrower / more compressible Arrow types (spec: docs/superpowers/specs/2026-09-26-describe-technique-design.md). Metrics: counts, entropy (null as a category), f1/f2, first-occurrence argmin/argmax and top-5 (indices; the base renders values), byte/list lengths, float stats (NaN/inf/fractional, decimal places, f32 round trip), numeric-string and ISO 8601 counts (Rust byte scanners / Rust-regex elsewhere — linear time), Datetime local-midnight count, Arrow IPC sizes (classic layout, plain + ZSTD) and Polars sizes, and the same for list inner values. Conclusions: rendered min/max/top-5, `unique`, Chao1 / Schnabel (3-way seeded split) / Duj1 with 95% intervals and `est_cardinality` picked by rule (exact → Duj1 → Schnabel → Chao1), `estimates_agree`, and `class` ∈ {null, constant, boolean, ordinal, categorical, discrete}. Keywords: `population_rows=None`, `categorical_threshold=10_000`, `zstd_level=1`, `seed=0`. Agreement: exact except entropy (1e-9), ZSTD sizes (1%), Schnabel (10%).
 

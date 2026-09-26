@@ -56,9 +56,11 @@ fn compute_ari(t: &ContingencyTable) -> f64 {
         return f64::NAN;
     }
 
+    // Marginal entries can be zero (ids seen only in dropped rows, or a null
+    // id — see build_contingency); C(0,2) and C(1,2) are both 0.
     #[inline]
     fn comb2(x: u64) -> u64 {
-        x * (x - 1) / 2
+        x * x.saturating_sub(1) / 2
     }
 
     let index: u64 = t.cells.iter().map(|&(_, _, c)| comb2(c)).sum();

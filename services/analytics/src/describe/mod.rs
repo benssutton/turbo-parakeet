@@ -27,13 +27,15 @@ type Row = Vec<AnyValue<'static>>;
 
 /// Metrics computed on any value series, in output order (base.py VALUE_METRICS).
 fn value_fields() -> Vec<(&'static str, DataType)> {
-    use DataType::{Float64 as F64, Int128 as I128, UInt32 as U32, UInt64 as U64};
+    use DataType::{Float64 as F64, UInt32 as U32, UInt64 as U64};
     let list = DataType::List(Box::new(U64));
+    // Arrow has no plain 128-bit integer; parse_i128 caps values at 38 digits.
+    let d38 = DataType::Decimal(Some(38), Some(0));
     vec![
         ("n_unique", U64), ("entropy", F64), ("f1", U64), ("f2", U64), ("argmin", U64), ("argmax", U64),
         ("min_len", U64), ("max_len", U64), ("top5_idx", list.clone()), ("top5_count", list.clone()), ("capture_history", list),
         ("n_nan", U64), ("n_inf", U64), ("n_fractional", U64), ("max_frac_digits", U32), ("n_f32_inexact", U64),
-        ("n_numeric", U64), ("n_numeric_int", U64), ("n_leading_zero", U64), ("numeric_int_min", I128), ("numeric_int_max", I128),
+        ("n_numeric", U64), ("n_numeric_int", U64), ("n_leading_zero", U64), ("numeric_int_min", d38.clone()), ("numeric_int_max", d38),
         ("numeric_max_int_digits", U32), ("numeric_max_frac_digits", U32),
         ("n_iso_date", U64), ("n_iso_time", U64), ("n_iso_datetime", U64), ("n_iso_datetime_tz", U64),
         ("iso_max_frac_digits", U32), ("iso_n_offsets", U64), ("iso_n_midnight", U64),
@@ -57,7 +59,7 @@ fn describe_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
 
 fn u64v(v: Option<u64>) -> AnyValue<'static> { v.map_or(AnyValue::Null, AnyValue::UInt64) }
 fn u32v(v: Option<u32>) -> AnyValue<'static> { v.map_or(AnyValue::Null, AnyValue::UInt32) }
-fn i128v(v: Option<i128>) -> AnyValue<'static> { v.map_or(AnyValue::Null, AnyValue::Int128) }
+fn d38v(v: Option<i128>) -> AnyValue<'static> { v.map_or(AnyValue::Null, |v| AnyValue::Decimal(v, 0)) }
 fn listv(v: &[u64]) -> AnyValue<'static> { AnyValue::List(Series::new(PlSmallStr::EMPTY, v)) }
 fn nulls(n: usize) -> Row { vec![AnyValue::Null; n] }
 
@@ -107,7 +109,7 @@ fn profile(s: &Series, seed: u64) -> PolarsResult<Row> {
             let (lo, hi) = if st.int_overflow { (None, None) } else { (st.int_min, st.int_max) };
             row.extend([
                 AnyValue::UInt64(st.n_numeric), AnyValue::UInt64(st.n_numeric_int), AnyValue::UInt64(st.n_leading_zero),
-                i128v(lo), i128v(hi), u32v(st.max_int_digits), u32v(st.max_frac_digits),
+                d38v(lo), d38v(hi), u32v(st.max_int_digits), u32v(st.max_frac_digits),
                 AnyValue::UInt64(st.n_iso_date), AnyValue::UInt64(st.n_iso_time), AnyValue::UInt64(st.n_iso_datetime),
                 AnyValue::UInt64(st.n_iso_datetime_tz), u32v(st.iso_max_frac_digits),
                 AnyValue::UInt64(st.offsets.len() as u64), AnyValue::UInt64(st.iso_n_midnight),

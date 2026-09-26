@@ -5,7 +5,7 @@ Oracles: known answers (values built as k·g) and GcdMath (math.gcd, arbitrary
 precision), the technique's reference. Semantics (ClickHouse GCD-codec method):
 GCD of the magnitudes of the raw physical integer values; nulls skipped;
 all-null / all-zero / zero-row → 0; non-integer-backed dtypes → status
-"ineligible" with gcd null; a magnitude of 2**127 (only i128::MIN) → null.
+"ineligible" with gcd null; a GCD of more than 38 digits (Decimal(38, 0)) → null.
 
 Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
@@ -155,7 +155,9 @@ def test_zeros_and_nulls(impl, dtype):
         pytest.param(pl.UInt64(), [2**64 - 1], 2**64 - 1, id="u64_max"),
         pytest.param(pl.Int64(), [-(2**63)], 2**63, id="i64_min"),
         pytest.param(pl.Int64(), [-(2**63), 2**62], 2**62, id="i64_min_and_2^62"),
-        pytest.param(pl.Int128(), [2**127 - 1], 2**127 - 1, id="i128_max"),
+        pytest.param(pl.Int128(), [10**38 - 1], 10**38 - 1, id="decimal38_max"),
+        pytest.param(pl.Int128(), [10**38], None, id="beyond_38_digits"),
+        pytest.param(pl.Int128(), [2**127 - 1], None, id="i128_max"),
         pytest.param(pl.Int128(), [-(2**127), 2**126], 2**126, id="i128_min_and_2^126"),
         pytest.param(pl.Int128(), [-(2**127)], None, id="i128_min_unrepresentable"),
         pytest.param(pl.Int128(), [-(2**127), None, 0], None, id="i128_min_with_null_zero"),

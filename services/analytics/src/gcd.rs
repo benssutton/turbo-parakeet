@@ -28,6 +28,10 @@ use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// Arrow has no plain 128-bit integer; decimal128(38, 0) is the widest native type.
+const GCD_DTYPE: DataType = DataType::Decimal(Some(38), Some(0));
+const GCD_LIMIT: u128 = 10u128.pow(38);
+
 const CHUNK: usize = 1 << 16;
 /// Values folded between checks of the early-exit flag.
 const BLOCK: usize = 1 << 10;
@@ -40,7 +44,7 @@ fn gcd_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
     let fields = vec![
         Field::new("column".into(), DataType::String),
         Field::new("dtype".into(), DataType::String),
-        Field::new("gcd".into(), DataType::Int128),
+        Field::new("gcd".into(), GCD_DTYPE),
     ];
     Ok(Field::new("column_gcd".into(), DataType::Struct(fields)))
 }
@@ -166,8 +170,8 @@ fn is_integer_backed(dtype: &DataType) -> bool {
     )
 }
 
-/// Whole-column GCD of `s`. `None` for non-integer-backed dtypes, and for the
-/// unrepresentable magnitude 2¹²⁷ (every non-zero value is `i128::MIN`).
+/// Whole-column GCD of `s`. `None` for non-integer-backed dtypes, and for a GCD
+/// of more than 38 digits (not representable as Decimal(38, 0)).
 pub(crate) fn series_gcd(s: &Series) -> PolarsResult<Option<i128>> {
     if !is_integer_backed(s.dtype()) {
         return Ok(None);
@@ -189,7 +193,7 @@ pub(crate) fn series_gcd(s: &Series) -> PolarsResult<Option<i128>> {
             ))
         }
     };
-    Ok(i128::try_from(g).ok())
+    Ok((g < GCD_LIMIT).then_some(g as i128))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -210,7 +214,9 @@ pub(crate) fn column_gcd_impl(inputs: &[Series]) -> PolarsResult<Series> {
     let dtype_s = StringChunked::from_iter(dtypes.iter().map(|s| s.as_str()))
         .into_series()
         .with_name("dtype".into());
-    let gcd_s = Int128Chunked::from_iter_options("gcd".into(), gcds.into_iter()).into_series();
+    let gcd_s = Int128Chunked::from_iter_options("gcd".into(), gcds.into_iter())
+        .into_decimal_unchecked(Some(38), 0)
+        .into_series();
 
     let struct_ca = StructChunked::from_series(
         "column_gcd".into(),
@@ -272,7 +278,10 @@ mod tests {
         assert_eq!(gcd_of(Series::new("a".into(), &[i64::MIN, 1i64 << 62])), Some(1i128 << 62));
         assert_eq!(gcd_of(Series::new("a".into(), &[u64::MAX])), Some(u64::MAX as i128));
         assert_eq!(gcd_of(Series::new("a".into(), &[i128::MIN, 1i128 << 126])), Some(1i128 << 126));
-        // Magnitude 2^127 is not representable as Int128 → null.
+        // More than 38 digits is not representable as Decimal(38, 0) → null.
+        assert_eq!(gcd_of(Series::new("a".into(), &[10i128.pow(38) - 1])), Some(10i128.pow(38) - 1));
+        assert_eq!(gcd_of(Series::new("a".into(), &[10i128.pow(38)])), None);
+        assert_eq!(gcd_of(Series::new("a".into(), &[i128::MAX])), None);
         assert_eq!(gcd_of(Series::new("a".into(), &[i128::MIN])), None);
     }
 
@@ -399,7 +408,9 @@ mod tests {
         let df = out.into_frame().unnest(["column_gcd"]).unwrap();
         let cols: Vec<_> = df.column("column").unwrap().str().unwrap().into_no_null_iter().collect();
         let dtypes: Vec<_> = df.column("dtype").unwrap().str().unwrap().into_no_null_iter().collect();
-        let gcds: Vec<_> = df.column("gcd").unwrap().i128().unwrap().into_iter().collect();
+        let gcd = df.column("gcd").unwrap();
+        assert_eq!(gcd.dtype(), &GCD_DTYPE);
+        let gcds: Vec<_> = gcd.decimal().unwrap().physical().into_iter().collect();
         assert_eq!(cols, ["a", "b", "c"]);
         assert_eq!(dtypes, ["i64", "str", "u8"]);
         assert_eq!(gcds, [Some(4), None, Some(3)]);

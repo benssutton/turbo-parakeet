@@ -14,7 +14,8 @@ from analytics.base import Technique, metric_mismatches
 from analytics.describe import estimators
 from analytics.describe._values import FLOATS, INTEGERS, STRING_LIKE, flatten
 
-U64, U32, I128, F64 = pl.UInt64, pl.UInt32, pl.Int128, pl.Float64
+U64, U32, F64 = pl.UInt64, pl.UInt32, pl.Float64
+D38 = pl.Decimal(38, 0)  # Arrow has no plain 128-bit integer; values are capped at 38 digits
 LU64 = pl.List(pl.UInt64)
 
 GROUP_A = {  # whole values — every eligible dtype
@@ -26,7 +27,7 @@ GROUP_B = {  # Float32 / Float64 only
 }
 GROUP_C = {  # String / Categorical / Enum only
     "n_numeric": U64, "n_numeric_int": U64, "n_leading_zero": U64,
-    "numeric_int_min": I128, "numeric_int_max": I128,
+    "numeric_int_min": D38, "numeric_int_max": D38,
     "numeric_max_int_digits": U32, "numeric_max_frac_digits": U32,
     "n_iso_date": U64, "n_iso_time": U64, "n_iso_datetime": U64, "n_iso_datetime_tz": U64,
     "iso_max_frac_digits": U32, "iso_n_offsets": U64, "iso_n_midnight": U64,

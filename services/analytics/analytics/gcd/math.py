@@ -2,12 +2,12 @@ import math
 
 import polars as pl
 
-from analytics.gcd.base import I128_LIMIT, Gcd
+from analytics.gcd.base import GCD_LIMIT, Gcd
 
 
 def math_gcd(series: pl.Series) -> int | None:
     g = math.gcd(*series.to_physical().drop_nulls().to_list())
-    return None if g >= I128_LIMIT else g
+    return None if g >= GCD_LIMIT else g
 
 
 class GcdMath(Gcd):

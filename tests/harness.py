@@ -56,6 +56,7 @@ def assert_contract(cls: type[Technique], result: pl.DataFrame, frames: dict) ->
         **cls.CONCLUSIONS,
     }
     assert list(result.schema.items()) == list(expected.items())
+    assert result.to_arrow().num_rows == result.height, "result must export to native Arrow"
     collected = {n: f.collect() if isinstance(f, pl.LazyFrame) else f for n, f in frames.items()}
     assert result.select(keys).equals(cls.keys_frame(cls.enumerate(collected))), "rows must be every combination, in canonical order"
     idle = result.filter(pl.col("status") != "computed")

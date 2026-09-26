@@ -146,7 +146,7 @@ class Technique(ABC):
         statuses = [status] * len(combos) if isinstance(status, str) else list(status)
         return cls.keys_frame(combos).with_columns(
             pl.Series("status", statuses, dtype=STATUS),
-            *(pl.Series(name, list(metrics[name]), dtype=dtype, strict=True) for name, dtype in cls.METRICS.items()),
+            *(_metric_series(name, metrics[name], dtype) for name, dtype in cls.METRICS.items()),
         )
 
     @classmethod
@@ -235,6 +235,14 @@ def group_by_frame(combos: Sequence[Combo]) -> dict[str, list[Combo]]:
     for k in combos:
         groups.setdefault(k[0][0], []).append(k)
     return groups
+
+
+def _metric_series(name: str, values: Sequence, dtype: pl.DataType) -> pl.Series:
+    if isinstance(dtype, pl.Decimal):
+        # polars cannot build a Decimal Series from Python ints; the cast is strict,
+        # so a value too wide for the precision raises rather than being dropped.
+        return pl.Series(name, [None if v is None else int(v) for v in values], dtype=pl.Int128).cast(dtype)
+    return pl.Series(name, list(values), dtype=dtype, strict=True)
 
 
 def same_value(got, want, rtol: float, atol: float) -> bool:

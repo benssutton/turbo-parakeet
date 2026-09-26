@@ -117,7 +117,7 @@ Min, max and top-5 values are reported as **row indices of first occurrence**, n
 | `n_numeric` | UInt64 | values matching exactly `-?[0-9]+(\.[0-9]+)?` (ASCII digits; optional leading minus; at most one dot with a digit on each side). `"5."`, `".5"`, `"+5"`, `"1e5"`, `" 5"` do not match |
 | `n_numeric_int` | UInt64 | subset of `n_numeric` with no dot |
 | `n_leading_zero` | UInt64 | integer-looking values (`n_numeric_int`) whose digits start with `0` and have length > 1 (`"007"`, `"-012"`; not `"0"`, not `"-0"`) |
-| `numeric_int_min`, `numeric_int_max` | Int128 | range of the integer-looking values; null if there are none or any has more than 38 significant digits |
+| `numeric_int_min`, `numeric_int_max` | Decimal(38, 0) | range of the integer-looking values; null if there are none or any has more than 38 significant digits |
 | `numeric_max_int_digits` | UInt32 | max significant integer-part digits over all `n_numeric` values (leading zeros ignored; `"0.5"` → 0) |
 | `numeric_max_frac_digits` | UInt32 | max fraction digits after trailing zeros are removed (`"1.50"` → 1) |
 | `n_iso_date` | UInt64 | values that are exactly an ISO date |

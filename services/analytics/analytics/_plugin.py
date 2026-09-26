@@ -312,7 +312,7 @@ def pairwise_adjusted_rand(
 Column GCD
 """
 
-_COLUMN_GCD_SCHEMA = pl.Struct({"column": pl.String, "dtype": pl.String, "gcd": pl.Int128})
+_COLUMN_GCD_SCHEMA = pl.Struct({"column": pl.String, "dtype": pl.String, "gcd": pl.Decimal(38, 0)})
 _UINT128 = getattr(pl, "UInt128", None)
 
 
@@ -338,8 +338,8 @@ def column_gcd(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
 
     Null policy: nulls are skipped. All-null, all-zero and zero-row columns
     -> 0. Non-integer-backed dtypes (float, string, boolean, categorical,
-    nested, ...) -> null. A magnitude of 2**127 (only i128::MIN values) is not
-    representable as Int128 -> null.
+    nested, ...) -> null. A GCD of more than 38 digits (only from Int128 columns)
+    is not representable as Decimal(38, 0) -> null.
 
     UInt128 columns (and nested types containing UInt128) are not passed to the
     plugin — its Rust polars has no UInt128, and crossing the FFI with one
@@ -358,7 +358,7 @@ def column_gcd(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
         in input order:
         - column: String - Column name
         - dtype: String - Polars dtype (Rust Display form, e.g. "datetime[μs]")
-        - gcd: Int128 - Whole-column GCD, or null if not applicable
+        - gcd: Decimal(38, 0) - Whole-column GCD, or null if not applicable
     """
     if isinstance(df, pl.LazyFrame):
         df = df.collect()
