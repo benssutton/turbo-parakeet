@@ -51,6 +51,8 @@ pub(crate) struct Frequencies {
     pub top5_idx: Vec<u64>,
     pub top5_count: Vec<u64>,
     pub capture_history: [u64; 7],
+    /// Total byte length of the distinct values (`lengths` given: string / binary columns).
+    pub sum_len_unique: Option<u64>,
 }
 
 /// Split subset (0, 1 or 2) of `row`: the SplitMix64 finaliser of `seed + row`.
@@ -95,7 +97,7 @@ fn merge(mut a: Map, mut b: Map) -> Map {
     a
 }
 
-pub(crate) fn frequencies(col: &EncodedColumn, seed: u64) -> Frequencies {
+pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]>) -> Frequencies {
     let n = col.len();
     let map = col
         .values
@@ -111,12 +113,16 @@ pub(crate) fn frequencies(col: &EncodedColumn, seed: u64) -> Frequencies {
     let (mut f1, mut f2, mut history) = (0u64, 0u64, [0u64; 7]);
     let n_unique = map.len() as u64;
     let mut entries: Vec<Entry> = Vec::with_capacity(map.len());
+    let mut unique_len = 0u64;
     for e in map.into_values() {
         let p = e.count as f64 / nf;
         entropy -= p * p.log2();
         f1 += (e.count == 1) as u64;
         f2 += (e.count == 2) as u64;
         history[e.mask as usize - 1] += 1;
+        if let Some(l) = lengths {
+            unique_len += l[e.first as usize];
+        }
         entries.push(e);
     }
     if n_null > 0 {
@@ -137,6 +143,7 @@ pub(crate) fn frequencies(col: &EncodedColumn, seed: u64) -> Frequencies {
         top5_idx: entries.iter().map(|e| e.first).collect(),
         top5_count: entries.iter().map(|e| e.count).collect(),
         capture_history: history,
+        sum_len_unique: lengths.map(|_| unique_len),
     }
 }
 
@@ -234,6 +241,16 @@ fn lengths(s: &Series) -> PolarsResult<(Option<u64>, Option<u64>)> {
         }
         DataType::Array(_, width) => min_max(s.is_not_null().iter().map(|ok| (ok == Some(true)).then_some(*width as u64))),
         _ => (None, None),
+    })
+}
+
+/// Byte length of every value (0 for nulls) of a String, Categorical, Enum or Binary series.
+fn byte_lengths(s: &Series) -> PolarsResult<Option<Vec<u64>>> {
+    Ok(match s.dtype() {
+        DataType::String => Some(s.str()?.iter().map(|v| v.map_or(0, |x| x.len() as u64)).collect()),
+        DataType::Categorical(_, _) | DataType::Enum(_, _) => return byte_lengths(&s.cast(&DataType::String)?),
+        DataType::Binary => Some(s.binary()?.iter().map(|v| v.map_or(0, |x| x.len() as u64)).collect()),
+        _ => None,
     })
 }
 
@@ -373,6 +390,9 @@ pub(crate) struct Numeric {
     pub int_digits: u32,
     /// Fraction digits with trailing zeros removed.
     pub frac_digits: u32,
+    /// Significant digits of the whole value: leading zeros (across the dot) and
+    /// trailing fraction zeros removed ("0.00120" → 2, "1200" → 4).
+    pub sig_digits: u32,
 }
 
 pub(crate) fn scan_numeric(b: &[u8]) -> Option<Numeric> {
@@ -383,16 +403,23 @@ pub(crate) fn scan_numeric(b: &[u8]) -> Option<Numeric> {
     }
     let (int, rest) = body.split_at(int_len);
     let frac = match rest {
-        [] => None,
-        [b'.', frac @ ..] if !frac.is_empty() && frac.iter().all(u8::is_ascii_digit) => Some(frac),
+        [] => &b""[..],
+        [b'.', frac @ ..] if !frac.is_empty() && frac.iter().all(u8::is_ascii_digit) => frac,
         _ => return None,
     };
+    let frac = &frac[..frac.iter().rposition(|&c| c != b'0').map_or(0, |p| p + 1)];
     let significant = int.iter().position(|&c| c != b'0').map_or(0, |p| int.len() - p);
+    let sig_digits = if significant > 0 {
+        significant + frac.len()
+    } else {
+        frac.iter().position(|&c| c != b'0').map_or(0, |p| frac.len() - p)
+    };
     Some(Numeric {
-        is_int: frac.is_none(),
-        leading_zero: frac.is_none() && int.len() > 1 && int[0] == b'0',
+        is_int: rest.is_empty(),
+        leading_zero: rest.is_empty() && int.len() > 1 && int[0] == b'0',
         int_digits: significant as u32,
-        frac_digits: frac.map_or(0, |f| f.iter().rposition(|&c| c != b'0').map_or(0, |p| p + 1)) as u32,
+        frac_digits: frac.len() as u32,
+        sig_digits: sig_digits as u32,
     })
 }
 
@@ -414,9 +441,10 @@ pub(crate) fn parse_i128(b: &[u8]) -> Option<i128> {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Iso {
     Date,
-    Time { frac: u32 },
-    DateTime { frac: u32, midnight: bool },
-    DateTimeTz { frac: u32, midnight: bool, offset_minutes: i32 },
+    /// frac = fractional-second digits as written; sig = without trailing zeros.
+    Time { frac: u32, sig: u32 },
+    DateTime { frac: u32, sig: u32, midnight: bool },
+    DateTimeTz { frac: u32, sig: u32, midnight: bool, offset_minutes: i32 },
 }
 
 #[inline]
@@ -445,13 +473,14 @@ fn date(b: &[u8]) -> Option<usize> {
     (1..=days_in_month(y, m)).contains(&d).then_some(10)
 }
 
-/// `HH:MM[:SS[.f{1,9}]]` from `i`: (end, fraction digits as written, all-zero time).
-fn time(b: &[u8], i: usize) -> Option<(usize, u32, bool)> {
+/// `HH:MM[:SS[.f{1,9}]]` from `i`: (end, fraction digits as written, without
+/// trailing zeros, all-zero time).
+fn time(b: &[u8], i: usize) -> Option<(usize, u32, u32, bool)> {
     let (h, m) = (two(b, i)?, two(b, i + 3)?);
     if b.get(i + 2) != Some(&b':') || h > 23 || m > 59 {
         return None;
     }
-    let (mut end, mut frac, mut zero) = (i + 5, 0, h == 0 && m == 0);
+    let (mut end, mut frac, mut sig, mut zero) = (i + 5, 0, 0, h == 0 && m == 0);
     if b.get(end) == Some(&b':') {
         let s = two(b, end + 1)?;
         if s > 59 {
@@ -464,12 +493,14 @@ fn time(b: &[u8], i: usize) -> Option<(usize, u32, bool)> {
             if !(1..=9).contains(&digits) {
                 return None;
             }
-            zero &= b[end + 1..end + 1 + digits].iter().all(|&c| c == b'0');
+            let f = &b[end + 1..end + 1 + digits];
+            zero &= f.iter().all(|&c| c == b'0');
             frac = digits as u32;
+            sig = f.iter().rposition(|&c| c != b'0').map_or(0, |p| p + 1) as u32;
             end += 1 + digits;
         }
     }
-    Some((end, frac, zero))
+    Some((end, frac, sig, zero))
 }
 
 /// `Z` or `±HH:MM` from `i` to the end of `b`, in minutes east of UTC.
@@ -493,14 +524,14 @@ pub(crate) fn scan_iso(b: &[u8]) -> Option<Iso> {
         if !matches!(b[d], b'T' | b' ') {
             return None;
         }
-        let (end, frac, midnight) = time(b, d + 1)?;
+        let (end, frac, sig, midnight) = time(b, d + 1)?;
         if end == b.len() {
-            return Some(Iso::DateTime { frac, midnight });
+            return Some(Iso::DateTime { frac, sig, midnight });
         }
-        return offset(b, end).map(|offset_minutes| Iso::DateTimeTz { frac, midnight, offset_minutes });
+        return offset(b, end).map(|offset_minutes| Iso::DateTimeTz { frac, sig, midnight, offset_minutes });
     }
-    let (end, frac, _) = time(b, 0)?;
-    (end == b.len()).then_some(Iso::Time { frac })
+    let (end, frac, sig, _) = time(b, 0)?;
+    (end == b.len()).then_some(Iso::Time { frac, sig })
 }
 
 /// Group C accumulator over the non-null string values of one column.
@@ -515,11 +546,14 @@ pub(crate) struct StringStats {
     pub int_overflow: bool,
     pub max_int_digits: Option<u32>,
     pub max_frac_digits: Option<u32>,
+    pub min_frac_digits: Option<u32>,
+    pub max_sig_digits: Option<u32>,
     pub n_iso_date: u64,
     pub n_iso_time: u64,
     pub n_iso_datetime: u64,
     pub n_iso_datetime_tz: u64,
     pub iso_max_frac_digits: Option<u32>,
+    pub iso_max_sig_frac_digits: Option<u32>,
     pub offsets: HashSet<i32>,
     pub iso_n_midnight: u64,
 }
@@ -538,6 +572,8 @@ impl StringStats {
             self.n_numeric += 1;
             self.max_int_digits = self.max_int_digits.max(Some(n.int_digits));
             self.max_frac_digits = self.max_frac_digits.max(Some(n.frac_digits));
+            self.min_frac_digits = opt_min(self.min_frac_digits, Some(n.frac_digits));
+            self.max_sig_digits = self.max_sig_digits.max(Some(n.sig_digits));
             if n.is_int {
                 self.n_numeric_int += 1;
                 self.n_leading_zero += n.leading_zero as u64;
@@ -553,23 +589,28 @@ impl StringStats {
         }
         match scan_iso(b) {
             Some(Iso::Date) => self.n_iso_date += 1,
-            Some(Iso::Time { frac }) => {
+            Some(Iso::Time { frac, sig }) => {
                 self.n_iso_time += 1;
-                self.iso_max_frac_digits = self.iso_max_frac_digits.max(Some(frac));
+                self.fraction(frac, sig);
             }
-            Some(Iso::DateTime { frac, midnight }) => {
+            Some(Iso::DateTime { frac, sig, midnight }) => {
                 self.n_iso_datetime += 1;
-                self.iso_max_frac_digits = self.iso_max_frac_digits.max(Some(frac));
+                self.fraction(frac, sig);
                 self.iso_n_midnight += midnight as u64;
             }
-            Some(Iso::DateTimeTz { frac, midnight, offset_minutes }) => {
+            Some(Iso::DateTimeTz { frac, sig, midnight, offset_minutes }) => {
                 self.n_iso_datetime_tz += 1;
-                self.iso_max_frac_digits = self.iso_max_frac_digits.max(Some(frac));
+                self.fraction(frac, sig);
                 self.iso_n_midnight += midnight as u64;
                 self.offsets.insert(offset_minutes);
             }
             None => {}
         }
+    }
+
+    fn fraction(&mut self, frac: u32, sig: u32) {
+        self.iso_max_frac_digits = self.iso_max_frac_digits.max(Some(frac));
+        self.iso_max_sig_frac_digits = self.iso_max_sig_frac_digits.max(Some(sig));
     }
 
     pub fn merge(mut self, o: Self) -> Self {
@@ -581,11 +622,14 @@ impl StringStats {
         self.int_overflow |= o.int_overflow;
         self.max_int_digits = self.max_int_digits.max(o.max_int_digits);
         self.max_frac_digits = self.max_frac_digits.max(o.max_frac_digits);
+        self.min_frac_digits = opt_min(self.min_frac_digits, o.min_frac_digits);
+        self.max_sig_digits = self.max_sig_digits.max(o.max_sig_digits);
         self.n_iso_date += o.n_iso_date;
         self.n_iso_time += o.n_iso_time;
         self.n_iso_datetime += o.n_iso_datetime;
         self.n_iso_datetime_tz += o.n_iso_datetime_tz;
         self.iso_max_frac_digits = self.iso_max_frac_digits.max(o.iso_max_frac_digits);
+        self.iso_max_sig_frac_digits = self.iso_max_sig_frac_digits.max(o.iso_max_sig_frac_digits);
         self.offsets.extend(o.offsets);
         self.iso_n_midnight += o.iso_n_midnight;
         self
@@ -606,12 +650,13 @@ pub(crate) fn value_fields() -> Vec<(&'static str, DataType)> {
     let d38 = DataType::Decimal(Some(38), Some(0));
     vec![
         ("n_unique", U64), ("entropy", F64), ("f1", U64), ("f2", U64), ("argmin", U64), ("argmax", U64),
-        ("min_len", U64), ("max_len", U64), ("top5_idx", list.clone()), ("top5_count", list.clone()), ("capture_history", list),
+        ("min_len", U64), ("max_len", U64), ("gcd", d38.clone()), ("sum_len", U64), ("sum_len_unique", U64),
+        ("top5_idx", list.clone()), ("top5_count", list.clone()), ("capture_history", list),
         ("n_nan", U64), ("n_inf", U64), ("n_fractional", U64), ("max_frac_digits", U32), ("n_f32_inexact", U64),
         ("n_numeric", U64), ("n_numeric_int", U64), ("n_leading_zero", U64), ("numeric_int_min", d38.clone()), ("numeric_int_max", d38),
-        ("numeric_max_int_digits", U32), ("numeric_max_frac_digits", U32),
+        ("numeric_max_int_digits", U32), ("numeric_max_frac_digits", U32), ("numeric_min_frac_digits", U32), ("numeric_max_sig_digits", U32),
         ("n_iso_date", U64), ("n_iso_time", U64), ("n_iso_datetime", U64), ("n_iso_datetime_tz", U64),
-        ("iso_max_frac_digits", U32), ("iso_n_offsets", U64), ("iso_n_midnight", U64),
+        ("iso_max_frac_digits", U32), ("iso_max_sig_frac_digits", U32), ("iso_n_offsets", U64), ("iso_n_midnight", U64),
     ]
 }
 
@@ -667,16 +712,23 @@ pub(crate) struct Profile {
     pub range: Range,
     pub floats: Option<FloatStats>,
     pub strings: Option<StringStats>,
+    /// GCD of the physical values (gcd.rs); None for non-integer dtypes or > 38 digits.
+    pub gcd: Option<i128>,
+    /// Total byte length of the non-null values (string / binary columns).
+    pub sum_len: Option<u64>,
     /// Float32 series: `n_f32_inexact` does not apply.
     pub is_f32: bool,
 }
 
 pub(crate) fn profile(s: &Series, seed: u64) -> PolarsResult<Profile> {
+    let lengths = byte_lengths(s)?;
     Ok(Profile {
-        freq: frequencies(&encode_series(s)?, seed),
+        freq: frequencies(&encode_series(s)?, seed, lengths.as_deref()),
         range: range(s)?,
         floats: float_stats(s)?,
         strings: strings(s)?,
+        gcd: crate::gcd::series_gcd(s)?,
+        sum_len: lengths.map(|l| l.iter().sum()),
         is_f32: s.dtype() == &DataType::Float32,
     })
 }
@@ -688,6 +740,7 @@ impl Profile {
         let mut row: Row = vec![
             AnyValue::UInt64(f.n_unique), AnyValue::Float64(f.entropy), AnyValue::UInt64(f.f1), AnyValue::UInt64(f.f2),
             u64v(r.argmin), u64v(r.argmax), u64v(r.min_len), u64v(r.max_len),
+            d38v(self.gcd), u64v(self.sum_len), u64v(f.sum_len_unique),
             listv(&f.top5_idx), listv(&f.top5_count), listv(&f.capture_history),
         ];
         match self.floats {
@@ -703,12 +756,13 @@ impl Profile {
                 row.extend([
                     AnyValue::UInt64(st.n_numeric), AnyValue::UInt64(st.n_numeric_int), AnyValue::UInt64(st.n_leading_zero),
                     d38v(lo), d38v(hi), u32v(st.max_int_digits), u32v(st.max_frac_digits),
+                    u32v(st.min_frac_digits), u32v(st.max_sig_digits),
                     AnyValue::UInt64(st.n_iso_date), AnyValue::UInt64(st.n_iso_time), AnyValue::UInt64(st.n_iso_datetime),
-                    AnyValue::UInt64(st.n_iso_datetime_tz), u32v(st.iso_max_frac_digits),
+                    AnyValue::UInt64(st.n_iso_datetime_tz), u32v(st.iso_max_frac_digits), u32v(st.iso_max_sig_frac_digits),
                     AnyValue::UInt64(st.offsets.len() as u64), AnyValue::UInt64(st.iso_n_midnight),
                 ])
             }
-            None => row.extend(nulls(14)),
+            None => row.extend(nulls(17)),
         }
         row
     }
@@ -849,7 +903,7 @@ mod tests {
     use super::*;
 
     fn freq(s: Series) -> Frequencies {
-        frequencies(&encode_series(&s).unwrap(), 0)
+        frequencies(&encode_series(&s).unwrap(), 0, None)
     }
 
     #[test]
@@ -995,13 +1049,13 @@ mod tests {
         for bad in ["2023-02-29", "2024-13-01", "2024-1-05", "24:00", "23:59:60", "10:00:00.1234567890", "10:00:00.", "2024-01-05t10:00", "2024-01-05T10:00+0200", "2024-01-05T10:00Zx"] {
             assert_eq!(iso(bad), None, "{bad:?}");
         }
-        assert_eq!(iso("23:59"), Some(Iso::Time { frac: 0 }));
-        assert_eq!(iso("10:00:00.123456789"), Some(Iso::Time { frac: 9 }));
-        assert_eq!(iso("2024-01-05 10:00:00"), Some(Iso::DateTime { frac: 0, midnight: false }));
-        assert_eq!(iso("2024-01-05T00:00:00.000"), Some(Iso::DateTime { frac: 3, midnight: true }));
-        assert_eq!(iso("2024-01-05T00:00Z"), Some(Iso::DateTimeTz { frac: 0, midnight: true, offset_minutes: 0 }));
-        assert_eq!(iso("2024-01-05T10:00-00:00"), Some(Iso::DateTimeTz { frac: 0, midnight: false, offset_minutes: 0 }));
-        assert_eq!(iso("2024-01-05T10:00-05:30"), Some(Iso::DateTimeTz { frac: 0, midnight: false, offset_minutes: -330 }));
+        assert_eq!(iso("23:59"), Some(Iso::Time { frac: 0, sig: 0 }));
+        assert_eq!(iso("10:00:00.123456789"), Some(Iso::Time { frac: 9, sig: 9 }));
+        assert_eq!(iso("2024-01-05 10:00:00"), Some(Iso::DateTime { frac: 0, sig: 0, midnight: false }));
+        assert_eq!(iso("2024-01-05T00:00:00.000"), Some(Iso::DateTime { frac: 3, sig: 0, midnight: true }));
+        assert_eq!(iso("2024-01-05T00:00Z"), Some(Iso::DateTimeTz { frac: 0, sig: 0, midnight: true, offset_minutes: 0 }));
+        assert_eq!(iso("2024-01-05T10:00-00:00"), Some(Iso::DateTimeTz { frac: 0, sig: 0, midnight: false, offset_minutes: 0 }));
+        assert_eq!(iso("2024-01-05T10:00-05:30"), Some(Iso::DateTimeTz { frac: 0, sig: 0, midnight: false, offset_minutes: -330 }));
     }
 
     #[test]
@@ -1024,6 +1078,38 @@ mod tests {
         let long = format!("{}.{}.", "0".repeat(1_000_000), "0".repeat(1_000_000));
         assert_eq!(num(&long), None);
         assert_eq!(iso(&format!("2024-01-05T{}", "0".repeat(1_000_000))), None);
+    }
+
+    #[test]
+    fn significant_digits() {
+        let sig = |s: &str| scan_numeric(s.as_bytes()).map(|n| (n.frac_digits, n.sig_digits));
+        assert_eq!(sig("1.50"), Some((1, 2)));
+        assert_eq!(sig("0.00120"), Some((4, 2)));
+        assert_eq!(sig("1200"), Some((0, 4)));
+        assert_eq!(sig("-0.0"), Some((0, 0)));
+        assert_eq!(sig("12.50"), Some((1, 3)));
+    }
+
+    #[test]
+    fn iso_significant_fraction() {
+        assert_eq!(iso("10:00:00.120"), Some(Iso::Time { frac: 3, sig: 2 }));
+        assert_eq!(iso("2024-01-05T00:00:00.000"), Some(Iso::DateTime { frac: 3, sig: 0, midnight: true }));
+    }
+
+    #[test]
+    fn sum_len_unique_counts_each_distinct_value_once() {
+        let s = Series::new("a".into(), &[Some("ab"), Some("ab"), Some("c"), None]);
+        let lens = byte_lengths(&s).unwrap().unwrap();
+        assert_eq!(lens.iter().sum::<u64>(), 5);
+        assert_eq!(frequencies(&encode_series(&s).unwrap(), 0, Some(&lens)).sum_len_unique, Some(3));
+    }
+
+    #[test]
+    fn profile_gcd_and_lengths() {
+        let p = profile(&Series::new("x".into(), &[Some(10i64), None, Some(30)]), 0).unwrap();
+        assert_eq!((p.gcd, p.sum_len), (Some(10), None));
+        let s = profile(&Series::new("x".into(), &["ab", "ab", "c"]), 0).unwrap();
+        assert_eq!((s.gcd, s.sum_len, s.freq.sum_len_unique), (None, Some(5), Some(3)));
     }
 
     #[test]
