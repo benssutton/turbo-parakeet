@@ -2,3 +2,4 @@
 // Entry points are added in Tasks 10–11.
 
 pub(crate) mod frequency;
+pub(crate) mod patterns;
