@@ -1,8 +1,18 @@
 """The planted structure that other tests and benchmarks rely on."""
 
 import polars as pl
+from polars.testing import assert_frame_equal
 
-from datagen import integer_multiples, integer_random, low_cardinality, mixed_dtypes, related_frames, similar_frames
+from datagen import (
+    describe_mixed,
+    integer_multiples,
+    integer_random,
+    low_cardinality,
+    mixed_dtypes,
+    related_frames,
+    similar_frames,
+    stringified,
+)
 
 
 def test_mixed_dtypes_layout():
@@ -47,3 +57,23 @@ def test_integer_generators():
     m = integer_multiples(1_000, 3, 12)
     assert m.columns == ["c0", "c1", "c2"] and (m["c0"] % 12 == 0).all()
     assert integer_random(1_000, 2).shape == (1_000, 2)
+
+
+def test_describe_mixed_is_seeded_and_covers_every_family():
+    a, b = describe_mixed(300), describe_mixed(300)
+    assert_frame_equal(a, b)
+    kinds = {type(dt) for dt in a.dtypes}
+    for kind in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.Int128, pl.UInt8, pl.UInt16, pl.UInt32,
+                 pl.UInt64, pl.Float32, pl.Float64, pl.Decimal, pl.Boolean, pl.Date, pl.Datetime,
+                 pl.Duration, pl.Time, pl.String, pl.Categorical, pl.Enum, pl.Binary, pl.List,
+                 pl.Array, pl.Struct):
+        assert kind in kinds, kind
+    assert a["all_null"].null_count() == 300
+    assert a["dt_tz"].dtype.time_zone == "Europe/London"
+
+
+def test_stringified_casts_only_castable_columns():
+    s = stringified(describe_mixed(100))
+    assert all(dt == pl.String or dt == pl.List(pl.String) for dt in s.dtypes)
+    assert {"i32", "f64", "dec", "date", "dt_tz", "time", "bool", "list_i64"} <= set(s.columns)
+    assert not {"dur", "bin", "struct", "arr_i32", "str_int", "cat", "all_null"} & set(s.columns)
