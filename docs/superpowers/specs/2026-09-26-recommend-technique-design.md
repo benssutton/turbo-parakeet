@@ -40,10 +40,11 @@ Recasting production data is invasive, so **transparency** governs the design: e
 services/analytics/
 ├── src/
 │   ├── describe.rs                # merged from describe/{frequency,numeric,patterns,range,mod}.rs;
-│   │                              #   profile() → typed Profile; entries describe_columns, describe_and_recommend
+│   │                              #   profile() → typed Profile; entry describe_columns
 │   ├── sizes.rs                   # moved from describe/; ported to arrow-rs ArrayData; entry column_sizes
 │   ├── cardinality_estimators.rs  # Chao1, Schnabel, Duj1, intervals, selection rule
-│   ├── recommend.rs               # Arrow-native: rules → candidates → cast → verify → measure; polars_layout()
+│   ├── recommend.rs               # Arrow-native: rules → candidates → cast → verify → measure; polars_layout();
+│   │                              #   entry describe_and_recommend
 │   ├── gcd.rs                     # kernel reused by describe.rs for the `gcd` metric
 │   └── lib.rs                     # mod describe; mod sizes; mod cardinality_estimators; mod recommend;
 └── analytics/
@@ -96,7 +97,7 @@ Within a signedness, only the narrowest fitting width is emitted (a wider one ca
 
 | Source | Candidates |
 |---|---|
-| any, `n_null == n_rows` | Null |
+| any, `n_rows > 0` and `n_null == n_rows` | Null |
 | Integer (Int/UInt 8–64, Int128) | Boolean if `0 ≤ min` and `max ≤ 1`; narrowest UInt if `min ≥ 0`; narrowest Int; Decimal128(p, 0) if outside the 64-bit ranges (p = digits of max(\|min\|, \|max\|) ≤ 38) |
 | Decimal(p, s) | Let `k` = trailing decimal zeros of `gcd` (capped at `s`; `gcd = 0` → `k = s`). New scale `s' = s − k`, precision `p' = p_obs − k` where `p_obs` = digits of max(\|min\|, \|max\|) unscaled. If `s' = 0`: the Integer rules on the scaled values. Else Decimal32 if `p' ≤ 9`, Decimal64 if `≤ 18`, Decimal128 if `≤ 38` |
 | Float32 / Float64 | If `n_nan = n_inf = 0` and `n_fractional = 0`: the Integer rules on min/max (including Decimal128(p, 0) beyond the 64-bit ranges). If `n_nan = n_inf = 0` and `n_fractional > 0`: Decimal(p, s) with `s = max_frac_digits`, `p = int_digits + s`, where `int_digits` = digits of ⌊max(\|min\|, \|max\|)⌋ (0 for values below 1), width by `p` as above, only if `p ≤ 38`. Float32 if the source is Float64 and `n_f32_inexact = 0` |
@@ -117,9 +118,9 @@ First matching row wins (then step 2 applies to whatever is still a string):
 
 | Condition | Candidates |
 |---|---|
-| `n_unique ≤ 2` and the distinct values (from top-5) match a `boolean_pairs` entry, case-insensitive | Boolean (first element of the pair → true) |
+| `n_unique ≤ 5` (so top-5 lists every distinct value) and every distinct value matches one `boolean_pairs` entry, case-insensitive (`"Y"`, `"y"`, `"n"` match `("y", "n")`) | Boolean (first element of the pair → true) |
 | `n_numeric_int = n`, `n_leading_zero = 0`, `numeric_int_min/max` not null | Integer rules on `numeric_int_min/max` |
-| `n_numeric = n` | Decimal(p, s): `s = numeric_max_frac_digits`, `p = numeric_max_int_digits + s`, width by `p`, only if `p ≤ 38`. **Plus**, when decimal places vary (`numeric_min_frac_digits < numeric_max_frac_digits`) and `p > 18` (no Decimal64 fits): Float32 if `numeric_max_sig_digits ≤ 6`, Float64 if `≤ 15`. Being smaller, the Float is tried before Decimal128, which remains the fallback if the Float fails verification |
+| `n_numeric = n`, `n_leading_zero = 0` | Decimal(p, s): `s = numeric_max_frac_digits`, `p = numeric_max_int_digits + s`, width by `p`, only if `p ≤ 38`. **Plus**, when decimal places vary (`numeric_min_frac_digits < numeric_max_frac_digits`) and `p > 18` (no Decimal64 fits): Float32 if `numeric_max_sig_digits ≤ 6`, Float64 if `≤ 15`. Being smaller, the Float is tried before Decimal128, which remains the fallback if the Float fails verification |
 | `n_iso_date = n` | Date32 |
 | `n_iso_time = n` | Time32/Time64 with unit from `iso_max_sig_frac_digits`: 0 → s, ≤ 3 → ms, ≤ 6 → µs, else ns |
 | `n_iso_datetime = n` | Date32 if `iso_n_midnight = n`; else Timestamp(unit from `iso_max_sig_frac_digits`, no tz) |
@@ -180,13 +181,14 @@ Applies to string results (outer, or inner values of a List) and to Categorical/
 ### 5.4 The loop (per column, in `recommend.rs`)
 
 1. **Candidates** from §4 and §5.2, ordered per §4.1.
-2. **Cast** with `arrow-cast` (`safe = true`), with hand-written paths where exactness demands it:
+2. **Cast** with `arrow-cast` using `safe: false` (in arrow-rs `safe: true` turns failures into nulls; `false` makes them errors), with hand-written paths where exactness demands it:
+   - String sources: every target is built from `describe.rs`'s exact parsers (`parse_decimal`, `parse_iso`), never from `arrow-cast`'s string parsing; a value that does not fit (unit remainder, i64 or precision overflow) fails the cast.
    - Float → Decimal: the exact decimal digits of the shortest round-trip representation (`ryu`), never multiply-and-round.
    - Boolean from `boolean_pairs`; `timestamp_with_offset`; Timestamp with a fixed-offset zone: built from the ISO scanner.
    - Any unparsable or out-of-range value fails the cast (reason: first failing row and value).
 3. **Verify** row by row against an **exact reference** of the original, with nulls matched:
    - numeric / temporal sources: the recast values cast back to the source type equal the originals (floats: `f64::from_str(decimal_text)` equals the original bits; `-0.0 = 0.0`);
-   - string sources: the reference is the scanner's exact parse (`i128` unscaled at the target scale; date / time-of-day ns / offset components), independent of `arrow-cast`'s parser;
+   - string sources: the recast values are rendered to text by `arrow-cast` and compared with the original text by value — canonical decimal digits for numbers, `parse_iso` components (days, time-of-day ns, UTC instant, offset) for temporals — so the check runs through code independent of the parser that built them;
    - dictionary: decoded values equal the originals;
    - list → scalar: scalar equals the list's only element.
    `rec_lossy_formatting` = some recast value, cast to Utf8, differs textually from the original's text (always false for non-string sources except `-0.0`).
@@ -195,6 +197,8 @@ Applies to string results (outer, or inner values of a List) and to Categorical/
 6. **Polars layout**: cast the chosen array to `polars_layout(rec_arrow_type)` (§5.5), verify (widening only, so it cannot fail in practice), measure plain and ZSTD.
 
 A result whose ZSTD size exceeds the original's is still returned (the hierarchy governs), with both sizes visible.
+
+When the original is chosen, `rec_polars_type` is the `dtype` descriptor and its Polars sizes are Describe's `size_polars_bytes` / `size_polars_zstd_bytes`. Columns whose sizes are null (List/Array/Struct nesting Int128, which pyarrow cannot import) get null recommendation columns.
 
 ### 5.5 `polars_layout` — Arrow type → Polars type → Polars' Arrow layout
 
@@ -210,10 +214,12 @@ Checked against Polars 1.41 / pyarrow 24.
 | Duration(s) / (ms/µs/ns) | Duration(ms) / same | duration(ms) / same |
 | Utf8 / LargeUtf8 | String | string_view |
 | Binary / LargeBinary | Binary | binary_view |
-| Dictionary<k, Utf8> | `Enum(categories)` if `est_method = exact` (Polars picks the key width from the category count, = k); else `Categorical(Categories(name=<column>, physical=k))` | dictionary<string_view, k> (Enum `ordered=1`) |
+| Dictionary<k, Utf8> | `Enum(categories)` when `population_rows` equals the frame's rows (exact cardinality; Polars picks the key width); else `Categorical(Categories(name=<column>, physical=k′))` | dictionary<string_view, k′> (Enum `ordered=1`) |
 | timestamp_with_offset | Struct{timestamp: Datetime(u′, UTC), offset_minutes: Int16}, u′ = u with s → ms | struct of the mapped children |
 | List(x) | List(mapped x) | large_list(mapped x) |
 | FixedSizeList(x, w) | Array(mapped x, w) | fixed_size_list |
+
+Polars reserves one key code, so its key width `k′` is UInt8 for `c ≤ 255`, UInt16 for `c ≤ 65,535`, else UInt32 (checked: an Enum of 256 categories is UInt16; a UInt8 Categorical refuses a 256th category) — one less than Arrow's boundaries for `k`.
 
 ## 6. Contract and output
 
@@ -244,10 +250,11 @@ The Rust cardinality estimates behind `c` appear in `evidence`; they must equal 
 1. **Contract** — schema, canonical order, ineligible rows null, `result().to_arrow()`.
 2. **Reference agreement** — none (single implementation). Instead, **independent oracles** on `describe_mixed`, `stringified(describe_mixed)` and `large_dataset.arrow`:
    - `predicted_bytes` = `rec_arrow_size_bytes` for the chosen candidate;
-   - pyarrow: `pa.array(original).cast(<rec_arrow_type>)` measured by `_sizes.py` matches `rec_arrow_size_*` (ZSTD RTOL 0.01);
+   - pyarrow: `pa.array(original).cast(<rec_arrow_type>, safe=False)` measured by `_sizes.py` matches `rec_arrow_size_*` (ZSTD RTOL 0.01);
    - Polars: `series.cast(<rec_polars_type>)` measured by `_sizes.py` on `CompatLevel.newest()` matches `rec_polars_size_*` (ZSTD RTOL 0.01);
+   - rows whose source is a string are skipped by these two oracles when the library cannot perform the cast (pyarrow and Polars cannot parse every ISO form); every row with a non-string source must be checked;
    - Rust estimates in `evidence` equal the Python estimators (RTOL 1e-9).
-3. **Known answers** — one case per rule row in §4.2–4.5, including: `{0,1}` ints → Boolean; UInt8 vs Int8 tie → UInt8; Int128 beyond 64 bits → Decimal128(p, 0); Decimal scale reduced by `gcd`, and to integers when `s' = 0`; floats → Decimal64 (`123.45`), → Int (whole), → Float32 (`0.5`, `0.25`: Float32 beats Decimal64 on size); Decimal32 beats Float32 on the tie; NaN keeps a Float; `"007"` stays String; `"1.50"` → Decimal with `rec_lossy_formatting`; varying decimal places beyond Decimal64 → Float64 (≤ 15 significant digits), → Float32 (≤ 6), and → Decimal128 when a value exceeds 15 significant digits (Float candidate `failed` or absent); fixed decimal places beyond Decimal64 → Decimal128; a Float64 column needing Decimal128 keeps Float64; `boolean_pairs` default and with `("y", "n")`; ISO date / time / naive / fixed offset / varying offsets (`timestamp_with_offset`); `"…00.000"` → Timestamp(s); ns out of range → String with a `failed` candidate; naive Datetime all-midnight → Date32, tz-aware → Timestamp; unit narrowing by `gcd` for Datetime / Duration / Time; single-item lists → scalar, and kept as List when null lists and null elements both occur; LargeList → List; dictionary key boundaries (256 / 257, 65,536 / 65,537 distinct); gate rejection above `categorical_threshold`; `population_rows` projection choosing plain over dictionary; Enum vs Categorical in `rec_polars_type`; all-null → Null.
+3. **Known answers** — one case per rule row in §4.2–4.5, including: `{0,1}` ints → Boolean; UInt8 vs Int8 tie → UInt8; Int128 beyond 64 bits → Decimal128(p, 0); Decimal scale reduced by `gcd`, and to integers when `s' = 0`; floats → Decimal32 (`123.45`), → Decimal64 (`1234567.891`), → Int (whole), → Float32 (`0.0009765625`: Float32 beats Decimal64(10, 10) on size); Decimal32 beats Float32 on the tie (`0.5`, `0.25`); NaN keeps a Float; `"007"` stays String (and never becomes a Decimal); `"1.50"` → Decimal with `rec_lossy_formatting`; varying decimal places beyond Decimal64 → Float64 (≤ 15 significant digits), → Float32 (≤ 6), and → Decimal128 when a value exceeds 15 significant digits (Float candidate `failed` or absent); fixed decimal places beyond Decimal64 → Decimal128; a Float64 column needing Decimal128 keeps Float64; `boolean_pairs` default and with `("y", "n")`; ISO date / time / naive / fixed offset / varying offsets (`timestamp_with_offset`); `"…00.000"` → Timestamp(s); ns out of range → String with a `failed` candidate; naive Datetime all-midnight → Date32, tz-aware → Timestamp; unit narrowing by `gcd` for Datetime / Duration / Time; single-item lists → scalar, and kept as List when null lists and null elements both occur; LargeList → List; dictionary key boundaries (Arrow 256 / 257 and 65,536 / 65,537 distinct; Polars 255 / 256); gate rejection above `categorical_threshold`; `population_rows` projection choosing plain over dictionary; Enum vs Categorical in `rec_polars_type`; all-null → Null.
 4. **Conclusions** — inherited from Describe; one `with_metrics` check that REC columns are null on non-computed rows.
 
 ### 7.2 `tests/test_describe.py`
