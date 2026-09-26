@@ -239,3 +239,178 @@ def test_column_sizes_int128_and_nested_int128():
 def test_categorical_size_includes_its_dictionary():
     s = pl.Series("x", ["a", "b", "a"], dtype=pl.Categorical)
     assert _sizes.column_sizes(s, 1)["size_bytes"] == 48  # dictionary batch 32 + keys 16
+
+
+from datagen import describe_mixed, stringified
+
+PKG = "analytics.describe"
+ALL = implementation_params(PKG)
+OTHERS = implementation_params(PKG, include_reference=False)
+
+
+def profile(impl: str, s: pl.Series, **params) -> dict:
+    """describe one Series; its result row as a dict."""
+    return run(load(impl), {"t": s.to_frame()}, **params).row(0, named=True)
+
+
+def ineligible_frame() -> pl.DataFrame:
+    cols = [pl.Series("obj", [object(), object()], dtype=pl.Object), pl.Series("nul", [None, None], dtype=pl.Null)]
+    if hasattr(pl, "UInt128"):
+        cols.append(pl.Series("u128", [1, 2], dtype=pl.UInt128))
+    return pl.DataFrame(cols)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Contract
+
+@pytest.mark.parametrize("impl", ALL)
+def test_contract(impl):
+    frames = {"mixed": describe_mixed(300), "empty": describe_mixed(50).clear(), "bad": ineligible_frame()}
+    cls = load(impl)
+    result = run(cls, frames)
+    assert_contract(cls, result, frames)
+    assert set(result.filter(pl.col("df_a") == "bad")["status"]) == {"ineligible"}
+    assert set(result.filter(pl.col("df_a") != "bad")["status"]) == {"computed"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Reference agreement
+
+@pytest.mark.parametrize("impl", OTHERS)
+def test_agrees_with_reference(impl):
+    frames = {"mixed": describe_mixed(2_000), "strings": stringified(describe_mixed(500)), "empty": describe_mixed(50).clear()}
+    cls = load(impl)
+    assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("impl", OTHERS)
+def test_agrees_with_reference_on_large_dataset(impl):
+    frames = {"large": pl.read_ipc(LARGE)}
+    cls = load(impl)
+    assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Known answers (the reference is included, so these are its oracle tests)
+
+@pytest.mark.parametrize("impl", ALL)
+def test_frequencies_entropy_and_top5(impl):
+    r = profile(impl, pl.Series("x", ["a", "a", "b", None]))
+    assert (r["n_rows"], r["n_null"], r["n_unique"], r["f1"], r["f2"]) == (4, 1, 2, 1, 1)
+    assert r["entropy"] == approx(1.5)
+    assert (r["top5_idx"], r["top5_count"]) == ([0, 2], [2, 1])
+    assert sum(r["capture_history"]) == 2
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_top5_ties_break_by_first_occurrence(impl):
+    r = profile(impl, pl.Series("x", [3, 1, 2, 1, 2, 3, 4, 5, 6]))
+    assert (r["top5_idx"], r["top5_count"]) == ([0, 1, 2, 6, 7], [2, 2, 2, 1, 1])
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_extremes_are_first_occurrences(impl):
+    r = profile(impl, pl.Series("x", [5, 1, 3, 1, 5]))
+    assert (r["argmin"], r["argmax"], r["min"], r["max"]) == (1, 0, "1", "5")
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_float_zero_and_nan_are_one_value_each(impl):
+    r = profile(impl, pl.Series("x", [0.0, -0.0, float("nan"), float("nan"), 1.5]))
+    assert (r["n_unique"], r["n_nan"], r["argmin"], r["argmax"], r["n_fractional"], r["max_frac_digits"]) == (3, 2, 0, 4, 1, 1)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_float_decimal_places_and_specials(impl):
+    r = profile(impl, pl.Series("x", [0.1, 1e-7, 1.5e20, 3.0, float("inf"), None]))
+    assert (r["max_frac_digits"], r["n_fractional"], r["n_inf"], r["n_nan"]) == (7, 2, 1, 0)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_f32_round_trip(impl):
+    assert profile(impl, pl.Series("x", [0.1]))["n_f32_inexact"] == 1
+    assert profile(impl, pl.Series("x", [0.5, 3.0, None]))["n_f32_inexact"] == 0
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_float32_uses_its_own_shortest_repr(impl):
+    r = profile(impl, pl.Series("x", [0.1, 0.25], dtype=pl.Float32))
+    assert (r["max_frac_digits"], r["n_f32_inexact"]) == (2, None)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_non_float_columns_have_null_float_stats(impl):
+    r = profile(impl, pl.Series("x", [1, 2]))
+    assert all(r[k] is None for k in ("n_nan", "n_inf", "n_fractional", "max_frac_digits", "n_f32_inexact"))
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_string_and_list_lengths(impl):
+    s = profile(impl, pl.Series("x", ["ab", "", None, "héllo"]))
+    assert (s["min_len"], s["max_len"]) == (0, 6)  # UTF-8 bytes
+    lst = profile(impl, pl.Series("x", [[1, 2], [], None], dtype=pl.List(pl.Int64)))
+    assert (lst["min_len"], lst["max_len"]) == (0, 2)
+    assert profile(impl, pl.Series("x", [1, 2]))["min_len"] is None
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_enum_orders_by_category_and_categorical_by_string(impl):
+    e = profile(impl, pl.Series("x", ["a", "z", "a"], dtype=pl.Enum(["z", "a"])))
+    assert (e["argmin"], e["argmax"]) == (1, 0)
+    c = profile(impl, pl.Series("x", ["z", "a", "z"], dtype=pl.Categorical))
+    assert (c["argmin"], c["argmax"]) == (1, 0)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_equal_struct_values_count_once(impl):
+    r = profile(impl, pl.Series("x", [{"a": 1, "b": "x"}, {"a": 1, "b": "x"}, {"a": 1, "b": None}, None]))
+    assert (r["n_unique"], r["n_null"]) == (2, 1)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_list_whole_and_inner_values(impl):
+    r = profile(impl, pl.Series("x", [[1, None], None, [], [3, 1]], dtype=pl.List(pl.Int64)))
+    assert (r["n_rows"], r["n_null"], r["n_unique"], r["argmin"], r["argmax"]) == (4, 1, 3, 2, 3)
+    assert (r["inner_n_values"], r["inner_n_null"], r["inner_n_unique"]) == (4, 1, 2)  # [1, None, 3, 1]
+    assert (r["inner_argmin"], r["inner_argmax"], r["inner_f1"], r["inner_f2"]) == (0, 2, 1, 1)
+    assert (r["inner_top5_idx"], r["inner_top5_count"]) == ([0, 2], [2, 1])
+    assert (r["inner_min"], r["inner_max"]) == ("1", "3")
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_n_midnight_uses_local_time(impl):
+    s = pl.Series(
+        "x", [datetime(2024, 3, 31, 0, 0), datetime(2024, 3, 31, 12, 0), datetime(2024, 7, 1, 0, 0), datetime(2024, 10, 28, 0, 0, 0, 1)]
+    ).dt.replace_time_zone("Europe/London")
+    # local midnight, noon, local midnight in BST (23:00 UTC — a UTC check would miss it), 1 µs past midnight
+    assert profile(impl, s)["n_midnight"] == 2
+    assert profile(impl, pl.Series("x", [datetime(2024, 1, 1), datetime(2024, 1, 1, 1)]))["n_midnight"] == 1
+    assert profile(impl, pl.Series("x", [1]))["n_midnight"] is None
+
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_zero_row_and_all_null_columns(impl):
+    z = profile(impl, pl.Series("x", [], dtype=pl.Int32))
+    assert (z["n_rows"], z["n_unique"], z["argmin"], z["top5_idx"], z["capture_history"]) == (0, 0, None, [], [0] * 7)
+    assert math.isnan(z["entropy"]) and z["size_bytes"] == 0 and z["min_len"] is None
+    a = profile(impl, pl.Series("x", [None, None], dtype=pl.String))
+    assert (a["n_unique"], a["entropy"], a["argmin"]) == (0, 0.0, None)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_capture_history(impl):
+    everywhere = profile(impl, pl.Series("x", np.repeat(np.arange(10), 1_000)))
+    assert everywhere["capture_history"] == [0, 0, 0, 0, 0, 0, 10]
+    rng = np.random.default_rng(7)
+    r = profile(impl, pl.Series("x", rng.integers(0, 5_000, 20_000)))
+    assert sum(r["capture_history"]) == r["n_unique"]
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_sizes_through_the_technique(impl):
+    r = profile(impl, pl.Series("x", np.arange(1_000, dtype=np.int32)))
+    assert (r["size_bytes"], r["size_polars_bytes"]) == (4_000, 4_000)
+    assert r["size_zstd_bytes"] == approx(1_912, rel=0.01)
+    assert profile(impl, pl.Series("x", [None if i % 3 == 0 else i for i in range(1_000)], dtype=pl.Int32))["size_bytes"] == 4_128
