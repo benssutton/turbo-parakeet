@@ -68,6 +68,7 @@ pub(crate) enum Method {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Estimate {
     pub est_cardinality: f64,
+    #[allow(dead_code)] // unused by recommend.rs; kept for parity with the Python estimators
     pub est_low: Option<f64>,
     pub est_high: Option<f64>,
     pub method: Method,

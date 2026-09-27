@@ -494,7 +494,6 @@ pub(crate) struct Candidate {
 
 /// One level of a column: the column, or a list's inner values.
 pub(crate) struct Level<'a> {
-    pub column: &'a str,
     /// Polars dtype of these values.
     pub dtype: &'a PT,
     /// The values in Arrow's classic layout (CompatLevel::oldest).
@@ -1098,8 +1097,9 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
 /// Dictionary/Run/Union arrays whose nullability can live in a child array; every array
 /// this module builds keeps its own physical buffer, but checking logical nulls
 /// throughout keeps that assumption from becoming a silent correctness trap.
-fn logical_is_null(a: &ArrayRef, i: usize) -> bool {
-    a.logical_nulls().is_some_and(|n| n.is_null(i))
+/// `nulls` is the array's `logical_nulls()`, computed once per array, not per row.
+fn logical_is_null(nulls: Option<&NullBuffer>, i: usize) -> bool {
+    nulls.is_some_and(|n| n.is_null(i))
 }
 
 /// Row-by-row check that `recast` holds the original values (Spec B §5.4 step 3).
@@ -1118,7 +1118,8 @@ pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<(), S
         let non_null = src.len() - src.logical_null_count();
         return (non_null == 0).then_some(()).ok_or_else(|| format!("{non_null} non-null source value(s)"));
     }
-    if let Some(i) = (0..src.len()).find(|&i| logical_is_null(recast, i) != logical_is_null(src, i)) {
+    let (recast_nulls, src_nulls) = (recast.logical_nulls(), src.logical_nulls());
+    if let Some(i) = (0..src.len()).find(|&i| logical_is_null(recast_nulls.as_ref(), i) != logical_is_null(src_nulls.as_ref(), i)) {
         return Err(format!("row {i}: null mismatch"));
     }
     match t {
@@ -1153,6 +1154,403 @@ pub(crate) fn lossy(t: &Target, lvl: &Level, recast: &ArrayRef) -> bool {
             .unwrap_or(false),
         _ => false,
     }
+}
+
+// ── choosing (Spec B §4.1, §4.4, §5.4) ──────────────────────────────────────
+
+use crate::describe::{assemble, describe_one, fields, Described, Row};
+use crate::shared::to_arrow_rs;
+use crate::sizes::{ipc_body_bytes, sizes, Sizes, SIZE_FIELDS};
+use arrow_array::{FixedSizeListArray, LargeListArray, ListArray, UInt64Array};
+use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use polars::prelude::{
+    polars_err, AnyValue, CompatLevel, Field as PField, Float64Chunked, IntoSeries, NewChunkedArray, PolarsResult, Series, StringChunked,
+    StructChunked, UInt64Chunked,
+};
+use pyo3_polars::derive::polars_expr;
+use rayon::prelude::*;
+
+pub(crate) struct Chosen {
+    pub target: Target,
+    pub rank: Rank,
+    pub array: ArrayRef,
+    pub lossy: bool,
+    pub predicted: u64,
+    pub projected: f64,
+    pub candidates: Vec<Candidate>,
+}
+
+/// Candidates in the order tried: rejected last, then smallest projected size, then rank.
+fn order(c: &mut [Candidate]) {
+    c.sort_by(|a, b| {
+        (a.outcome == Outcome::Rejected)
+            .cmp(&(b.outcome == Outcome::Rejected))
+            .then(a.projected.total_cmp(&b.projected))
+            .then(a.rank.cmp(&b.rank))
+    });
+}
+
+/// Tries the candidates in order; the first success is chosen, failures keep their reason.
+fn first_success(mut cands: Vec<Candidate>, mut attempt: impl FnMut(&Target) -> Result<ArrayRef, String>) -> (usize, ArrayRef, Vec<Candidate>) {
+    order(&mut cands);
+    for i in 0..cands.len() {
+        if cands[i].outcome == Outcome::Rejected {
+            continue;
+        }
+        match attempt(&cands[i].target) {
+            Ok(a) => {
+                cands[i].outcome = Outcome::Chosen;
+                return (i, a, cands);
+            }
+            Err(reason) => {
+                cands[i].outcome = Outcome::Failed;
+                cands[i].reason = Some(reason);
+            }
+        }
+    }
+    unreachable!("the original type is always a candidate and cannot fail")
+}
+
+fn chosen_from(i: usize, array: ArrayRef, cands: Vec<Candidate>, lossy: bool) -> Chosen {
+    let c = &cands[i];
+    Chosen { target: c.target.clone(), rank: c.rank, lossy, predicted: c.predicted, projected: c.projected, array, candidates: cands }
+}
+
+pub(crate) fn choose(lvl: &Level, params: &Params) -> Result<Chosen, String> {
+    let (i, array, cands) = first_success(candidates(lvl, params)?, |t| {
+        let a = cast_to(t, lvl)?;
+        verify(t, lvl, &a)?;
+        Ok(a)
+    });
+    let lossy = lossy(&cands[i].target, lvl, &array);
+    Ok(chosen_from(i, array, cands, lossy))
+}
+
+fn choose_original(lvl: &Level) -> Chosen {
+    let mut r = Rules { lvl, shape: lvl.shape(), out: Vec::new() };
+    r.original();
+    let (i, array, cands) = first_success(r.out, |_| Ok(lvl.values.clone()));
+    chosen_from(i, array, cands, false)
+}
+
+/// Per row of a List/Array column: (start, len) in its child, or None for a null
+/// list; the child sliced to the referenced range; the fixed width (0 for List).
+fn list_parts(values: &ArrayRef) -> (Vec<Option<(usize, usize)>>, ArrayRef, i32) {
+    match values.data_type() {
+        AT::LargeList(_) => {
+            let l = values.as_list::<i64>();
+            let o = l.value_offsets();
+            let first = o[0] as usize;
+            let rows = (0..l.len()).map(|i| l.is_valid(i).then(|| (o[i] as usize - first, (o[i + 1] - o[i]) as usize))).collect();
+            (rows, l.values().slice(first, o[l.len()] as usize - first), 0)
+        }
+        AT::FixedSizeList(_, w) => {
+            let f = values.as_fixed_size_list();
+            let w = *w as usize;
+            let first = f.value_offset(0) as usize; // non-zero when the array is a slice
+            let rows = (0..f.len()).map(|i| f.is_valid(i).then(|| (i * w, w))).collect();
+            (rows, f.values().slice(first, f.len() * w), w as i32)
+        }
+        t => unreachable!("not a list: {t}"),
+    }
+}
+
+/// A list column rebuilt around its recast inner values.
+fn wrap(t: &Target, values: &ArrayRef, rows: &[Option<(usize, usize)>], inner: &ArrayRef) -> Result<ArrayRef, String> {
+    let field = || Arc::new(AField::new("item", inner.data_type().clone(), true));
+    let nulls = values.logical_nulls();
+    match t {
+        Target::Original(_) => Ok(values.clone()),
+        Target::Scalar(_) => {
+            let idx = UInt64Array::from(rows.iter().map(|r| r.map(|(start, _)| start as u64)).collect::<Vec<_>>());
+            arrow_select::take::take(inner.as_ref(), &idx, None).map_err(|e| e.to_string())
+        }
+        Target::List(_) => {
+            let mut offsets = vec![0i32];
+            for r in rows {
+                let len = i32::try_from(r.map_or(0, |(_, len)| len)).map_err(|e| e.to_string())?;
+                offsets.push(offsets.last().unwrap() + len);
+            }
+            ListArray::try_new(field(), OffsetBuffer::new(ScalarBuffer::from(offsets)), inner.clone(), nulls)
+                .map(|a| Arc::new(a) as ArrayRef)
+                .map_err(|e| e.to_string())
+        }
+        Target::FixedList(_, w) => {
+            FixedSizeListArray::try_new(field(), *w, inner.clone(), nulls).map(|a| Arc::new(a) as ArrayRef).map_err(|e| e.to_string())
+        }
+        t => Err(format!("not a list target: {t:?}")),
+    }
+}
+
+fn candidate(target: Target, rank: Rank, rule: &str, evidence: String, predicted: f64, projected: f64) -> Candidate {
+    Candidate { target, rank, rule: rule.into(), evidence, predicted: predicted as u64, projected, outcome: Outcome::NotTried, reason: None }
+}
+
+/// Lists: choose the inner type first, then wrap it — as a scalar when every list
+/// holds one item, else as a List with 32-bit offsets (Array keeps its width).
+fn choose_list(lvl: &Level, inner: &Level, params: &Params) -> Result<Chosen, String> {
+    let (rows, _, width) = list_parts(&lvl.values);
+    let ic = choose(inner, params)?;
+    let (n, nulls, r) = (lvl.n_rows() as f64, lvl.n_null() as f64, lvl.r);
+    let inner_t = ic.target.clone();
+    let mut outer = Vec::new();
+    let nested = matches!(inner_t, Target::Original(_)) && matches!(inner.dtype, PT::List(_) | PT::Array(..) | PT::Struct(_));
+    let single = lvl.p.range.min_len == Some(1) && lvl.p.range.max_len == Some(1);
+    if single && !(lvl.n_null() > 0 && inner.n_null() > 0) && !nested {
+        let shape = Shape { n, nulls: nulls + inner.n_null() as f64, ..inner.shape() };
+        let (c, _) = inner.cardinality();
+        let t = inner_t.arrow_type();
+        outer.push(candidate(
+            Target::Scalar(Box::new(inner_t.clone())),
+            ic.rank,
+            "list→scalar",
+            format!("min_len=1 max_len=1 n_null={} inner_n_null={}", lvl.n_null(), inner.n_null()),
+            body_size(&t, &shape),
+            body_size(&t, &shape.project(r, c)),
+        ));
+    }
+    if width == 0 {
+        if inner.n_rows() < 1 << 31 {
+            outer.push(candidate(
+                Target::List(Box::new(inner_t.clone())),
+                Rank::List,
+                "large_list→list",
+                format!("inner_n_values={}", inner.n_rows()),
+                validity(n, nulls) + pad(4.0 * (n + 1.0)) + ic.predicted as f64,
+                validity(n * r, nulls * r) + pad(4.0 * (n * r + 1.0)) + ic.projected,
+            ));
+        }
+    } else {
+        outer.push(candidate(
+            Target::FixedList(Box::new(inner_t.clone()), width),
+            Rank::List,
+            "array→array",
+            format!("width={width}"),
+            validity(n, nulls) + ic.predicted as f64,
+            validity(n * r, nulls * r) + ic.projected,
+        ));
+    }
+    let mut rules = Rules { lvl, shape: lvl.shape(), out: outer };
+    rules.original();
+    let (i, array, cands) = first_success(rules.out, |t| wrap(t, &lvl.values, &rows, &ic.array));
+    let lossy = !matches!(cands[i].target, Target::Original(_)) && ic.lossy;
+    let mut chosen = chosen_from(i, array, cands, lossy);
+    chosen.candidates.extend(ic.candidates);
+    Ok(chosen)
+}
+
+// ── Polars layout of the result (Spec B §5.5) ───────────────────────────────
+
+/// `a` converted to the Arrow layout Polars exports for it (`polars_layout`),
+/// recursing through lists and structs; `key` is a dictionary's Polars key.
+fn to_polars_layout(a: &ArrayRef, key: &AT) -> Result<ArrayRef, String> {
+    let item = |c: &ArrayRef| Arc::new(AField::new("item", c.data_type().clone(), true));
+    match a.data_type() {
+        AT::Dictionary(..) => {
+            let keyed = arrow_cast(a.as_ref(), &AT::Dictionary(Box::new(key.clone()), Box::new(AT::Utf8)))?;
+            let d = keyed.as_any_dictionary();
+            Ok(d.with_values(arrow_cast(d.values().as_ref(), &AT::Utf8View)?))
+        }
+        AT::List(f) | AT::LargeList(f) => {
+            let large = arrow_cast(a.as_ref(), &AT::LargeList(f.clone()))?;
+            let l = large.as_list::<i64>();
+            let child = to_polars_layout(l.values(), key)?;
+            LargeListArray::try_new(item(&child), l.offsets().clone(), child, l.nulls().cloned())
+                .map(|x| Arc::new(x) as ArrayRef)
+                .map_err(|e| e.to_string())
+        }
+        AT::FixedSizeList(_, w) => {
+            let f = a.as_fixed_size_list();
+            let child = to_polars_layout(f.values(), key)?;
+            FixedSizeListArray::try_new(item(&child), *w, child, f.nulls().cloned()).map(|x| Arc::new(x) as ArrayRef).map_err(|e| e.to_string())
+        }
+        AT::Struct(fields) => {
+            let s = a.as_struct();
+            let cols = s.columns().iter().map(|c| to_polars_layout(c, key)).collect::<Result<Vec<_>, _>>()?;
+            let fields: Fields = fields.iter().zip(&cols).map(|(f, c)| Arc::new(AField::new(f.name(), c.data_type().clone(), f.is_nullable()))).collect();
+            StructArray::try_new(fields, cols, s.nulls().cloned()).map(|x| Arc::new(x) as ArrayRef).map_err(|e| e.to_string())
+        }
+        t => arrow_cast(a.as_ref(), &polars_layout(t, key)),
+    }
+}
+
+/// A dictionary's values (the Enum categories), looking through one list level.
+fn dictionary_values(a: &ArrayRef) -> Option<Vec<String>> {
+    match a.data_type() {
+        AT::Dictionary(..) => {
+            let v = arrow_cast(a.as_any_dictionary().values().as_ref(), &AT::Utf8).ok()?;
+            Some(v.as_string::<i32>().iter().map(|x| x.unwrap_or_default().to_string()).collect())
+        }
+        AT::List(_) => dictionary_values(a.as_list::<i32>().values()),
+        AT::FixedSizeList(..) => dictionary_values(a.as_fixed_size_list().values()),
+        _ => None,
+    }
+}
+
+// ── one column ───────────────────────────────────────────────────────────────
+
+pub(crate) struct Rec {
+    pub nullable: bool,
+    pub arrow_type: String,
+    pub arrow_size: u64,
+    pub arrow_zstd: u64,
+    /// None when the original type is kept: Python fills in `str(dtype)`.
+    pub polars_type: Option<String>,
+    pub polars_size: u64,
+    pub polars_zstd: u64,
+    pub lossy: bool,
+    pub candidates: Vec<Candidate>,
+}
+
+/// The recommendation for one column; None when its sizes are null (nested Int128).
+pub(crate) fn recommend(s: &Series, d: &Described, sz: &Sizes, params: &Params) -> PolarsResult<Option<Rec>> {
+    let (Some(size_bytes), Some(polars_bytes), Some(polars_zstd)) = (sz[0], sz[2], sz[3]) else { return Ok(None) };
+    let name = s.name().as_str();
+    let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
+    let values = to_arrow_rs(s, CompatLevel::oldest())?;
+    let q = params.population_rows.map(|p| if p == d.n_rows { 1.0 } else { d.n_rows as f64 / p as f64 });
+    let r = match params.population_rows {
+        Some(p) if d.n_rows > 0 => p as f64 / d.n_rows as f64,
+        _ => 1.0,
+    };
+    let outer = Level {
+        dtype: s.dtype(), values: values.clone(), p: &d.outer, n_midnight: d.n_midnight, size_bytes,
+        est: level_estimate(&d.outer, d.n_rows - d.n_null, q), r, prefix: "",
+    };
+    let chosen = match &d.inner {
+        Some(inner) if matches!(s.dtype(), PT::List(_) | PT::Array(..)) => {
+            let (_, child, _) = list_parts(&values);
+            if child.len() == inner.values.len() {
+                let inner_lvl = Level {
+                    dtype: inner.values.dtype(), size_bytes: ipc_body_bytes(child.as_ref(), None)?, values: child,
+                    p: &inner.profile, n_midnight: None,
+                    est: level_estimate(&inner.profile, (inner.values.len() - inner.values.null_count()) as u64, q), r, prefix: "inner: ",
+                };
+                choose_list(&outer, &inner_lvl, params).map_err(err)?
+            } else {
+                choose_original(&outer) // null lists hold values: keep the column as it is
+            }
+        }
+        _ => choose(&outer, params).map_err(err)?,
+    };
+    let t = chosen.array.data_type().clone();
+    let (polars_type, polars_size, polars_zstd) = if matches!(chosen.target, Target::Original(_)) {
+        (None, polars_bytes, polars_zstd)
+    } else {
+        let key = chosen.target.polars_key().unwrap_or(AT::UInt32);
+        let layout = to_polars_layout(&chosen.array, &key).map_err(err)?;
+        let enum_values = if q == Some(1.0) { dictionary_values(&chosen.array) } else { None };
+        (
+            Some(pl_name(&t, name, enum_values.as_deref(), &key)),
+            ipc_body_bytes(layout.as_ref(), None)?,
+            ipc_body_bytes(layout.as_ref(), Some(params.zstd_level))?,
+        )
+    };
+    Ok(Some(Rec {
+        nullable: d.n_null > 0,
+        arrow_type: pa_name(&t),
+        arrow_size: ipc_body_bytes(chosen.array.as_ref(), None)?,
+        arrow_zstd: ipc_body_bytes(chosen.array.as_ref(), Some(params.zstd_level))?,
+        polars_type,
+        polars_size,
+        polars_zstd,
+        lossy: chosen.lossy,
+        candidates: chosen.candidates,
+    }))
+}
+
+// ── plugin entry ─────────────────────────────────────────────────────────────
+
+fn candidate_type() -> PT {
+    PT::Struct(vec![
+        PField::new("arrow_type".into(), PT::String),
+        PField::new("rule".into(), PT::String),
+        PField::new("evidence".into(), PT::String),
+        PField::new("predicted_bytes".into(), PT::UInt64),
+        PField::new("projected_population_bytes".into(), PT::Float64),
+        PField::new("outcome".into(), PT::String),
+        PField::new("reason".into(), PT::String),
+    ])
+}
+
+fn rec_fields() -> Vec<(String, PT)> {
+    [
+        ("rec_nullable", PT::Boolean),
+        ("rec_arrow_type", PT::String),
+        ("rec_arrow_size_bytes", PT::UInt64),
+        ("rec_arrow_size_zstd_bytes", PT::UInt64),
+        ("rec_polars_type", PT::String),
+        ("rec_polars_size_bytes", PT::UInt64),
+        ("rec_polars_size_zstd_bytes", PT::UInt64),
+        ("rec_lossy_formatting", PT::Boolean),
+        ("rec_candidates", PT::List(Box::new(candidate_type()))),
+    ]
+    .into_iter()
+    .map(|(n, d)| (n.to_string(), d))
+    .collect()
+}
+
+fn output_fields() -> Vec<(String, PT)> {
+    let mut f = fields();
+    f.extend(SIZE_FIELDS.iter().map(|n| (n.to_string(), PT::UInt64)));
+    f.extend(rec_fields());
+    f
+}
+
+fn recommend_output_type(_input_fields: &[PField]) -> PolarsResult<PField> {
+    let fields = output_fields().into_iter().map(|(n, d)| PField::new(n.into(), d)).collect();
+    Ok(PField::new("recommend".into(), PT::Struct(fields)))
+}
+
+fn candidates_series(c: &[Candidate]) -> Series {
+    let text = |name: &str, v: Vec<Option<String>>| StringChunked::from_iter_options(name.into(), v.into_iter()).into_series();
+    let cols = [
+        text("arrow_type", c.iter().map(|x| Some(pa_name(&x.target.arrow_type()))).collect()),
+        text("rule", c.iter().map(|x| Some(x.rule.clone())).collect()),
+        text("evidence", c.iter().map(|x| Some(x.evidence.clone())).collect()),
+        UInt64Chunked::from_iter_values("predicted_bytes".into(), c.iter().map(|x| x.predicted)).into_series(),
+        Float64Chunked::from_iter_values("projected_population_bytes".into(), c.iter().map(|x| x.projected)).into_series(),
+        text("outcome", c.iter().map(|x| Some(x.outcome.name().to_string())).collect()),
+        text("reason", c.iter().map(|x| x.reason.clone()).collect()),
+    ];
+    StructChunked::from_series("candidate".into(), c.len(), cols.iter()).expect("equal-length fields").into_series()
+}
+
+fn rec_row(rec: Option<&Rec>) -> Row {
+    let Some(r) = rec else { return vec![AnyValue::Null; rec_fields().len()] };
+    let text = |s: &str| AnyValue::StringOwned(s.into());
+    vec![
+        AnyValue::Boolean(r.nullable),
+        text(&r.arrow_type),
+        AnyValue::UInt64(r.arrow_size),
+        AnyValue::UInt64(r.arrow_zstd),
+        r.polars_type.as_deref().map_or(AnyValue::Null, text),
+        AnyValue::UInt64(r.polars_size),
+        AnyValue::UInt64(r.polars_zstd),
+        AnyValue::Boolean(r.lossy),
+        AnyValue::List(candidates_series(&r.candidates)),
+    ]
+}
+
+pub(crate) fn describe_and_recommend_impl(inputs: &[Series], params: &Params) -> PolarsResult<Series> {
+    let rows: Vec<Row> = inputs
+        .par_iter()
+        .map(|s| {
+            let d = describe_one(s, params.seed)?;
+            let sz = sizes(s, params.zstd_level)?;
+            let rec = recommend(s, &d, &sz, params)?;
+            let mut row = d.row();
+            row.extend(sz.iter().map(|v| v.map_or(AnyValue::Null, AnyValue::UInt64)));
+            row.extend(rec_row(rec.as_ref()));
+            Ok(row)
+        })
+        .collect::<PolarsResult<_>>()?;
+    assemble("recommend", &output_fields(), &rows)
+}
+
+#[polars_expr(output_type_func=recommend_output_type)]
+fn describe_and_recommend(inputs: &[Series], kwargs: Params) -> PolarsResult<Series> {
+    describe_and_recommend_impl(inputs, &kwargs)
 }
 
 #[cfg(test)]
@@ -1253,7 +1651,7 @@ mod tests {
     fn types(s: Series, p: &Params) -> Vec<(String, Outcome)> {
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
-            column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
             n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, d.n_rows - d.n_null, None), r: 1.0, prefix: "",
         };
         candidates(&lvl, p).unwrap().iter().map(|c| (pa_name(&c.target.arrow_type()), c.outcome)).collect()
@@ -1316,7 +1714,7 @@ mod tests {
         let d = describe_one(&s, 0).unwrap();
         assert_eq!(d.outer.freq.n_unique, 3);
         let lvl = Level {
-            column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
             n_midnight: d.n_midnight, size_bytes: 0,
             est: Estimate {
                 est_cardinality: 1.0,
@@ -1380,7 +1778,7 @@ mod tests {
         for s in [Series::new("x".into(), &[None::<i64>, None]), Series::new("x".into(), &[None::<&str>, None])] {
             let d = describe_one(&s, 0).unwrap();
             let lvl = Level {
-                column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+                dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
                 n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 0, None), r: 1.0, prefix: "",
             };
             let recast = cast_to(&Target::Null, &lvl).unwrap();
@@ -1390,7 +1788,7 @@ mod tests {
         let s = Series::new("x".into(), &[Some(1i64), None]);
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
-            column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
             n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 1, None), r: 1.0, prefix: "",
         };
         let recast = cast_to(&Target::Null, &lvl).unwrap();
@@ -1453,10 +1851,102 @@ mod tests {
         let d = describe_one(&dummy, 0).unwrap();
         let dtype = PT::Datetime(PTimeUnit::Microseconds, None);
         let lvl = Level {
-            column: "x", dtype: &dtype, values: src, p: &d.outer,
+            dtype: &dtype, values: src, p: &d.outer,
             n_midnight: None, size_bytes: 0, est: level_estimate(&d.outer, 2, None), r: 1.0, prefix: "",
         };
         let target = Target::Fixed(AT::Timestamp(TimeUnit::Microsecond, Some("+05:00".into())));
         assert!(verify(&target, &lvl, &recast).is_err());
+    }
+
+    use crate::sizes::sizes;
+
+    fn rec(s: Series) -> Rec {
+        let d = describe_one(&s, 0).unwrap();
+        let sz = sizes(&s, 1).unwrap();
+        recommend(&s, &d, &sz, &params()).unwrap().unwrap()
+    }
+
+    fn chosen(r: &Rec) -> &Candidate {
+        r.candidates.iter().find(|c| c.outcome == Outcome::Chosen).unwrap()
+    }
+
+    #[test]
+    fn end_to_end_choices() {
+        assert_eq!(rec(Series::new("x".into(), &[0i64, 5, 127])).arrow_type, "uint8");
+        let price = rec(Series::new("x".into(), &[123.45f64, 99.99]));
+        assert_eq!((price.arrow_type.as_str(), price.polars_type.as_deref()), ("decimal32(5, 2)", Some("Decimal(precision=5, scale=2)")));
+        assert_eq!(rec(Series::new("x".into(), &["2024-01-05 10:00:00.120", "2024-01-06T11:00:00"])).arrow_type, "timestamp[ms]");
+        let kept = rec(Series::new("x".into(), &[0.1f64, f64::NAN]));
+        assert_eq!((kept.arrow_type.as_str(), kept.polars_type.clone()), ("double", None));
+    }
+
+    #[test]
+    fn failed_cast_falls_back() {
+        let r = rec(Series::new("x".into(), &["2300-01-01T00:00:00.123456789", "2024-01-05T10:00:00"]));
+        assert_eq!(r.arrow_type, "string");
+        assert!(r.candidates.iter().any(|c| c.outcome == Outcome::Failed && pa_name(&c.target.arrow_type()) == "timestamp[ns]"));
+    }
+
+    #[test]
+    fn single_item_lists_become_scalars() {
+        let s = Series::new("x".into(), [Some(Series::new("".into(), &[1i64])), Some(Series::new("".into(), &[2i64])), None]);
+        assert_eq!(rec(s).arrow_type, "uint8");
+        // Null lists and null items both occur: the column stays a list (Spec B §4.4).
+        let both = Series::new("x".into(), [Some(Series::new("".into(), &[Some(2i64)])), Some(Series::new("".into(), &[None::<i64>])), None]);
+        assert_eq!(rec(both).arrow_type, "list<item: uint8>");
+        // Inner values {1}: 0 ≤ min, max ≤ 1 → Boolean ties UInt8 in size and wins on rank (§4.1, §4.2).
+        let ones = Series::new("x".into(), [Some(Series::new("".into(), &[Some(1i64)])), Some(Series::new("".into(), &[None::<i64>])), None]);
+        assert_eq!(rec(ones).arrow_type, "list<item: bool>");
+    }
+
+    #[test]
+    fn predicted_equals_measured() {
+        let cases = [
+            Series::new("x".into(), &[Some(0i64), Some(5), None]),
+            Series::new("x".into(), &[123.45f64, 99.99]),
+            Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]),
+            Series::new("x".into(), &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"]),
+            Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None]),
+        ];
+        for s in cases {
+            let r = rec(s);
+            assert_eq!(chosen(&r).predicted, r.arrow_size, "{}", r.arrow_type);
+        }
+    }
+
+    #[test]
+    fn polars_types_of_results() {
+        let s = Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]);
+        let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
+        let exact = Params { population_rows: Some(6), ..params() };
+        let r = recommend(&s, &d, &sz, &exact).unwrap().unwrap();
+        assert_eq!(r.polars_type.as_deref(), Some("Enum(categories=['a', 'b'])"));
+        let many: Vec<&str> = (0..200).map(|i| if i % 2 == 0 { "alpha" } else { "beta" }).collect();
+        let r = rec(Series::new("x".into(), &many));
+        assert_eq!(r.polars_type.as_deref(), Some("Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8))"));
+        // List of dictionary strings: Polars layout is large_list<dictionary<string_view>>, sized without error.
+        let words = Series::new("x".into(), [Some(Series::new("".into(), &many)), None]);
+        let r = rec(words);
+        assert_eq!(r.polars_type.as_deref(), Some("List(Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8)))"));
+        assert!(r.polars_size > 0);
+    }
+
+    #[test]
+    fn plugin_output_matches_declared_schema() {
+        let nested_int128 = Series::new("n".into(), [Some(Series::new("".into(), &[1i128])), None]);
+        let inputs = [Series::new("a".into(), &[Some(0i64), Some(5), None]), Series::new("s".into(), &["x", "y", "x"]), nested_int128];
+        let out = describe_and_recommend_impl(&inputs, &params()).unwrap();
+        assert_eq!(out.dtype(), recommend_output_type(&[]).unwrap().dtype());
+        assert_eq!(out.len(), 3);
+        let ca = out.struct_().unwrap();
+        let fields = ca.fields_as_series();
+        let get = |n: &str| fields.iter().find(|f| f.name().as_str() == n).unwrap().clone();
+        let types = get("rec_arrow_type");
+        assert_eq!(types.str().unwrap().get(0), Some("uint8"));
+        assert_eq!(types.str().unwrap().get(2), None); // nested Int128: null recommendation
+        let cands = get("rec_candidates");
+        let first = cands.list().unwrap().get_as_series(0).unwrap();
+        assert!(first.len() >= 2);
+        assert!(cands.list().unwrap().get_as_series(2).is_none());
     }
 }
