@@ -56,18 +56,18 @@ fn validate_bit_array(bit_array: &[u8], m: usize) -> PolarsResult<()> {
 
 /// Kwargs struct for bloom_filter
 #[derive(Deserialize)]
-struct BloomFilterKwargs {
-    bit_array_bytes: Vec<u8>,
-    k: usize,
-    m: usize,
+pub(crate) struct BloomFilterKwargs {
+    pub(crate) bit_array_bytes: Vec<u8>,
+    pub(crate) k: usize,
+    pub(crate) m: usize,
 }
 
 /// Kwargs struct for membership / membership_ratio
 #[derive(Deserialize)]
-struct MembershipKwargs {
-    bit_array_bytes: Vec<u8>,
-    k: usize,
-    m: usize,
+pub(crate) struct MembershipKwargs {
+    pub(crate) bit_array_bytes: Vec<u8>,
+    pub(crate) k: usize,
+    pub(crate) m: usize,
 }
 
 /// Kwargs struct for membership_ratio_sample
@@ -79,7 +79,7 @@ struct MembershipRatioSampleKwargs {
     sample_frac: f64,
 }
 
-fn bloom_filter_impl(series: &Series, kwargs: BloomFilterKwargs) -> PolarsResult<Vec<u8>> {
+pub(crate) fn bloom_filter_impl(series: &Series, kwargs: BloomFilterKwargs) -> PolarsResult<Vec<u8>> {
     let enc = encode_series(series)?;
     let m = kwargs.m; // filter size in BITS
     let k = kwargs.k;
@@ -239,7 +239,7 @@ fn membership_ratio_output_type(_input_fields: &[Field]) -> PolarsResult<Field> 
 
 /// Multi-column batch impl: checks each input column independently.
 /// Returns a struct Series with one row per input column.
-fn membership_ratio_multi_impl(
+pub(crate) fn membership_ratio_multi_impl(
     inputs: &[Series],
     kwargs: &MembershipKwargs,
 ) -> PolarsResult<Series> {

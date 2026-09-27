@@ -2,6 +2,7 @@ mod bloomfilter;
 mod minhash;
 mod shared;
 mod arrow_io;
+mod api;
 mod entropy;
 mod chi_squared;
 mod contingency;

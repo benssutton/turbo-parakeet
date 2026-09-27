@@ -11,9 +11,8 @@ use crate::shared::encode_series;
 /// Parameters for LSH candidate finding
 #[derive(Deserialize, Debug)]
 pub(crate) struct LSHKwargs {
-    threshold: f64,
-    num_bands: usize,
-    rows_per_band: usize,
+    pub(crate) num_bands: usize,
+    pub(crate) rows_per_band: usize,
 }
 
 /// Find candidate pairs using Locality Sensitive Hashing (LSH).
@@ -29,7 +28,7 @@ pub(crate) struct LSHKwargs {
 ///
 /// # Arguments
 /// * `inputs` - Array containing: [qualified_names: Utf8, minhash_signatures: List[UInt32]]
-/// * `kwargs` - LSHKwargs containing threshold and band configuration
+/// * `kwargs` - LSHKwargs containing the band configuration
 ///
 /// # Returns
 /// A DataFrame with columns (col_a: Utf8, col_b: Utf8) containing candidate pairs
@@ -47,7 +46,6 @@ pub(crate) fn lsh_candidates_impl(inputs: &[Series], kwargs: &LSHKwargs) -> Pola
 
     let num_bands = kwargs.num_bands;
     let rows_per_band = kwargs.rows_per_band;
-    let _ = kwargs.threshold; // Available for future filtering if needed
 
     // Create buckets: (band_index, band_hash) -> list of row indices
     let mut buckets: HashMap<(usize, u64), Vec<usize>, FoldHashFast> =
@@ -149,8 +147,8 @@ fn lsh_candidates_output(_input_fields: &[Field]) -> PolarsResult<Field> {
 /// Parameters for batch MinHash computation
 #[derive(Deserialize, Debug)]
 pub(crate) struct MinHashKwargs {
-    df_name: String,
-    num_perm: usize,
+    pub(crate) df_name: String,
+    pub(crate) num_perm: usize,
 }
 
 /// Compute MinHash signatures for all columns passed as a struct series.
@@ -399,7 +397,6 @@ mod tests {
 
         // Step 3: Find LSH candidate pairs
         let lsh_kwargs = LSHKwargs {
-            threshold: 0.5,
             num_bands: 32,
             rows_per_band: 4,
         };
