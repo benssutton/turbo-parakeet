@@ -117,6 +117,9 @@ KNOWN = [
     pytest.param(pl.Series("x", [[1], [None], None]), {}, "list<item: bool>", "List(Boolean)", id="list_of_0_1_becomes_list_of_bool"),
     pytest.param(pl.Series("x", [[1, 2], [3]]), {}, "list<item: uint8>", "List(UInt8)", id="large_list_to_list"),
     pytest.param(pl.Series("x", [None, None], dtype=pl.String), {}, "null", "Null", id="all_null"),
+    pytest.param(pl.Series("x", [b"ab", None, b"cde"]), {}, "binary", "Binary", id="binary"),
+    pytest.param(pl.Series("x", [[1, 2], [3, 4], None], dtype=pl.Array(pl.Int64, 2)), {}, "fixed_size_list<item: uint8>[2]", "Array(UInt8, shape=(2,))", id="array_keeps_fixed_size"),
+    pytest.param(pl.Series("x", ["123", "45", "-7"]), {}, "int8", "Int8", id="string_integer"),
 ]
 
 
@@ -150,7 +153,21 @@ def test_failed_cast_falls_back_to_the_next_candidate():
     r = rec(pl.Series("x", ["2300-01-01T00:00:00.123456789", "2024-01-05T10:00:00"]))
     assert r["rec_arrow_type"] == "string"
     failed = by_type(r)["timestamp[ns]"]
-    assert failed["outcome"] == "failed" and failed["reason"]
+    assert failed["outcome"] == "failed"
+    assert "row 0" in failed["reason"] and "2300-01-01T00:00:00.123456789" in failed["reason"]
+
+
+NUMERIC = re.compile(r"(u?int\d+|decimal\d+|float|double|halffloat)$|decimal\d+\(")
+
+
+def test_leading_zero_string_has_no_numeric_candidate():
+    r = rec(pl.Series("x", ["007", "12"]))
+    assert not [c["arrow_type"] for c in r["rec_candidates"] if NUMERIC.match(c["arrow_type"])]
+
+
+def test_over_15_significant_digits_has_no_float_candidate():
+    r = rec(pl.Series("x", ["12345678901234567.8", "0.12"]))
+    assert not {"float", "double", "halffloat"} & set(by_type(r))
 
 
 def test_dictionary_polars_types():
