@@ -81,7 +81,7 @@ combinations) are unchanged.
 **Errors.** `api::Error` has two kinds:
 
 - `InvalidInput`: unknown column in `pairs` / `triplets`, a Bloom bit array of the
-  wrong length, UInt128, or an Arrow type no kernel accepts.
+  wrong length, Int128 or UInt128 (§4), or an Arrow type no kernel accepts.
 - `Compute`: any other kernel failure.
 
 `python.rs` raises them as `ValueError` and `RuntimeError` respectively. No test
@@ -94,8 +94,7 @@ depends on Polars' `ComputeError`.
   reverse of today's `to_arrow_rs` bridge, and it reuses that bridge's documented
   `unsafe` layout equivalence between the two crates' FFI structs. Field metadata
   passes through, so Polars' `_PL_CATEGORICAL2` and `_PL_ENUM_VALUES2` restore
-  Categorical and Enum. A field tagged `analytics.int128 = "true"` (§4) is restored
-  to an Int128 `Series`.
+  Categorical and Enum.
 - **Export:** a kernel's output columns (`Vec<Series>` / `DataFrame`) become one
   `RecordBatch`, using the newest compat level.
 
@@ -103,9 +102,10 @@ depends on Polars' `ComputeError`.
 
 - Accepts any object with `__arrow_c_stream__` (Polars DataFrame, pyarrow Table,
   RecordBatch, RecordBatchReader) through the Arrow PyCapsule interface.
-- Reads the stream with **polars-arrow's** importer, which understands Polars'
-  private formats, applies the Int128 relabelling (§4), and hands the result to
-  arrow-rs over the C Data Interface.
+- Before importing, it walks the stream's C schema read-only, top level and nested.
+  A field whose format is Polars' private `_pli128` (Int128) or `_plu128` (UInt128)
+  is rejected with `InvalidInput` naming the column (§4); a comment at the check
+  says why. The stream is then read with arrow-rs's `ArrowArrayStreamReader`.
 - A multi-batch stream is concatenated into one `RecordBatch`, so kernels see one
   chunk per column, as they do after `rechunk` today.
 - Releases the GIL (`py.allow_threads`) around each `api.rs` call. Rayon
@@ -123,6 +123,19 @@ the batch's arrow-rs arrays directly for their Arrow-native work, and the `Serie
 (from `arrow_io`) only where they already use Polars: Describe's profile and
 Polars-type naming.
 
+Int128 can no longer reach a kernel (§4), so its branches become dead code and are
+removed. The known sites are:
+
+- the `DataType::Int128` arms in `gcd.rs`, `describe.rs`, `shared.rs::encode_series`
+  and `recommend.rs`;
+- `sizes.rs::nests_int128`, with the null-sizes rule for nested Int128;
+- the "nested Int128 → null recommendation" path in `recommend.rs`;
+- the Int128 unit tests that exercise these arms.
+
+GCD's output stays `decimal128(38, 0)`: Decimal inputs still need 128 bits, and
+Arrow has no plain 128-bit integer. The "GCD over 38 digits → null" case was
+reachable only from Int128, so it goes too.
+
 ### 3.5 Python
 
 - **`Technique.add`** also accepts any object with `__arrow_c_stream__` or
@@ -135,6 +148,19 @@ Polars-type naming.
   today. Two callers change:
   - `similarity/rust.py`: `lsh_candidates` returns a frame, no longer a `pl.Expr`.
   - `membership/rust.py`: passes and receives `bytes` instead of `list[int]`.
+- **128-bit integers are ineligible in every technique.** `_dtypes.py` gains one
+  constant, `WIDE_INTEGERS = (pl.Int128, pl.UInt128)` (UInt128 only where the
+  installed Polars has it), whose comment says why they are rejected (§4). Every
+  eligibility rule excludes it, at any nesting depth:
+  - `_dtypes.ENCODABLE`, for entropy, ARI, Membership and Similarity;
+  - `chi_squared/base.CATEGORICAL`;
+  - `gcd/base.INTEGER_BACKED`;
+  - `describe/base._unsupported`, which Recommend inherits.
+
+  Because eligibility lives in the technique base, reference and Rust
+  implementations agree. The now-dead Int128 handling in the Python reference
+  implementations is removed: `describe/polars.py`, `describe/datafusion.py` and
+  `describe/_sizes.py`.
 
 ## 4. Polars-only dtypes
 
@@ -143,52 +169,55 @@ Verified with py-polars 1.41 and pyarrow 24.
 - **Categorical / Enum:** exported as `dictionary<uint32|uint8, string_view>` with
   `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` field metadata. Both round-trip exactly
   (§3.2). A plain Arrow dictionary without that metadata imports as Categorical.
-- **Int128:** Polars exports the private format `_pli128`, which arrow-rs and
-  pyarrow reject. `python.rs` reads it with polars-arrow and, at any nesting depth:
-  1. relabels it `decimal128(38, 0)` over the same 16-byte buffers (zero-copy);
-     precision is only a label, so values beyond 38 digits are carried bitwise, as
-     `to_arrow_rs` does today;
-  2. tags the field `analytics.int128 = "true"`.
+- **Int128 and UInt128 are rejected.** Arrow has no 128-bit integer type. Polars
+  exports them with the private formats `_pli128` / `_plu128`, which arrow-rs,
+  pyarrow and every non-Polars consumer reject. Rejection happens in two places,
+  each with a comment giving this reason:
+  1. **Python eligibility** (§3.5): `WIDE_INTEGERS` columns, top level or nested,
+     are listed with status `ineligible` in every technique and never sent to Rust.
+  2. **The `python.rs` boundary** (§3.3): a read-only scan of the incoming C schema
+     raises `ValueError` naming the column. This guards direct callers of the
+     binding.
 
-  `arrow_io` restores tagged fields to Int128, so every kernel behaves exactly as
-  today. An untagged `decimal128(38, 0)` from any other caller stays Decimal(38, 0).
-  The tag is optional and documented; non-Polars callers never set it.
-
-  Rejected alternative: rewriting the format string inside the C schema struct. The
-  producer owns that pointer and frees it in its release callback, so the rewrite is
-  unsound.
-- **UInt128** (`_plu128`): `InvalidInput` → `ValueError`. The Python classes
-  already keep UInt128 away from the plugin (it is ineligible), so this only guards
-  the boundary.
-- **Outputs** never contain Int128 (`gcd` is `decimal128(38, 0)`), so results are
-  native Arrow at the FFI itself.
+  **Behaviour change:** Int128 columns were computed by GCD, chi², pairwise and
+  three-way entropy, ARI, Membership, Similarity, Describe and Recommend. They are
+  now `ineligible`, as UInt128 already was. Callers that need them can cast to
+  Decimal(38, 0) or Int64 first.
+- **Outputs** never contain a 128-bit integer (`gcd` is `decimal128(38, 0)`), so
+  results are native Arrow at the FFI itself.
 
 ## 5. Testing
 
-The existing suites are the regression oracle, with unchanged expectations: 193 Rust
-unit tests and 745 pytest. Kernel `*_impl` tests keep working because the kernels
-are untouched.
+The existing suites are the regression oracle: 193 Rust unit tests and 745 pytest.
+Expectations are unchanged except for Int128 cases, which now expect `ineligible`
+(in `test_gcd`, `test_describe`, `test_recommend`, `test_base`, and any `datagen`
+column feeding a contract test). The Rust unit tests for the removed Int128 arms are
+deleted. The remaining kernel `*_impl` tests keep working because the kernels are
+otherwise untouched.
 
 New tests:
 
 - **Rust `arrow_io`:** import/export round trip for every dtype in
-  `tests/data/large_dataset.arrow`; Categorical and Enum with metadata kept; Int128
-  including a value beyond 38 digits (tag restores it); nested Int128; zero-row and
-  zero-column batches.
-- **Rust `api`:** each error kind: unknown pair column, wrong-length Bloom array,
-  UInt128.
+  `tests/data/large_dataset.arrow`; Categorical and Enum with metadata kept;
+  zero-row and zero-column batches.
+- **Rust `api`:** each error kind: unknown pair column, wrong-length Bloom array.
 - **Python `tests/test_plugin.py`:**
   - for every technique package, the reference and Rust implementations return
     identical `result()` from a Polars DataFrame, a pyarrow Table and a pyarrow
     RecordBatch;
-  - `ValueError` / `RuntimeError` mapping;
-  - GCD known answer on an Int128 column holding a value beyond 38 digits.
+  - `ValueError` / `RuntimeError` mapping, including Int128 and UInt128 (top level
+    and nested in a List) passed straight to the binding → `ValueError` naming the
+    column;
+  - for every technique, an Int128 column and a UInt128 column are listed as
+    `ineligible`.
 
 ## 6. Done when
 
 - Rust and pytest suites pass, new tests included.
 - No `polars_expr`, `pyo3_polars`, `register_plugin_function` or `to_arrow_rs`
   remains.
+- No Int128 branch remains in the kernels; the only Int128 / UInt128 references
+  are the two rejection points (§4) and their tests.
 - `api.rs` signatures mention only arrow-rs and std types.
 - Benchmarks on `large_dataset.arrow`: every Rust implementation's median is
   within 10% of the pre-change run. The boundary is zero-copy, so equal or faster
@@ -197,4 +226,8 @@ New tests:
   - the Rust Plugin section describes the core / binding split;
   - the structure listing gains `api.rs`, `arrow_io.rs` and `python.rs`;
   - two follow-ups are closed: Bloom arrays as `list[int]`, and the dead LSH
-    `threshold`.
+    `threshold`;
+  - the technique descriptions list Int128 as ineligible (GCD's "GCD over 38 digits
+    → null" note goes);
+  - the Analytical Functions rule "use Decimal(38, 0) for 128-bit integers" still
+    applies to results.
