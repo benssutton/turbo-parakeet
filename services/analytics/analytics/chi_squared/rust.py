@@ -13,6 +13,6 @@ class ChiSquaredRust(ChiSquared):
         for frame, group in group_by_frame(combos).items():
             pairs = [(a, b) for (_, a), (_, b) in group]
             df = frames[frame].select(list(dict.fromkeys(c for p in pairs for c in p)))
-            out = _plugin.pairwise_chi_squared(df, pairs).unnest("pairwise_chi_squared")
+            out = _plugin.pairwise_chi_squared(df, pairs)
             parts.append(self.rows_from_plugin(frame, out))
         return pl.concat(parts)

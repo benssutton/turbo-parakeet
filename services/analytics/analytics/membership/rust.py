@@ -39,6 +39,6 @@ class BloomRust(BloomMembership):
             padded = pl.DataFrame(
                 [distinct[x].extend_constant(None, longest - distinct[x].len()).alias(f"q{i}") for i, x in enumerate(queries)]
             )
-            ratios = _plugin.membership_ratio(padded, bit_array_bytes=bits, k=k, m=m).unnest("membership_ratio")
+            ratios = _plugin.membership_ratio(padded, bits, k=k, m=m)
             contained.update(((x, y), r) for x, r in zip(queries, ratios["ratio_non_null"].to_list()))
         return self.membership_rows(frames, combos, {c: distinct[c].len() for c in columns}, contained)

@@ -63,15 +63,7 @@ class MinHashRust(Similarity):
         if signatures:
             sigs = pl.concat(signatures)
             if sigs.height > 1:
-                pairs = sigs.select(
-                    _plugin.lsh_candidates(
-                        pl.col("qualified_name"),
-                        pl.col("minhash"),
-                        threshold=self.lsh_threshold,
-                        num_bands=self.bands,
-                        rows_per_band=self.rows_per_band,
-                    ).alias("c")
-                ).unnest("c")
+                pairs = _plugin.lsh_candidates(sigs, num_bands=self.bands, rows_per_band=self.rows_per_band)
 
                 def parse(qualified: str):
                     i, column = qualified.split("|", 1)

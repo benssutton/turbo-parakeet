@@ -13,9 +13,9 @@ class PairwiseEntropyRust(PairwiseEntropy):
         parts = []
         for frame, group in group_by_frame(combos).items():
             df = frames[frame].select(list(dict.fromkeys(c for k in group for _, c in k)))
-            marginal = dict(_plugin.marginal_entropy(df).unnest("marginal_entropy").iter_rows())
+            marginal = dict(_plugin.marginal_entropy(df).iter_rows())
             joint = _plugin.pairwise_joint_entropy(df, [(a, b) for (_, a), (_, b) in group])
-            h_ab = {frozenset((a, b)): h for a, b, h in joint.unnest("pairwise_entropy").iter_rows()}
+            h_ab = {frozenset((a, b)): h for a, b, h in joint.iter_rows()}
             parts.append(
                 self.entropy_rows(
                     group,

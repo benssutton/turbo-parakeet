@@ -13,7 +13,7 @@ class ThreewayEntropyRust(ThreewayEntropy):
         for frame, group in group_by_frame(combos).items():
             df = frames[frame].select(list(dict.fromkeys(c for k in group for _, c in k)))
             triplets = [tuple(c for _, c in k) for k in group]
-            out = _plugin.threeway_joint_entropy(df, triplets).unnest("threeway_entropy")
+            out = _plugin.threeway_joint_entropy(df, triplets)
             h = {frozenset((a, b, c)): e for a, b, c, e in out.iter_rows()}
             parts.append(
                 self.metrics_frame(
