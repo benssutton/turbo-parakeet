@@ -2237,6 +2237,41 @@ mod tests {
         }
     }
 
+    /// The inner level's choice for a list column, as `recommend` makes it.
+    fn inner_chosen(s: &Series) -> Chosen {
+        let d = describe_one(s, 0).unwrap();
+        let inner = d.inner.as_ref().unwrap();
+        let (_, child, _) = list_parts(&classic_layout(s).unwrap().unwrap()).unwrap();
+        let lvl = Level {
+            dtype: inner.values.dtype(), size_bytes: ipc_body_bytes(child.as_ref(), None).unwrap(), values: child,
+            p: &inner.profile, n_midnight: None,
+            est: level_estimate(&inner.profile, (inner.values.len() - inner.values.null_count()) as u64, None), r: 1.0,
+            prefix: "inner: ", text: Default::default(),
+        };
+        choose(&lvl, &params()).unwrap()
+    }
+
+    #[test]
+    fn inner_predicted_equals_measured() {
+        let many: Vec<&str> = (0..200).map(|i| if i % 3 == 0 { "alpha" } else { "beta" }).collect();
+        let cases = [
+            Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None, Some(Series::new("".into(), &[300i64]))]),
+            Series::new("x".into(), [Some(Series::new("".into(), &[Some(1.5f64), None])), Some(Series::new("".into(), &[2.25f64]))]),
+            Series::new("x".into(), [Some(Series::new("".into(), &many)), None, Some(Series::new("".into(), &["gamma"]))]),
+            Series::new("x".into(), [Some(Series::new("".into(), &["1.50", "2.2"])), Some(Series::new("".into(), &["3"]))]),
+            Series::new("x".into(), [Some(Series::new("".into(), &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"])), None]),
+            Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None, Some(Series::new("".into(), &[5i64, 6]))])
+                .cast(&PT::Array(Box::new(PT::Int64), 2))
+                .unwrap(),
+            null_list_holding_values(vec![1, 2, 3, 4, 5], vec![0, 2, 4, 5], 1),
+        ];
+        for s in cases {
+            let c = inner_chosen(&s);
+            assert!(!matches!(c.target, Target::Original(_)), "{}", pa_name(c.array.data_type())); // a recast, not the measured original
+            assert_eq!(c.predicted, ipc_body_bytes(c.array.as_ref(), None).unwrap(), "{}", pa_name(c.array.data_type()));
+        }
+    }
+
     #[test]
     fn polars_types_of_results() {
         let s = Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]);

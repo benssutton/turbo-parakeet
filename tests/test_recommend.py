@@ -73,6 +73,8 @@ def test_population_rows_below_frame_rows_raise():
 # 3. Known answers
 
 LONDON = [datetime(2024, 1, 5), datetime(2024, 1, 6)]
+DICT8 = "dictionary<values=string, indices=uint8, ordered=0>"
+UNIQUE = [f"value-{i:03d}" for i in range(200)]
 OFFSETS = "struct<timestamp: timestamp[s, tz=UTC] not null, offset_minutes: int16 not null>"
 
 KNOWN = [
@@ -122,6 +124,13 @@ KNOWN = [
     pytest.param(pl.Series("x", [b"ab", None, b"cde"]), {}, "binary", "Binary", id="binary"),
     pytest.param(pl.Series("x", [[1, 2], [3, 4], None], dtype=pl.Array(pl.Int64, 2)), {}, "fixed_size_list<item: uint8>[2]", "Array(UInt8, shape=(2,))", id="array_keeps_fixed_size"),
     pytest.param(pl.Series("x", ["123", "45", "-7"]), {}, "int8", "Int8", id="string_integer"),
+    # Categorical / Enum sources are already dictionaries: step 2 narrows the key or drops the dictionary (§5.2).
+    # Categorical exports dictionary<uint32, large_string> (400 + 24 + 8 bytes); two values → UInt8 keys (104 + 16 + 8).
+    pytest.param(pl.Series("x", ["a", "b"] * 50, dtype=pl.Categorical), {}, DICT8, 'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))', id="categorical_narrows_key"),
+    # Enum keeps its dictionary with 32-bit value offsets (the original has 64-bit); exact cardinality → Enum.
+    pytest.param(pl.Series("x", ["a", "b"] * 50, dtype=pl.Enum(["a", "b"])), {"population_rows": 100}, DICT8, "Enum(categories=['a', 'b'])", id="enum_keeps_dictionary"),
+    # 200 singletons: Chao1 est_high ≈ 26,438 > categorical_threshold → dictionary rejected; Utf8 (2,608) beats the original (3,608).
+    pytest.param(pl.Series("x", UNIQUE, dtype=pl.Enum(UNIQUE)), {}, "string", "String", id="enum_of_singletons_drops_dictionary"),
 ]
 
 
@@ -214,8 +223,8 @@ def test_dictionary_polars_types():
         pytest.param(255, "uint8", id="255"),
         pytest.param(256, "uint8", id="256"),
         pytest.param(257, "uint16", id="257"),
-        pytest.param(65_536, "uint16", id="65536", marks=pytest.mark.slow),
-        pytest.param(65_537, "uint32", id="65537", marks=pytest.mark.slow),
+        pytest.param(65_536, "uint16", id="65536"),
+        pytest.param(65_537, "uint32", id="65537"),
     ],
 )
 def test_dictionary_key_widths(d, arrow_key):
