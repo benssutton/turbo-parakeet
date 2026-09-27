@@ -542,6 +542,84 @@ pub(crate) fn scan_iso(b: &[u8]) -> Option<Iso> {
     (end == b.len()).then_some(Iso::Time { frac, sig })
 }
 
+/// Components of a value in the scan_iso grammar: days since 1970-01-01 (None for
+/// a bare time), nanoseconds since midnight, offset minutes east of UTC.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct IsoValue {
+    pub days: Option<i64>,
+    pub nanos: i64,
+    pub offset_minutes: Option<i32>,
+}
+
+impl IsoValue {
+    /// Nanoseconds since the Unix epoch, UTC (a bare time counts from 1970-01-01).
+    pub(crate) fn epoch_ns(&self) -> i128 {
+        self.days.unwrap_or(0) as i128 * 86_400_000_000_000 + self.nanos as i128
+            - self.offset_minutes.unwrap_or(0) as i128 * 60_000_000_000
+    }
+}
+
+/// Days from 1970-01-01 to a proleptic Gregorian date (Hinnant's days_from_civil).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Exact components of an ISO value (validated by scan_iso first).
+pub(crate) fn parse_iso(b: &[u8]) -> Option<IsoValue> {
+    let kind = scan_iso(b)?;
+    let num = |i: usize| two(b, i).map(|v| v as i64);
+    let date_days = || Some(days_from_civil(num(0)? * 100 + num(2)?, num(5)?, num(8)?));
+    let (days, t) = match kind {
+        Iso::Date => return Some(IsoValue { days: date_days(), nanos: 0, offset_minutes: None }),
+        Iso::Time { .. } => (None, 0),
+        _ => (date_days(), 11),
+    };
+    let mut nanos = (num(t)? * 60 + num(t + 3)?) * 60 * 1_000_000_000;
+    let end = t + 5;
+    if b.get(end) == Some(&b':') {
+        nanos += num(end + 1)? * 1_000_000_000;
+        if b.get(end + 3) == Some(&b'.') {
+            let frac: Vec<u8> = b[end + 4..].iter().take_while(|c| c.is_ascii_digit()).copied().collect();
+            let f = frac.iter().fold(0i64, |a, &c| a * 10 + (c - b'0') as i64);
+            nanos += f * 10i64.pow(9 - frac.len() as u32);
+        }
+    }
+    let offset_minutes = match kind {
+        Iso::DateTimeTz { offset_minutes, .. } => Some(offset_minutes),
+        _ => None,
+    };
+    Some(IsoValue { days, nanos, offset_minutes })
+}
+
+/// Exact unscaled value of a numeric string (scan_numeric grammar) at `scale`:
+/// None when it needs more decimal places or more than 38 digits.
+pub(crate) fn parse_decimal(b: &[u8], scale: u32) -> Option<i128> {
+    scan_numeric(b)?;
+    let (neg, body) = match b.strip_prefix(b"-") {
+        Some(r) => (true, r),
+        None => (false, b),
+    };
+    let (int, frac) = match body.iter().position(|&c| c == b'.') {
+        Some(p) => (&body[..p], &body[p + 1..]),
+        None => (body, &b""[..]),
+    };
+    let frac = &frac[..frac.iter().rposition(|&c| c != b'0').map_or(0, |p| p + 1)];
+    if frac.len() > scale as usize {
+        return None;
+    }
+    let mut v: i128 = 0;
+    for &c in int.iter().chain(frac) {
+        v = v.checked_mul(10)?.checked_add((c - b'0') as i128)?;
+    }
+    v = v.checked_mul(10i128.checked_pow(scale - frac.len() as u32)?)?;
+    (v < 10i128.pow(38)).then_some(if neg { -v } else { v })
+}
+
 /// Group C accumulator over the non-null string values of one column.
 #[derive(Default)]
 pub(crate) struct StringStats {
@@ -1132,5 +1210,26 @@ mod tests {
         let floats = describe_one(&Series::new("y".into(), &[1.5f64]), 0).unwrap();
         assert_eq!(floats.row().len(), fields().len());
         assert!(floats.inner.is_none() && floats.outer.floats.is_some());
+    }
+
+    #[test]
+    fn exact_iso_components() {
+        assert_eq!(parse_iso(b"1970-01-02"), Some(IsoValue { days: Some(1), nanos: 0, offset_minutes: None }));
+        assert_eq!(parse_iso(b"2024-02-29").unwrap().days, Some(19_782));
+        let t = parse_iso(b"10:00:00.12").unwrap();
+        assert_eq!((t.days, t.nanos), (None, 36_000_120_000_000));
+        let z = parse_iso(b"1970-01-01T05:30+05:30").unwrap();
+        assert_eq!((z.offset_minutes, z.epoch_ns()), (Some(330), 0));
+        assert_eq!(parse_iso(b"1969-12-31 23:59:59.999999999").unwrap().epoch_ns(), -1);
+        assert_eq!(parse_iso(b"2023-02-29"), None);
+    }
+
+    #[test]
+    fn exact_decimals() {
+        assert_eq!(parse_decimal(b"007.50", 2), Some(750));
+        assert_eq!(parse_decimal(b"-1.5", 3), Some(-1500));
+        assert_eq!(parse_decimal(b"12", 0), Some(12));
+        assert_eq!(parse_decimal(b"1.25", 1), None); // needs 2 places
+        assert_eq!(parse_decimal(format!("1{}", "0".repeat(38)).as_bytes(), 0), None); // 39 digits
     }
 }
