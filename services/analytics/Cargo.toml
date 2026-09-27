@@ -43,7 +43,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"
 
 #Arrow-native core (recommend.rs, sizes.rs): arrow-rs, fed zero-copy through the C Data Interface
-arrow-array = { version = "60", features = ["ffi"] }
+arrow-array = { version = "60", features = ["ffi", "chrono-tz"] }
 arrow-buffer = "60"
 arrow-cast = "60"
 arrow-data = { version = "60", features = ["ffi"] }

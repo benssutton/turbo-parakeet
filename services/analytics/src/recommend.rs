@@ -836,6 +836,272 @@ pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>,
     Ok(r.out)
 }
 
+// ── cast and verify (Spec B §5.4) ───────────────────────────────────────────
+
+use crate::describe::{parse_decimal, parse_iso};
+use arrow_array::types::{Float32Type, Int16Type};
+use arrow_array::{
+    BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int16Array, StructArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray,
+};
+
+fn exact_div(ns: i128, u: &TimeUnit) -> Option<i64> {
+    let f = unit_ns(u);
+    (ns % f == 0).then(|| ns / f).and_then(|v| i64::try_from(v).ok())
+}
+
+fn time_array(u: TimeUnit, v: Vec<Option<i64>>) -> ArrayRef {
+    let narrow = || v.iter().map(|x| x.map(|x| x as i32)).collect::<Vec<_>>();
+    match u {
+        TimeUnit::Second => Arc::new(Time32SecondArray::from(narrow())),
+        TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from(narrow())),
+        TimeUnit::Microsecond => Arc::new(Time64MicrosecondArray::from(v)),
+        TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from(v)),
+    }
+}
+
+fn timestamp_array(u: TimeUnit, v: Vec<Option<i64>>, tz: Option<Arc<str>>) -> ArrayRef {
+    match u {
+        TimeUnit::Second => Arc::new(TimestampSecondArray::from(v).with_timezone_opt(tz)),
+        TimeUnit::Millisecond => Arc::new(TimestampMillisecondArray::from(v).with_timezone_opt(tz)),
+        TimeUnit::Microsecond => Arc::new(TimestampMicrosecondArray::from(v).with_timezone_opt(tz)),
+        TimeUnit::Nanosecond => Arc::new(TimestampNanosecondArray::from(v).with_timezone_opt(tz)),
+    }
+}
+
+fn decimal_array(v: Vec<Option<i128>>, scale: i8) -> Result<ArrayRef, String> {
+    Decimal128Array::from(v).with_precision_and_scale(38, scale).map(|a| Arc::new(a) as ArrayRef).map_err(|e| e.to_string())
+}
+
+/// `f` over every non-null text value; the first value it rejects fails the cast.
+fn parsed<T>(text: &LargeStringArray, f: impl Fn(&str) -> Option<T>) -> Result<Vec<Option<T>>, String> {
+    text.iter()
+        .enumerate()
+        .map(|(i, v)| v.map(|s| f(s).ok_or_else(|| format!("row {i}: {s:?} does not convert"))).transpose())
+        .collect()
+}
+
+/// A string column recast to `t`, built from describe.rs's exact parsers.
+pub(crate) fn from_text(t: &Target, text: &LargeStringArray) -> Result<ArrayRef, String> {
+    match t {
+        Target::Boolean | Target::BoolPair(..) => {
+            let (tt, ff) = match t {
+                Target::BoolPair(a, b) => (a.as_str(), b.as_str()),
+                _ => ("1", "0"),
+            };
+            let v = parsed(text, |s| {
+                let s = s.to_lowercase();
+                if s == tt { Some(true) } else if s == ff { Some(false) } else { None }
+            })?;
+            Ok(Arc::new(BooleanArray::from(v)))
+        }
+        Target::Fixed(to) => match to {
+            AT::Int8 | AT::Int16 | AT::Int32 | AT::Int64 | AT::UInt8 | AT::UInt16 | AT::UInt32 | AT::UInt64 => {
+                arrow_cast(decimal_array(parsed(text, |s| parse_decimal(s.as_bytes(), 0))?, 0)?.as_ref(), to)
+            }
+            AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s) => {
+                arrow_cast(decimal_array(parsed(text, |x| parse_decimal(x.as_bytes(), *s as u32))?, *s)?.as_ref(), to)
+            }
+            AT::Float32 => Ok(Arc::new(Float32Array::from(parsed(text, |s| s.parse::<f32>().ok())?))),
+            AT::Float64 => Ok(Arc::new(Float64Array::from(parsed(text, |s| s.parse::<f64>().ok())?))),
+            AT::Date32 => Ok(Arc::new(Date32Array::from(parsed(text, |s| {
+                let v = parse_iso(s.as_bytes())?;
+                (v.nanos == 0 && v.offset_minutes.is_none()).then_some(())?;
+                i32::try_from(v.days?).ok()
+            })?))),
+            AT::Time32(u) | AT::Time64(u) => Ok(time_array(*u, parsed(text, |s| exact_div(parse_iso(s.as_bytes())?.nanos as i128, u))?)),
+            AT::Timestamp(u, tz) => Ok(timestamp_array(*u, parsed(text, |s| exact_div(parse_iso(s.as_bytes())?.epoch_ns(), u))?, tz.clone())),
+            t => Err(format!("no string conversion to {}", pa_name(t))),
+        },
+        Target::TimestampWithOffset(u) => {
+            let parts = parsed(text, |s| {
+                let v = parse_iso(s.as_bytes())?;
+                Some((exact_div(v.epoch_ns(), u)?, i16::try_from(v.offset_minutes?).ok()?))
+            })?;
+            let ts = timestamp_array(*u, parts.iter().map(|p| Some(p.map_or(0, |p| p.0))).collect(), Some("UTC".into()));
+            let off: ArrayRef = Arc::new(Int16Array::from(parts.iter().map(|p| p.map_or(0, |p| p.1)).collect::<Vec<i16>>()));
+            let AT::Struct(fields) = timestamp_with_offset(*u) else { unreachable!() };
+            StructArray::try_new(fields, vec![ts, off], text.logical_nulls()).map(|a| Arc::new(a) as ArrayRef).map_err(|e| e.to_string())
+        }
+        Target::Dictionary(..) => arrow_cast(arrow_cast(text, &AT::Utf8)?.as_ref(), &t.arrow_type()),
+        Target::Plain(to) => arrow_cast(text, to),
+        t => Err(format!("no string conversion to {}", pa_name(&t.arrow_type()))),
+    }
+}
+
+/// Float → Decimal through the exact digits of each value's shortest round-trip
+/// representation (ryu), never multiply-and-round.
+pub(crate) fn float_to_decimal(src: &ArrayRef, to: &AT) -> Result<ArrayRef, String> {
+    let (AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s)) = to else { return Err("not a decimal".into()) };
+    let f32_src = src.data_type() == &AT::Float32;
+    let values = arrow_cast(src.as_ref(), &AT::Float64)?;
+    let mut buf = ryu::Buffer::new();
+    let unscaled: Vec<Option<i128>> = values
+        .as_primitive::<Float64Type>()
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            v.map(|x| {
+                let repr = if f32_src { buf.format_finite(x as f32).to_string() } else { buf.format_finite(x).to_string() };
+                decimal_from_repr(&repr, *s as u32).ok_or_else(|| format!("row {i}: {repr} does not fit scale {s}"))
+            })
+            .transpose()
+        })
+        .collect::<Result<_, _>>()?;
+    arrow_cast(decimal_array(unscaled, *s)?.as_ref(), to)
+}
+
+/// The column recast to `t` (lists are wrapped by `wrap`).
+pub(crate) fn cast_to(t: &Target, lvl: &Level) -> Result<ArrayRef, String> {
+    let src = &lvl.values;
+    match t {
+        Target::Original(_) => Ok(src.clone()),
+        Target::Null => Ok(arrow_array::new_null_array(&AT::Null, src.len())),
+        _ if is_text(lvl.dtype) => from_text(t, &text_of(src)?),
+        Target::Fixed(to @ (AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..))) if is_float(lvl.dtype) => float_to_decimal(src, to),
+        Target::Boolean | Target::Fixed(_) | Target::Plain(_) => arrow_cast(src.as_ref(), &t.arrow_type()),
+        t => Err(format!("no cast to {}", pa_name(&t.arrow_type()))),
+    }
+}
+
+fn render(a: &ArrayRef, i: usize) -> String {
+    arrow_cast(a.slice(i, 1).as_ref(), &AT::Utf8)
+        .ok()
+        .and_then(|s| {
+            let s = s.as_string::<i32>();
+            s.is_valid(0).then(|| s.value(0).to_string())
+        })
+        .unwrap_or_else(|| "null".into())
+}
+
+pub(crate) fn first_mismatch(a: &ArrayRef, b: &ArrayRef) -> Result<(), String> {
+    if a.to_data() == b.to_data() {
+        return Ok(());
+    }
+    let i = (0..a.len()).find(|&i| a.slice(i, 1).to_data() != b.slice(i, 1).to_data()).unwrap_or(0);
+    Err(format!("row {i}: {} round-trips to {}", render(a, i), render(b, i)))
+}
+
+/// Float sources: every recast value converts back to the original float (NaN = NaN,
+/// -0.0 = 0.0). Decimals come back through their text (correctly rounded parse).
+pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), String> {
+    let f32_src = src.data_type() == &AT::Float32;
+    let decimal = matches!(recast.data_type(), AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..));
+    let back: Vec<Option<f64>> = if decimal {
+        let t = arrow_cast(recast.as_ref(), &AT::Utf8)?;
+        t.as_string::<i32>()
+            .iter()
+            .map(|v| v.map(|s| if f32_src { s.parse::<f32>().map_or(f64::NAN, f64::from) } else { s.parse::<f64>().unwrap_or(f64::NAN) }))
+            .collect()
+    } else if f32_src {
+        arrow_cast(recast.as_ref(), &AT::Float32)?.as_primitive::<Float32Type>().iter().map(|v| v.map(f64::from)).collect()
+    } else {
+        arrow_cast(recast.as_ref(), &AT::Float64)?.as_primitive::<Float64Type>().iter().collect()
+    };
+    let orig = arrow_cast(src.as_ref(), &AT::Float64)?;
+    for (i, (a, b)) in orig.as_primitive::<Float64Type>().iter().zip(back).enumerate() {
+        if let (Some(a), Some(b)) = (a, b) {
+            if !(a == b || (a.is_nan() && b.is_nan())) {
+                return Err(format!("row {i}: {a} round-trips to {b}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// String sources: the recast values, rendered to text by arrow-cast, equal the
+/// original text by value (canonical digits; parse_iso components).
+pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef) -> Result<(), String> {
+    let bad = |i: usize, got: &str| Err(format!("row {i}: {:?} round-trips to {got:?}", text.value(i)));
+    let iso = |s: &str| parse_iso(s.as_bytes());
+    match t {
+        Target::Dictionary(..) | Target::Plain(_) => {
+            first_mismatch(&(Arc::new(text.clone()) as ArrayRef), &arrow_cast(recast.as_ref(), &AT::LargeUtf8)?)
+        }
+        Target::Boolean | Target::BoolPair(..) => {
+            let (tt, ff) = match t {
+                Target::BoolPair(a, b) => (a.as_str(), b.as_str()),
+                _ => ("1", "0"),
+            };
+            let b = recast.as_boolean();
+            for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
+                let want = if b.value(i) { tt } else { ff };
+                if text.value(i).to_lowercase() != want {
+                    return bad(i, want);
+                }
+            }
+            Ok(())
+        }
+        Target::TimestampWithOffset(_) => {
+            let s = recast.as_struct();
+            let back = arrow_cast(s.column(0).as_ref(), &AT::Utf8)?;
+            let (back, off) = (back.as_string::<i32>(), s.column(1).as_primitive::<Int16Type>());
+            for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
+                let (a, b) = (iso(text.value(i)), iso(back.value(i)));
+                let same = matches!((a, b), (Some(a), Some(b)) if a.epoch_ns() == b.epoch_ns() && a.offset_minutes == Some(off.value(i) as i32));
+                if !same {
+                    return bad(i, back.value(i));
+                }
+            }
+            Ok(())
+        }
+        Target::Fixed(to) => {
+            let back = arrow_cast(recast.as_ref(), &AT::Utf8)?;
+            let back = back.as_string::<i32>();
+            for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
+                let (a, b) = (text.value(i), back.value(i));
+                let same = match to {
+                    AT::Date32 | AT::Timestamp(..) => matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns()),
+                    AT::Time32(_) | AT::Time64(_) => matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.nanos == y.nanos),
+                    _ => canon(a) == canon(b),
+                };
+                if !same {
+                    return bad(i, b);
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Row-by-row check that `recast` holds the original values (Spec B §5.4 step 3).
+pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<(), String> {
+    if matches!(t, Target::Original(_)) {
+        return Ok(());
+    }
+    let src = &lvl.values;
+    if recast.len() != src.len() {
+        return Err(format!("length {} ≠ {}", recast.len(), src.len()));
+    }
+    if let Some(i) = (0..src.len()).find(|&i| recast.is_null(i) != src.is_null(i)) {
+        return Err(format!("row {i}: null mismatch"));
+    }
+    match t {
+        Target::Null => Ok(()),
+        _ if is_text(lvl.dtype) => verify_text(t, &text_of(src)?, recast),
+        _ if is_float(lvl.dtype) => verify_float(src, recast),
+        _ => first_mismatch(src, &arrow_cast(recast.as_ref(), src.data_type())?),
+    }
+}
+
+/// Some value's text changed although its value did not (Spec B §5.4).
+pub(crate) fn lossy(t: &Target, lvl: &Level, recast: &ArrayRef) -> bool {
+    match t {
+        Target::Original(_) | Target::Null | Target::Dictionary(..) | Target::Plain(_) => false,
+        _ if is_text(lvl.dtype) => match (text_of(&lvl.values), arrow_cast(recast.as_ref(), &AT::LargeUtf8)) {
+            (Ok(a), Ok(b)) => a.iter().zip(b.as_string::<i64>().iter()).any(|(x, y)| x != y),
+            _ => true, // no text rendering (timestamp_with_offset): the format necessarily changes
+        },
+        Target::Fixed(AT::Float32 | AT::Float64) => false,
+        _ if is_float(lvl.dtype) => arrow_cast(lvl.values.as_ref(), &AT::Float64)
+            .map(|f| f.as_primitive::<Float64Type>().iter().flatten().any(|x| x == 0.0 && x.is_sign_negative()))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,5 +1274,48 @@ mod tests {
             r: 1.0, prefix: "",
         };
         assert_eq!(lvl.cardinality(), (3.0, "est_high"));
+    }
+
+    use arrow_array::{Float64Array, Int64Array};
+
+    #[test]
+    fn floats_become_exact_decimals() {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![Some(0.1), Some(123.45), None]));
+        let d = float_to_decimal(&a, &decimal_type(5, 2)).unwrap();
+        let d = arrow_cast(d.as_ref(), &AT::Decimal128(38, 2)).unwrap();
+        let v = d.as_primitive::<Decimal128Type>();
+        assert_eq!((v.value(0), v.value(1), v.is_null(2)), (10, 12_345, true));
+        assert!(verify_float(&a, &arrow_cast(d.as_ref(), &decimal_type(5, 2)).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn timestamps_with_offsets_from_text() {
+        let text = LargeStringArray::from(vec![Some("2024-01-05T10:00+05:00"), None]);
+        let a = from_text(&Target::TimestampWithOffset(TimeUnit::Second), &text).unwrap();
+        let s = a.as_struct();
+        let ts = s.column(0).as_primitive::<arrow_array::types::TimestampSecondType>();
+        assert_eq!((ts.value(0), s.column(1).as_primitive::<arrow_array::types::Int16Type>().value(0)), (1_704_430_800, 300));
+        assert!(a.is_null(1));
+        assert!(verify_text(&Target::TimestampWithOffset(TimeUnit::Second), &text, &a).is_ok());
+    }
+
+    #[test]
+    fn verification_reports_the_first_mismatch() {
+        let a: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        let b: ArrayRef = Arc::new(Int64Array::from(vec![1, 9, 3]));
+        assert!(first_mismatch(&a, &b).unwrap_err().starts_with("row 1:"));
+        let text = LargeStringArray::from(vec!["2300-01-01T00:00:00.123456789"]);
+        assert!(from_text(&Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, None)), &text).is_err()); // beyond i64 ns
+    }
+
+    #[test]
+    fn timestamp_with_offset_struct_children_have_no_nulls() {
+        let text = LargeStringArray::from(vec![Some("2024-01-05T10:00+05:00"), None, Some("2024-01-06T00:00Z")]);
+        let a = from_text(&Target::TimestampWithOffset(TimeUnit::Second), &text).unwrap();
+        let s = a.as_struct();
+        assert_eq!(s.column(0).null_count(), 0);
+        assert_eq!(s.column(1).null_count(), 0);
+        let shape = Shape { n: 3.0, nulls: 1.0, ..Default::default() };
+        assert_eq!(ipc_body_bytes(a.as_ref(), None).unwrap() as f64, body_size(&timestamp_with_offset(TimeUnit::Second), &shape));
     }
 }
