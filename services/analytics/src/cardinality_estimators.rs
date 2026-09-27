@@ -71,6 +71,7 @@ pub(crate) struct Estimate {
     #[allow(dead_code)] // unused by recommend.rs; kept for parity with the Python estimators
     pub est_low: Option<f64>,
     pub est_high: Option<f64>,
+    #[allow(dead_code)] // read only by tests; kept for parity with the Python estimators
     pub method: Method,
 }
 
