@@ -525,3 +525,37 @@ def column_sizes(df: pl.DataFrame, zstd_level: int) -> pl.DataFrame:
             changes_length=True,
         ).alias("column_sizes")
     ).unnest("column_sizes")
+
+"""
+Recommend
+"""
+
+
+def describe_and_recommend(
+    df: pl.DataFrame,
+    *,
+    seed: int,
+    zstd_level: int,
+    population_rows: int | None,
+    categorical_threshold: int,
+    boolean_pairs: tuple[tuple[str, str], ...],
+) -> pl.DataFrame:
+    """One row per column of `df`: `column`, every Describe metric, the size metrics
+    and the recommendation columns (see analytics.recommend.base). Private — called
+    only by RecommendRust."""
+    return df.select(
+        register_plugin_function(
+            plugin_path=PLUGIN_PATH,
+            function_name="describe_and_recommend",
+            args=df.get_columns(),
+            kwargs={
+                "seed": seed,
+                "zstd_level": zstd_level,
+                "population_rows": population_rows,
+                "categorical_threshold": categorical_threshold,
+                "boolean_pairs": [list(p) for p in boolean_pairs],
+            },
+            is_elementwise=False,
+            changes_length=True,
+        ).alias("recommend")
+    ).unnest("recommend")
