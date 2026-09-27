@@ -172,8 +172,30 @@ pub(crate) fn pa_name(t: &AT) -> String {
     }
 }
 
+/// Python `repr()` of a str, as Polars' `str(pl.Enum([...]))` renders each category:
+/// double-quoted when the string holds `'` and no `"` (avoids escaping the apostrophe),
+/// else single-quoted with `'` escaped; `\`, `\n`, `\r`, `\t` get their short escapes,
+/// other control characters (`< 0x20` or `0x7f`) become `\xNN`.
 fn py_str(s: &str) -> String {
-    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
 }
 
 /// Python `str(dtype)` of the Polars type that holds `t`. A dictionary is an Enum of
@@ -286,7 +308,7 @@ pub(crate) fn body_size(t: &AT, s: &Shape) -> f64 {
             v + pad(s.n * k.primitive_width().unwrap() as f64) + pad(4.0 * (s.d + 1.0)) + pad(s.sum_len_unique)
         }
         AT::Struct(_) => v + pad(8.0 * s.n) + pad(2.0 * s.n), // timestamp_with_offset
-        t => v + pad(s.n * t.primitive_width().unwrap_or(8) as f64),
+        t => v + pad(s.n * t.primitive_width().expect("body_size: fixed-width type") as f64),
     }
 }
 
@@ -373,6 +395,13 @@ pub(crate) fn offset_tz(minutes: i32) -> String {
 /// A decimal or exponent string as (negative, significant digits, point) with
 /// value = 0.DIGITS × 10^point; zero is (false, "", 0). Equal values give equal
 /// tuples regardless of formatting ("1.50" ≡ "1.5", "0.00120" ≡ "1.2e-3").
+///
+/// Precondition: `s` is a numeric literal already validated by describe.rs's
+/// `scan_numeric` (or produced by Rust's own float formatter, e.g. ryu) — an
+/// optional leading `-`, ASCII digits, at most one `.`, and an optional
+/// `e`/`E`-led exponent. `canon` does not re-validate this; a non-conforming
+/// `s` (e.g. embedded non-digit bytes in the mantissa) can produce a `sig` that
+/// is not purely ASCII digits, which `decimal_from_repr` below guards against.
 pub(crate) fn canon(s: &str) -> (bool, String, i32) {
     let (neg, s) = s.strip_prefix('-').map_or((false, s), |r| (true, r));
     let (mantissa, exp) = s.split_once(['e', 'E']).map_or((s, 0), |(m, e)| (m, e.parse::<i32>().unwrap_or(0)));
@@ -387,7 +416,9 @@ pub(crate) fn canon(s: &str) -> (bool, String, i32) {
 }
 
 /// Exact unscaled value of a decimal/exponent string at `scale`; None when it needs
-/// more decimal places or more than 38 digits.
+/// more decimal places or more than 38 digits. Same precondition as `canon`; also
+/// returns None (rather than underflowing the `c - b'0'` subtraction) if `canon`
+/// ever hands back a non-digit byte in `sig`, which a conforming input cannot do.
 pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
     let (neg, sig, point) = canon(repr);
     if sig.is_empty() {
@@ -399,6 +430,9 @@ pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
     }
     let mut v: i128 = 0;
     for c in sig.bytes() {
+        if !c.is_ascii_digit() {
+            return None;
+        }
         v = v.checked_mul(10)?.checked_add((c - b'0') as i128)?;
     }
     v = v.checked_mul(10i128.checked_pow((scale as i32 - places) as u32)?)?;
@@ -435,6 +469,15 @@ mod tests {
             pl_name(&timestamp_with_offset(TimeUnit::Second), "x", None, &k),
             "Struct({'timestamp': Datetime(time_unit='ms', time_zone='UTC'), 'offset_minutes': Int16})"
         );
+    }
+
+    #[test]
+    fn python_repr_for_enum_categories() {
+        // Verified against: python -c "import polars as pl; print(str(pl.Enum([...])))"
+        let k = AT::UInt8;
+        let dict = Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type();
+        let values = ["it's".to_string(), "a\"b".to_string(), "x\\y".to_string(), "n\nl".to_string()];
+        assert_eq!(pl_name(&dict, "x", Some(&values), &k), "Enum(categories=[\"it's\", 'a\"b', 'x\\\\y', 'n\\nl'])");
     }
 
     #[test]
