@@ -9,7 +9,7 @@ import polars as pl
 
 FLOATS = (pl.Float32, pl.Float64)
 STRING_LIKE = (pl.String, pl.Categorical, pl.Enum)
-INTEGERS = (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.Int128, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64)
+INTEGERS = (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64)
 
 
 def flatten(s: pl.Series) -> pl.Series:

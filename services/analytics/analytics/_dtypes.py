@@ -14,7 +14,7 @@ WIDE_INTEGERS = tuple(t for t in (pl.Int128, getattr(pl, "UInt128", None)) if t 
 
 
 def holds_wide_integer(dtype: pl.DataType) -> bool:
-    if isinstance(dtype, WIDE_INTEGERS):
+    if dtype in WIDE_INTEGERS:
         return True
     if isinstance(dtype, (pl.List, pl.Array)):
         return holds_wide_integer(dtype.inner)

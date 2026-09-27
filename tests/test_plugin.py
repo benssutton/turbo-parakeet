@@ -5,6 +5,7 @@ import importlib
 import polars as pl
 import pytest
 
+from analytics._dtypes import holds_wide_integer
 from harness import load, run
 
 PACKAGES = (
@@ -27,6 +28,10 @@ def wide_integer_frame() -> tuple[pl.DataFrame, list[str]]:
     if hasattr(pl, "UInt128"):
         cols["u128"] = pl.Series([1, 2, 3], dtype=pl.UInt128)
     return pl.DataFrame(cols), [c for c in cols if not c.startswith("ok_")]
+
+
+def test_holds_wide_integer_detects_nested_dtype_classes():
+    assert all(holds_wide_integer(d) for d in (pl.Int128, pl.List(pl.Int128), pl.Struct({"a": pl.Int128})))
 
 
 @pytest.mark.parametrize("spec", EVERY_IMPLEMENTATION)

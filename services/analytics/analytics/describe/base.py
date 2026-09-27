@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from analytics._dtypes import holds_wide_integer
+from analytics._dtypes import WIDE_INTEGERS
 from analytics.base import Technique, metric_mismatches
 from analytics.describe import estimators
 from analytics.describe._values import FLOATS, INTEGERS, STRING_LIKE, flatten
@@ -62,8 +62,9 @@ TOLERANCES = {"entropy": 1e-9, "inner_entropy": 1e-9, "size_zstd_bytes": 0.01, "
 SPLIT_DEPENDENT = ("capture_history", "inner_capture_history")
 SCHNABEL_RTOL = 0.10
 
+
 def _unsupported(dtype: pl.DataType) -> bool:
-    if isinstance(dtype, (pl.Object, pl.Null)) or holds_wide_integer(dtype):
+    if isinstance(dtype, (pl.Object, pl.Null)) or dtype in WIDE_INTEGERS:
         return True
     if isinstance(dtype, (pl.List, pl.Array)):
         return _unsupported(dtype.inner)

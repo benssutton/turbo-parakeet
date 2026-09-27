@@ -528,7 +528,7 @@ def test_stringified_describe_mixed(impl):
     source = describe_mixed(500)
     text = stringified(source)
     out = {r["col_a"]: r for r in run(load(impl), {"s": text}).iter_rows(named=True)}
-    for c in ("i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "codes"):
+    for c in ("i8", "i16", "i32", "i64", "d38", "u8", "u16", "u32", "u64", "codes"):
         assert out[c]["n_numeric_int"] == _non_null(source, c), c
         assert out[c]["n_leading_zero"] == 0, c
     assert out["date"]["n_iso_date"] == _non_null(source, "date")
