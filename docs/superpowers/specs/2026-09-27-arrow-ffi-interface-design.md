@@ -1,6 +1,6 @@
 # Arrow FFI interface for the Rust extension — design
 
-Status: approved design, not yet implemented.
+Status: implemented.
 
 ## 1. Goal
 

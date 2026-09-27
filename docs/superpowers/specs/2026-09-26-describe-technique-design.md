@@ -1,5 +1,7 @@
 # Describe Technique — Design (Spec A)
 
+> **Superseded in part** by [the Arrow FFI interface](2026-09-27-arrow-ffi-interface-design.md): Int128 / UInt128 columns are now ineligible (so the Int128 rules, the "over 38 digits → null" GCD case and null sizes / recommendations for nested Int128 no longer apply), and the Rust entry points are `api.rs` functions behind the `analytics.analytics` binding, not Polars plugins.
+
 **Date:** 2026-09-26
 **Status:** Approved in brainstorming; awaiting written-spec review
 **Follow-up:** Spec B (recommender, cast verification, recast sizes) — separate spec, consumes this technique's output.

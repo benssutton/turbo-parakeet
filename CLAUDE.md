@@ -20,13 +20,16 @@ and returns one flat table: `df_a, col_a[, df_b, col_b[, df_c, col_c]] | status 
 `status` ∈ {computed, ineligible, pruned}; null = not computed, NaN = computed but undefined.
 Ineligible columns/pairs are always listed, never dropped. Results must export to native Arrow
 (`result().to_arrow()`, checked in every contract test): never a Polars-only dtype such as Int128 —
-use Decimal(38, 0) for 128-bit integers. Thresholds are keyword-only
+use Decimal(38, 0) for 128-bit integers. `add()` accepts Polars DataFrames / LazyFrames and any Arrow
+tabular object (pyarrow Table, RecordBatch, RecordBatchReader — anything with `__arrow_c_stream__`).
+Int128 / UInt128 columns, at any depth, are ineligible in every technique: Arrow has no 128-bit integer
+(`analytics._dtypes.WIDE_INTEGERS`). Thresholds are keyword-only
 constructor arguments with the defaults below. Techniques are grouped by **scope** —
 how column combinations are enumerated.
 
 ## 1. Per-column (one column at a time)
 
-**GCD — `analytics.gcd`** (`GcdRust`, `GcdNumpy`, ★`GcdMath`). ClickHouse GCD-codec method: the GCD of the magnitudes of each integer-backed column's raw physical values (Int/UInt 8–64, Int128, Decimal → unscaled, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; `gcd` is Decimal(38, 0), so a GCD over 38 digits (Int128 only) → null; other dtypes (incl. Categorical/Enum, UInt128) → ineligible. Descriptor `dtype` (Python `str(dtype)`) on every row. Conclusion `gcd_compressible` = gcd > 1. Rust: rayon-parallel across columns and 64K-value chunks, `binary_gcd(g, v % g)` fold with early exit at 1.
+**GCD — `analytics.gcd`** (`GcdRust`, `GcdNumpy`, ★`GcdMath`). ClickHouse GCD-codec method: the GCD of the magnitudes of each integer-backed column's raw physical values (Int/UInt 8–64, Decimal → unscaled, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; `gcd` is Decimal(38, 0); other dtypes (incl. Categorical/Enum and Int128/UInt128) → ineligible. Descriptor `dtype` (Python `str(dtype)`) on every row. Conclusion `gcd_compressible` = gcd > 1. Rust: rayon-parallel across columns and 64K-value chunks, `binary_gcd(g, v % g)` fold with early exit at 1.
 
 **Describe — `analytics.describe`** (`DescribeRust`, `DescribeDataFusion`, ★`DescribePolars`). Profile for choosing narrower / more compressible Arrow types (spec: docs/superpowers/specs/2026-09-26-describe-technique-design.md). Metrics: counts, entropy (null as a category), f1/f2, first-occurrence argmin/argmax and top-5 (indices; the base renders values), byte/list lengths, `gcd`, byte totals (`sum_len`, `sum_len_unique`), significant-digit counts, float stats (NaN/inf/fractional, decimal places, f32 round trip), numeric-string and ISO 8601 counts (Rust byte scanners / Rust-regex elsewhere — linear time), Datetime local-midnight count, Arrow IPC sizes (classic layout, plain + ZSTD) and Polars native-layout IPC sizes, and the same for list inner values. Conclusions: rendered min/max/top-5, `unique`, Chao1 / Schnabel (3-way seeded split) / Duj1 with 95% intervals and `est_cardinality` picked by rule (exact → Duj1 → Schnabel → Chao1), `estimates_agree`, and `class` ∈ {null, constant, boolean, ordinal, categorical, discrete}. Keywords: `population_rows=None`, `categorical_threshold=10_000`, `zstd_level=1`, `seed=0`. Agreement: exact except entropy (1e-9), ZSTD sizes (1%), Schnabel (10%).
 
@@ -60,11 +63,12 @@ turbo-parakeet/
 │   ├── pyproject.toml, Cargo.toml          # maturin build (editable install via analytics.pth)
 │   ├── src/                                # Rust plugin — lib.rs, shared.rs, entropy.rs, chi_squared.rs,
 │   │                                       #   contingency.rs, ari.rs, gcd.rs, bloomfilter.rs, minhash.rs,
-│   │                                       #   describe.rs, sizes.rs, cardinality_estimators.rs, recommend.rs
+│   │                                       #   describe.rs, sizes.rs, cardinality_estimators.rs, recommend.rs,
+│   │                                       #   api.rs, arrow_io.rs, python.rs
 │   └── analytics/
 │       ├── __init__.py                     # __version__ only
-│       ├── analytics.pyd                   # compiled plugin
-│       ├── _plugin.py                      # PRIVATE plugin wrappers (called only by *Rust classes)
+│       ├── analytics.pyd                   # compiled extension (module analytics.analytics)
+│       ├── _plugin.py                      # PRIVATE wrappers over the Arrow binding (called only by *Rust classes)
 │       ├── _dtypes.py, _sets.py            # dtype groupings / value families; canonical distinct values
 │       ├── base.py                         # Technique contract, helpers, metric_mismatches
 │       └── <technique>/                    # gcd, describe, recommend, membership, similarity, chi_squared,
@@ -83,17 +87,19 @@ turbo-parakeet/
         └── benchmark_<technique>.py        # one per technique package
 ```
 
-# Rust Plugin (analytics)
+# Rust Extension (analytics)
 Build: `maturin develop --release` from `services/analytics/`. Python changes need no rebuild (editable install).
+
+Three layers (spec: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design.md):
+- `src/api.rs` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown column, bad Bloom array, unimportable type) / `Compute`.
+- `src/arrow_io.rs` — RecordBatch ↔ Polars Series, zero-copy through the C Data Interface (Polars' `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` field metadata restores Categorical / Enum). Kernels still compute on Series; `sizes.rs` / `recommend.rs` measure layouts derived with `export_series`.
+- `src/python.rs` — pyo3 module `analytics.analytics`: reads any `__arrow_c_stream__` object into one batch, rejects Polars' private `_pli128` / `_plu128` (Int128 / UInt128) with ValueError naming the column, releases the GIL, returns `ArrowTable` (itself `__arrow_c_stream__`). InvalidInput → ValueError, Compute → RuntimeError, non-Arrow input → TypeError.
 
 Private — reached only through `analytics._plugin`, only by the `*Rust` classes:
 `column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
-`pairwise_joint_entropy`, `threeway_joint_entropy` (the classes always pass explicit triplets, so the plugin's 5000-triplet default cap for `triplets=None` never applies; C(101,3) = 166,650 at 101 cols, ~65 s at 50K rows),
-`bloom_filter_bits` + `membership_ratio`, `minhash` + `lsh_candidates`,
+`pairwise_joint_entropy`, `threeway_joint_entropy` (the classes always pass explicit triplets; `triplets=None` means every triplet, uncapped — C(101,3) = 166,650 at 101 cols, ~65 s at 50K rows),
+`bloom_filter` + `membership_ratio` (the bit array crosses as `bytes`), `minhash` + `lsh_candidates`,
 `describe_columns` + `column_sizes`, `describe_and_recommend`.
-(`membership`, `membership_ratio_sample` remain compiled but unused.)
-
-`recommend.rs` and `sizes.rs` are Arrow-native (arrow-rs 60); Series cross in through `shared::to_arrow_rs` (C Data Interface, zero-copy).
 
 # Testing Convention
 Every technique package declares `REFERENCE` (the exact accuracy reference) and `IMPLEMENTATIONS`.
@@ -113,7 +119,7 @@ Every technique package declares `REFERENCE` (the exact accuracy reference) and 
 - Rust unit tests: `cargo test --lib <module>::` from `services/analytics/` with `PYO3_PYTHON` set to the env's `python.exe` and the env dir on `PATH` (else `STATUS_DLL_NOT_FOUND`).
 
 # Current Focus
-All nine techniques (GCD, Describe, Recommend; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract, one accuracy-test pattern and one benchmark harness (spec: docs/superpowers/specs/2026-09-24-uniform-technique-interface-design.md). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. Next technique: Wald-Wolfowitz runs test.
+All nine techniques (GCD, Describe, Recommend; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract and one Arrow-in/Arrow-out Rust core, one accuracy-test pattern and one benchmark harness (spec: docs/superpowers/specs/2026-09-24-uniform-technique-interface-design.md). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. Next technique: Wald-Wolfowitz runs test.
 
 Joint entropy (2-way and 3-way) is dense-id encoded (see below): 83.5µs/pair, 170.3µs/triplet at 50K rows/101 cols — roughly 2x faster than the original hash-tuple implementation, and the 3-way/2-way speedup-vs-native-Polars gap that motivated the change is closed (3-way now outpaces 2-way's multiplier rather than trailing it). ARI (`pairwise_adjusted_rand`) is complete and validated against scikit-learn; chi² now shares the same dense contingency builder and reports `n_valid`.
 
@@ -131,18 +137,16 @@ This encoding is entropy/chi²-only — it's value-relabeling and has no cross-c
 
 **[bloomfilter.rs](services/analytics/src/bloomfilter.rs)**
 - ~~silent state discard on `existing_filter` length mismatch~~ **Fixed**: `m` is now consistently bits with `ceil(m/8)`-byte arrays; wrong-sized filters raise `ComputeError`, and `validate_bit_array` guards the unchecked bit reads.
-- `membership/rust.py`: bit arrays cross the FFI as `list[int]` (~60KB at fp=1%, n=50K) because pyo3-polars 0.24 pins pyo3 < 0.27 (no bytes kwargs). Pass bytes directly once pyo3-polars upgrades.
 
 **[minhash.rs](services/analytics/src/minhash.rs)**
 - [minhash.rs:266](services/analytics/src/minhash.rs#L266): `compute_signature_for_series_with_coeffs` swallows `series_to_u64` errors and returns `vec![u32::MAX; num_perm]` — a useless signature that gets silently included downstream. Propagate the error instead.
-- [minhash.rs:50](services/analytics/src/minhash.rs#L50): the `threshold` kwarg in `lsh_candidates` is read and discarded (`let _ = kwargs.threshold`). Either implement candidate-stage threshold filtering or remove the parameter from `LSHKwargs`.
 - [minhash.rs:87-99](services/analytics/src/minhash.rs#L87-L99): bucket-pair generation is O(|bucket|²) per band. Acceptable at typical scales; document as a known scaling concern for pathologically dense buckets.
 
 **[similarity/rust.py]**
 - MinHash recall on large_dataset.arrow is 0.62 (389/625 passing pairs), below MIN_RECALL 0.85: all misses are containment pairs (overlap = 1.0) whose Jaccard is below the ~0.43 LSH candidate threshold (min(j·0.9, o·0.45)). The heuristic is carried over unchanged from the old filter. Follow-ups: add a containment-heavy recall fixture to tests/test_similarity.py; derive the candidate threshold from the overlap threshold and the cardinality ratio.
 
 **[membership/rust.py]**
-- `BloomRust` loses to `MembershipExact` (plain Python `frozenset` intersection) on every benchmarked shape: 0.60x algorithmic on large_dataset.arrow, 0.98x on the narrow related-frames shape, and 0.16x total (6x slower overall, parallelism included) on the wide 100-column shape — see tests/performance/results/membership_*.parquet. Building a fresh Bloom filter per column (`bloom_filter_bits`, one `register_plugin_function` call each) carries enough constant overhead that it doesn't pay off at these value-set sizes; exact set intersection is already near-optimal here. Follow-ups: batch filter construction across columns in one Rust call instead of one call per column; only reach for Bloom below a distinct-value-count threshold (or drop it in favour of `MembershipExact` as the default and keep Bloom for pathologically large value sets where set intersection stops being cheap).
+- `BloomRust` loses to `MembershipExact` (plain Python `frozenset` intersection) on every benchmarked shape: 0.60x algorithmic on large_dataset.arrow, 0.98x on the narrow related-frames shape, and 0.16x total (6x slower overall, parallelism included) on the wide 100-column shape — see tests/performance/results/membership_*.parquet. Building a fresh Bloom filter per column (`bloom_filter_bits`, one binding call each) carries enough constant overhead that it doesn't pay off at these value-set sizes; exact set intersection is already near-optimal here. Follow-ups: batch filter construction across columns in one Rust call instead of one call per column; only reach for Bloom below a distinct-value-count threshold (or drop it in favour of `MembershipExact` as the default and keep Bloom for pathologically large value sets where set intersection stops being cheap).
 
 ## Cross-cutting notes (not bugs, worth documenting)
 - `encode_series` (formerly `series_to_u64`) returns `EncodedColumn { values, is_null }` — nulls are out-of-band (no in-band sentinel), floats are canonicalised (`-0.0`→`0.0`, all NaN payloads→one key). Null policy per module: entropy = null is a category; chi² = null rows dropped; minhash/bloom = nulls skipped. Keep this in mind when deriving MI from entropy + chi² outputs. Entropy additionally densifies `EncodedColumn` → `DenseColumn` (`0..card` ids) via `densify` — see "Entropy dense re-encoding" above.
