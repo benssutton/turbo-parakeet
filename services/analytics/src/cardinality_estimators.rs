@@ -65,13 +65,23 @@ pub(crate) enum Method {
     Chao1,
 }
 
+impl Method {
+    /// Lower-case name, as the dictionary candidate's evidence reports it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Method::Exact => "exact",
+            Method::Duj1 => "duj1",
+            Method::Schnabel => "schnabel",
+            Method::Chao1 => "chao1",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Estimate {
     pub est_cardinality: f64,
-    #[allow(dead_code)] // unused by recommend.rs; kept for parity with the Python estimators
     pub est_low: Option<f64>,
     pub est_high: Option<f64>,
-    #[allow(dead_code)] // read only by tests; kept for parity with the Python estimators
     pub method: Method,
 }
 

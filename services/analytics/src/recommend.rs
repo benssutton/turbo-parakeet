@@ -23,7 +23,28 @@
 // ("007.50") is unlikely to be an identifier, so only numeric equivalence
 // matters for it; differing leading or trailing zeros set rec_lossy_formatting.
 
+use crate::cardinality_estimators::{estimate, Estimate};
+use crate::describe::{assemble, describe_one, fields, parse_decimal, parse_iso, Described, Profile, Row};
+use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
+use arrow_array::builder::make_view;
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int16Type};
+use arrow_array::{
+    Array, ArrayRef, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeListArray, Float32Array, Float64Array,
+    Int16Array, LargeListArray, LargeStringArray, ListArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt64Array,
+};
+use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_cast::cast::{cast_with_options, CastOptions};
 use arrow_schema::{DataType as AT, Field as AField, Fields, TimeUnit};
+use polars::prelude::{
+    polars_err, AnyValue, DataType as PT, Field as PField, Float64Chunked, IntoSeries, NewChunkedArray, PolarsResult, Series,
+    StringChunked, StructChunked, UInt64Chunked,
+};
+use pyo3_polars::derive::polars_expr;
+use rayon::prelude::*;
+use serde::Deserialize;
 use std::cell::OnceCell;
 use std::sync::Arc;
 
@@ -39,6 +60,7 @@ pub(crate) enum Rank {
     Date,
     Time,
     Timestamp,
+    Duration,
     TimestampWithOffset,
     Dictionary,
     Plain,
@@ -480,14 +502,6 @@ pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
 
 // ── candidates (Spec B §4, §5.2) ────────────────────────────────────────────
 
-use crate::cardinality_estimators::{estimate, Estimate};
-use crate::describe::Profile;
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal128Type, Float64Type};
-use arrow_array::{Array, ArrayRef, LargeStringArray};
-use arrow_cast::cast::{cast_with_options, CastOptions};
-use polars::prelude::DataType as PT;
-use serde::Deserialize;
 
 /// Plugin keyword arguments (Recommend's constructor keywords).
 #[derive(Deserialize, Clone, Debug)]
@@ -723,7 +737,7 @@ impl Rules<'_, '_> {
                     self.push(Target::Fixed(AT::Timestamp(coarse, tz)), Rank::Timestamp, "datetime→timestamp", ev);
                 }
             }
-            PT::Duration(_) if coarse != unit => self.push(Target::Fixed(AT::Duration(coarse)), Rank::Timestamp, "duration→duration", ev),
+            PT::Duration(_) if coarse != unit => self.push(Target::Fixed(AT::Duration(coarse)), Rank::Duration, "duration→duration", ev),
             PT::Time if coarse != unit => self.push(Target::Fixed(time_type(coarse)), Rank::Time, "time→time", ev),
             _ => {}
         }
@@ -826,7 +840,13 @@ impl Rules<'_, '_> {
         let (c, source) = self.lvl.cardinality();
         let (key, polars_key) = dictionary_keys(c);
         let threshold = params.categorical_threshold;
-        let ev = format!("c={c:?} from {source} n_unique={} categorical_threshold={threshold}", self.lvl.p.freq.n_unique);
+        let est = &self.lvl.est;
+        let low = est.est_low.map_or(String::new(), |l| format!(" est_low={l:?}"));
+        let ev = format!(
+            "c={c:?} from {source} method={}{low} n_unique={} categorical_threshold={threshold}",
+            est.method.name(),
+            self.lvl.p.freq.n_unique
+        );
         self.push(Target::Dictionary(key, polars_key), Rank::Dictionary, "string→dictionary", ev);
         if c > threshold as f64 {
             let last = self.out.last_mut().unwrap();
@@ -886,13 +906,6 @@ pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>,
 
 // ── cast and verify (Spec B §5.4) ───────────────────────────────────────────
 
-use crate::describe::{parse_decimal, parse_iso};
-use arrow_array::types::{Float32Type, Int16Type};
-use arrow_array::{
-    BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int16Array, StructArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray,
-};
 
 fn exact_div(ns: i128, u: &TimeUnit) -> Option<i64> {
     let f = unit_ns(u);
@@ -1235,17 +1248,6 @@ pub(crate) fn lossy(t: &Target, lvl: &Level, recast: &ArrayRef, rendered: Option
 
 // ── choosing (Spec B §4.1, §4.4, §5.4) ──────────────────────────────────────
 
-use crate::describe::{assemble, describe_one, fields, Described, Row};
-use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
-use arrow_array::builder::make_view;
-use arrow_array::{BinaryViewArray, FixedSizeListArray, LargeListArray, ListArray, StringViewArray, UInt64Array};
-use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-use polars::prelude::{
-    polars_err, AnyValue, Field as PField, Float64Chunked, IntoSeries, NewChunkedArray, PolarsResult, Series, StringChunked,
-    StructChunked, UInt64Chunked,
-};
-use pyo3_polars::derive::polars_expr;
-use rayon::prelude::*;
 
 pub(crate) struct Chosen {
     pub target: Target,
@@ -1936,6 +1938,24 @@ mod tests {
             let expected: &[&str] = if dtype == PT::String { &["string→utf8", "string→dictionary", "original"] } else { &["original"] };
             assert_eq!(got, expected, "{dtype}");
         }
+    }
+
+    #[test]
+    fn dictionary_evidence_names_the_estimator() {
+        let s = Series::new("x".into(), &["a", "b", "a", "b", "c"]);
+        let d = describe_one(&s, 0).unwrap();
+        let evidence = |q: Option<f64>| {
+            let lvl = Level {
+                dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer, n_midnight: None, size_bytes: 0,
+                est: level_estimate(&d.outer, 5, q), r: 1.0, prefix: "", text: Default::default(),
+            };
+            candidates(&lvl, &params()).unwrap().into_iter().find(|c| c.rule == "string→dictionary").unwrap().evidence
+        };
+        let chao = evidence(None);
+        assert!(chao.contains("method=chao1 est_low="), "{chao}");
+        let duj = evidence(Some(0.5));
+        assert!(duj.contains("method=duj1") && !duj.contains("est_low"), "{duj}");
+        assert!(evidence(Some(1.0)).contains("c=3.0 from est_high method=exact est_low=3.0"));
     }
 
     #[test]
