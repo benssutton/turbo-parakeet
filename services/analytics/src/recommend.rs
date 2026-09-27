@@ -910,7 +910,11 @@ pub(crate) fn from_text(t: &Target, text: &LargeStringArray) -> Result<ArrayRef,
                 (v.nanos == 0 && v.offset_minutes.is_none()).then_some(())?;
                 i32::try_from(v.days?).ok()
             })?))),
-            AT::Time32(u) | AT::Time64(u) => Ok(time_array(*u, parsed(text, |s| exact_div(parse_iso(s.as_bytes())?.nanos as i128, u))?)),
+            AT::Time32(u) | AT::Time64(u) => Ok(time_array(*u, parsed(text, |s| {
+                let v = parse_iso(s.as_bytes())?;
+                v.days.is_none().then_some(())?;
+                exact_div(v.nanos as i128, u)
+            })?)),
             AT::Timestamp(u, tz) => Ok(timestamp_array(*u, parsed(text, |s| exact_div(parse_iso(s.as_bytes())?.epoch_ns(), u))?, tz.clone())),
             t => Err(format!("no string conversion to {}", pa_name(t))),
         },
@@ -943,6 +947,9 @@ pub(crate) fn float_to_decimal(src: &ArrayRef, to: &AT) -> Result<ArrayRef, Stri
         .enumerate()
         .map(|(i, v)| {
             v.map(|x| {
+                if !x.is_finite() {
+                    return Err(format!("row {i}: {x} is not finite"));
+                }
                 let repr = if f32_src { buf.format_finite(x as f32).to_string() } else { buf.format_finite(x).to_string() };
                 decimal_from_repr(&repr, *s as u32).ok_or_else(|| format!("row {i}: {repr} does not fit scale {s}"))
             })
@@ -983,6 +990,13 @@ pub(crate) fn first_mismatch(a: &ArrayRef, b: &ArrayRef) -> Result<(), String> {
     Err(format!("row {i}: {} round-trips to {}", render(a, i), render(b, i)))
 }
 
+/// A decimal's rendered text parsed back as a float; a failure to parse is an error,
+/// never silently folded into NaN (NaN is only ever a *value*, from a genuine decimal
+/// text like "nan" — which cannot occur here since decimals never render one).
+fn parse_back(s: &str, f32_src: bool) -> Result<f64, String> {
+    if f32_src { s.parse::<f32>().map(f64::from) } else { s.parse::<f64>() }.map_err(|_| format!("{s:?} does not parse as a float"))
+}
+
 /// Float sources: every recast value converts back to the original float (NaN = NaN,
 /// -0.0 = 0.0). Decimals come back through their text (correctly rounded parse).
 pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), String> {
@@ -992,8 +1006,9 @@ pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), Stri
         let t = arrow_cast(recast.as_ref(), &AT::Utf8)?;
         t.as_string::<i32>()
             .iter()
-            .map(|v| v.map(|s| if f32_src { s.parse::<f32>().map_or(f64::NAN, f64::from) } else { s.parse::<f64>().unwrap_or(f64::NAN) }))
-            .collect()
+            .enumerate()
+            .map(|(i, v)| v.map(|s| parse_back(s, f32_src).map_err(|e| format!("row {i}: {e}"))).transpose())
+            .collect::<Result<_, _>>()?
     } else if f32_src {
         arrow_cast(recast.as_ref(), &AT::Float32)?.as_primitive::<Float32Type>().iter().map(|v| v.map(f64::from)).collect()
     } else {
@@ -1052,7 +1067,18 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
                 let (a, b) = (text.value(i), back.value(i));
                 let same = match to {
-                    AT::Date32 | AT::Timestamp(..) => matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns()),
+                    AT::Date32 => matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns()),
+                    // A fixed-offset target renders the same offset as the text only when
+                    // every value actually had one; a naive target renders no offset at all
+                    // ("Z" and "UTC" both parse back to offset_minutes = Some(0), so this
+                    // must compare the *parsed* offsets, not the rendered strings).
+                    AT::Timestamp(_, tz) => match (iso(a), iso(b)) {
+                        (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns() => match tz {
+                            Some(_) => x.offset_minutes.is_some() && x.offset_minutes == y.offset_minutes,
+                            None => x.offset_minutes.is_none(),
+                        },
+                        _ => false,
+                    },
                     AT::Time32(_) | AT::Time64(_) => matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.nanos == y.nanos),
                     _ => canon(a) == canon(b),
                 };
@@ -1066,6 +1092,16 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
     }
 }
 
+/// Whether row `i` is null "logically" — i.e. as `Array::logical_nulls` sees it, not
+/// `Array::is_null`'s raw physical null buffer. They differ for `NullArray` (no physical
+/// buffer at all, so `is_null` is always false despite every value being null) and for
+/// Dictionary/Run/Union arrays whose nullability can live in a child array; every array
+/// this module builds keeps its own physical buffer, but checking logical nulls
+/// throughout keeps that assumption from becoming a silent correctness trap.
+fn logical_is_null(a: &ArrayRef, i: usize) -> bool {
+    a.logical_nulls().is_some_and(|n| n.is_null(i))
+}
+
 /// Row-by-row check that `recast` holds the original values (Spec B §5.4 step 3).
 pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<(), String> {
     if matches!(t, Target::Original(_)) {
@@ -1075,14 +1111,31 @@ pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<(), S
     if recast.len() != src.len() {
         return Err(format!("length {} ≠ {}", recast.len(), src.len()));
     }
-    if let Some(i) = (0..src.len()).find(|&i| recast.is_null(i) != src.is_null(i)) {
+    if matches!(t, Target::Null) {
+        // NullArray carries no physical null buffer of its own — `Array::is_null` is
+        // always false for it — so the only real check is that every source value was
+        // actually null (via the source's own *logical* nulls).
+        let non_null = src.len() - src.logical_null_count();
+        return (non_null == 0).then_some(()).ok_or_else(|| format!("{non_null} non-null source value(s)"));
+    }
+    if let Some(i) = (0..src.len()).find(|&i| logical_is_null(recast, i) != logical_is_null(src, i)) {
         return Err(format!("row {i}: null mismatch"));
     }
     match t {
-        Target::Null => Ok(()),
         _ if is_text(lvl.dtype) => verify_text(t, &text_of(src)?, recast),
         _ if is_float(lvl.dtype) => verify_float(src, recast),
-        _ => first_mismatch(src, &arrow_cast(recast.as_ref(), src.data_type())?),
+        _ => {
+            // arrow-cast's cast-back below forces `recast` into `src`'s exact data type
+            // (tz included), which would silently paper over a timezone that changed
+            // along the way — Timestamp's physical storage (epoch units) doesn't depend
+            // on tz, so the value comparison alone can't catch it.
+            if let (AT::Timestamp(_, a), AT::Timestamp(_, b)) = (src.data_type(), recast.data_type()) {
+                if a != b {
+                    return Err(format!("timezone changed: {a:?} → {b:?}"));
+                }
+            }
+            first_mismatch(src, &arrow_cast(recast.as_ref(), src.data_type())?)
+        }
     }
 }
 
@@ -1317,5 +1370,93 @@ mod tests {
         assert_eq!(s.column(1).null_count(), 0);
         let shape = Shape { n: 3.0, nulls: 1.0, ..Default::default() };
         assert_eq!(ipc_body_bytes(a.as_ref(), None).unwrap() as f64, body_size(&timestamp_with_offset(TimeUnit::Second), &shape));
+    }
+
+    #[test]
+    fn null_target_verifies_all_null_columns() {
+        // NullArray (Target::Null's recast) has no physical null buffer at all, so a
+        // naive `is_null` per-row check against it is always false — verify() must
+        // special-case Target::Null and check the *source*'s logical nulls instead.
+        for s in [Series::new("x".into(), &[None::<i64>, None]), Series::new("x".into(), &[None::<&str>, None])] {
+            let d = describe_one(&s, 0).unwrap();
+            let lvl = Level {
+                column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+                n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 0, None), r: 1.0, prefix: "",
+            };
+            let recast = cast_to(&Target::Null, &lvl).unwrap();
+            assert!(verify(&Target::Null, &lvl, &recast).is_ok());
+        }
+        // A column that is NOT all-null must not verify against Target::Null.
+        let s = Series::new("x".into(), &[Some(1i64), None]);
+        let d = describe_one(&s, 0).unwrap();
+        let lvl = Level {
+            column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 1, None), r: 1.0, prefix: "",
+        };
+        let recast = cast_to(&Target::Null, &lvl).unwrap();
+        assert!(verify(&Target::Null, &lvl, &recast).is_err());
+    }
+
+    #[test]
+    fn timestamp_offset_consistency_is_verified() {
+        // Same instant, but the two rows disagree on offset — a target fixed at +05:00
+        // is only valid if every row actually carried +05:00; the previous epoch-only
+        // check missed this because relabelling the tz doesn't change the stored instant.
+        let text = LargeStringArray::from(vec!["2024-01-05T10:00+05:00", "2024-01-05T02:00-03:30"]);
+        let target = Target::Fixed(AT::Timestamp(TimeUnit::Second, Some("+05:00".into())));
+        let recast = from_text(&target, &text).unwrap();
+        assert!(verify_text(&target, &text, &recast).is_err());
+
+        // A single consistent offset does verify.
+        let text = LargeStringArray::from(vec!["2024-01-05T10:00+05:00", "2024-01-06T10:00+05:00"]);
+        let recast = from_text(&target, &text).unwrap();
+        assert!(verify_text(&target, &text, &recast).is_ok());
+
+        // An offset-bearing source cast to a naive Timestamp must fail: the offset was
+        // silently dropped, not merely re-rendered.
+        let text = LargeStringArray::from(vec!["2024-01-05T10:00+05:00"]);
+        let naive = Target::Fixed(AT::Timestamp(TimeUnit::Second, None));
+        let recast = from_text(&naive, &text).unwrap();
+        assert!(verify_text(&naive, &text, &recast).is_err());
+    }
+
+    #[test]
+    fn time_targets_reject_text_carrying_a_date() {
+        let text = LargeStringArray::from(vec!["2024-01-05T10:00"]);
+        assert!(from_text(&Target::Fixed(AT::Time32(TimeUnit::Second)), &text).is_err());
+        let bare = LargeStringArray::from(vec!["10:00:00"]);
+        assert!(from_text(&Target::Fixed(AT::Time32(TimeUnit::Second)), &bare).is_ok());
+    }
+
+    #[test]
+    fn float_to_decimal_rejects_non_finite() {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![Some(f64::INFINITY), Some(f64::NAN), None]));
+        let err = float_to_decimal(&a, &decimal_type(5, 2)).unwrap_err();
+        assert!(err.contains("not finite"), "{err}");
+    }
+
+    #[test]
+    fn verify_float_reports_parse_failure_instead_of_nan() {
+        assert!(parse_back("not_a_number", false).is_err());
+        assert_eq!(parse_back("1.5", false), Ok(1.5));
+    }
+
+    #[test]
+    fn recast_timezone_change_fails_generic_verify() {
+        // Two arrays holding the same instant but tagged with different tz: casting
+        // `recast` up to `src`'s exact data type (tz included) makes their values equal
+        // (Timestamp storage doesn't depend on tz), so only an explicit tz check catches
+        // the mismatch — first_mismatch alone cannot.
+        let src = timestamp_array(TimeUnit::Microsecond, vec![Some(0), Some(3_600_000_000)], Some("+05:00".into()));
+        let recast = timestamp_array(TimeUnit::Microsecond, vec![Some(0), Some(3_600_000_000)], Some("+00:00".into()));
+        let dummy = Series::new("x".into(), &[0i64, 1]);
+        let d = describe_one(&dummy, 0).unwrap();
+        let dtype = PT::Datetime(PTimeUnit::Microseconds, None);
+        let lvl = Level {
+            column: "x", dtype: &dtype, values: src, p: &d.outer,
+            n_midnight: None, size_bytes: 0, est: level_estimate(&d.outer, 2, None), r: 1.0, prefix: "",
+        };
+        let target = Target::Fixed(AT::Timestamp(TimeUnit::Microsecond, Some("+05:00".into())));
+        assert!(verify(&target, &lvl, &recast).is_err());
     }
 }
