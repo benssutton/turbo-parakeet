@@ -8,6 +8,7 @@ mod ari;
 mod gcd;
 mod describe;
 mod sizes;
+mod cardinality_estimators;
 
 use mimalloc::MiMalloc;
 
