@@ -242,6 +242,11 @@ def test_categorical_size_includes_its_dictionary():
     assert _sizes.column_sizes(s, 1)["size_bytes"] == 48  # dictionary batch 32 + keys 16
 
 
+def test_polars_size_is_the_native_ipc_body():
+    assert _sizes.column_sizes(pl.Series("x", ["ab", None]), 1)["size_polars_bytes"] == 40  # validity 8 + 2 views × 16
+    assert _sizes.column_sizes(pl.Series("x", ["a" * 20, "b"]), 1)["size_polars_bytes"] == 56  # views 32 + 20-byte buffer → 24
+
+
 from datagen import describe_mixed, stringified
 
 PKG = "analytics.describe"
@@ -415,6 +420,7 @@ def test_sizes_through_the_technique(impl):
     assert (r["size_bytes"], r["size_polars_bytes"]) == (4_000, 4_000)
     assert r["size_zstd_bytes"] == approx(1_912, rel=0.01)
     assert profile(impl, pl.Series("x", [None if i % 3 == 0 else i for i in range(1_000)], dtype=pl.Int32))["size_bytes"] == 4_128
+    assert profile(impl, pl.Series("x", ["ab", None]))["size_polars_bytes"] == 40
 
 
 @pytest.mark.parametrize("impl", ALL)

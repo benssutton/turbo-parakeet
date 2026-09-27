@@ -12,7 +12,7 @@
 // included) — pyarrow never falls back to raw bytes.
 //
 // Arrow sizes use CompatLevel::oldest() (LargeUtf8, LargeList); Polars sizes are
-// `estimated_size()` and the ZSTD body of CompatLevel::newest() (view types).
+// the plain and ZSTD body of CompatLevel::newest() (view types).
 // Columns nesting Int128 inside List/Array/Struct get null sizes: pyarrow cannot
 // import them, so there is no oracle to agree with.
 
@@ -167,16 +167,15 @@ fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
         return Ok([None; 4]);
     }
     let s = s.rechunk();
-    let polars_bytes = Some(s.estimated_size() as u64);
     if s.n_chunks() == 0 {
-        return Ok([Some(0), Some(0), polars_bytes, Some(0)]);
+        return Ok([Some(0); 4]);
     }
     let classic = s.to_arrow(0, CompatLevel::oldest());
     let native = s.to_arrow(0, CompatLevel::newest());
     Ok([
         Some(ipc_body_bytes(classic.as_ref(), None)?),
         Some(ipc_body_bytes(classic.as_ref(), Some(level))?),
-        polars_bytes,
+        Some(ipc_body_bytes(native.as_ref(), None)?),
         Some(ipc_body_bytes(native.as_ref(), Some(level))?),
     ])
 }

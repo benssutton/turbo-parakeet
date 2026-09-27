@@ -513,7 +513,7 @@ def describe_columns(df: pl.DataFrame, seed: int) -> pl.DataFrame:
 
 def column_sizes(df: pl.DataFrame, zstd_level: int) -> pl.DataFrame:
     """One row per column of `df`: Arrow IPC body bytes (classic layout, plain and
-    ZSTD) and Polars sizes (estimated_size, ZSTD IPC of the native layout).
+    ZSTD) and Polars sizes (IPC body of the native layout, plain and ZSTD).
     Private — called only by DescribeRust."""
     return df.select(
         register_plugin_function(

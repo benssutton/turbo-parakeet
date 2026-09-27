@@ -7,7 +7,7 @@ ZSTD, each non-empty buffer is an 8-byte uncompressed-length prefix plus one ZST
 frame — pyarrow never falls back to raw bytes. src/sizes.rs mirrors this.
 
 Arrow sizes use the classic layout (CompatLevel.oldest(): LargeUtf8, LargeList);
-Polars sizes are `estimated_size()` and the ZSTD body of its native layout
+Polars sizes are the IPC body of its native layout, plain and ZSTD
 (CompatLevel.newest(): Utf8View/BinaryView) — what `write_ipc(compression="zstd")`
 writes. pyarrow cannot import Polars Int128, so a top-level Int128 column is passed
 as decimal128(38, 0) over the same 16-byte values; columns nesting Int128 inside
@@ -56,6 +56,6 @@ def column_sizes(s: pl.Series, zstd_level: int) -> dict[str, int | None]:
     return {
         "size_bytes": ipc_body_bytes(classic, None),
         "size_zstd_bytes": ipc_body_bytes(classic, zstd_level),
-        "size_polars_bytes": s.estimated_size(),
+        "size_polars_bytes": ipc_body_bytes(native, None),
         "size_polars_zstd_bytes": ipc_body_bytes(native, zstd_level),
     }
