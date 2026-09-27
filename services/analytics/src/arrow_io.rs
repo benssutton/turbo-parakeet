@@ -79,6 +79,7 @@ pub(crate) fn export_series(s: &Series, compat: CompatLevel) -> PolarsResult<Arr
 
 /// A kernel's one-struct-column result as a RecordBatch of its fields (native layout).
 pub(crate) fn export_struct(out: &Series) -> PolarsResult<RecordBatch> {
+    debug_assert_eq!(out.null_count(), 0);
     let fields = out.struct_()?.fields_as_series();
     let columns = fields.iter().map(|s| export_series(s, CompatLevel::newest())).collect::<PolarsResult<Vec<_>>>()?;
     let schema = Schema::new(
@@ -98,7 +99,7 @@ mod tests {
     use polars::datatypes::{Categories, FrozenCategories};
 
     #[test]
-    fn series_cross_to_arrow_rs() {
+    fn export_series_layouts() {
         let a = export_series(&Series::new("x".into(), &[Some(1i32), None]), CompatLevel::oldest()).unwrap();
         assert_eq!((a.len(), a.null_count(), a.data_type().clone()), (2, 1, AT::Int32));
         assert_eq!(export_series(&Series::new("x".into(), &["a"]), CompatLevel::oldest()).unwrap().data_type(), &AT::LargeUtf8);
@@ -124,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_series_round_trips() {
+    fn export_boolean_with_nulls() {
         let a = export_series(
             &Series::new("x".into(), &[Some(true), None, Some(false)]),
             CompatLevel::oldest(),
@@ -213,6 +214,47 @@ mod tests {
         .unwrap();
         let back = import_batch(&batch).unwrap();
         assert_eq!((back[0].dtype(), back[1].dtype()), (&DataType::Int32, &DataType::String));
+    }
+
+    #[test]
+    fn import_of_sliced_arrays_with_nulls_at_unaligned_offset() {
+        // Int32Array: 20 values, null every 3rd; slice(3, 3) starts at a
+        // validity-bitmap offset (3) that is not a multiple of 8. StringArray:
+        // slice(1, 3), offset 1. Both plain arrow-rs arrays, no Polars metadata.
+        let vals: Vec<Option<i32>> = (0..20i32).map(|i| if i % 3 == 0 { None } else { Some(i) }).collect();
+        let ints: ArrayRef = Arc::new(arrow_array::Int32Array::from(vals));
+        let ints = ints.slice(3, 3);
+        let strs: ArrayRef = Arc::new(arrow_array::StringArray::from(vec![Some("a"), None, Some("c"), Some("d")]));
+        let strs = strs.slice(1, 3);
+        let batch = RecordBatch::try_from_iter([("n", ints), ("s", strs)]).unwrap();
+        let back = import_batch(&batch).unwrap();
+        assert_eq!(back[0].i32().unwrap().iter().collect::<Vec<_>>(), vec![None, Some(4), Some(5)]);
+        assert_eq!(back[1].str().unwrap().iter().collect::<Vec<_>>(), vec![None, Some("c"), Some("d")]);
+    }
+
+    #[test]
+    fn plain_dictionary_arrays_import_as_categorical() {
+        // No Polars metadata (no `_PL_CATEGORICAL2` key): polars 0.51 still recognises
+        // a plain arrow-rs Dictionary<_, Utf8> array (any integer key width) and
+        // imports it as Categorical, keyed to a fresh, ad hoc category set.
+        use arrow_array::types::{Int32Type, Int8Type};
+        use arrow_array::DictionaryArray;
+        let d32: DictionaryArray<Int32Type> = vec![Some("a"), Some("b"), Some("a")].into_iter().collect();
+        let d8: DictionaryArray<Int8Type> = vec![Some("x"), None, Some("y")].into_iter().collect();
+        let batch = RecordBatch::try_from_iter([
+            ("d32", Arc::new(d32) as ArrayRef),
+            ("d8", Arc::new(d8) as ArrayRef),
+        ])
+        .unwrap();
+        let back = import_batch(&batch).unwrap();
+        for s in &back {
+            assert!(matches!(s.dtype(), DataType::Categorical(..)), "{}: {}", s.name(), s.dtype());
+        }
+        let text = |s: &Series| -> Vec<Option<String>> {
+            s.cast(&DataType::String).unwrap().str().unwrap().iter().map(|v| v.map(str::to_string)).collect()
+        };
+        assert_eq!(text(&back[0]), vec![Some("a".into()), Some("b".into()), Some("a".into())]);
+        assert_eq!(text(&back[1]), vec![Some("x".into()), None, Some("y".into())]);
     }
 
     #[test]
