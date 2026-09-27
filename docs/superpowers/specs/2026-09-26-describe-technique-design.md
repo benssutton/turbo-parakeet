@@ -35,13 +35,12 @@
 
 ```
 services/analytics/
-├── src/describe/
-│   ├── mod.rs        # plugin entry describe_columns(frame): one struct row per column
-│   ├── frequency.rs  # key → (count, first_idx): n_unique, entropy, f1, f2, top-5
-│   ├── range.rs      # argmin/argmax (first occurrence), min/max length
-│   ├── patterns.rs   # numeric-string and ISO 8601 byte scanners (no regex)
-│   ├── numeric.rs    # float stats (ryu shortest repr, f32 round trip, NaN/inf/fractional)
-│   └── sizes.rs      # plugin entry column_sizes(frame, zstd_level): IPC-framed bytes
+├── src/describe.rs   # plugin entry describe_columns(frame): one struct row per column;
+│                     #   frequency (key → (count, first_idx): n_unique, entropy, f1, f2, top-5),
+│                     #   range (argmin/argmax first occurrence, min/max length),
+│                     #   patterns (numeric-string and ISO 8601 byte scanners, no regex),
+│                     #   numeric (float stats: ryu shortest repr, f32 round trip, NaN/inf/fractional)
+├── src/sizes.rs      # plugin entry column_sizes(frame, zstd_level): IPC-framed bytes over arrow-rs ArrayData
 ├── src/shared.rs     # encode_series extended to Struct (whole value hashed)
 ├── src/lib.rs        # mod describe;
 └── analytics/
@@ -86,6 +85,9 @@ Min, max and top-5 values are reported as **row indices of first occurrence**, n
 | `f1`, `f2` | UInt64 | non-null values occurring exactly once / exactly twice |
 | `argmin`, `argmax` | UInt64 | first row index of the minimum / maximum non-null value; null when there is none |
 | `min_len`, `max_len` | UInt64 | String/Categorical/Enum: UTF-8 bytes of the value; Binary: bytes; List/Array: element count; else null |
+| `gcd` | Decimal(38, 0) | Int/UInt 8–64, Int128, Decimal, Date, Datetime, Duration, Time: GCD of the magnitudes of the physical values, as the Gcd technique (Decimal → unscaled, Date → days, Datetime/Duration → time unit, Time → ns); nulls skipped; all-null / all-zero / zero-row → 0; over 38 digits → null. Else null |
+| `sum_len` | UInt64 | String/Categorical/Enum (UTF-8 bytes), Binary: total bytes over non-null values. Else null |
+| `sum_len_unique` | UInt64 | as `sum_len`, over distinct non-null values (Rust: at each key's `first_idx` from the frequency map). Else null |
 | `top5_idx` | List(UInt64) | first-occurrence row index of each of the ≤5 most frequent non-null values |
 | `top5_count` | List(UInt64) | their counts |
 | `capture_history` | List(UInt64), length 7 | distinct non-null values by the set of split subsets they occur in. Each row is assigned to subset 0, 1 or 2 by a seeded pseudo-random draw; element `k−1` counts values whose subset mask (bit *i* = seen in subset *i*) equals `k`, for `k = 1..7` |
@@ -120,11 +122,14 @@ Min, max and top-5 values are reported as **row indices of first occurrence**, n
 | `numeric_int_min`, `numeric_int_max` | Decimal(38, 0) | range of the integer-looking values; null if there are none or any has more than 38 significant digits |
 | `numeric_max_int_digits` | UInt32 | max significant integer-part digits over all `n_numeric` values (leading zeros ignored; `"0.5"` → 0) |
 | `numeric_max_frac_digits` | UInt32 | max fraction digits after trailing zeros are removed (`"1.50"` → 1) |
+| `numeric_min_frac_digits` | UInt32 | min fraction digits over the `n_numeric` values after removing trailing zeros (integers count 0; `"1.50"` → 1); with `numeric_max_frac_digits` shows whether decimal places vary. Null if `n_numeric = 0` |
+| `numeric_max_sig_digits` | UInt32 | max significant digits of a single `n_numeric` value: all digits after removing leading zeros (across the dot) and trailing fraction zeros (`"0.00120"` → 2, `"1200"` → 4, `"12.50"` → 3, `"0"` → 0); decides whether a value round-trips through Float32 (≤ 6) / Float64 (≤ 15). Null if `n_numeric = 0` |
 | `n_iso_date` | UInt64 | values that are exactly an ISO date |
 | `n_iso_time` | UInt64 | values that are exactly an ISO time |
 | `n_iso_datetime` | UInt64 | ISO datetimes without offset |
 | `n_iso_datetime_tz` | UInt64 | ISO datetimes with `Z` or `±HH:MM` |
 | `iso_max_frac_digits` | UInt32 | max fractional-second digits (0–9) over ISO times/datetimes; null if none |
+| `iso_max_sig_frac_digits` | UInt32 | max fractional-second digits over ISO times/datetimes (both kinds) after removing trailing zeros (`"10:00:00.120"` → 2, `"10:00:00.000"` → 0); null if none |
 | `iso_n_offsets` | UInt64 | distinct offsets among `n_iso_datetime_tz` values (`Z`, `+00:00` and `-00:00` are one offset) |
 | `iso_n_midnight` | UInt64 | ISO datetimes (both kinds) whose time is exactly `00:00:00` with any fraction all zeros |
 
@@ -144,7 +149,7 @@ Time-unit granularity (e.g. all values whole milliseconds) is not computed here;
 |---|---|---|
 | `size_bytes` | UInt64 | Arrow IPC record-batch body length of the column (classic layout), uncompressed |
 | `size_zstd_bytes` | UInt64 | the same body length with ZSTD buffer compression at `zstd_level` |
-| `size_polars_bytes` | UInt64 | Polars in-memory size: `Series.estimated_size()` |
+| `size_polars_bytes` | UInt64 | IPC body length of the column in Polars' native layout (`CompatLevel.newest()`), uncompressed |
 | `size_polars_zstd_bytes` | UInt64 | IPC body length with ZSTD of the column in Polars' native layout (`CompatLevel.newest()`: StringView/BinaryView), i.e. what `write_ipc(compression="zstd")` writes |
 
 Arrow layout: the column as `Series.rechunk().to_arrow(compat_level=pl.CompatLevel.oldest())` — LargeUtf8, LargeBinary, LargeList (not Polars' internal view types). Framing follows Arrow IPC: every buffer is padded to 8 bytes; a validity buffer is written only if the column has nulls; with compression, each buffer is prefixed by its 8-byte uncompressed length and compressed as one ZSTD frame. How pyarrow writes a buffer that does not shrink (length prefix `-1`, raw bytes) is confirmed against pyarrow during implementation and mirrored in Rust. The reference definition is pyarrow's `body_length` of the IPC message (§5.2). The Polars ZSTD size uses the same framing on the `CompatLevel.newest()` layout (view types include their variadic data buffers).
@@ -170,7 +175,7 @@ Rayon-parallel across columns; within a column, 64K-row chunks (as in `gcd.rs`).
 4. **Floats** (`numeric.rs`): `ryu` shortest representation for `max_frac_digits`; f32 round trip; NaN/inf/fractional counts.
 5. **Datetime** `n_midnight`: naive → `physical.rem_euclid(units_per_day) == 0`; tz-aware → local time via Polars' `timezones` feature (chrono-tz).
 6. **Inner values**: flatten the List/Array child through its offsets and run steps 1–4 on it.
-7. **Sizes** (`sizes.rs`, separate entry point): per column, rechunk, `to_arrow(CompatLevel::oldest())`, walk the buffers recursively (validity, offsets, values, children), apply §4.5 framing, `zstd::bulk::compress(buffer, level)`. Polars sizes: `Series::estimated_size()`, and the same buffer walk and framing on `to_arrow(CompatLevel::newest())`.
+7. **Sizes** (`sizes.rs`, separate entry point): per column, rechunk, `to_arrow(CompatLevel::oldest())`, walk the buffers recursively (validity, offsets, values, children), apply §4.5 framing, `zstd::bulk::compress(buffer, level)`. Polars sizes: the same buffer walk and framing on `to_arrow(CompatLevel::newest())`.
 
 `shared.rs::encode_series` gains Struct support: a struct value's key is a foldhash of its fields' keys (null fields distinguished from null struct). This does not change existing keys for other dtypes.
 
@@ -188,7 +193,7 @@ Polars expressions, one `select` per column (no Python-level row loops):
 - Floats: `max_frac_digits` from the shortest string form (exponent-aware parse); f32 round trip via `cast(pl.Float32).cast(pl.Float64)`.
 - `n_midnight`: `dt.time() == time(0)`.
 - Inner values: `list.explode()` (or `Array` → `explode`) respecting offsets, then the same expressions.
-- Sizes (`_sizes.py`): `pa.record_batch([arrow_column])` written through `pa.ipc.new_stream` with `IpcWriteOptions(compression=None)` and `IpcWriteOptions(compression="zstd", ...)` at `zstd_level` (via `pa.Codec("zstd", compression_level=zstd_level)`); size = the record-batch message's `body_length`. Polars sizes: `Series.estimated_size()`, and the same ZSTD IPC measurement on `to_arrow(compat_level=pl.CompatLevel.newest())`.
+- Sizes (`_sizes.py`): `pa.record_batch([arrow_column])` written through `pa.ipc.new_stream` with `IpcWriteOptions(compression=None)` and `IpcWriteOptions(compression="zstd", ...)` at `zstd_level` (via `pa.Codec("zstd", compression_level=zstd_level)`); size = the record-batch message's `body_length`. Polars sizes: the same IPC measurement, plain and ZSTD, on `to_arrow(compat_level=pl.CompatLevel.newest())`.
 
 ### 5.3 DescribeDataFusion
 
@@ -280,7 +285,7 @@ A new `datagen.describe_mixed(n, seed)` frame covers: Int8–Int64, UInt8–UInt
    - Enum ordering; tz-aware `n_midnight` across a DST change; equal struct values count once; list inner metrics;
    - sizes vs hand-computed values (1,000 Int32 no nulls → 4,000 bytes; with nulls → + 128-byte validity buffer padded to 8);
    - adversarial long inputs (e.g. `"0"*10**6 + "." + "0"*10**6 + "."`) return correct counts (linearity is guaranteed by construction; not timed);
-   - `size_polars_bytes` equals `Series.estimated_size()`;
+   - `size_polars_bytes` equals the uncompressed IPC body length of the Polars native (`CompatLevel.newest()`) layout;
    - `capture_history` sums to `n_unique`; a column where every value occurs in every subset (e.g. 10 values × 10,000 rows) puts all mass in element 7;
    - **stringified columns**: a new `datagen.stringified(frame)` casts ints, floats, Decimal, Date, Datetime (naive and tz-aware), Time, Boolean and `List(Int64)` columns to String (`List(String)`), applied to `describe_mixed` and to 25 non-string columns of `large_dataset.arrow`. Expected: integer columns `n_numeric_int == n`; Date `n_iso_date == n`; naive Datetime (Polars writes `"2024-01-05 10:00:00.000"`) `n_iso_datetime == n`; tz-aware Datetime (Polars writes `"…+00:00"`) `n_iso_datetime_tz == n` and `iso_n_offsets == 1`; stringified lists → the same checks on inner values; floats written in exponent form (Polars writes `1e-7`) are deliberately not numeric; Boolean (`"true"`/`"false"`) is neither numeric nor ISO. Expectations are asserted on the strings Polars actually produces.
 4. **Conclusions** via `with_metrics`: each estimator branch (exact, Duj1, Schnabel, Chao1) including Schnabel invalid when `d/n ≥ 0.5` or `R = 0`; hand-worked Chao1 and Schnabel intervals (both `f2 > 0` and `f2 = 0`, and `T = 0`); `estimates_agree` true and false; `population_rows` as int and as dict; `ValueError` for `population_rows < n_rows`; one case per class including ordinal-before-categorical (`0..4` integer codes → ordinal); a NaN-entropy row.
@@ -312,9 +317,6 @@ The harness reports algorithmic (fastest non-Rust ÷ Rust@1), parallel and total
 
 ## 10. Out of scope (Spec B)
 
-- Recommender: target Arrow type per column following the type hierarchy, value-preserving (formatting may change → `lossy_formatting` flag), leading-zero rule.
-- Cast verification (round trip) and recast sizes via `column_sizes`.
-- Temporal granularity (reuse `Gcd`), Date from all-midnight datetimes, Timestamp(tz) vs `Struct{Timestamp(UTC), offset_minutes: Int16}` for varying offsets.
-- LargeString → String offset narrowing; dictionary (Categorical/Enum) encoding for low-cardinality strings; constant-column handling.
+Delivered by Spec B: docs/superpowers/specs/2026-09-26-recommend-technique-design.md.
 
 Deferred (not in Spec A or B): ClickHouse column sizes (MergeTree serialisation model and compressed-block approximation).

@@ -28,7 +28,9 @@ how column combinations are enumerated.
 
 **GCD — `analytics.gcd`** (`GcdRust`, `GcdNumpy`, ★`GcdMath`). ClickHouse GCD-codec method: the GCD of the magnitudes of each integer-backed column's raw physical values (Int/UInt 8–64, Int128, Decimal → unscaled, Date → days, Datetime/Duration → time unit, Time → ns). Nulls skipped; all-null / all-zero / zero-row → 0; `gcd` is Decimal(38, 0), so a GCD over 38 digits (Int128 only) → null; other dtypes (incl. Categorical/Enum, UInt128) → ineligible. Descriptor `dtype` (Python `str(dtype)`) on every row. Conclusion `gcd_compressible` = gcd > 1. Rust: rayon-parallel across columns and 64K-value chunks, `binary_gcd(g, v % g)` fold with early exit at 1.
 
-**Describe — `analytics.describe`** (`DescribeRust`, `DescribeDataFusion`, ★`DescribePolars`). Profile for choosing narrower / more compressible Arrow types (spec: docs/superpowers/specs/2026-09-26-describe-technique-design.md). Metrics: counts, entropy (null as a category), f1/f2, first-occurrence argmin/argmax and top-5 (indices; the base renders values), byte/list lengths, float stats (NaN/inf/fractional, decimal places, f32 round trip), numeric-string and ISO 8601 counts (Rust byte scanners / Rust-regex elsewhere — linear time), Datetime local-midnight count, Arrow IPC sizes (classic layout, plain + ZSTD) and Polars sizes, and the same for list inner values. Conclusions: rendered min/max/top-5, `unique`, Chao1 / Schnabel (3-way seeded split) / Duj1 with 95% intervals and `est_cardinality` picked by rule (exact → Duj1 → Schnabel → Chao1), `estimates_agree`, and `class` ∈ {null, constant, boolean, ordinal, categorical, discrete}. Keywords: `population_rows=None`, `categorical_threshold=10_000`, `zstd_level=1`, `seed=0`. Agreement: exact except entropy (1e-9), ZSTD sizes (1%), Schnabel (10%).
+**Describe — `analytics.describe`** (`DescribeRust`, `DescribeDataFusion`, ★`DescribePolars`). Profile for choosing narrower / more compressible Arrow types (spec: docs/superpowers/specs/2026-09-26-describe-technique-design.md). Metrics: counts, entropy (null as a category), f1/f2, first-occurrence argmin/argmax and top-5 (indices; the base renders values), byte/list lengths, `gcd`, byte totals (`sum_len`, `sum_len_unique`), significant-digit counts, float stats (NaN/inf/fractional, decimal places, f32 round trip), numeric-string and ISO 8601 counts (Rust byte scanners / Rust-regex elsewhere — linear time), Datetime local-midnight count, Arrow IPC sizes (classic layout, plain + ZSTD) and Polars native-layout IPC sizes, and the same for list inner values. Conclusions: rendered min/max/top-5, `unique`, Chao1 / Schnabel (3-way seeded split) / Duj1 with 95% intervals and `est_cardinality` picked by rule (exact → Duj1 → Schnabel → Chao1), `estimates_agree`, and `class` ∈ {null, constant, boolean, ordinal, categorical, discrete}. Keywords: `population_rows=None`, `categorical_threshold=10_000`, `zstd_level=1`, `seed=0`. Agreement: exact except entropy (1e-9), ZSTD sizes (1%), Schnabel (10%).
+
+**Recommend — `analytics.recommend`** (★`RecommendRust`, the only implementation). Narrowest value-preserving Arrow type per column (spec: docs/superpowers/specs/2026-09-26-recommend-technique-design.md): Describe's table plus `rec_*` columns. Step 1 type rules (null → boolean → uint → int → decimal → float → date → time → timestamp → timestamp_with_offset → string; lists → scalar when every list holds one item), step 2 dictionary encoding for strings (key width from `est_high`, Polars key one code narrower). Candidates carry a predicted IPC size and are tried smallest projected population size first (ties: hierarchy rank); each is cast, verified row by row and measured (Arrow and Polars layouts, plain and ZSTD); the original type is always the last resort. `rec_candidates` lists rule, evidence (the metric values tested), predicted/projected size and outcome for every candidate. Keywords: Describe's plus `boolean_pairs=(("true", "false"),)`. No Python implementation, so no reference agreement or algorithmic speedup; oracles are pyarrow/Polars casts and predicted = measured.
 
 ## 2. Multi-set (distinct-value sets; pairs may span frames)
 
@@ -58,14 +60,14 @@ turbo-parakeet/
 │   ├── pyproject.toml, Cargo.toml          # maturin build (editable install via analytics.pth)
 │   ├── src/                                # Rust plugin — lib.rs, shared.rs, entropy.rs, chi_squared.rs,
 │   │                                       #   contingency.rs, ari.rs, gcd.rs, bloomfilter.rs, minhash.rs,
-│   │                                       #   describe/ (frequency, patterns, numeric, range, sizes)
+│   │                                       #   describe.rs, sizes.rs, cardinality_estimators.rs, recommend.rs
 │   └── analytics/
 │       ├── __init__.py                     # __version__ only
 │       ├── analytics.pyd                   # compiled plugin
 │       ├── _plugin.py                      # PRIVATE plugin wrappers (called only by *Rust classes)
 │       ├── _dtypes.py, _sets.py            # dtype groupings / value families; canonical distinct values
 │       ├── base.py                         # Technique contract, helpers, metric_mismatches
-│       └── <technique>/                    # gcd, describe, membership, similarity, chi_squared,
+│       └── <technique>/                    # gcd, describe, recommend, membership, similarity, chi_squared,
 │           ├── __init__.py                 #   pairwise_entropy, threeway_entropy, adjusted_rand
 │           ├── base.py                     # technique base: METRICS, eligibility, conclusions, RTOL/ATOL
 │           └── rust.py, <library>.py …     # one file per implementation
@@ -88,8 +90,10 @@ Private — reached only through `analytics._plugin`, only by the `*Rust` classe
 `column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
 `pairwise_joint_entropy`, `threeway_joint_entropy` (the classes always pass explicit triplets, so the plugin's 5000-triplet default cap for `triplets=None` never applies; C(101,3) = 166,650 at 101 cols, ~65 s at 50K rows),
 `bloom_filter_bits` + `membership_ratio`, `minhash` + `lsh_candidates`,
-`describe_columns` + `column_sizes`.
+`describe_columns` + `column_sizes`, `describe_and_recommend`.
 (`membership`, `membership_ratio_sample` remain compiled but unused.)
+
+`recommend.rs` and `sizes.rs` are Arrow-native (arrow-rs 60); Series cross in through `shared::to_arrow_rs` (C Data Interface, zero-copy).
 
 # Testing Convention
 Every technique package declares `REFERENCE` (the exact accuracy reference) and `IMPLEMENTATIONS`.
