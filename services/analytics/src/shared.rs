@@ -59,7 +59,7 @@ impl EncodedColumn {
 /// Canonicalise an `f64` before taking its bit pattern:
 ///   - `+0.0` and `-0.0` collapse to the same key (they compare equal),
 ///   - every NaN (regardless of sign/payload) collapses to one key.
-/// This matches how Polars `value_counts` groups floats and keeps the plugin's
+/// This matches how Polars `value_counts` groups floats and keeps the Rust
 /// entropy/chi-squared consistent with a Polars reference on real float data.
 #[inline]
 fn canon_f64(x: f64) -> u64 {

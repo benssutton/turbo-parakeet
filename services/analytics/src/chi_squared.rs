@@ -135,7 +135,7 @@ pub(crate) fn pairwise_chi_squared_impl(
 /// from a drop-null contingency table.
 ///
 /// Null policy: rows where either column is null are dropped (pairwise deletion)
-/// by build_contingency. Note this differs from the entropy plugin, which treats
+/// by build_contingency. Note this differs from the entropy kernels, which treat
 /// null as its own category — keep that in mind when deriving mutual information
 /// from the two outputs.
 ///

@@ -118,7 +118,7 @@ pub(crate) fn bloom_filter_impl(series: &Series, kwargs: BloomFilterKwargs) -> P
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// membership_ratio  (batch plugin — one result row per input column)
+// membership_ratio  (batch — one result row per input column)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Compute (ratio_all, ratio_non_null) from a pre-converted column.
@@ -234,10 +234,9 @@ fn check_item_membership(item_bytes: &[u8], bit_array: &[u8], hash_count: usize,
     for i in 0..hash_count {
         let idx = hash1.wrapping_add(i.wrapping_mul(hash2)) % size;
         // SAFETY: `size` is the filter's bit count, so idx < size and therefore
-        // idx/8 < ceil(size/8). Every entry point (membership_impl,
-        // membership_ratio_impl, membership_ratio_multi_impl) calls
-        // validate_bit_array first, guaranteeing bit_array.len() == ceil(size/8),
-        // so this byte index is always in bounds.
+        // idx/8 < ceil(size/8). The production entry point (membership_ratio_multi_impl)
+        // and the test helpers call validate_bit_array first, guaranteeing
+        // bit_array.len() == ceil(size/8), so this byte index is always in bounds.
         if unsafe { *bit_array.get_unchecked(idx / 8) } & (1u8 << (idx % 8)) == 0 {
             return false;
         }
@@ -515,6 +514,38 @@ mod tests {
         assert_eq!(ratio_all, 0.5, "Nulls count in denominator: 2/4 = 0.5");
         // ratio_non_null: 2 found out of 3 non-null rows = 2/3
         assert!((ratio_non_null - 2.0 / 3.0).abs() < 1e-10, "ratio_non_null should be 2/3");
+    }
+
+    #[test]
+    fn test_membership_ratio_multi_impl_two_columns() {
+        // Generous m so a false positive is practically impossible.
+        let m = 1024;
+        let num_bytes = (m + 7) / 8;
+        let training = Series::new("training".into(), &["a", "b", "c"]);
+        let kwargs = BloomFilterKwargs { bit_array_bytes: vec![0u8; num_bytes], k: 7, m };
+        let bit_array = bloom_filter_impl(&training, kwargs).unwrap();
+
+        // col1: every value is in the filter → ratio_all = ratio_non_null = 1.0.
+        let col1 = Series::new("contained".into(), &["a", "b", "c"]);
+        // col2: one null, one value never inserted, one value that is inserted.
+        let col2 = Series::new("mixed".into(), &[Some("a"), None, Some("notfound")]);
+
+        let membership_kwargs = MembershipKwargs { bit_array_bytes: bit_array, k: 7, m };
+        let result = membership_ratio_multi_impl(&[col1, col2], &membership_kwargs).unwrap();
+        let df = result.into_frame().unnest(["membership_ratio"]).unwrap();
+
+        let names: Vec<&str> = df.column("col_name").unwrap().str().unwrap().into_no_null_iter().collect();
+        assert_eq!(names, ["contained", "mixed"]);
+
+        let ratio_all: Vec<f64> = df.column("ratio_all").unwrap().f64().unwrap().into_no_null_iter().collect();
+        let ratio_non_null: Vec<f64> = df.column("ratio_non_null").unwrap().f64().unwrap().into_no_null_iter().collect();
+
+        assert_eq!(ratio_all[0], 1.0, "every value in 'contained' is in the filter");
+        assert_eq!(ratio_non_null[0], 1.0, "every value in 'contained' is in the filter");
+
+        // "mixed": 1 found ("a"), 1 null, 1 not found ("notfound") → total 3, non_null 2.
+        assert!((ratio_all[1] - 1.0 / 3.0).abs() < 1e-10, "ratio_all should be 1/3, got {}", ratio_all[1]);
+        assert_eq!(ratio_non_null[1], 0.5, "1 of 2 non-null rows found, got {}", ratio_non_null[1]);
     }
 
     // ── numeric type tests ────────────────────────────────────────────────────
