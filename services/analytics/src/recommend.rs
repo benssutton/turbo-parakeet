@@ -1030,11 +1030,28 @@ fn render(a: &ArrayRef, i: usize) -> String {
         .unwrap_or_else(|| "null".into())
 }
 
+/// Rows compared per ArrayData equality check in `first_mismatch`.
+const MISMATCH_CHUNK: usize = 1 << 16;
+
+/// Ok when `a` and `b` hold equal values; else the first differing row. Compares
+/// 64K-row chunks, then bisects the first failing chunk on prefix equality (a
+/// prefix that differs stays different when extended) — O(log) comparisons, no
+/// per-row slicing.
 pub(crate) fn first_mismatch(a: &ArrayRef, b: &ArrayRef) -> Result<(), String> {
-    if a.to_data() == b.to_data() {
-        return Ok(());
+    if a.len() != b.len() {
+        return Err(format!("length {} ≠ {}", b.len(), a.len()));
     }
-    let i = (0..a.len()).find(|&i| a.slice(i, 1).to_data() != b.slice(i, 1).to_data()).unwrap_or(0);
+    let same = |start: usize, len: usize| a.slice(start, len).to_data() == b.slice(start, len).to_data();
+    let Some(start) = (0..a.len()).step_by(MISMATCH_CHUNK).find(|&s| !same(s, MISMATCH_CHUNK.min(a.len() - s))) else {
+        return Ok(());
+    };
+    // Invariant: rows start..start+lo are equal; start..start+hi differ somewhere.
+    let (mut lo, mut hi) = (0, MISMATCH_CHUNK.min(a.len() - start));
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if same(start, mid) { lo = mid } else { hi = mid }
+    }
+    let i = start + lo;
     Err(format!("row {i}: {} round-trips to {}", render(a, i), render(b, i)))
 }
 
@@ -1932,6 +1949,23 @@ mod tests {
         let a: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         let b: ArrayRef = Arc::new(Int64Array::from(vec![1, 9, 3]));
         assert!(first_mismatch(&a, &b).unwrap_err().starts_with("row 1:"));
+        assert!(first_mismatch(&a, &a.clone()).is_ok());
+        let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
+        assert!(first_mismatch(&empty, &empty.clone()).is_ok());
+        // Mismatches around the 64K chunk boundaries, and a null against a value.
+        let n = 3 * MISMATCH_CHUNK + 7;
+        let base: Vec<Option<i64>> = (0..n as i64).map(Some).collect();
+        let a: ArrayRef = Arc::new(Int64Array::from(base.clone()));
+        for i in [0, MISMATCH_CHUNK - 1, MISMATCH_CHUNK, 2 * MISMATCH_CHUNK + 1, n - 1] {
+            for v in [Some(-1), None] {
+                let mut other = base.clone();
+                other[i] = v;
+                other[n - 1] = if i == n - 1 { v } else { Some(-2) }; // a later mismatch too
+                let b: ArrayRef = Arc::new(Int64Array::from(other));
+                let err = first_mismatch(&a, &b).unwrap_err();
+                assert!(err.starts_with(&format!("row {i}:")), "{i}: {err}");
+            }
+        }
         let text = LargeStringArray::from(vec!["2300-01-01T00:00:00.123456789"]);
         assert!(from_text(&Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, None)), &text).is_err()); // beyond i64 ns
     }
