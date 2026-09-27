@@ -9,6 +9,7 @@ mod gcd;
 mod describe;
 mod sizes;
 mod cardinality_estimators;
+mod recommend;
 
 use mimalloc::MiMalloc;
 
