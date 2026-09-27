@@ -5,14 +5,13 @@ build-backend = "maturin"
 [project]
 name = "analytics"
 version = "0.1"
-description = "Extensions to Polars expressions for Data Analysis"
+description = "Column-relationship analytics over Arrow data, with a Rust core"
 requires-python = ">=3.10"
 dependencies = [
-    "polars>=0.19.0",
+    "polars>=1.41",
 ]
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
 ]
 

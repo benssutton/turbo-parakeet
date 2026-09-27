@@ -3,7 +3,7 @@ Determine patterns and relationships between columns, both within and between da
 
 # Technology
 - Arrow columnar data format throughout
-- Python with Rust extensions via pyo3/pyo3-polars for performance
+- Python with Rust extensions via pyo3, with Arrow at the FFI boundary for performance
 - Polars as the primary dataframe library
 
 # Python Environment
@@ -61,7 +61,7 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 turbo-parakeet/
 ├── services/analytics/
 │   ├── pyproject.toml, Cargo.toml          # maturin build (editable install via analytics.pth)
-│   ├── src/                                # Rust plugin — lib.rs, shared.rs, entropy.rs, chi_squared.rs,
+│   ├── src/                                # Rust extension — lib.rs, shared.rs, entropy.rs, chi_squared.rs,
 │   │                                       #   contingency.rs, ari.rs, gcd.rs, bloomfilter.rs, minhash.rs,
 │   │                                       #   describe.rs, sizes.rs, cardinality_estimators.rs, recommend.rs,
 │   │                                       #   api.rs, arrow_io.rs, python.rs
@@ -91,7 +91,7 @@ turbo-parakeet/
 Build: `maturin develop --release` from `services/analytics/`. Python changes need no rebuild (editable install).
 
 Three layers (spec: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design.md):
-- `src/api.rs` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown column, bad Bloom array, unimportable type) / `Compute`.
+- `src/api.rs` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown or duplicate column names, a malformed Bloom array or zero Bloom/LSH parameters, wrong column counts, an unimportable Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/`ShapeMismatch` error — a column of the wrong type for the kernel) / `Compute`.
 - `src/arrow_io.rs` — RecordBatch ↔ Polars Series, zero-copy through the C Data Interface (Polars' `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` field metadata restores Categorical / Enum). Kernels still compute on Series; `sizes.rs` / `recommend.rs` measure layouts derived with `export_series`.
 - `src/python.rs` — pyo3 module `analytics.analytics`: reads any `__arrow_c_stream__` object into one batch, rejects Polars' private `_pli128` / `_plu128` (Int128 / UInt128) with ValueError naming the column, releases the GIL, returns `ArrowTable` (itself `__arrow_c_stream__`). InvalidInput → ValueError, Compute → RuntimeError, non-Arrow input → TypeError.
 
@@ -136,11 +136,10 @@ This encoding is entropy/chi²-only — it's value-relabeling and has no cross-c
 ## Implementation cleanups
 
 **[bloomfilter.rs](services/analytics/src/bloomfilter.rs)**
-- ~~silent state discard on `existing_filter` length mismatch~~ **Fixed**: `m` is now consistently bits with `ceil(m/8)`-byte arrays; wrong-sized filters raise `ComputeError`, and `validate_bit_array` guards the unchecked bit reads.
+- ~~silent state discard on `existing_filter` length mismatch~~ **Fixed**: wrong-sized bit arrays are rejected by `api::membership_ratio` as `InvalidInput` (→ ValueError); `validate_bit_array` still guards the unchecked bit reads.
 
 **[minhash.rs](services/analytics/src/minhash.rs)**
-- [minhash.rs:266](services/analytics/src/minhash.rs#L266): `compute_signature_for_series_with_coeffs` swallows `series_to_u64` errors and returns `vec![u32::MAX; num_perm]` — a useless signature that gets silently included downstream. Propagate the error instead.
-- [minhash.rs:87-99](services/analytics/src/minhash.rs#L87-L99): bucket-pair generation is O(|bucket|²) per band. Acceptable at typical scales; document as a known scaling concern for pathologically dense buckets.
+- [minhash.rs:75-92](services/analytics/src/minhash.rs#L75-L92): bucket-pair generation is O(|bucket|²) per band. Acceptable at typical scales; document as a known scaling concern for pathologically dense buckets.
 
 **[similarity/rust.py]**
 - MinHash recall on large_dataset.arrow is 0.62 (389/625 passing pairs), below MIN_RECALL 0.85: all misses are containment pairs (overlap = 1.0) whose Jaccard is below the ~0.43 LSH candidate threshold (min(j·0.9, o·0.45)). The heuristic is carried over unchanged from the old filter. Follow-ups: add a containment-heavy recall fixture to tests/test_similarity.py; derive the candidate threshold from the overlap threshold and the cardinality ratio.

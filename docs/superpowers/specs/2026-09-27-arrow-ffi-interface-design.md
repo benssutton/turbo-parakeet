@@ -82,8 +82,11 @@ combinations) are unchanged.
 
 **Errors.** `api::Error` has two kinds:
 
-- `InvalidInput`: unknown column in `pairs` / `triplets`, a Bloom bit array of the
-  wrong length, Int128 or UInt128 (§4), or an Arrow type no kernel accepts.
+- `InvalidInput`: unknown or duplicate column names, a malformed Bloom array or zero
+  Bloom/LSH parameters, wrong column counts, Int128 or UInt128 (§4), an unimportable
+  Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/
+  `ShapeMismatch` error (a column of the wrong type for the kernel) — `compute()`
+  reclassifies those four Polars error kinds as `InvalidInput`.
 - `Compute`: any other kernel failure.
 
 `python.rs` raises them as `ValueError` and `RuntimeError` respectively. No test
