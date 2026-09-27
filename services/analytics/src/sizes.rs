@@ -104,11 +104,21 @@ impl Body {
             AT::LargeUtf8 | AT::LargeBinary => self.var_size::<i64>(d),
             AT::Utf8View | AT::BinaryView => {
                 self.validity(d)?;
+                // Only the 16-byte view buffer is offset/len-sliced; the variadic data
+                // buffers (buffers()[1..]) hold the actual string/byte payload and are
+                // written whole even for a sliced view array — pyarrow does the same,
+                // since a view's inline/prefix bytes and buffer-index+offset already
+                // point at the right bytes regardless of which views are in range.
                 self.buffer(&d.buffers()[0].as_slice()[d.offset() * 16..(d.offset() + d.len()) * 16])?;
                 d.buffers()[1..].iter().try_for_each(|b| self.buffer(b.as_slice()))
             }
             AT::List(_) => self.list::<i32>(d),
             AT::LargeList(_) => self.list::<i64>(d),
+            // FixedSizeList/Struct children are sliced by the parent's own offset/len here:
+            // needed for FFI-imported or hand-built ArrayData, where a parent can carry a
+            // non-zero offset over unsliced children. arrow-rs's own `Array::slice().to_data()`
+            // instead returns offset 0 with children already sliced, so this slice is a no-op
+            // in that case and never double-applies.
             AT::FixedSizeList(_, w) => {
                 self.validity(d)?;
                 let w = *w as usize;
@@ -119,7 +129,8 @@ impl Body {
                 d.child_data().iter().try_for_each(|c| self.array(&c.slice(d.offset(), d.len())))
             }
             AT::Dictionary(k, _) => {
-                self.fixed(d, k.primitive_width().expect("integer dictionary key"))?; // the keys
+                let width = k.primitive_width().ok_or_else(|| polars_err!(ComputeError: "sizes: non-integer dictionary key {k}"))?;
+                self.fixed(d, width)?; // the keys
                 self.array(&d.child_data()[0]) // the dictionary batch
             }
             t => match t.primitive_width() {
