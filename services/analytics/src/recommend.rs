@@ -439,6 +439,394 @@ pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
     (v < 10i128.pow(38)).then_some(if neg { -v } else { v })
 }
 
+// ── candidates (Spec B §4, §5.2) ────────────────────────────────────────────
+
+use crate::cardinality_estimators::{estimate, Estimate};
+use crate::describe::Profile;
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Decimal128Type, Float64Type};
+use arrow_array::{Array, ArrayRef, LargeStringArray};
+use arrow_cast::cast::{cast_with_options, CastOptions};
+use polars::prelude::DataType as PT;
+use serde::Deserialize;
+
+/// Plugin keyword arguments (Recommend's constructor keywords).
+#[derive(Deserialize, Clone, Debug)]
+pub(crate) struct Params {
+    pub seed: u64,
+    pub zstd_level: i32,
+    pub population_rows: Option<u64>,
+    pub categorical_threshold: u64,
+    pub boolean_pairs: Vec<(String, String)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Outcome {
+    Chosen,
+    Failed,
+    Rejected,
+    NotTried,
+}
+
+impl Outcome {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Outcome::Chosen => "chosen",
+            Outcome::Failed => "failed",
+            Outcome::Rejected => "rejected",
+            Outcome::NotTried => "not_tried",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Candidate {
+    pub target: Target,
+    pub rank: Rank,
+    pub rule: String,
+    /// The metric values the rule tested and what they implied.
+    pub evidence: String,
+    pub predicted: u64,
+    pub projected: f64,
+    pub outcome: Outcome,
+    pub reason: Option<String>,
+}
+
+/// One level of a column: the column, or a list's inner values.
+pub(crate) struct Level<'a> {
+    pub column: &'a str,
+    /// Polars dtype of these values.
+    pub dtype: &'a PT,
+    /// The values in Arrow's classic layout (CompatLevel::oldest).
+    pub values: ArrayRef,
+    pub p: &'a Profile,
+    pub n_midnight: Option<u64>,
+    /// Measured uncompressed size of `values`.
+    pub size_bytes: u64,
+    pub est: Estimate,
+    /// Population rows ÷ frame rows.
+    pub r: f64,
+    /// "" or "inner: " — prefixes every rule name.
+    pub prefix: &'static str,
+}
+
+impl Level<'_> {
+    fn n_rows(&self) -> u64 {
+        self.values.len() as u64
+    }
+
+    fn n_null(&self) -> u64 {
+        self.values.null_count() as u64
+    }
+
+    fn n(&self) -> u64 {
+        self.n_rows() - self.n_null()
+    }
+
+    /// Population cardinality for dictionaries: est_high where an interval exists.
+    fn cardinality(&self) -> (f64, &'static str) {
+        match self.est.est_high {
+            Some(h) => (h, "est_high"),
+            None => (self.est.est_cardinality, "est_cardinality"),
+        }
+    }
+
+    fn shape(&self) -> Shape {
+        Shape {
+            n: self.n_rows() as f64,
+            nulls: self.n_null() as f64,
+            sum_len: self.p.sum_len.unwrap_or(0) as f64,
+            d: self.p.freq.n_unique as f64,
+            sum_len_unique: self.p.freq.sum_len_unique.unwrap_or(0) as f64,
+        }
+    }
+}
+
+pub(crate) fn level_estimate(p: &Profile, n: u64, q: Option<f64>) -> Estimate {
+    estimate(p.freq.n_unique, n, p.freq.f1, p.freq.f2, &p.freq.capture_history, q)
+}
+
+/// arrow-cast with `safe: false`: a value that does not fit is an error, not a null.
+pub(crate) fn arrow_cast(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
+    cast_with_options(a, to, &CastOptions { safe: false, ..Default::default() }).map_err(|e| e.to_string())
+}
+
+pub(crate) fn is_text(dt: &PT) -> bool {
+    matches!(dt, PT::String | PT::Categorical(..) | PT::Enum(..))
+}
+
+pub(crate) fn is_float(dt: &PT) -> bool {
+    matches!(dt, PT::Float32 | PT::Float64)
+}
+
+pub(crate) fn text_of(values: &ArrayRef) -> Result<LargeStringArray, String> {
+    Ok(arrow_cast(values.as_ref(), &AT::LargeUtf8)?.as_string::<i64>().clone())
+}
+
+/// Row `i` as an exact integer (integer columns; Int128 arrives as decimal128(38, 0)).
+fn int_at(a: &ArrayRef, i: u64) -> Option<i128> {
+    let v = arrow_cast(a.slice(i as usize, 1).as_ref(), &AT::Decimal128(38, 0)).ok()?;
+    let v = v.as_primitive::<Decimal128Type>();
+    v.is_valid(0).then(|| v.value(0))
+}
+
+fn f64_at(a: &ArrayRef, i: u64) -> f64 {
+    arrow_cast(a.slice(i as usize, 1).as_ref(), &AT::Float64).map_or(f64::NAN, |v| v.as_primitive::<Float64Type>().value(0))
+}
+
+struct Rules<'l, 'a> {
+    lvl: &'l Level<'a>,
+    shape: Shape,
+    out: Vec<Candidate>,
+}
+
+impl Rules<'_, '_> {
+    fn push(&mut self, target: Target, rank: Rank, rule: &str, evidence: String) {
+        let t = target.arrow_type();
+        let (c, _) = self.lvl.cardinality();
+        self.out.push(Candidate {
+            predicted: body_size(&t, &self.shape) as u64,
+            projected: body_size(&t, &self.shape.project(self.lvl.r, c)),
+            target,
+            rank,
+            rule: format!("{}{rule}", self.lvl.prefix),
+            evidence,
+            outcome: Outcome::NotTried,
+            reason: None,
+        });
+    }
+
+    fn integers(&mut self, lo: i128, hi: i128, from: &str, evidence: &str) {
+        let ev = format!("{evidence}min={lo} max={hi}");
+        if lo >= 0 && hi <= 1 {
+            self.push(Target::Boolean, Rank::Boolean, &format!("{from}→boolean"), ev.clone());
+        }
+        let uint = if lo >= 0 { narrowest_uint(hi) } else { None };
+        let int = narrowest_int(lo, hi);
+        if let Some(t) = uint.clone() {
+            self.push(Target::Fixed(t), Rank::UInt, &format!("{from}→uint"), ev.clone());
+        }
+        if let Some(t) = int.clone() {
+            self.push(Target::Fixed(t), Rank::Int, &format!("{from}→int"), ev.clone());
+        }
+        if uint.is_none() && int.is_none() {
+            let p = digits(lo.unsigned_abs().max(hi.unsigned_abs()));
+            if p <= 38 {
+                self.push(Target::Fixed(AT::Decimal128(p, 0)), Rank::Decimal, &format!("{from}→decimal128"), format!("{ev} → p={p}"));
+            }
+        }
+    }
+
+    fn decimal(&mut self, scale: usize) {
+        let (p, v) = (self.lvl.p, &self.lvl.values);
+        let (Some(lo), Some(hi)) = (p.range.argmin, p.range.argmax) else { return };
+        let unscaled = |i: u64| v.as_primitive::<Decimal128Type>().value(i as usize);
+        let g = p.gcd.unwrap_or(1);
+        let k = if g == 0 { scale } else { trailing_zeros10(g).min(scale) };
+        let f = 10i128.pow(k as u32);
+        let (lo, hi, s) = (unscaled(lo) / f, unscaled(hi) / f, scale - k);
+        let ev = format!("gcd={g} → {k} trailing zeros, scale {scale}→{s}; ");
+        if s == 0 {
+            return self.integers(lo, hi, "decimal", &ev);
+        }
+        let prec = digits(lo.unsigned_abs().max(hi.unsigned_abs())).max(s as u8);
+        if prec <= 38 {
+            self.push(Target::Fixed(decimal_type(prec, s as i8)), Rank::Decimal, "decimal→decimal", format!("{ev}min={lo} max={hi} → p={prec} s={s}"));
+        }
+    }
+
+    fn float(&mut self) {
+        let (p, v) = (self.lvl.p, &self.lvl.values);
+        let f = p.floats.expect("float columns have float stats");
+        let ev = format!("n_nan={} n_inf={} n_fractional={} ", f.n_nan, f.n_inf, f.n_fractional);
+        if let (0, 0, Some(lo), Some(hi)) = (f.n_nan, f.n_inf, p.range.argmin, p.range.argmax) {
+            let (lo, hi) = (f64_at(v, lo), f64_at(v, hi));
+            let top = lo.abs().max(hi.abs());
+            if f.n_fractional == 0 {
+                if top < 1e38 {
+                    self.integers(lo as i128, hi as i128, "float", &ev);
+                }
+            } else if let Some(s) = f.max_frac_digits {
+                let int_digits = if top < 1.0 { 0 } else { digits(top.floor() as u128) as u32 };
+                let prec = int_digits + s;
+                if prec <= 38 {
+                    self.push(
+                        Target::Fixed(decimal_type(prec as u8, s as i8)),
+                        Rank::Decimal,
+                        "float→decimal",
+                        format!("{ev}max_frac_digits={s} int_digits={int_digits} → p={prec} s={s}"),
+                    );
+                }
+            }
+        }
+        if self.lvl.dtype == &PT::Float64 && f.n_f32_inexact == 0 {
+            self.push(Target::Fixed(AT::Float32), Rank::Float, "float64→float32", "n_f32_inexact=0".into());
+        }
+    }
+
+    fn temporal(&mut self) {
+        let lvl = self.lvl;
+        let (unit, tz) = match lvl.values.data_type() {
+            AT::Timestamp(u, tz) => (*u, tz.clone()),
+            AT::Duration(u) | AT::Time64(u) | AT::Time32(u) => (*u, None),
+            _ => return,
+        };
+        let g = lvl.p.gcd.unwrap_or(1);
+        let coarse = coarsest_unit(g * unit_ns(&unit));
+        let ev = format!("gcd={g} ({}) → {}", unit_name(&unit), unit_name(&coarse));
+        match lvl.dtype {
+            PT::Datetime(_, zone) => {
+                if zone.is_none() && lvl.n_midnight == Some(lvl.n()) {
+                    self.push(Target::Fixed(AT::Date32), Rank::Date, "datetime→date32", format!("n_midnight={}", lvl.n()));
+                }
+                if coarse != unit {
+                    self.push(Target::Fixed(AT::Timestamp(coarse, tz)), Rank::Timestamp, "datetime→timestamp", ev);
+                }
+            }
+            PT::Duration(_) if coarse != unit => self.push(Target::Fixed(AT::Duration(coarse)), Rank::Timestamp, "duration→duration", ev),
+            PT::Time if coarse != unit => self.push(Target::Fixed(time_type(coarse)), Rank::Time, "time→time", ev),
+            _ => {}
+        }
+    }
+
+    fn text(&mut self, params: &Params) -> Result<(), String> {
+        let lvl = self.lvl;
+        let (st, n) = (lvl.p.strings.as_ref().expect("string columns have string stats"), lvl.n());
+        let text = text_of(&lvl.values)?;
+        let distinct: Vec<String> = if lvl.p.freq.n_unique <= 5 {
+            lvl.p.freq.top5_idx.iter().map(|&i| text.value(i as usize).to_lowercase()).collect()
+        } else {
+            Vec::new()
+        };
+        let pair = params
+            .boolean_pairs
+            .iter()
+            .map(|(t, f)| (t.to_lowercase(), f.to_lowercase()))
+            .find(|(t, f)| !distinct.is_empty() && distinct.iter().all(|v| v == t || v == f));
+        let sig = st.iso_max_sig_frac_digits.unwrap_or(0);
+        if let Some((t, f)) = pair {
+            self.push(Target::BoolPair(t.clone(), f.clone()), Rank::Boolean, "string→boolean", format!("distinct={distinct:?} pair=({t:?}, {f:?})"));
+        } else if st.n_numeric_int == n && st.n_leading_zero == 0 && !st.int_overflow && st.int_min.is_some() {
+            self.integers(st.int_min.unwrap(), st.int_max.unwrap(), "string", &format!("n_numeric_int={n} n_leading_zero=0 "));
+        } else if st.n_numeric == n && st.n_leading_zero == 0 {
+            let (i, f) = (st.max_int_digits.unwrap_or(0), st.max_frac_digits.unwrap_or(0));
+            let (min_f, sig_d) = (st.min_frac_digits.unwrap_or(0), st.max_sig_digits.unwrap_or(0));
+            let prec = (i + f).max(1);
+            let ev = format!(
+                "n_numeric={n} n_leading_zero=0 numeric_max_int_digits={i} numeric_max_frac_digits={f} \
+                 numeric_min_frac_digits={min_f} numeric_max_sig_digits={sig_d}"
+            );
+            if prec <= 38 {
+                self.push(Target::Fixed(decimal_type(prec as u8, f as i8)), Rank::Decimal, "string→decimal", format!("{ev} → p={prec} s={f}"));
+            }
+            if min_f < f && prec > 18 {
+                let why = format!("{ev} → varying places, p={prec} > 18");
+                if sig_d <= 6 {
+                    self.push(Target::Fixed(AT::Float32), Rank::Float, "string→float32", why.clone());
+                }
+                if sig_d <= 15 {
+                    self.push(Target::Fixed(AT::Float64), Rank::Float, "string→float64", why);
+                }
+            }
+        } else if st.n_iso_date == n {
+            self.push(Target::Fixed(AT::Date32), Rank::Date, "string→date32", format!("n_iso_date={n}"));
+        } else if st.n_iso_time == n {
+            self.push(Target::Fixed(time_type(iso_unit(sig))), Rank::Time, "string→time", format!("n_iso_time={n} iso_max_sig_frac_digits={sig}"));
+        } else if st.n_iso_datetime == n {
+            if st.iso_n_midnight == n {
+                self.push(Target::Fixed(AT::Date32), Rank::Date, "string→date32", format!("n_iso_datetime={n} iso_n_midnight={n}"));
+            } else {
+                self.push(
+                    Target::Fixed(AT::Timestamp(iso_unit(sig), None)),
+                    Rank::Timestamp,
+                    "string→timestamp",
+                    format!("n_iso_datetime={n} iso_max_sig_frac_digits={sig}"),
+                );
+            }
+        } else if st.n_iso_datetime_tz == n {
+            let ev = format!("n_iso_datetime_tz={n} iso_n_offsets={} iso_max_sig_frac_digits={sig}", st.offsets.len());
+            match st.offsets.iter().next() {
+                Some(&m) if st.offsets.len() == 1 => {
+                    self.push(Target::Fixed(AT::Timestamp(iso_unit(sig), Some(offset_tz(m).into()))), Rank::Timestamp, "string→timestamp", ev)
+                }
+                _ => self.push(
+                    Target::TimestampWithOffset(iso_unit(sig)),
+                    Rank::TimestampWithOffset,
+                    "string→timestamp_with_offset (arrow.timestamp_with_offset)",
+                    ev,
+                ),
+            }
+        }
+        let sum_len = lvl.p.sum_len.unwrap_or(0);
+        if sum_len < 1 << 31 {
+            self.push(Target::Plain(AT::Utf8), Rank::Plain, "string→utf8", format!("sum_len={sum_len}"));
+        }
+        self.dictionary(params);
+        Ok(())
+    }
+
+    fn dictionary(&mut self, params: &Params) {
+        let (c, source) = self.lvl.cardinality();
+        let (key, polars_key) = dictionary_keys(c);
+        let threshold = params.categorical_threshold;
+        let ev = format!("c={c:?} from {source} n_unique={} categorical_threshold={threshold}", self.lvl.p.freq.n_unique);
+        self.push(Target::Dictionary(key, polars_key), Rank::Dictionary, "string→dictionary", ev);
+        if c > threshold as f64 {
+            let last = self.out.last_mut().unwrap();
+            last.outcome = Outcome::Rejected;
+            last.reason = Some(format!("c={c:?} > categorical_threshold={threshold}"));
+        }
+    }
+
+    fn binary(&mut self) {
+        let sum_len = self.lvl.p.sum_len.unwrap_or(0);
+        if sum_len < 1 << 31 {
+            self.push(Target::Plain(AT::Binary), Rank::Plain, "binary→binary", format!("sum_len={sum_len}"));
+        }
+    }
+
+    fn original(&mut self) {
+        let lvl = self.lvl;
+        self.out.push(Candidate {
+            target: Target::Original(lvl.values.data_type().clone()),
+            rank: Rank::Original,
+            rule: format!("{}original", lvl.prefix),
+            evidence: format!("measured size_bytes={}", lvl.size_bytes),
+            predicted: lvl.size_bytes,
+            projected: lvl.size_bytes as f64 * lvl.r,
+            outcome: Outcome::NotTried,
+            reason: None,
+        });
+    }
+}
+
+/// Every candidate for one level, in rule order (Spec B §4.2–4.3, §5.2); the
+/// original type last.
+pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>, String> {
+    let mut r = Rules { lvl, shape: lvl.shape(), out: Vec::new() };
+    if lvl.n_rows() > 0 && lvl.n() == 0 {
+        r.push(Target::Null, Rank::Null, "all-null→null", format!("n_null={} n_rows={}", lvl.n_null(), lvl.n_rows()));
+    } else if lvl.n() > 0 {
+        match lvl.dtype {
+            PT::Int8 | PT::Int16 | PT::Int32 | PT::Int64 | PT::Int128 | PT::UInt8 | PT::UInt16 | PT::UInt32 | PT::UInt64 => {
+                if let (Some(a), Some(b)) = (lvl.p.range.argmin, lvl.p.range.argmax) {
+                    if let (Some(lo), Some(hi)) = (int_at(&lvl.values, a), int_at(&lvl.values, b)) {
+                        r.integers(lo, hi, "integer", "");
+                    }
+                }
+            }
+            PT::Decimal(_, s) => r.decimal(s.unwrap_or(0)),
+            PT::Float32 | PT::Float64 => r.float(),
+            PT::Datetime(..) | PT::Duration(_) | PT::Time => r.temporal(),
+            dt if is_text(dt) => r.text(params)?,
+            PT::Binary => r.binary(),
+            _ => {}
+        }
+    }
+    r.original();
+    Ok(r.out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,5 +912,71 @@ mod tests {
         assert_eq!(narrowest_int(0, i128::from(u64::MAX)), None);
         assert_eq!(trailing_zeros10(1_200), 2);
         assert_eq!(offset_tz(-210), "-03:30");
+    }
+
+    use crate::describe::describe_one;
+    use crate::shared::to_arrow_rs;
+    use polars::prelude::{CompatLevel, DataType as PT, IntoSeries, NamedFrom, NewChunkedArray, Series, TimeUnit as PTimeUnit};
+
+    pub(super) fn params() -> Params {
+        Params { seed: 0, zstd_level: 1, population_rows: None, categorical_threshold: 10_000, boolean_pairs: vec![("true".into(), "false".into())] }
+    }
+
+    fn types(s: Series, p: &Params) -> Vec<(String, Outcome)> {
+        let d = describe_one(&s, 0).unwrap();
+        let lvl = Level {
+            column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, d.n_rows - d.n_null, None), r: 1.0, prefix: "",
+        };
+        candidates(&lvl, p).unwrap().iter().map(|c| (pa_name(&c.target.arrow_type()), c.outcome)).collect()
+    }
+
+    fn names(s: Series) -> Vec<String> {
+        types(s, &params()).into_iter().map(|(t, _)| t).collect()
+    }
+
+    #[test]
+    fn integer_rules() {
+        assert_eq!(names(Series::new("x".into(), &[0i64, 1])), ["bool", "uint8", "int8", "int64"]);
+        assert_eq!(names(Series::new("x".into(), &[-200i64, 5])), ["int16", "int64"]);
+    }
+
+    #[test]
+    fn decimal_scale_reduced_by_gcd() {
+        let dec = polars::prelude::Int128Chunked::from_slice("x".into(), &[120, 340]).into_decimal_unchecked(Some(10), 2).into_series();
+        assert_eq!(names(dec), ["decimal32(2, 1)", "decimal128(10, 2)"]);
+    }
+
+    #[test]
+    fn float_rules() {
+        assert_eq!(names(Series::new("x".into(), &[123.45f64, 99.99])), ["decimal32(5, 2)", "double"]);
+        assert_eq!(names(Series::new("x".into(), &[0.5f64, 0.25])), ["decimal32(2, 2)", "float", "double"]);
+        assert_eq!(names(Series::new("x".into(), &[0.1f64, f64::NAN])), ["double"]);
+    }
+
+    #[test]
+    fn string_rules() {
+        let dict = "dictionary<values=string, indices=uint8, ordered=0>";
+        assert_eq!(names(Series::new("x".into(), &["007", "12"])), ["string", dict, "large_string"]);
+        assert_eq!(
+            names(Series::new("x".into(), &["1234567890.1", "0.00000012345"])),
+            ["decimal128(21, 11)", "double", "string", dict, "large_string"]
+        );
+        let offsets = names(Series::new("x".into(), &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"]));
+        assert_eq!(offsets[0], "struct<timestamp: timestamp[s, tz=UTC] not null, offset_minutes: int16 not null>");
+        assert_eq!(names(Series::new("x".into(), &["True", "false"]))[0], "bool");
+    }
+
+    #[test]
+    fn temporal_rules() {
+        let days = Series::new("x".into(), &[0i64, 86_400_000_000]).cast(&PT::Datetime(PTimeUnit::Microseconds, None)).unwrap();
+        assert_eq!(names(days), ["date32[day]", "timestamp[s]", "timestamp[us]"]);
+    }
+
+    #[test]
+    fn dictionary_gate_rejects() {
+        let p = Params { categorical_threshold: 1, ..params() };
+        let got = types(Series::new("x".into(), &["a", "b", "a", "b"]), &p);
+        assert!(got.iter().any(|(t, o)| t.starts_with("dictionary") && *o == Outcome::Rejected));
     }
 }
