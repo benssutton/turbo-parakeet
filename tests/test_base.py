@@ -9,6 +9,7 @@ import math
 import weakref
 
 import polars as pl
+import pyarrow as pa
 import pytest
 
 from analytics._dtypes import encodable, is_nested, value_family
@@ -233,6 +234,11 @@ def test_bad_frame_name_raises(name):
 def test_non_frame_raises():
     with pytest.raises(TypeError, match="DataFrame or LazyFrame, or Arrow tabular data"):
         Toy().add({"f": {"a": [1]}})
+
+
+def test_non_tabular_arrow_raises():
+    with pytest.raises(TypeError, match="not Arrow tabular data"):
+        Toy().add({"f": pa.array([1, 2, 3])})
 
 
 def test_wrong_schema_from_compute_raises():

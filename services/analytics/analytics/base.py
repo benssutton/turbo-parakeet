@@ -69,7 +69,10 @@ class Technique(ABC):
                         f"frame {name!r} must be a polars DataFrame or LazyFrame, or Arrow tabular data "
                         f"(an object with __arrow_c_stream__), got {type(frame).__name__}"
                     )
-                frame = pl.DataFrame(frame)
+                try:
+                    frame = pl.DataFrame(frame)
+                except Exception as exc:
+                    raise TypeError(f"frame {name!r} is not Arrow tabular data: {exc}") from exc
             if name in self._frames:
                 raise ValueError(f"frame {name!r} already added")
             accepted[name] = frame
