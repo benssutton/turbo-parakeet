@@ -1,7 +1,7 @@
 # Recommend Technique — Design (Spec B)
 
 **Date:** 2026-09-26
-**Status:** Approved in brainstorming; awaiting written-spec review
+**Status:** Implemented (branch `recommend-technique`)
 **Builds on:** Spec A, `docs/superpowers/specs/2026-09-26-describe-technique-design.md` (the Describe technique).
 
 ## 1. Purpose
@@ -87,11 +87,13 @@ Polars: `gcd` via the physical values (as `GcdMath`); `sum_len` = `str.len_bytes
 
 Each rule emits candidates. Every candidate has a predicted frame size (§5.1) and a projected population size (§5.3). Candidates are tried in ascending projected population size; ties are broken by **hierarchy rank**:
 
-Null < Boolean < UInt < Int < Decimal < Float < Date32 < Time32/Time64 < Timestamp < timestamp_with_offset < Dictionary < Utf8/Binary < List < original (last among equal sizes).
+Null < Boolean < UInt < Int < Decimal < Float < Date32 < Time32/Time64 < Timestamp < Duration < timestamp_with_offset < Dictionary < Utf8/Binary < List < original (last among equal sizes).
+
+Candidates rejected by a gate (§5.2) are listed **last**, after every candidate that can be tried. A list column reports its outer candidates (scalar / list / array / original) followed by its inner level's, whose rules are prefixed `inner: ` — so it shows two `chosen` entries, the outer choice and the inner choice.
 
 Within a signedness, only the narrowest fitting width is emitted (a wider one cannot succeed where the narrowest fails). The **original** Arrow type (Spec A's classic layout, `CompatLevel.oldest()`) is always a candidate, ordered by its size like the others, and cannot fail — so a candidate larger than the original is never tried (e.g. a Float64 column needing Decimal128 keeps Float64).
 
-`rec_nullable = n_null > 0` (the Arrow field's `nullable` flag; the IPC layout already omits the validity buffer without nulls).
+`rec_nullable` = the recommended array has nulls (the Arrow field's `nullable` flag; the IPC layout already omits the validity buffer without nulls). Usually `n_null > 0`, but a list → scalar recast turns `[null]` into a null row, so it is read off the recast array rather than the source.
 
 ### 4.2 Rules by source type
 
@@ -101,10 +103,10 @@ Within a signedness, only the narrowest fitting width is emitted (a wider one ca
 | Integer (Int/UInt 8–64, Int128) | Boolean if `0 ≤ min` and `max ≤ 1`; narrowest UInt if `min ≥ 0`; narrowest Int; Decimal128(p, 0) if outside the 64-bit ranges (p = digits of max(\|min\|, \|max\|) ≤ 38) |
 | Decimal(p, s) | Let `k` = trailing decimal zeros of `gcd` (capped at `s`; `gcd = 0` → `k = s`). New scale `s' = s − k`, precision `p' = p_obs − k` where `p_obs` = digits of max(\|min\|, \|max\|) unscaled. If `s' = 0`: the Integer rules on the scaled values. Else Decimal32 if `p' ≤ 9`, Decimal64 if `≤ 18`, Decimal128 if `≤ 38` |
 | Float32 / Float64 | If `n_nan = n_inf = 0` and `n_fractional = 0`: the Integer rules on min/max (including Decimal128(p, 0) beyond the 64-bit ranges). If `n_nan = n_inf = 0` and `n_fractional > 0`: Decimal(p, s) with `s = max_frac_digits`, `p = int_digits + s`, where `int_digits` = digits of ⌊max(\|min\|, \|max\|)⌋ (0 for values below 1), width by `p` as above, only if `p ≤ 38`. Float32 if the source is Float64 and `n_f32_inexact = 0` |
-| Datetime (naive) | Date32 if `n_midnight = n`. Timestamp in the coarsest unit u ∈ {s, ms, µs, ns} dividing `gcd` (in the column's unit; `gcd = 0` → s) |
+| Datetime (naive) | Date32 if `n_midnight = n`. Timestamp in the coarsest unit u ∈ {s, ms, µs, ns} dividing `gcd` (in the column's unit; `gcd = 0` → s), only when u differs from the column's unit (the same unit is the original) |
 | Datetime (tz-aware) | Timestamp(u, same tz), u as above. Never Date32 (the local date needs the zone to be reconstructed) |
-| Duration | Duration(u), u as above |
-| Time | Time32(s) if 10⁹ \| `gcd`; Time32(ms) if 10⁶ \| `gcd`; Time64(µs) if 10³ \| `gcd`; else Time64(ns) |
+| Duration | Duration(u), u as above, only when u changes |
+| Time | Time32(s) if 10⁹ \| `gcd`; Time32(ms) if 10⁶ \| `gcd`; Time64(µs) if 10³ \| `gcd`; else Time64(ns); only when the unit changes |
 | String / Categorical / Enum | §4.3 |
 | Binary | Binary (32-bit offsets) if `sum_len < 2³¹` |
 | List / LargeList / Array | §4.4 |
@@ -130,16 +132,18 @@ First matching row wins (then step 2 applies to whatever is still a string):
 
 **Leading zeros** (comment required in `recommend.rs`, as in Spec A §5.1): an integer-looking string with a leading zero (`"007"`) must stay a String — identifiers such as UUID fragments, account numbers or zip codes can be all digits with significant leading zeros. A value with a decimal point (`"007.50"`) is unlikely to be an identifier, so only numeric equivalence matters for it; differing leading or trailing zeros set `rec_lossy_formatting`.
 
-Strings become Float only through the varying-decimal-places rule above: a column such as `1234567890.1` and `0.00000012345` needs Decimal128(21, 11), yet each value has ≤ 15 significant digits and is exact in Float64 at half the width. Float verification compares the scanner's exact decimal parse with the Float's value (`rec_lossy_formatting` is set when the text changes). Exponent forms are not numeric (Spec A §4.3). A Timestamp(ns) outside 1677–2262 fails its cast; the next candidate is the string itself (a coarser unit would lose digits).
+Strings become Float only through the varying-decimal-places rule above: a column such as `1234567890.1` and `0.00000012345` needs Decimal128(21, 11), yet each value has ≤ 15 significant digits and is exact in Float64 at half the width. Float verification is a canonical comparison of the text with arrow-cast's rendering of the Float (significant digits and decimal point, independent of formatting: `"1.50"` ≡ `"1.5"`, `"0.00000012345"` ≡ `"1.2345e-7"`); `rec_lossy_formatting` is set when the text changes. Exponent forms are not numeric (Spec A §4.3). A Timestamp(ns) outside 1677–2262 fails its cast; the next candidate is the string itself (a coarser unit would lose digits).
 
 ### 4.4 Lists
 
 | Condition | Candidates |
 |---|---|
-| `min_len = max_len = 1` (over non-null lists), and not (`n_null > 0` and `inner_n_null > 0`) | Scalar: the inner rules applied to the inner values (a null list becomes a null scalar) |
-| otherwise | List(x) with x from the inner rules, using List (32-bit offsets) when `inner_n_values < 2³¹`; Array keeps its fixed size |
+| `min_len = max_len = 1` (over non-null lists), not (`n_null > 0` and `inner_n_null > 0`), and the kept inner type is not itself List / Array / Struct | Scalar: the inner rules applied to the inner values (a null list becomes a null scalar) |
+| otherwise | List(x) with x from the inner rules, using List (32-bit offsets) when `inner_n_values < 2³¹`; Array keeps its fixed size, and Array(x, w) is a candidate only when the inner type changes (else it is the original) |
 
 If both null lists and null elements occur, a null list and `[null]` would collide, so the column stays a list. Only one nesting level is analysed (Describe's inner values); deeper levels keep their types.
+
+The inner values are exactly Describe's `flatten` (null lists dropped, then the values of the non-empty lists), so the inner profile's indices point into them. A null list may still span values behind its offsets (common after `pl.when(mask).then(list).otherwise(None)`): those values are not inner values — the child is compacted to the valid rows' ranges (a `take`) and the recast list rebuilds its offsets from row lengths, a null row becoming empty. Array columns compact the same way (the w slots of each valid row) and re-expand a null row to w null slots.
 
 ### 4.5 Varying offsets — `arrow.timestamp_with_offset`
 
@@ -163,13 +167,13 @@ Arrow's canonical extension type: storage `Struct{timestamp: Timestamp(u, "UTC")
 | List(x) / LargeList(x) | V + pad(4(N+1)) or pad(8(N+1)) + predicted(x) over the inner values (`inner_n_values`, `inner_n_null`) |
 | FixedSizeList(x, w) | V + predicted(x) over n·w inner slots, whose nulls include the w slots of every null row (the child keeps them; Polars exports them as null) |
 
-These mirror `sizes.rs` exactly, so **predicted = measured** for every successful candidate (asserted in tests; a mismatch is a bug).
+These mirror `sizes.rs` exactly, so **predicted = measured** for every successful candidate (asserted in tests; a mismatch is a bug). A type with no analytic size (none of the rules emits one) makes its candidate `failed` with the reason — never a wrong prediction.
 
 ### 5.2 Step 2 — dictionary encoding
 
 Applies to string results (outer, or inner values of a List) and to Categorical/Enum sources (already dictionaries: step 2 narrows the key or drops the dictionary).
 
-- Cardinality `c` = `est_high` if not null, else `est_cardinality` (inner: `inner_est_*`).
+- Cardinality `c` = `est_high` if not null, else `est_cardinality` (inner: `inner_est_*`), floored at `n_unique` (an estimate never claims fewer distinct values than were observed). The evidence names the estimator (`method`) and `est_low` when present.
 - Gate: `c ≤ categorical_threshold`; failing the gate the candidate is listed with outcome `rejected`.
 - Key width `k`: UInt8 if `c ≤ 256`, UInt16 if `c ≤ 65,536`, else UInt32.
 - The dictionary candidate joins the candidate list and is ordered by projected population size like every other candidate (§4.1).
@@ -190,7 +194,7 @@ Applies to string results (outer, or inner values of a List) and to Categorical/
    - numeric / temporal sources: the recast values cast back to the source type equal the originals (floats: `f64::from_str(decimal_text)` equals the original bits; `-0.0 = 0.0`);
    - string sources: the recast values are rendered to text by `arrow-cast` and compared with the original text by value — canonical decimal digits for numbers, `parse_iso` components (days, time-of-day ns, UTC instant, offset) for temporals — so the check runs through code independent of the parser that built them;
    - dictionary: decoded values equal the originals;
-   - list → scalar: scalar equals the list's only element.
+   - list → scalar: verified structurally — the inner values are verified as above, and the scalar column is a `take` of each row's only item (a null list → a null row).
    `rec_lossy_formatting` = some recast value, cast to Utf8, differs textually from the original's text (always false for non-string sources except `-0.0`).
 4. **Measure** with `sizes.rs`: plain and ZSTD at `zstd_level` on the recast array.
 5. On failure, record `outcome = failed` with the reason and try the next candidate; untried candidates are `not_tried`.
@@ -231,15 +235,15 @@ Polars reserves one key code, so its key width `k′` is UInt8 for `c ≤ 255`, 
 
 | Column | Type | Meaning |
 |---|---|---|
-| `rec_nullable` | Boolean | `n_null > 0` |
+| `rec_nullable` | Boolean | the recommended array has nulls (§4.1) |
 | `rec_arrow_type` | String | pyarrow's `str(type)` spelling, e.g. `decimal64(6, 2)`, `dictionary<values=string, indices=uint8, ordered=0>` |
 | `rec_arrow_size_bytes`, `rec_arrow_size_zstd_bytes` | UInt64 | measured |
 | `rec_polars_type` | String | Python `str(dtype)` |
 | `rec_polars_size_bytes`, `rec_polars_size_zstd_bytes` | UInt64 | measured on the Polars layout |
 | `rec_lossy_formatting` | Boolean | §5.4 |
-| `rec_candidates` | List(Struct) | one entry per candidate, in the order tried |
+| `rec_candidates` | List(Struct) | one entry per candidate, in the order tried; rejected candidates last; list columns: outer candidates, then inner ones prefixed `inner: ` (§4.1) |
 
-`rec_candidates` struct fields: `arrow_type` (String), `rule` (String, e.g. `float→decimal`), `evidence` (String: the metric values the rule tested and what they implied, e.g. `n_nan=0 n_inf=0 n_fractional=120 max_frac_digits=2 int_digits=4 → p=6 s=2`; for dictionaries also `c=<value> from est_high|est_cardinality`, `k`), `predicted_bytes` (UInt64), `projected_population_bytes` (Float64), `outcome` (Enum{chosen, failed, rejected, not_tried}), `reason` (String; null unless failed/rejected).
+`rec_candidates` struct fields: `arrow_type` (String), `rule` (String, e.g. `float→decimal`), `evidence` (String: the metric values the rule tested and what they implied, e.g. `n_nan=0 n_inf=0 n_fractional=120 max_frac_digits=2 int_digits=4 → p=6 s=2`; for dictionaries also `c=<value> from est_high|est_cardinality`, the estimator `method=exact|duj1|schnabel|chao1` and `est_low` when present; the key width is in `arrow_type`), `predicted_bytes` (UInt64), `projected_population_bytes` (Float64), `outcome` (Enum{chosen, failed, rejected, not_tried}; it crosses the plugin boundary as String and is cast to the Enum in Python), `reason` (String; null unless failed/rejected).
 
 The Rust cardinality estimates behind `c` appear in `evidence`; they must equal the Python `est_high` / `est_cardinality` (§7).
 
@@ -267,7 +271,7 @@ The six new metrics join the reference-agreement block (exact) and get known ans
 
 ### 7.4 Benchmarks
 
-`benchmark_describe.py` unchanged (now timing the new metrics in all three implementations). `benchmark_recommend.py` times `RecommendRust` on the Describe datasets and reports the parallel speedup (Rust@1 ÷ Rust@N) only; `tests/performance/harness.py` gains support for a package with no non-Rust implementation.
+`benchmark_describe.py` unchanged (now timing the new metrics in all three implementations). `benchmark_recommend.py` times `RecommendRust` on the Describe datasets and reports the parallel speedup (Rust@1 ÷ Rust@N) only; `tests/performance/harness.py` needed no change: with no non-Rust implementation it reports the parallel split only.
 
 ## 8. Build and documentation
 
