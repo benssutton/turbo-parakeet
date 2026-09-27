@@ -17,8 +17,9 @@ use crate::shared::{PairwiseKwargs, ThreewayKwargs};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
-    /// The caller's input: unknown column names, a malformed Bloom array, an Arrow
-    /// type no kernel accepts.
+    /// The caller's input: unknown or duplicate column names, a malformed Bloom
+    /// array or invalid Bloom/LSH parameters, an Arrow type no kernel accepts, or
+    /// a column of the wrong type for the kernel.
     InvalidInput(String),
     /// Any other failure inside a kernel.
     Compute(String),
@@ -37,10 +38,24 @@ impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
 fn compute(e: PolarsError) -> Error {
-    Error::Compute(e.to_string())
+    let msg = e.to_string();
+    match e {
+        PolarsError::ColumnNotFound(_)
+        | PolarsError::SchemaMismatch(_)
+        | PolarsError::InvalidOperation(_)
+        | PolarsError::ShapeMismatch(_) => Error::InvalidInput(msg),
+        _ => Error::Compute(msg),
+    }
 }
 
 fn columns(batch: &RecordBatch) -> Result<Vec<Series>> {
+    let schema = batch.schema();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for f in schema.fields().iter() {
+        if !seen.insert(f.name().as_str()) {
+            return Err(Error::InvalidInput(format!("duplicate column {:?}", f.name())));
+        }
+    }
     import_batch(batch).map_err(|e| Error::InvalidInput(e.to_string()))
 }
 
@@ -104,6 +119,9 @@ pub fn pairwise_adjusted_rand(batch: &RecordBatch, pairs: Option<&[(String, Stri
 
 /// A fresh k-hash, m-bit Bloom filter over a one-column batch: ⌈m/8⌉ bytes.
 pub fn bloom_filter(batch: &RecordBatch, k: usize, m: usize) -> Result<Vec<u8>> {
+    if k == 0 || m == 0 {
+        return Err(Error::InvalidInput(format!("bloom_filter requires k > 0 and m > 0, got k={k}, m={m}")));
+    }
     let cols = columns(batch)?;
     let [s] = cols.as_slice() else {
         return Err(Error::InvalidInput(format!("bloom_filter takes one column, got {}", cols.len())));
@@ -113,6 +131,9 @@ pub fn bloom_filter(batch: &RecordBatch, k: usize, m: usize) -> Result<Vec<u8>> 
 
 /// `col_name`, `ratio_all`, `ratio_non_null` per column, against the filter `bits`.
 pub fn membership_ratio(batch: &RecordBatch, bits: &[u8], k: usize, m: usize) -> Result<RecordBatch> {
+    if k == 0 || m == 0 {
+        return Err(Error::InvalidInput(format!("membership_ratio requires k > 0 and m > 0, got k={k}, m={m}")));
+    }
     if bits.len() != m.div_ceil(8) {
         return Err(Error::InvalidInput(format!(
             "bloom filter bit array has {} bytes but m={m} bits requires {} bytes",
@@ -133,6 +154,11 @@ pub fn minhash(batch: &RecordBatch, df_name: &str, num_perm: usize) -> Result<Re
 
 /// `col_a`, `col_b` per candidate pair, from a batch of (names, signatures) — by position.
 pub fn lsh_candidates(signatures: &RecordBatch, num_bands: usize, rows_per_band: usize) -> Result<RecordBatch> {
+    if num_bands == 0 || rows_per_band == 0 {
+        return Err(Error::InvalidInput(format!(
+            "lsh_candidates requires num_bands > 0 and rows_per_band > 0, got num_bands={num_bands}, rows_per_band={rows_per_band}"
+        )));
+    }
     let cols = columns(signatures)?;
     if cols.len() != 2 {
         return Err(Error::InvalidInput(format!("lsh_candidates takes (names, signatures), got {} columns", cols.len())));
@@ -231,9 +257,78 @@ mod tests {
     }
 
     #[test]
-    fn lsh_on_a_non_list_signature_is_a_compute_error() {
+    fn lsh_on_a_non_list_signature_is_invalid_input() {
         let bad = batch(vec![("qualified_name", Arc::new(StringArray::from(vec!["a"])) as ArrayRef), ("minhash", ints(&[1]))]);
-        assert!(matches!(lsh_candidates(&bad, 1, 1), Err(Error::Compute(_))));
+        assert!(matches!(lsh_candidates(&bad, 1, 1), Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn compute_error_maps_to_compute_variant() {
+        assert!(matches!(compute(PolarsError::ComputeError("x".into())), Error::Compute(_)));
+    }
+
+    #[test]
+    fn bloom_filter_rejects_zero_k_or_m() {
+        let b = batch(vec![("a", ints(&[1, 2, 3]))]);
+        assert!(matches!(bloom_filter(&b, 0, 64), Err(Error::InvalidInput(_))));
+        assert!(matches!(bloom_filter(&b, 3, 0), Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn membership_ratio_rejects_zero_k_or_m() {
+        let b = batch(vec![("a", ints(&[1, 2, 3]))]);
+        assert!(matches!(membership_ratio(&b, &[], 0, 64), Err(Error::InvalidInput(_))));
+        assert!(matches!(membership_ratio(&b, &[], 3, 0), Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn lsh_candidates_rejects_zero_bands_or_rows_per_band() {
+        let sigs = minhash(&batch(vec![("a", ints(&[1, 2, 3])), ("b", ints(&[1, 2, 3]))]), "0", 16).unwrap();
+        assert!(matches!(lsh_candidates(&sigs, 0, 4), Err(Error::InvalidInput(_))));
+        assert!(matches!(lsh_candidates(&sigs, 4, 0), Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn duplicate_column_names_are_invalid_input() {
+        let b = batch(vec![("a", ints(&[1, 2])), ("a", ints(&[3, 4]))]);
+        let err = column_gcd(&b).unwrap_err();
+        assert_eq!(err, Error::InvalidInput("duplicate column \"a\"".into()));
+    }
+
+    #[test]
+    fn marginal_entropy_smoke() {
+        let out = marginal_entropy(&batch(vec![("a", ints(&[1, 1, 2, 2]))])).unwrap();
+        let names: Vec<String> = out.schema().fields().iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["col_name", "entropy"]);
+        assert_eq!(out.column(1).as_primitive::<Float64Type>().value(0), 1.0);
+    }
+
+    #[test]
+    fn pairwise_chi_squared_smoke() {
+        let out = pairwise_chi_squared(&batch(vec![("a", ints(&[0, 0, 1, 1])), ("b", ints(&[0, 0, 1, 1]))]), None).unwrap();
+        let names: Vec<String> = out.schema().fields().iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["col_a", "col_b", "chi2_stat", "p_value", "cramers_v", "low_expected_count", "n_valid"]);
+        assert_eq!(out.column(4).as_primitive::<Float64Type>().value(0), 1.0);
+    }
+
+    #[test]
+    fn pairwise_adjusted_rand_smoke() {
+        let out = pairwise_adjusted_rand(&batch(vec![("a", ints(&[0, 0, 1, 1])), ("b", ints(&[0, 0, 1, 1]))]), None).unwrap();
+        let names: Vec<String> = out.schema().fields().iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["col_a", "col_b", "ari", "n_valid"]);
+        assert_eq!(out.column(2).as_primitive::<Float64Type>().value(0), 1.0);
+    }
+
+    #[test]
+    fn threeway_entropy_smoke() {
+        let out = threeway_joint_entropy(
+            &batch(vec![("a", ints(&[1, 1, 2, 2])), ("b", ints(&[1, 2, 1, 2])), ("c", ints(&[1, 2, 1, 2]))]),
+            Some(&[("a".into(), "b".into(), "c".into())]),
+        )
+        .unwrap();
+        let names: Vec<String> = out.schema().fields().iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["col_a", "col_b", "col_c", "entropy"]);
+        assert_eq!(out.column(3).as_primitive::<Float64Type>().value(0), 2.0);
     }
 
     #[test]
