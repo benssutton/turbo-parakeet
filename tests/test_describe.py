@@ -231,12 +231,6 @@ def test_column_sizes_arrow_and_polars():
     }
 
 
-def test_column_sizes_int128_and_nested_int128():
-    assert _sizes.column_sizes(pl.Series("x", [1, None, 3], dtype=pl.Int128), 1)["size_bytes"] == 56  # 8 + 48
-    nested = pl.Series("x", [[1], None], dtype=pl.List(pl.Int128))
-    assert _sizes.column_sizes(nested, 1) == dict.fromkeys(_sizes.SIZE_KEYS)
-
-
 def test_categorical_size_includes_its_dictionary():
     s = pl.Series("x", ["a", "b", "a"], dtype=pl.Categorical)
     assert _sizes.column_sizes(s, 1)["size_bytes"] == 48  # dictionary batch 32 + keys 16
@@ -261,6 +255,7 @@ def profile(impl: str, s: pl.Series, **params) -> dict:
 
 def ineligible_frame() -> pl.DataFrame:
     cols = [pl.Series("obj", [object(), object()], dtype=pl.Object), pl.Series("nul", [None, None], dtype=pl.Null)]
+    cols += [pl.Series("i128", [1, 2], dtype=pl.Int128), pl.Series("list_i128", [[1], [2]], dtype=pl.List(pl.Int128))]
     if hasattr(pl, "UInt128"):
         cols.append(pl.Series("u128", [1, 2], dtype=pl.UInt128))
     return pl.DataFrame(cols)
@@ -655,13 +650,12 @@ NESTED_CASES = [
     pytest.param(pl.Series("x", [{"a": 0.0}, {"a": -0.0}, {"a": 1.0}]), dict(n_unique=2, argmin=0, argmax=2), id="struct_negzero"),
     pytest.param(pl.Series("x", [["a"], ["z"], ["a"]], dtype=pl.List(pl.Enum(["z", "a"]))), dict(n_unique=2, argmin=1, argmax=0), id="list_enum"),
     pytest.param(pl.Series("x", [["b"], ["a"], ["b"]], dtype=pl.List(pl.Categorical)), dict(n_unique=2, argmin=1, argmax=0), id="list_categorical"),
-    pytest.param(pl.Series("x", [[1], [2], [1]], dtype=pl.List(pl.Int128)), dict(n_unique=2, argmin=0, argmax=1), id="list_int128"),
     pytest.param(pl.Series("x", [{"e": "a"}, {"e": "z"}], dtype=pl.Struct({"e": pl.Enum(["z", "a"])})), dict(n_unique=2, argmin=1, argmax=0), id="struct_enum"),
 ]
 
 
 @pytest.mark.parametrize("impl", ALL)
 @pytest.mark.parametrize("s, expected", NESTED_CASES)
-def test_nested_floats_enums_and_int128(impl, s, expected):
+def test_nested_floats_and_enums(impl, s, expected):
     r = profile(impl, s)
     assert {k: r[k] for k in expected} == expected

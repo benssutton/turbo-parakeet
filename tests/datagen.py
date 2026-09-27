@@ -277,7 +277,7 @@ def describe_mixed(n_rows: int = 1_000, seed: int = 42) -> pl.DataFrame:
             pl.Series("i16", nulls(ints.tolist()), dtype=pl.Int16),
             pl.Series("i32", nulls((ints * 1_000).tolist()), dtype=pl.Int32),
             pl.Series("i64", nulls((ints.astype(np.int64) * 10**12).tolist()), dtype=pl.Int64),
-            pl.Series("i128", nulls([int(v) * 10**25 for v in ints]), dtype=pl.Int128),
+            pl.Series("i128", nulls([int(v) * 10**25 for v in ints]), dtype=pl.Decimal(38, 0)),
             pl.Series("u8", nulls(rng.integers(0, 256, n).tolist()), dtype=pl.UInt8),
             pl.Series("u16", rng.integers(0, 65_536, n).tolist(), dtype=pl.UInt16),
             pl.Series("u32", nulls(rng.integers(0, 2**32, n).tolist()), dtype=pl.UInt32),

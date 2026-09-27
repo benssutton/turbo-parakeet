@@ -5,7 +5,7 @@ import polars as pl
 from analytics._dtypes import INTEGERS_64, STRING_LIKE
 from analytics.base import Technique, at_least, check_unit, computed
 
-CATEGORICAL = (pl.Boolean, *STRING_LIKE, *INTEGERS_64, pl.Int128)
+CATEGORICAL = (pl.Boolean, *STRING_LIKE, *INTEGERS_64)
 
 
 class ChiSquared(Technique):

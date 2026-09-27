@@ -51,7 +51,7 @@ def test_contract():
     result = run(cls, frames)
     assert_contract(cls, result, frames)
     computed = result.filter(pl.col("status") == "computed")
-    assert computed["rec_arrow_type"].null_count() == 0  # describe_mixed nests no Int128
+    assert computed["rec_arrow_type"].null_count() == 0
     assert computed["rec_polars_type"].null_count() == 0
     assert set(result.filter(pl.col("df_a") == "bad")["status"]) == {"ineligible"}
 
@@ -82,7 +82,6 @@ KNOWN = [
     pytest.param(pl.Series("x", [0, 5, 127]), {}, "uint8", "UInt8", id="uint_before_int_on_tie"),
     pytest.param(pl.Series("x", [-5, 100]), {}, "int8", "Int8", id="int8"),
     pytest.param(pl.Series("x", [-200, 5]), {}, "int16", "Int16", id="int16"),
-    pytest.param(pl.Series("x", [10**20, -1], dtype=pl.Int128), {}, "decimal128(21, 0)", "Decimal(precision=21, scale=0)", id="int128_beyond_64_bits"),
     pytest.param(pl.Series("x", [Decimal("1.20"), Decimal("3.40")], dtype=pl.Decimal(10, 2)), {}, "decimal32(2, 1)", "Decimal(precision=2, scale=1)", id="decimal_scale_by_gcd"),
     pytest.param(pl.Series("x", [Decimal("1.00"), Decimal("300.00")], dtype=pl.Decimal(10, 2)), {}, "uint16", "UInt16", id="decimal_to_integer"),
     pytest.param(pl.Series("x", [123.45, 99.99]), {}, "decimal32(5, 2)", "Decimal(precision=5, scale=2)", id="float_to_decimal32"),
@@ -352,7 +351,7 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
                 continue
         skippable = _string_source(s.dtype) and not original
         try:
-            arrow = _sizes._to_arrow(_unlist(s, r["rec_arrow_type"]).rechunk(), pl.CompatLevel.oldest())
+            arrow = _unlist(s, r["rec_arrow_type"]).rechunk().to_arrow(compat_level=pl.CompatLevel.oldest())
             arrow = arrow.cast(pa_type(r["rec_arrow_type"]), safe=False)
             polars = s if original else _unlist(s, r["rec_arrow_type"]).cast(pl_dtype(r["rec_polars_type"])).rechunk()
         except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pl.exceptions.PolarsError, NotImplementedError):

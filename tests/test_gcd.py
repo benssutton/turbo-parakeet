@@ -77,7 +77,6 @@ CASES = [
     pytest.param(pl.Int16(), 12, -2_000, 2_000, id="Int16"),
     pytest.param(pl.Int32(), 1_000, -2_000_000, 2_000_000, id="Int32"),
     pytest.param(pl.Int64(), 3_600, -(2**40), 2**40, id="Int64"),
-    pytest.param(pl.Int128(), 10**20, -(10**15), 10**15, id="Int128"),
     pytest.param(pl.UInt8(), 5, 0, 51, id="UInt8"),
     pytest.param(pl.UInt16(), 12, 0, 5_000, id="UInt16"),
     pytest.param(pl.UInt32(), 1_000, 0, 4_000_000, id="UInt32"),
@@ -155,12 +154,7 @@ def test_zeros_and_nulls(impl, dtype):
         pytest.param(pl.UInt64(), [2**64 - 1], 2**64 - 1, id="u64_max"),
         pytest.param(pl.Int64(), [-(2**63)], 2**63, id="i64_min"),
         pytest.param(pl.Int64(), [-(2**63), 2**62], 2**62, id="i64_min_and_2^62"),
-        pytest.param(pl.Int128(), [10**38 - 1], 10**38 - 1, id="decimal38_max"),
-        pytest.param(pl.Int128(), [10**38], None, id="beyond_38_digits"),
-        pytest.param(pl.Int128(), [2**127 - 1], None, id="i128_max"),
-        pytest.param(pl.Int128(), [-(2**127), 2**126], 2**126, id="i128_min_and_2^126"),
-        pytest.param(pl.Int128(), [-(2**127)], None, id="i128_min_unrepresentable"),
-        pytest.param(pl.Int128(), [-(2**127), None, 0], None, id="i128_min_with_null_zero"),
+        pytest.param(pl.Decimal(38, 0), [10**38 - 1], 10**38 - 1, id="decimal38_max"),
     ],
 )
 def test_dtype_extremes(impl, dtype, ints, expected):
@@ -239,7 +233,6 @@ _FUZZ_INT_RANGES = {
     pl.Int16: (-(2**15), 2**15 - 1),
     pl.Int32: (-(2**31), 2**31 - 1),
     pl.Int64: (-(2**63), 2**63 - 1),
-    pl.Int128: (-(2**127), 2**127 - 1),
     pl.UInt8: (0, 2**8 - 1),
     pl.UInt16: (0, 2**16 - 1),
     pl.UInt32: (0, 2**32 - 1),
@@ -267,7 +260,7 @@ def test_seeded_fuzz_matches_reference(impl, seed):
 
 def test_conclusions():
     Fixed = with_metrics(Gcd, gcd=[0, 1, 2, None])
-    df = pl.DataFrame({"zero": [0], "one": [1], "two": [2], "big": pl.Series([0], dtype=pl.Int128)})
+    df = pl.DataFrame({"zero": [0], "one": [1], "two": [2], "big": pl.Series([0], dtype=pl.Int64)})
     out = Fixed().add({"t": df}).result()
     assert out["gcd_compressible"].to_list() == [False, False, True, None]
 
@@ -288,8 +281,9 @@ def test_ineligible_dtypes_are_reported_with_their_dtype(impl):
         "struct": [{"a": 2}, {"a": 4}],
         "bin": [b"\x02", b"\x04"],
         "null": pl.Series([None, None], dtype=pl.Null),
+        "i128": pl.Series([12, 18], dtype=pl.Int128),
     }
-    if hasattr(pl, "UInt128"):  # the plugin's Rust polars cannot receive UInt128
+    if hasattr(pl, "UInt128"):  # 128-bit integers are ineligible (analytics._dtypes.WIDE_INTEGERS)
         cols["u128"] = pl.Series([12, 18], dtype=pl.UInt128)
     df = pl.DataFrame(cols)
     out = run(load(impl), {"t": df})

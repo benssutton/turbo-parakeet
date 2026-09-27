@@ -35,12 +35,11 @@ class DescribeDataFusion(Describe):
       - entropy / f1 / f2 / top-5 / capture history: numpy over the GROUP BY result;
       - min_len/max_len of Binary: pyarrow binary_length (octet_length takes only strings);
       - every group A metric of List/Array/Struct columns whose values hold floats,
-        Enum, Categorical or Int128: the Polars reference helpers (SQL cannot key
-        nested -0.0/NaN, list-of-dictionary children, Enum order or Int128 exactly);
+        Enum or Categorical: the Polars reference helpers (SQL cannot key nested
+        -0.0/NaN, list-of-dictionary children or Enum order exactly);
       - max_frac_digits: the shared parser over CAST(v AS VARCHAR) of distinct finite values;
       - gcd: Python math.gcd over the physical values (as GcdMath; SQL has no exact GCD aggregate);
       - sum_len / sum_len_unique of Binary: pyarrow binary_length.
-    Int128 is registered as Decimal(38, 0); values beyond 38 digits are not supported.
     """
 
     def _compute(self, frames, combos):
@@ -76,13 +75,13 @@ class DescribeDataFusion(Describe):
             ctx.deregister_table("t")
 
 
-_INEXACT_IN_SQL = (pl.Float32, pl.Float64, pl.Enum, pl.Categorical, pl.Int128)
+_INEXACT_IN_SQL = (pl.Float32, pl.Float64, pl.Enum, pl.Categorical)
 
 
 def _needs_polars(dtype: pl.DataType, nested: bool = False) -> bool:
-    """True for List/Array/Struct values that hold floats, Enum, Categorical or Int128:
+    """True for List/Array/Struct values that hold floats, Enum or Categorical:
     DataFusion cannot key them exactly (-0.0 and NaN payloads inside nested values,
-    dictionary children in lists, Enum category order, Int128 export)."""
+    dictionary children in lists, Enum category order)."""
     if isinstance(dtype, (pl.List, pl.Array)):
         return _needs_polars(dtype.inner, True)
     if isinstance(dtype, pl.Struct):
@@ -91,8 +90,6 @@ def _needs_polars(dtype: pl.DataType, nested: bool = False) -> bool:
 
 
 def _arrow(s: pl.Series) -> pa.Array:
-    if s.dtype == pl.Int128:
-        s = s.cast(pl.Decimal(38, 0))
     return s.rechunk().to_arrow(compat_level=pl.CompatLevel.oldest())
 
 

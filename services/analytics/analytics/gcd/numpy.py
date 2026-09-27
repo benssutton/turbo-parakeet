@@ -1,13 +1,13 @@
 import numpy as np
 import polars as pl
 
-from analytics.gcd.base import GCD_LIMIT, Gcd
+from analytics.gcd.base import Gcd
 
 _NATIVE = {pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64}
 _SIGNED_MIN = {pl.Int8: -(2**7), pl.Int16: -(2**15), pl.Int32: -(2**31), pl.Int64: -(2**63)}
 
 
-def numpy_gcd(series: pl.Series) -> int | None:
+def numpy_gcd(series: pl.Series) -> int:
     phys = series.to_physical().drop_nulls()
     if phys.len() == 0:
         return 0
@@ -19,8 +19,7 @@ def numpy_gcd(series: pl.Series) -> int | None:
         # native ints: fall back to an object array of Python ints.
         values = np.array(phys.to_list(), dtype=object)
     # reduce() of one element returns it unchanged (possibly negative): take abs.
-    g = abs(int(np.gcd.reduce(values)))
-    return None if g >= GCD_LIMIT else g
+    return abs(int(np.gcd.reduce(values)))
 
 
 class GcdNumpy(Gcd):

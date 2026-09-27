@@ -66,7 +66,7 @@ def test_describe_mixed_is_seeded_and_covers_every_family():
     a, b = describe_mixed(300), describe_mixed(300)
     assert_frame_equal(a, b)
     kinds = {type(dt) for dt in a.dtypes}
-    for kind in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.Int128, pl.UInt8, pl.UInt16, pl.UInt32,
+    for kind in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32,
                  pl.UInt64, pl.Float32, pl.Float64, pl.Decimal, pl.Boolean, pl.Date, pl.Datetime,
                  pl.Duration, pl.Time, pl.String, pl.Categorical, pl.Enum, pl.Binary, pl.List,
                  pl.Array, pl.Struct):
