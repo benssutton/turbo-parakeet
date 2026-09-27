@@ -542,12 +542,14 @@ pub(crate) fn scan_iso(b: &[u8]) -> Option<Iso> {
     (end == b.len()).then_some(Iso::Time { frac, sig })
 }
 
-/// Components of a value in the scan_iso grammar: days since 1970-01-01 (None for
-/// a bare time), nanoseconds since midnight, offset minutes east of UTC.
+/// Components of a value in the scan_iso grammar.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct IsoValue {
+    /// Days since 1970-01-01; None for a bare time.
     pub days: Option<i64>,
+    /// Nanoseconds since midnight.
     pub nanos: i64,
+    /// Offset minutes east of UTC; None when the value carries no offset.
     pub offset_minutes: Option<i32>,
 }
 
@@ -569,7 +571,10 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Exact components of an ISO value (validated by scan_iso first).
+/// Exact components of an ISO value (validated by scan_iso first). scan_iso's
+/// `midnight` flag isn't needed here — a midnight value simply has nanos == 0 —
+/// and every field below has already been validated by scan_iso, so these `?`
+/// reads (re-parsing the same bytes) cannot fail.
 pub(crate) fn parse_iso(b: &[u8]) -> Option<IsoValue> {
     let kind = scan_iso(b)?;
     let num = |i: usize| two(b, i).map(|v| v as i64);
@@ -584,9 +589,11 @@ pub(crate) fn parse_iso(b: &[u8]) -> Option<IsoValue> {
     if b.get(end) == Some(&b':') {
         nanos += num(end + 1)? * 1_000_000_000;
         if b.get(end + 3) == Some(&b'.') {
-            let frac: Vec<u8> = b[end + 4..].iter().take_while(|c| c.is_ascii_digit()).copied().collect();
-            let f = frac.iter().fold(0i64, |a, &c| a * 10 + (c - b'0') as i64);
-            nanos += f * 10i64.pow(9 - frac.len() as u32);
+            let (f, digits) = b[end + 4..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .fold((0i64, 0u32), |(a, n), &c| (a * 10 + (c - b'0') as i64, n + 1));
+            nanos += f * 10i64.pow(9 - digits);
         }
     }
     let offset_minutes = match kind {
