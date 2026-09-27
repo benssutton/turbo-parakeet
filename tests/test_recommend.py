@@ -113,6 +113,8 @@ KNOWN = [
     pytest.param(pl.Series("x", [timedelta(seconds=5), timedelta(minutes=1)], dtype=pl.Duration("us")), {}, "duration[s]", "Duration(time_unit='ms')", id="duration_unit_by_gcd"),
     pytest.param(pl.Series("x", [time(10, 0), time(11, 30, 15)]), {}, "time32[s]", "Time", id="time_unit_by_gcd"),
     pytest.param(pl.Series("x", [[1], [2], None]), {}, "uint8", "UInt8", id="single_item_lists"),
+    pytest.param(pl.Series("x", [[1], [None], [2]]), {}, "uint8", "UInt8", id="single_item_lists_with_null_items"),
+    pytest.param(pl.Series("x", [["a"], [None], ["b"]] * 20), {}, "dictionary<values=string, indices=uint8, ordered=0>", 'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))', id="single_item_string_lists_with_null_items"),
     pytest.param(pl.Series("x", [[2], [None], None]), {}, "list<item: uint8>", "List(UInt8)", id="null_lists_and_elements_stay_lists"),
     pytest.param(pl.Series("x", [[1], [None], None]), {}, "list<item: bool>", "List(Boolean)", id="list_of_0_1_becomes_list_of_bool"),
     pytest.param(pl.Series("x", [[1, 2], [3]]), {}, "list<item: uint8>", "List(UInt8)", id="large_list_to_list"),
@@ -127,7 +129,8 @@ KNOWN = [
 def test_known_answers(s, params, arrow_type, polars_type):
     r = rec(s, **params)
     assert (r["rec_arrow_type"], r["rec_polars_type"]) == (arrow_type, polars_type)
-    assert r["rec_nullable"] == (s.null_count() > 0)
+    # rec_nullable: the recommended array has nulls — a list → scalar recast turns a [null] item into a null row.
+    assert r["rec_nullable"] == (_unlist(s, arrow_type).null_count() > 0)
 
 
 def test_lossy_formatting():

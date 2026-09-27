@@ -1484,6 +1484,7 @@ fn dictionary_values(a: &ArrayRef) -> Option<Vec<String>> {
 // ── one column ───────────────────────────────────────────────────────────────
 
 pub(crate) struct Rec {
+    /// The recommended array has nulls (a list → scalar recast turns `[null]` into a null row).
     pub nullable: bool,
     pub arrow_type: String,
     pub arrow_size: u64,
@@ -1543,7 +1544,7 @@ pub(crate) fn recommend(s: &Series, d: &Described, sz: &Sizes, params: &Params) 
         )
     };
     Ok(Some(Rec {
-        nullable: d.n_null > 0,
+        nullable: chosen.array.logical_null_count() > 0,
         arrow_type: pa_name(&t),
         arrow_size: ipc_body_bytes(chosen.array.as_ref(), None)?,
         arrow_zstd: ipc_body_bytes(chosen.array.as_ref(), Some(params.zstd_level))?,
@@ -1993,6 +1994,16 @@ mod tests {
         // Inner values {1}: 0 ≤ min, max ≤ 1 → Boolean ties UInt8 in size and wins on rank (§4.1, §4.2).
         let ones = Series::new("x".into(), [Some(Series::new("".into(), &[Some(1i64)])), Some(Series::new("".into(), &[None::<i64>])), None]);
         assert_eq!(rec(ones).arrow_type, "list<item: bool>");
+    }
+
+    #[test]
+    fn nullable_means_the_recommended_array_has_nulls() {
+        // [null] items become null scalars: the recast column has a null although the source has none.
+        let s = Series::new("x".into(), [Some(Series::new("".into(), &[Some(1i64)])), Some(Series::new("".into(), &[None::<i64>])), Some(Series::new("".into(), &[Some(2i64)]))]);
+        let r = rec(s);
+        assert_eq!((r.arrow_type.as_str(), r.nullable), ("uint8", true));
+        assert!(!rec(Series::new("x".into(), &[1i64, 2])).nullable);
+        assert!(rec(Series::new("x".into(), &[Some(1i64), None])).nullable);
     }
 
     #[test]
