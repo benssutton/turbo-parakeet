@@ -57,8 +57,13 @@ class Technique(ABC):
     def add(self, frames: dict[str, Any]) -> Self:
         """Register named frames: Polars DataFrames / LazyFrames, or any Arrow tabular
         object implementing the Arrow PyCapsule interface (pyarrow Table, RecordBatch,
-        RecordBatchReader, …), read once into a Polars DataFrame. Names are unique for
-        the life of the instance."""
+        RecordBatchReader, …), read once into a Polars DataFrame. Every column holding
+        an Array or Struct (at any depth) is rebuilt first: py-polars 1.41 exports a
+        *sliced* Array/Struct with nulls as inconsistent Arrow (Array: slice offset
+        applied twice; Struct: short child), which aborts the Rust extension's process
+        (arrow-rs panics, and the release profile is panic=abort) and makes
+        pyarrow/DataFusion raise. A gather over every row produces a fresh, consistent
+        buffer. Lazy-safe. Names are unique for the life of the instance."""
         accepted = {}
         for name, frame in frames.items():
             if not isinstance(name, str) or not name:
@@ -75,7 +80,7 @@ class Technique(ABC):
                     raise TypeError(f"frame {name!r} is not Arrow tabular data: {exc}") from exc
             if name in self._frames:
                 raise ValueError(f"frame {name!r} already added")
-            accepted[name] = frame
+            accepted[name] = _normalise(frame)
         self._frames.update(accepted)
         self._on_add()
         return self
@@ -219,6 +224,22 @@ class Technique(ABC):
 
 
 # ── helpers for technique bases and implementations ─────────────────────────────
+
+def _holds_array_or_struct(dtype: pl.DataType) -> bool:
+    if isinstance(dtype, (pl.Array, pl.Struct)):
+        return True
+    if isinstance(dtype, pl.List):
+        return _holds_array_or_struct(dtype.inner)
+    return False
+
+
+def _normalise(frame: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | pl.LazyFrame:
+    schema = frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
+    cols = [c for c, dt in schema.items() if _holds_array_or_struct(dt)]
+    if not cols:
+        return frame
+    return frame.with_columns(pl.col(c).gather(pl.int_range(pl.len())) for c in cols)
+
 
 def computed(expr: pl.Expr) -> pl.Expr:
     """`expr` where status == computed, null elsewhere."""

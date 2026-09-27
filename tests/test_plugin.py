@@ -1,6 +1,9 @@
 """The Arrow boundary: 128-bit integers, the Python binding, and Arrow inputs."""
 
 import importlib
+import subprocess
+import sys
+from pathlib import Path
 
 import polars as pl
 import pyarrow as pa
@@ -143,3 +146,43 @@ def test_arrow_inputs_match_polars(spec, kind):
     arrow = {"table": table, "record_batch": table.combine_chunks().to_batches()[0], "reader": table.to_reader()}[kind]
     cls = load(spec)
     assert_frame_equal(run(cls, {"t": arrow}), run(cls, {"t": df}))
+
+
+# ── sliced Array/Struct columns must never crash the interpreter ──────────────
+
+_SLICED_ARRAY_STRUCT = """
+import importlib
+import polars as pl
+
+frame = pl.DataFrame({{
+    "arr": pl.Series([[1, 2], None, [3, 4]] * 5, dtype=pl.Array(pl.Int64, 2)),
+    "st": pl.Series([{{"v": 1}}, None, {{"v": 2}}] * 5),
+    "b": list(range(15)),
+    "c": list(range(15))[::-1],
+}}).slice(3, 10)
+
+for spec in {specs!r}:
+    package, name = spec.split(":")
+    try:
+        cls = getattr(importlib.import_module(package), name)
+    except ImportError as exc:
+        print(f"SKIP {{spec}}: {{exc}}")
+        continue
+    cls().add({{"t": frame}}).result()
+    print(f"OK {{spec}}")
+print("DONE")
+"""
+
+
+@pytest.mark.parametrize("package", PACKAGES)
+def test_sliced_array_struct_columns_do_not_crash(package):
+    """py-polars 1.41 exports a sliced Array/Struct column with nulls as inconsistent
+    Arrow, which aborts the process (panic=abort) rather than raising — run every
+    implementation of `package` in a subprocess so a crash fails the test instead of
+    killing the whole run."""
+    specs = [f"{package}:{n}" for n in importlib.import_module(package).IMPLEMENTATIONS]
+    code = _SLICED_ARRAY_STRUCT.format(specs=specs)
+    tests_dir = Path(__file__).parent
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tests_dir, timeout=300)
+    assert out.returncode == 0, f"exit {out.returncode}: {out.stderr[-2000:]}"
+    assert out.stdout.strip().endswith("DONE"), out.stdout[-2000:]
