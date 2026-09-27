@@ -43,8 +43,10 @@ types: no pyo3 and no Polars. A future Java layer wraps exactly `api.rs`.
 - The `pyo3-polars` dependency, every `#[polars_expr]` wrapper and `*_output_type`
   function, `register_plugin_function`, and the one-struct-column-then-`.unnest(...)`
   output shape.
-- `shared::to_arrow_rs`. `recommend.rs` and `sizes.rs` receive arrow-rs arrays
-  directly instead of converting a `Series` back to Arrow.
+- `shared::to_arrow_rs` as a separate bridge. It becomes `arrow_io::export_series`
+  (Series → arrow-rs, zero-copy), which exports every result column.
+  `sizes.rs` and `recommend.rs` keep calling it to derive the classic (oldest)
+  and native (newest) Polars layouts they measure.
 - The unused compiled functions `membership` and `membership_ratio_sample`.
 - `lsh_candidates`' `threshold` parameter, which is read and discarded today.
 
@@ -118,19 +120,24 @@ depends on Polars' `ComputeError`.
 
 `entropy.rs`, `chi_squared.rs`, `contingency.rs`, `ari.rs`, `bloomfilter.rs`,
 `minhash.rs`, `gcd.rs` and `describe.rs` keep their `*_impl` logic on `Series`
-unchanged; only the plugin wrappers are removed. `recommend.rs` and `sizes.rs` take
-the batch's arrow-rs arrays directly for their Arrow-native work, and the `Series`
-(from `arrow_io`) only where they already use Polars: Describe's profile and
-Polars-type naming.
+unchanged; only the plugin wrappers are removed. `recommend.rs` and `sizes.rs` keep
+deriving their layouts from the `Series` through `arrow_io::export_series`.
 
-Int128 can no longer reach a kernel (§4), so its branches become dead code and are
-removed. The known sites are:
+Int128 can no longer reach a kernel (§4), so its branches on the **logical** dtype
+become dead code and are removed:
 
-- the `DataType::Int128` arms in `gcd.rs`, `describe.rs`, `shared.rs::encode_series`
-  and `recommend.rs`;
-- `sizes.rs::nests_int128`, with the null-sizes rule for nested Int128;
-- the "nested Int128 → null recommendation" path in `recommend.rs`;
-- the Int128 unit tests that exercise these arms.
+- Int128 in `gcd.rs::is_integer_backed`;
+- the Int128 arm of `shared.rs::encode_series`;
+- `PT::Int128` in `recommend.rs`'s integer rule;
+- the Int128 relabelling inside the old `to_arrow_rs`;
+- `sizes.rs::nests_int128`, together with the null-sizes rule for nested Int128.
+  Sizes are therefore always present: `Sizes` becomes `[u64; 4]`, `classic_layout`
+  returns the array, and `recommend` returns `Rec` instead of `Option<Rec>`;
+- the Rust unit tests that exercise these arms.
+
+Polars stores Decimal as Int128 **physically**, so the physical-Int128 arms that
+read Decimal values stay. These are the Int128 arm of `gcd.rs::series_gcd` and of
+Describe's extremes in `describe.rs`.
 
 GCD's output stays `decimal128(38, 0)`: Decimal inputs still need 128 bits, and
 Arrow has no plain 128-bit integer. The "GCD over 38 digits → null" case was
@@ -143,15 +150,16 @@ reachable only from Int128, so it goes too.
   `base.py` does not import pyarrow. Any other type still raises `TypeError`, with
   the message listing the accepted kinds. The Python-side logic (eligibility,
   descriptors, non-Rust implementations) stays Polars-based.
-- **`_plugin.py`** wrappers keep their Python signatures and return shapes. Each
-  becomes `pl.DataFrame(_rs.<fn>(df, ...))`, with LazyFrames collected first as
-  today. Two callers change:
+- **`_plugin.py`** wrappers keep their names and arguments. Each becomes
+  `pl.DataFrame(_rs.<fn>(df, ...))`, with LazyFrames collected first as today.
+  They return flat frames, so every `*Rust` class drops its `.unnest(...)`. Two
+  callers also change:
   - `similarity/rust.py`: `lsh_candidates` returns a frame, no longer a `pl.Expr`.
   - `membership/rust.py`: passes and receives `bytes` instead of `list[int]`.
-- **128-bit integers are ineligible in every technique.** `_dtypes.py` gains one
-  constant, `WIDE_INTEGERS = (pl.Int128, pl.UInt128)` (UInt128 only where the
-  installed Polars has it), whose comment says why they are rejected (§4). Every
-  eligibility rule excludes it, at any nesting depth:
+- **128-bit integers are ineligible in every technique.** `_dtypes.py` gains
+  `WIDE_INTEGERS = (pl.Int128, pl.UInt128)` (UInt128 only where the installed Polars
+  has it) and a recursive `holds_wide_integer(dtype)`. Their comment says why they
+  are rejected (§4). Every eligibility rule excludes them, at any nesting depth:
   - `_dtypes.ENCODABLE`, for entropy, ARI, Membership and Similarity;
   - `chi_squared/base.CATEGORICAL`;
   - `gcd/base.INTEGER_BACKED`;
@@ -216,8 +224,9 @@ New tests:
 - Rust and pytest suites pass, new tests included.
 - No `polars_expr`, `pyo3_polars`, `register_plugin_function` or `to_arrow_rs`
   remains.
-- No Int128 branch remains in the kernels; the only Int128 / UInt128 references
-  are the two rejection points (§4) and their tests.
+- No logical-Int128 branch remains in the kernels. The only other Int128 / UInt128
+  references are the two rejection points (§4), their tests, and the
+  physical-Int128 arms that read Decimal (§3.4).
 - `api.rs` signatures mention only arrow-rs and std types.
 - Benchmarks on `large_dataset.arrow`: every Rust implementation's median is
   within 10% of the pre-change run. The boundary is zero-copy, so equal or faster
