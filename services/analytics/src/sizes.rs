@@ -148,7 +148,7 @@ pub(crate) fn ipc_body_bytes(arr: &dyn Array, level: Option<i32>) -> PolarsResul
     Ok(body.bytes)
 }
 
-fn nests_int128(dtype: &DataType) -> bool {
+pub(crate) fn nests_int128(dtype: &DataType) -> bool {
     match dtype {
         DataType::List(inner) | DataType::Array(inner, _) => **inner == DataType::Int128 || nests_int128(inner),
         DataType::Struct(fields) => fields.iter().any(|f| *f.dtype() == DataType::Int128 || nests_int128(f.dtype())),
@@ -159,11 +159,18 @@ fn nests_int128(dtype: &DataType) -> bool {
 pub(crate) type Sizes = [Option<u64>; 4];
 pub(crate) const SIZE_FIELDS: [&str; 4] = ["size_bytes", "size_zstd_bytes", "size_polars_bytes", "size_polars_zstd_bytes"];
 
+/// `s`'s classic layout (CompatLevel::oldest), or None when `sizes` is null (nested Int128).
+pub(crate) fn classic_layout(s: &Series) -> PolarsResult<Option<arrow_array::ArrayRef>> {
+    if nests_int128(s.dtype()) { Ok(None) } else { to_arrow_rs(s, CompatLevel::oldest()).map(Some) }
+}
+
 pub(crate) fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
-    if nests_int128(s.dtype()) {
-        return Ok([None; 4]);
-    }
-    let classic = to_arrow_rs(s, CompatLevel::oldest())?;
+    sizes_of(s, classic_layout(s)?.as_ref(), level)
+}
+
+/// `sizes` given `s`'s `classic_layout` (exported once by callers that reuse it).
+pub(crate) fn sizes_of(s: &Series, classic: Option<&arrow_array::ArrayRef>, level: i32) -> PolarsResult<Sizes> {
+    let Some(classic) = classic else { return Ok([None; 4]) };
     let native = to_arrow_rs(s, CompatLevel::newest())?;
     Ok([
         Some(ipc_body_bytes(classic.as_ref(), None)?),

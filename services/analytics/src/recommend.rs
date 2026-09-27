@@ -24,6 +24,7 @@
 // matters for it; differing leading or trailing zeros set rec_lossy_formatting.
 
 use arrow_schema::{DataType as AT, Field as AField, Fields, TimeUnit};
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 /// Hierarchy rank (Spec B §4.1): breaks ties between candidates of equal projected size.
@@ -394,49 +395,85 @@ pub(crate) fn offset_tz(minutes: i32) -> String {
 
 /// A decimal or exponent string as (negative, significant digits, point) with
 /// value = 0.DIGITS × 10^point; zero is (false, "", 0). Equal values give equal
-/// tuples regardless of formatting ("1.50" ≡ "1.5", "0.00120" ≡ "1.2e-3").
+/// canonical forms regardless of formatting ("1.50" ≡ "1.5", "0.00120" ≡ "1.2e-3").
+/// The digits borrow the input (`head` then `tail`, the dot skipped): no allocation.
 ///
 /// Precondition: `s` is a numeric literal already validated by describe.rs's
 /// `scan_numeric` (or produced by Rust's own float formatter, e.g. ryu) — an
 /// optional leading `-`, ASCII digits, at most one `.`, and an optional
 /// `e`/`E`-led exponent. `canon` does not re-validate this; a non-conforming
-/// `s` (e.g. embedded non-digit bytes in the mantissa) can produce a `sig` that
-/// is not purely ASCII digits, which `decimal_from_repr` below guards against.
-pub(crate) fn canon(s: &str) -> (bool, String, i32) {
+/// `s` (e.g. embedded non-digit bytes in the mantissa) can produce digits that
+/// are not purely ASCII, which `decimal_from_repr` below guards against.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Canon<'a> {
+    neg: bool,
+    head: &'a [u8],
+    tail: &'a [u8],
+    point: i32,
+}
+
+impl Canon<'_> {
+    fn digits(&self) -> impl Iterator<Item = u8> + '_ {
+        self.head.iter().chain(self.tail).copied()
+    }
+
+    fn n_digits(&self) -> usize {
+        self.head.len() + self.tail.len()
+    }
+}
+
+impl PartialEq for Canon<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.neg == other.neg && self.point == other.point && self.n_digits() == other.n_digits() && self.digits().eq(other.digits())
+    }
+}
+
+pub(crate) fn canon(s: &str) -> Canon<'_> {
     let (neg, s) = s.strip_prefix('-').map_or((false, s), |r| (true, r));
     let (mantissa, exp) = s.split_once(['e', 'E']).map_or((s, 0), |(m, e)| (m, e.parse::<i32>().unwrap_or(0)));
     let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let all = format!("{int}{frac}");
-    let lead = all.len() - all.trim_start_matches('0').len();
-    let sig = all.trim_start_matches('0').trim_end_matches('0');
-    if sig.is_empty() {
-        return (false, String::new(), 0);
+    let (int, frac) = (int.as_bytes(), frac.as_bytes());
+    let zeros = |b: &[u8]| b.iter().take_while(|&&c| c == b'0').count();
+    let trim_end = |b: &'_ [u8]| -> usize { b.len() - b.iter().rev().take_while(|&&c| c == b'0').count() };
+    let lead_int = zeros(int);
+    let (head, tail, lead) = if lead_int == int.len() {
+        // No significant integer digit: the digits start inside the fraction.
+        let lead_frac = zeros(frac);
+        let tail = &frac[lead_frac..];
+        (&int[..0], &tail[..trim_end(tail)], lead_int + lead_frac)
+    } else {
+        let head = &int[lead_int..];
+        let t = trim_end(frac);
+        if t > 0 { (head, &frac[..t], lead_int) } else { (&head[..trim_end(head)], &frac[..0], lead_int) }
+    };
+    if head.is_empty() && tail.is_empty() {
+        return Canon { neg: false, head, tail, point: 0 };
     }
-    (neg, sig.to_string(), int.len() as i32 + exp - lead as i32)
+    Canon { neg, head, tail, point: int.len() as i32 + exp - lead as i32 }
 }
 
 /// Exact unscaled value of a decimal/exponent string at `scale`; None when it needs
 /// more decimal places or more than 38 digits. Same precondition as `canon`; also
 /// returns None (rather than underflowing the `c - b'0'` subtraction) if `canon`
-/// ever hands back a non-digit byte in `sig`, which a conforming input cannot do.
+/// ever hands back a non-digit byte, which a conforming input cannot do.
 pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
-    let (neg, sig, point) = canon(repr);
-    if sig.is_empty() {
+    let c = canon(repr);
+    if c.n_digits() == 0 {
         return Some(0);
     }
-    let places = sig.len() as i32 - point;
+    let places = c.n_digits() as i32 - c.point;
     if places > scale as i32 {
         return None;
     }
     let mut v: i128 = 0;
-    for c in sig.bytes() {
-        if !c.is_ascii_digit() {
+    for d in c.digits() {
+        if !d.is_ascii_digit() {
             return None;
         }
-        v = v.checked_mul(10)?.checked_add((c - b'0') as i128)?;
+        v = v.checked_mul(10)?.checked_add((d - b'0') as i128)?;
     }
     v = v.checked_mul(10i128.checked_pow((scale as i32 - places) as u32)?)?;
-    (v < 10i128.pow(38)).then_some(if neg { -v } else { v })
+    (v < 10i128.pow(38)).then_some(if c.neg { -v } else { v })
 }
 
 // ── candidates (Spec B §4, §5.2) ────────────────────────────────────────────
@@ -507,9 +544,16 @@ pub(crate) struct Level<'a> {
     pub r: f64,
     /// "" or "inner: " — prefixes every rule name.
     pub prefix: &'static str,
+    /// Text sources: `values` as LargeUtf8, built once and shared by cast, verify and lossy.
+    pub text: OnceCell<Result<LargeStringArray, String>>,
 }
 
 impl Level<'_> {
+    /// The values as text (LargeUtf8), computed on first use.
+    fn text(&self) -> Result<&LargeStringArray, String> {
+        self.text.get_or_init(|| text_of(&self.values)).as_ref().map_err(|e| e.clone())
+    }
+
     fn n_rows(&self) -> u64 {
         self.values.len() as u64
     }
@@ -873,6 +917,12 @@ fn decimal_array(v: Vec<Option<i128>>, scale: i8) -> Result<ArrayRef, String> {
     Decimal128Array::from(v).with_precision_and_scale(38, scale).map(|a| Arc::new(a) as ArrayRef).map_err(|e| e.to_string())
 }
 
+/// `s.to_lowercase() == lower` for an already lower-cased `lower`, allocating only for
+/// non-ASCII `s` (whose Unicode lower case can map onto ASCII, e.g. the Kelvin sign).
+fn lower_eq(s: &str, lower: &str) -> bool {
+    if s.is_ascii() { s.eq_ignore_ascii_case(lower) } else { s.to_lowercase() == lower }
+}
+
 /// `f` over every non-null text value; the first value it rejects fails the cast.
 fn parsed<T>(text: &LargeStringArray, f: impl Fn(&str) -> Option<T>) -> Result<Vec<Option<T>>, String> {
     text.iter()
@@ -890,8 +940,7 @@ pub(crate) fn from_text(t: &Target, text: &LargeStringArray) -> Result<ArrayRef,
                 _ => ("1", "0"),
             };
             let v = parsed(text, |s| {
-                let s = s.to_lowercase();
-                if s == tt { Some(true) } else if s == ff { Some(false) } else { None }
+                if lower_eq(s, tt) { Some(true) } else if lower_eq(s, ff) { Some(false) } else { None }
             })?;
             Ok(Arc::new(BooleanArray::from(v)))
         }
@@ -964,7 +1013,7 @@ pub(crate) fn cast_to(t: &Target, lvl: &Level) -> Result<ArrayRef, String> {
     match t {
         Target::Original(_) => Ok(src.clone()),
         Target::Null => Ok(arrow_array::new_null_array(&AT::Null, src.len())),
-        _ if is_text(lvl.dtype) => from_text(t, &text_of(src)?),
+        _ if is_text(lvl.dtype) => from_text(t, lvl.text()?),
         Target::Fixed(to @ (AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..))) if is_float(lvl.dtype) => float_to_decimal(src, to),
         Target::Boolean | Target::Fixed(_) | Target::Plain(_) => arrow_cast(src.as_ref(), &t.arrow_type()),
         t => Err(format!("no cast to {}", pa_name(&t.arrow_type()))),
@@ -1025,13 +1074,14 @@ pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), Stri
 }
 
 /// String sources: the recast values, rendered to text by arrow-cast, equal the
-/// original text by value (canonical digits; parse_iso components).
-pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef) -> Result<(), String> {
+/// original text by value (canonical digits; parse_iso components). Returns the
+/// LargeUtf8 rendering when it made one, so `lossy` need not render again.
+pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef) -> Result<Option<ArrayRef>, String> {
     let bad = |i: usize, got: &str| Err(format!("row {i}: {:?} round-trips to {got:?}", text.value(i)));
     let iso = |s: &str| parse_iso(s.as_bytes());
     match t {
         Target::Dictionary(..) | Target::Plain(_) => {
-            first_mismatch(&(Arc::new(text.clone()) as ArrayRef), &arrow_cast(recast.as_ref(), &AT::LargeUtf8)?)
+            first_mismatch(&(Arc::new(text.clone()) as ArrayRef), &arrow_cast(recast.as_ref(), &AT::LargeUtf8)?).map(|_| None)
         }
         Target::Boolean | Target::BoolPair(..) => {
             let (tt, ff) = match t {
@@ -1041,11 +1091,11 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
             let b = recast.as_boolean();
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
                 let want = if b.value(i) { tt } else { ff };
-                if text.value(i).to_lowercase() != want {
+                if !lower_eq(text.value(i), want) {
                     return bad(i, want);
                 }
             }
-            Ok(())
+            Ok(None)
         }
         Target::TimestampWithOffset(_) => {
             let s = recast.as_struct();
@@ -1058,11 +1108,11 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
                     return bad(i, back.value(i));
                 }
             }
-            Ok(())
+            Ok(None)
         }
         Target::Fixed(to) => {
-            let back = arrow_cast(recast.as_ref(), &AT::Utf8)?;
-            let back = back.as_string::<i32>();
+            let rendered = arrow_cast(recast.as_ref(), &AT::LargeUtf8)?;
+            let back = rendered.as_string::<i64>();
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
                 let (a, b) = (text.value(i), back.value(i));
                 let same = match to {
@@ -1085,9 +1135,9 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
                     return bad(i, b);
                 }
             }
-            Ok(())
+            Ok(Some(rendered))
         }
-        _ => Ok(()),
+        _ => Ok(None),
     }
 }
 
@@ -1103,9 +1153,10 @@ fn logical_is_null(nulls: Option<&NullBuffer>, i: usize) -> bool {
 }
 
 /// Row-by-row check that `recast` holds the original values (Spec B §5.4 step 3).
-pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<(), String> {
+/// Text sources: returns the recast values' LargeUtf8 rendering when verification made one.
+pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<Option<ArrayRef>, String> {
     if matches!(t, Target::Original(_)) {
-        return Ok(());
+        return Ok(None);
     }
     let src = &lvl.values;
     if recast.len() != src.len() {
@@ -1116,15 +1167,18 @@ pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<(), S
         // always false for it — so the only real check is that every source value was
         // actually null (via the source's own *logical* nulls).
         let non_null = src.len() - src.logical_null_count();
-        return (non_null == 0).then_some(()).ok_or_else(|| format!("{non_null} non-null source value(s)"));
+        return (non_null == 0).then_some(None).ok_or_else(|| format!("{non_null} non-null source value(s)"));
     }
     let (recast_nulls, src_nulls) = (recast.logical_nulls(), src.logical_nulls());
-    if let Some(i) = (0..src.len()).find(|&i| logical_is_null(recast_nulls.as_ref(), i) != logical_is_null(src_nulls.as_ref(), i)) {
-        return Err(format!("row {i}: null mismatch"));
+    let null_count = |n: &Option<NullBuffer>| n.as_ref().map_or(0, |n| n.null_count());
+    if recast_nulls != src_nulls || null_count(&recast_nulls) != null_count(&src_nulls) {
+        if let Some(i) = (0..src.len()).find(|&i| logical_is_null(recast_nulls.as_ref(), i) != logical_is_null(src_nulls.as_ref(), i)) {
+            return Err(format!("row {i}: null mismatch"));
+        }
     }
     match t {
-        _ if is_text(lvl.dtype) => verify_text(t, &text_of(src)?, recast),
-        _ if is_float(lvl.dtype) => verify_float(src, recast),
+        _ if is_text(lvl.dtype) => verify_text(t, lvl.text()?, recast),
+        _ if is_float(lvl.dtype) => verify_float(src, recast).map(|_| None),
         _ => {
             // arrow-cast's cast-back below forces `recast` into `src`'s exact data type
             // (tz included), which would silently paper over a timezone that changed
@@ -1135,16 +1189,17 @@ pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<(), S
                     return Err(format!("timezone changed: {a:?} → {b:?}"));
                 }
             }
-            first_mismatch(src, &arrow_cast(recast.as_ref(), src.data_type())?)
+            first_mismatch(src, &arrow_cast(recast.as_ref(), src.data_type())?).map(|_| None)
         }
     }
 }
 
-/// Some value's text changed although its value did not (Spec B §5.4).
-pub(crate) fn lossy(t: &Target, lvl: &Level, recast: &ArrayRef) -> bool {
+/// Some value's text changed although its value did not (Spec B §5.4). `rendered`:
+/// `recast` as LargeUtf8 if `verify` already made it.
+pub(crate) fn lossy(t: &Target, lvl: &Level, recast: &ArrayRef, rendered: Option<ArrayRef>) -> bool {
     match t {
         Target::Original(_) | Target::Null | Target::Dictionary(..) | Target::Plain(_) => false,
-        _ if is_text(lvl.dtype) => match (text_of(&lvl.values), arrow_cast(recast.as_ref(), &AT::LargeUtf8)) {
+        _ if is_text(lvl.dtype) => match (lvl.text(), rendered.map_or_else(|| arrow_cast(recast.as_ref(), &AT::LargeUtf8), Ok)) {
             (Ok(a), Ok(b)) => a.iter().zip(b.as_string::<i64>().iter()).any(|(x, y)| x != y),
             _ => true, // no text rendering (timestamp_with_offset): the format necessarily changes
         },
@@ -1159,13 +1214,12 @@ pub(crate) fn lossy(t: &Target, lvl: &Level, recast: &ArrayRef) -> bool {
 // ── choosing (Spec B §4.1, §4.4, §5.4) ──────────────────────────────────────
 
 use crate::describe::{assemble, describe_one, fields, Described, Row};
-use crate::shared::to_arrow_rs;
-use crate::sizes::{ipc_body_bytes, sizes, Sizes, SIZE_FIELDS};
+use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
 use arrow_array::builder::make_view;
 use arrow_array::{BinaryViewArray, FixedSizeListArray, LargeListArray, ListArray, StringViewArray, UInt64Array};
 use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use polars::prelude::{
-    polars_err, AnyValue, CompatLevel, Field as PField, Float64Chunked, IntoSeries, NewChunkedArray, PolarsResult, Series, StringChunked,
+    polars_err, AnyValue, Field as PField, Float64Chunked, IntoSeries, NewChunkedArray, PolarsResult, Series, StringChunked,
     StructChunked, UInt64Chunked,
 };
 use pyo3_polars::derive::polars_expr;
@@ -1192,7 +1246,7 @@ fn order(c: &mut [Candidate]) {
 }
 
 /// Tries the candidates in order; the first success is chosen, failures keep their reason.
-fn first_success(mut cands: Vec<Candidate>, mut attempt: impl FnMut(&Target) -> Result<ArrayRef, String>) -> (usize, ArrayRef, Vec<Candidate>) {
+fn first_success<T>(mut cands: Vec<Candidate>, mut attempt: impl FnMut(&Target) -> Result<T, String>) -> (usize, T, Vec<Candidate>) {
     order(&mut cands);
     for i in 0..cands.len() {
         if cands[i].outcome == Outcome::Rejected {
@@ -1218,12 +1272,12 @@ fn chosen_from(i: usize, array: ArrayRef, cands: Vec<Candidate>, lossy: bool) ->
 }
 
 pub(crate) fn choose(lvl: &Level, params: &Params) -> Result<Chosen, String> {
-    let (i, array, cands) = first_success(candidates(lvl, params)?, |t| {
+    let (i, (array, rendered), cands) = first_success(candidates(lvl, params)?, |t| {
         let a = cast_to(t, lvl)?;
-        verify(t, lvl, &a)?;
-        Ok(a)
+        let rendered = verify(t, lvl, &a)?;
+        Ok((a, rendered))
     });
-    let lossy = lossy(&cands[i].target, lvl, &array);
+    let lossy = lossy(&cands[i].target, lvl, &array, rendered);
     Ok(chosen_from(i, array, cands, lossy))
 }
 
@@ -1505,11 +1559,11 @@ pub(crate) struct Rec {
 }
 
 /// The recommendation for one column; None when its sizes are null (nested Int128).
-pub(crate) fn recommend(s: &Series, d: &Described, sz: &Sizes, params: &Params) -> PolarsResult<Option<Rec>> {
+/// `values` is `s` in the classic layout (sizes.rs's `classic_layout`).
+pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes, params: &Params) -> PolarsResult<Option<Rec>> {
     let (Some(size_bytes), Some(polars_bytes), Some(polars_zstd)) = (sz[0], sz[2], sz[3]) else { return Ok(None) };
     let name = s.name().as_str();
     let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
-    let values = to_arrow_rs(s, CompatLevel::oldest())?;
     let q = params.population_rows.map(|p| if p == d.n_rows { 1.0 } else { d.n_rows as f64 / p as f64 });
     let r = match params.population_rows {
         Some(p) if d.n_rows > 0 => p as f64 / d.n_rows as f64,
@@ -1517,16 +1571,16 @@ pub(crate) fn recommend(s: &Series, d: &Described, sz: &Sizes, params: &Params) 
     };
     let outer = Level {
         dtype: s.dtype(), values: values.clone(), p: &d.outer, n_midnight: d.n_midnight, size_bytes,
-        est: level_estimate(&d.outer, d.n_rows - d.n_null, q), r, prefix: "",
+        est: level_estimate(&d.outer, d.n_rows - d.n_null, q), r, prefix: "", text: Default::default(),
     };
     let chosen = match &d.inner {
         Some(inner) if matches!(s.dtype(), PT::List(_) | PT::Array(..)) => {
-            let (rows, child, width) = list_parts(&values).map_err(err)?;
+            let (rows, child, width) = list_parts(values).map_err(err)?;
             if child.len() == inner.values.len() {
                 let inner_lvl = Level {
                     dtype: inner.values.dtype(), size_bytes: ipc_body_bytes(child.as_ref(), None)?, values: child,
                     p: &inner.profile, n_midnight: None,
-                    est: level_estimate(&inner.profile, (inner.values.len() - inner.values.null_count()) as u64, q), r, prefix: "inner: ",
+                    est: level_estimate(&inner.profile, (inner.values.len() - inner.values.null_count()) as u64, q), r, prefix: "inner: ", text: Default::default(),
                 };
                 choose_list(&outer, &inner_lvl, &rows, width, params).map_err(err)?
             } else {
@@ -1643,8 +1697,12 @@ pub(crate) fn describe_and_recommend_impl(inputs: &[Series], params: &Params) ->
         .par_iter()
         .map(|s| {
             let d = describe_one(s, params.seed)?;
-            let sz = sizes(s, params.zstd_level)?;
-            let rec = recommend(s, &d, &sz, params)?;
+            let classic = classic_layout(s)?;
+            let sz = sizes_of(s, classic.as_ref(), params.zstd_level)?;
+            let rec = match &classic {
+                Some(values) => recommend(s, values, &d, &sz, params)?,
+                None => None,
+            };
             let mut row = d.row();
             row.extend(sz.iter().map(|v| v.map_or(AnyValue::Null, AnyValue::UInt64)));
             row.extend(rec_row(rec.as_ref()));
@@ -1724,11 +1782,24 @@ mod tests {
     }
 
     #[test]
+    fn lower_case_comparison() {
+        assert!(lower_eq("TRUE", "true") && lower_eq("tRuE", "true") && !lower_eq("true ", "true"));
+        assert!(lower_eq("\u{212A}", "k")); // Kelvin sign lower-cases to ASCII k
+        assert!(!lower_eq("É", "e") && lower_eq("É", "é"));
+    }
+
+    #[test]
     fn canonical_decimals() {
         assert_eq!(canon("1.50"), canon("1.5"));
         assert_eq!(canon("0.00120"), canon("1.2e-3"));
         assert_eq!(canon("-0.0"), canon("0"));
         assert_ne!(canon("123"), canon("12.3"));
+        assert_eq!(canon("120"), canon("1.2e2"));
+        assert_eq!(canon("00.0100"), canon("1e-2"));
+        assert_eq!(canon("10.05"), canon("1005e-2"));
+        assert_ne!(canon("10.05"), canon("10.5"));
+        assert_ne!(canon("-1.5"), canon("1.5"));
+        assert_eq!(canon("0"), canon("-0.000"));
         assert_eq!(decimal_from_repr("1e-7", 7), Some(1));
         assert_eq!(decimal_from_repr("1.5e20", 0), Some(150_000_000_000_000_000_000));
         assert_eq!(decimal_from_repr("123.45", 1), None);
@@ -1758,7 +1829,7 @@ mod tests {
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
             dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
-            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, d.n_rows - d.n_null, None), r: 1.0, prefix: "",
+            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, d.n_rows - d.n_null, None), r: 1.0, prefix: "", text: Default::default(),
         };
         candidates(&lvl, p).unwrap().iter().map(|c| (pa_name(&c.target.arrow_type()), c.outcome)).collect()
     }
@@ -1828,7 +1899,7 @@ mod tests {
                 est_high: Some(1.0),
                 method: crate::cardinality_estimators::Method::Chao1,
             },
-            r: 1.0, prefix: "",
+            r: 1.0, prefix: "", text: Default::default(),
         };
         assert_eq!(lvl.cardinality(), (3.0, "est_high"));
     }
@@ -1885,7 +1956,7 @@ mod tests {
             let d = describe_one(&s, 0).unwrap();
             let lvl = Level {
                 dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
-                n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 0, None), r: 1.0, prefix: "",
+                n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 0, None), r: 1.0, prefix: "", text: Default::default(),
             };
             let recast = cast_to(&Target::Null, &lvl).unwrap();
             assert!(verify(&Target::Null, &lvl, &recast).is_ok());
@@ -1895,7 +1966,7 @@ mod tests {
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
             dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
-            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 1, None), r: 1.0, prefix: "",
+            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 1, None), r: 1.0, prefix: "", text: Default::default(),
         };
         let recast = cast_to(&Target::Null, &lvl).unwrap();
         assert!(verify(&Target::Null, &lvl, &recast).is_err());
@@ -1958,7 +2029,7 @@ mod tests {
         let dtype = PT::Datetime(PTimeUnit::Microseconds, None);
         let lvl = Level {
             dtype: &dtype, values: src, p: &d.outer,
-            n_midnight: None, size_bytes: 0, est: level_estimate(&d.outer, 2, None), r: 1.0, prefix: "",
+            n_midnight: None, size_bytes: 0, est: level_estimate(&d.outer, 2, None), r: 1.0, prefix: "", text: Default::default(),
         };
         let target = Target::Fixed(AT::Timestamp(TimeUnit::Microsecond, Some("+05:00".into())));
         assert!(verify(&target, &lvl, &recast).is_err());
@@ -1969,7 +2040,7 @@ mod tests {
     fn rec(s: Series) -> Rec {
         let d = describe_one(&s, 0).unwrap();
         let sz = sizes(&s, 1).unwrap();
-        recommend(&s, &d, &sz, &params()).unwrap().unwrap()
+        recommend(&s, &classic_layout(&s).unwrap().unwrap(), &d, &sz, &params()).unwrap().unwrap()
     }
 
     fn chosen(r: &Rec) -> &Candidate {
@@ -2072,7 +2143,7 @@ mod tests {
         let s = Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]);
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
         let exact = Params { population_rows: Some(6), ..params() };
-        let r = recommend(&s, &d, &sz, &exact).unwrap().unwrap();
+        let r = recommend(&s, &classic_layout(&s).unwrap().unwrap(), &d, &sz, &exact).unwrap().unwrap();
         assert_eq!(r.polars_type.as_deref(), Some("Enum(categories=['a', 'b'])"));
         let many: Vec<&str> = (0..200).map(|i| if i % 2 == 0 { "alpha" } else { "beta" }).collect();
         let r = rec(Series::new("x".into(), &many));
@@ -2086,7 +2157,7 @@ mod tests {
 
     fn rec_with(s: Series, population_rows: Option<u64>) -> Rec {
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
-        recommend(&s, &d, &sz, &Params { population_rows, ..params() }).unwrap().unwrap()
+        recommend(&s, &classic_layout(&s).unwrap().unwrap(), &d, &sz, &Params { population_rows, ..params() }).unwrap().unwrap()
     }
 
     #[test]
