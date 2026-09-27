@@ -523,12 +523,15 @@ impl Level<'_> {
         self.n_rows() - self.n_null()
     }
 
-    /// Population cardinality for dictionaries: est_high where an interval exists.
+    /// Population cardinality for dictionaries: est_high where an interval exists,
+    /// floored at the observed distinct count (an estimate must never claim fewer
+    /// distinct values than were actually observed).
     fn cardinality(&self) -> (f64, &'static str) {
-        match self.est.est_high {
+        let (c, source) = match self.est.est_high {
             Some(h) => (h, "est_high"),
             None => (self.est.est_cardinality, "est_cardinality"),
-        }
+        };
+        (c.max(self.p.freq.n_unique as f64), source)
     }
 
     fn shape(&self) -> Shape {
@@ -692,9 +695,15 @@ impl Rules<'_, '_> {
     fn text(&mut self, params: &Params) -> Result<(), String> {
         let lvl = self.lvl;
         let (st, n) = (lvl.p.strings.as_ref().expect("string columns have string stats"), lvl.n());
-        let text = text_of(&lvl.values)?;
+        // Only cast the (≤5) top5 rows to text, not the whole column — the rest of
+        // this rule never needs the column's text form.
         let distinct: Vec<String> = if lvl.p.freq.n_unique <= 5 {
-            lvl.p.freq.top5_idx.iter().map(|&i| text.value(i as usize).to_lowercase()).collect()
+            lvl.p
+                .freq
+                .top5_idx
+                .iter()
+                .map(|&i| text_of(&lvl.values.slice(i as usize, 1)).map(|t| t.value(0).to_lowercase()))
+                .collect::<Result<_, _>>()?
         } else {
             Vec::new()
         };
@@ -978,5 +987,26 @@ mod tests {
         let p = Params { categorical_threshold: 1, ..params() };
         let got = types(Series::new("x".into(), &["a", "b", "a", "b"]), &p);
         assert!(got.iter().any(|(t, o)| t.starts_with("dictionary") && *o == Outcome::Rejected));
+    }
+
+    #[test]
+    fn dictionary_cardinality_floors_at_n_unique() {
+        // 3 distinct values, but the estimate handed to Level is (artificially)
+        // below that — cardinality() must still report at least n_unique.
+        let s = Series::new("x".into(), &["a", "b", "c"]);
+        let d = describe_one(&s, 0).unwrap();
+        assert_eq!(d.outer.freq.n_unique, 3);
+        let lvl = Level {
+            column: "x", dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            n_midnight: d.n_midnight, size_bytes: 0,
+            est: Estimate {
+                est_cardinality: 1.0,
+                est_low: Some(1.0),
+                est_high: Some(1.0),
+                method: crate::cardinality_estimators::Method::Chao1,
+            },
+            r: 1.0, prefix: "",
+        };
+        assert_eq!(lvl.cardinality(), (3.0, "est_high"));
     }
 }
