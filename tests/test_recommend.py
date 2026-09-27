@@ -133,6 +133,33 @@ def test_known_answers(s, params, arrow_type, polars_type):
     assert r["rec_nullable"] == (_unlist(s, arrow_type).null_count() > 0)
 
 
+def null_lists_holding_values(lists: list) -> pl.Series:
+    """`lists` with row 1 set null by pl.when/otherwise: the null row keeps its values behind the offsets."""
+    s = pl.Series("x", lists)
+    mask = pl.Series([i != 1 for i in range(len(lists))])
+    out = pl.select(pl.when(mask).then(s).otherwise(None).alias("x")).to_series()
+    offsets = out.to_arrow().offsets.to_pylist()
+    assert offsets[2] > offsets[1], offsets  # the null row still spans values
+    return out
+
+
+@pytest.mark.parametrize(
+    "lists, arrow_type, polars_type",
+    [
+        pytest.param([[1, 2], [3, 4], [5]], "list<item: uint8>", "List(UInt8)", id="list"),
+        pytest.param([[1], [2], [3]], "uint8", "UInt8", id="scalar"),
+        # inner ["a", "a"]: Utf8 (16 + 8) ties Dictionary (keys 8 + offsets 8 + values 8); Dictionary wins on rank
+        pytest.param([["a"], ["b"], ["a"]], "dictionary<values=string, indices=uint8, ordered=0>", 'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))', id="strings"),
+    ],
+)
+def test_null_lists_holding_values_are_narrowed(lists, arrow_type, polars_type):
+    s = null_lists_holding_values(lists)
+    r = rec(s)
+    assert (r["rec_arrow_type"], r["rec_polars_type"]) == (arrow_type, polars_type)
+    assert r["rec_nullable"] is True
+    assert _outer_chosen(r)["predicted_bytes"] == r["rec_arrow_size_bytes"]
+
+
 def test_lossy_formatting():
     assert rec(pl.Series("x", ["1.50", "2.2"]))["rec_lossy_formatting"] is True
     assert rec(pl.Series("x", ["1.5", "2.2"]))["rec_lossy_formatting"] is False

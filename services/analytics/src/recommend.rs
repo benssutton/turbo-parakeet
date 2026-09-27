@@ -1227,49 +1227,56 @@ pub(crate) fn choose(lvl: &Level, params: &Params) -> Result<Chosen, String> {
     Ok(chosen_from(i, array, cands, lossy))
 }
 
-fn choose_original(lvl: &Level) -> Chosen {
+/// The original type only; `why` explains, in its evidence, why nothing else was tried.
+fn choose_original(lvl: &Level, why: &str) -> Chosen {
     let mut r = Rules { lvl, shape: lvl.shape(), out: Vec::new() };
     r.original();
+    r.out[0].evidence = format!("{}; {why}", r.out[0].evidence);
     let (i, array, cands) = first_success(r.out, |_| Ok(lvl.values.clone()));
     chosen_from(i, array, cands, false)
 }
 
 /// Per row of a List/Array column: (start, len) in the child the inner level holds,
-/// or None for a null row; that child; the fixed width (None for List). A List's
-/// child is the range its offsets reference. An Array's child keeps only the slots
-/// of non-null rows (valid row k → (k·w, w)) — Describe's `flatten`, so the inner
-/// profile's argmin/top5 indices point into it.
+/// or None for a null row; that child; the fixed width (None for List). The child is
+/// Describe's `flatten` — the values of the non-null rows only, in row order — so the
+/// inner profile's argmin/top5 indices point into it: valid row k starts where valid
+/// row k−1 ends. A null row can still span values (a List's offsets after
+/// `pl.when(mask).then(list).otherwise(None)`; an Array's w slots); those are dropped
+/// with a `take`, and `wrap` rebuilds the offsets from row lengths (a null row → empty).
 fn list_parts(values: &ArrayRef) -> Result<(Vec<Option<(usize, usize)>>, ArrayRef, Option<i32>), String> {
-    match values.data_type() {
+    // (physical start, len) of every row, then the compacted rows.
+    let (spans, child, width): (Vec<(usize, usize, bool)>, ArrayRef, Option<i32>) = match values.data_type() {
         AT::LargeList(_) => {
             let l = values.as_list::<i64>();
             let o = l.value_offsets();
             let first = o[0] as usize;
-            let rows = (0..l.len()).map(|i| l.is_valid(i).then(|| (o[i] as usize - first, (o[i + 1] - o[i]) as usize))).collect();
-            Ok((rows, l.values().slice(first, o[l.len()] as usize - first), None))
+            let spans = (0..l.len()).map(|i| (o[i] as usize - first, (o[i + 1] - o[i]) as usize, l.is_valid(i))).collect();
+            (spans, l.values().slice(first, o[l.len()] as usize - first), None)
         }
         AT::FixedSizeList(_, width) => {
             let f = values.as_fixed_size_list();
             let w = *width as usize;
             let child = f.values().slice(f.value_offset(0) as usize, f.len() * w); // offset non-zero for a slice
-            let mut k = 0;
-            let rows: Vec<_> = (0..f.len())
-                .map(|i| {
-                    f.is_valid(i).then(|| {
-                        k += 1;
-                        ((k - 1) * w, w)
-                    })
-                })
-                .collect();
-            if f.null_count() == 0 {
-                return Ok((rows, child, Some(*width)));
-            }
-            let idx = UInt64Array::from_iter_values((0..f.len()).filter(|&i| f.is_valid(i)).flat_map(|i| (i * w..(i + 1) * w).map(|j| j as u64)));
-            let compact = arrow_select::take::take(child.as_ref(), &idx, None).map_err(|e| e.to_string())?;
-            Ok((rows, compact, Some(*width)))
+            ((0..f.len()).map(|i| (i * w, w, f.is_valid(i))).collect(), child, Some(*width))
         }
-        t => unreachable!("not a list: {t}"),
+        t => return Err(format!("not a list type: {}", pa_name(t))),
+    };
+    let mut k = 0;
+    let rows = spans
+        .iter()
+        .map(|&(_, len, valid)| {
+            valid.then(|| {
+                k += len;
+                (k - len, len)
+            })
+        })
+        .collect();
+    if !spans.iter().any(|&(_, len, valid)| !valid && len > 0) {
+        return Ok((rows, child, width)); // no null row spans values: the child is already compact
     }
+    let idx = UInt64Array::from_iter_values(spans.iter().filter(|s| s.2).flat_map(|&(start, len, _)| (start..start + len).map(|j| j as u64)));
+    let compact = arrow_select::take::take(child.as_ref(), &idx, None).map_err(|e| e.to_string())?;
+    Ok((rows, compact, width))
 }
 
 /// `take` whose null indices give null rows; a struct keeps its nulls at struct
@@ -1523,7 +1530,9 @@ pub(crate) fn recommend(s: &Series, d: &Described, sz: &Sizes, params: &Params) 
                 };
                 choose_list(&outer, &inner_lvl, &rows, width, params).map_err(err)?
             } else {
-                choose_original(&outer) // null lists hold values: keep the column as it is
+                // Defensive: list_parts builds Describe's flatten, so the lengths agree.
+                let why = format!("inner values {} ≠ Describe's inner_n_values {}: inner type kept", child.len(), inner.values.len());
+                choose_original(&outer, &why)
             }
         }
         _ => choose(&outer, params).map_err(err)?,
@@ -2004,6 +2013,38 @@ mod tests {
         assert_eq!((r.arrow_type.as_str(), r.nullable), ("uint8", true));
         assert!(!rec(Series::new("x".into(), &[1i64, 2])).nullable);
         assert!(rec(Series::new("x".into(), &[Some(1i64), None])).nullable);
+    }
+
+    /// A List(Int64) Series with offsets `offsets` over `values`, row `null` null — its
+    /// values still behind the offsets (as `pl.when(mask).then(list).otherwise(None)` leaves them).
+    fn null_list_holding_values(values: Vec<i64>, offsets: Vec<i64>, null: usize) -> Series {
+        use polars_arrow::array::{ListArray as PlList, PrimitiveArray};
+        use polars_arrow::bitmap::Bitmap;
+        use polars_arrow::offset::Offsets;
+        let values = PrimitiveArray::<i64>::from_vec(values).boxed();
+        let rows = offsets.len() - 1;
+        let arr = PlList::<i64>::new(
+            PlList::<i64>::default_datatype(values.dtype().clone()),
+            Offsets::try_from(offsets).unwrap().into(),
+            values,
+            Some(Bitmap::from_iter((0..rows).map(|i| i != null))),
+        );
+        Series::from_arrow("x".into(), arr.boxed()).unwrap()
+    }
+
+    #[test]
+    fn null_lists_holding_values_are_narrowed() {
+        let s = null_list_holding_values(vec![1, 2, 3, 4, 5], vec![0, 2, 4, 5], 1);
+        assert_eq!(describe_one(&s, 0).unwrap().inner.unwrap().values.len(), 3); // Describe's flatten skips the null row
+        let r = rec(s);
+        assert_eq!((r.arrow_type.as_str(), r.nullable), ("list<item: uint8>", true));
+        assert_eq!(chosen(&r).predicted, r.arrow_size);
+        let inner = r.candidates.iter().find(|c| c.outcome == Outcome::Chosen && c.rule.starts_with("inner: ")).unwrap();
+        assert_eq!(pa_name(&inner.target.arrow_type()), "uint8");
+        // Single-item rows: the null row (holding [9]) becomes a null scalar.
+        let r = rec(null_list_holding_values(vec![1, 9, 3], vec![0, 1, 2, 3], 1));
+        assert_eq!((r.arrow_type.as_str(), r.nullable), ("uint8", true));
+        assert_eq!(chosen(&r).predicted, r.arrow_size);
     }
 
     #[test]
