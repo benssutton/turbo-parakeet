@@ -297,20 +297,22 @@ pub(crate) fn validity(n: f64, nulls: f64) -> f64 {
 }
 
 /// Uncompressed Arrow IPC body bytes of a scalar type `t` holding values shaped
-/// like `s`, exactly as sizes.rs measures it. Lists are sized by the caller.
-pub(crate) fn body_size(t: &AT, s: &Shape) -> f64 {
+/// like `s`, exactly as sizes.rs measures it. Lists are sized by the caller; a type
+/// with no analytic size is an error (its candidate fails), never a wrong size.
+pub(crate) fn body_size(t: &AT, s: &Shape) -> Result<f64, String> {
     let v = validity(s.n, s.nulls);
-    match t {
+    let width = |t: &AT| t.primitive_width().ok_or_else(|| format!("no predicted size for {}", pa_name(t)));
+    Ok(match t {
         AT::Null => 0.0,
         AT::Boolean => v + pad((s.n / 8.0).ceil()),
         AT::Utf8 | AT::Binary => v + pad(4.0 * (s.n + 1.0)) + pad(s.sum_len),
         AT::LargeUtf8 | AT::LargeBinary => v + pad(8.0 * (s.n + 1.0)) + pad(s.sum_len),
-        AT::Dictionary(k, _) => {
-            v + pad(s.n * k.primitive_width().unwrap() as f64) + pad(4.0 * (s.d + 1.0)) + pad(s.sum_len_unique)
+        AT::Dictionary(k, values) if **values == AT::Utf8 => v + pad(s.n * width(k)? as f64) + pad(4.0 * (s.d + 1.0)) + pad(s.sum_len_unique),
+        AT::Struct(f) if matches!(f.first().map(|x| x.data_type()), Some(AT::Timestamp(u, _)) if *t == timestamp_with_offset(*u)) => {
+            v + pad(8.0 * s.n) + pad(2.0 * s.n)
         }
-        AT::Struct(_) => v + pad(8.0 * s.n) + pad(2.0 * s.n), // timestamp_with_offset
-        t => v + pad(s.n * t.primitive_width().expect("body_size: fixed-width type") as f64),
-    }
+        t => v + pad(s.n * width(t)? as f64),
+    })
 }
 
 // ── numbers and units ────────────────────────────────────────────────────────
@@ -630,16 +632,8 @@ impl Rules<'_, '_> {
     fn push(&mut self, target: Target, rank: Rank, rule: &str, evidence: String) {
         let t = target.arrow_type();
         let (c, _) = self.lvl.cardinality();
-        self.out.push(Candidate {
-            predicted: body_size(&t, &self.shape) as u64,
-            projected: body_size(&t, &self.shape.project(self.lvl.r, c)),
-            target,
-            rank,
-            rule: format!("{}{rule}", self.lvl.prefix),
-            evidence,
-            outcome: Outcome::NotTried,
-            reason: None,
-        });
+        let sizes = body_size(&t, &self.shape).and_then(|p| Ok((p, body_size(&t, &self.shape.project(self.lvl.r, c))?)));
+        self.out.push(candidate(target, rank, &format!("{}{rule}", self.lvl.prefix), evidence, sizes));
     }
 
     fn integers(&mut self, lo: i128, hi: i128, from: &str, evidence: &str) {
@@ -665,8 +659,8 @@ impl Rules<'_, '_> {
 
     fn decimal(&mut self, scale: usize) {
         let (p, v) = (self.lvl.p, &self.lvl.values);
-        let (Some(lo), Some(hi)) = (p.range.argmin, p.range.argmax) else { return };
-        let unscaled = |i: u64| v.as_primitive::<Decimal128Type>().value(i as usize);
+        let (Some(lo), Some(hi), Some(d)) = (p.range.argmin, p.range.argmax, v.as_primitive_opt::<Decimal128Type>()) else { return };
+        let unscaled = |i: u64| d.value(i as usize);
         let g = p.gcd.unwrap_or(1);
         let k = if g == 0 { scale } else { trailing_zeros10(g).min(scale) };
         let f = 10i128.pow(k as u32);
@@ -683,7 +677,7 @@ impl Rules<'_, '_> {
 
     fn float(&mut self) {
         let (p, v) = (self.lvl.p, &self.lvl.values);
-        let f = p.floats.expect("float columns have float stats");
+        let Some(f) = p.floats else { return }; // Describe profiles every float column: never None
         let ev = format!("n_nan={} n_inf={} n_fractional={} ", f.n_nan, f.n_inf, f.n_fractional);
         if let (0, 0, Some(lo), Some(hi)) = (f.n_nan, f.n_inf, p.range.argmin, p.range.argmax) {
             let (lo, hi) = (f64_at(v, lo), f64_at(v, hi));
@@ -737,7 +731,7 @@ impl Rules<'_, '_> {
 
     fn text(&mut self, params: &Params) -> Result<(), String> {
         let lvl = self.lvl;
-        let (st, n) = (lvl.p.strings.as_ref().expect("string columns have string stats"), lvl.n());
+        let n = lvl.n();
         // Only cast the (≤5) top5 rows to text, not the whole column — the rest of
         // this rule never needs the column's text form.
         let distinct: Vec<String> = if lvl.p.freq.n_unique <= 5 {
@@ -755,11 +749,17 @@ impl Rules<'_, '_> {
             .iter()
             .map(|(t, f)| (t.to_lowercase(), f.to_lowercase()))
             .find(|(t, f)| !distinct.is_empty() && distinct.iter().all(|v| v == t || v == f));
+        // Describe profiles every text column, so `strings` is always present; without
+        // it only the plain / dictionary candidates apply.
+        let Some(st) = lvl.p.strings.as_ref() else {
+            self.plain_and_dictionary(params);
+            return Ok(());
+        };
         let sig = st.iso_max_sig_frac_digits.unwrap_or(0);
         if let Some((t, f)) = pair {
             self.push(Target::BoolPair(t.clone(), f.clone()), Rank::Boolean, "string→boolean", format!("distinct={distinct:?} pair=({t:?}, {f:?})"));
-        } else if st.n_numeric_int == n && st.n_leading_zero == 0 && !st.int_overflow && st.int_min.is_some() {
-            self.integers(st.int_min.unwrap(), st.int_max.unwrap(), "string", &format!("n_numeric_int={n} n_leading_zero=0 "));
+        } else if let (true, Some(lo), Some(hi)) = (st.n_numeric_int == n && st.n_leading_zero == 0 && !st.int_overflow, st.int_min, st.int_max) {
+            self.integers(lo, hi, "string", &format!("n_numeric_int={n} n_leading_zero=0 "));
         } else if st.n_numeric == n && st.n_leading_zero == 0 {
             let (i, f) = (st.max_int_digits.unwrap_or(0), st.max_frac_digits.unwrap_or(0));
             let (min_f, sig_d) = (st.min_frac_digits.unwrap_or(0), st.max_sig_digits.unwrap_or(0));
@@ -809,12 +809,17 @@ impl Rules<'_, '_> {
                 ),
             }
         }
-        let sum_len = lvl.p.sum_len.unwrap_or(0);
+        self.plain_and_dictionary(params);
+        Ok(())
+    }
+
+    /// Step 2 for text (Spec B §4.3 "always", §5.2): Utf8 with 32-bit offsets, and the dictionary.
+    fn plain_and_dictionary(&mut self, params: &Params) {
+        let sum_len = self.lvl.p.sum_len.unwrap_or(0);
         if sum_len < 1 << 31 {
             self.push(Target::Plain(AT::Utf8), Rank::Plain, "string→utf8", format!("sum_len={sum_len}"));
         }
         self.dictionary(params);
-        Ok(())
     }
 
     fn dictionary(&mut self, params: &Params) {
@@ -1105,7 +1110,7 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
                 Target::BoolPair(a, b) => (a.as_str(), b.as_str()),
                 _ => ("1", "0"),
             };
-            let b = recast.as_boolean();
+            let b = recast.as_boolean_opt().ok_or("recast is not boolean")?;
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
                 let want = if b.value(i) { tt } else { ff };
                 if !lower_eq(text.value(i), want) {
@@ -1115,7 +1120,7 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
             Ok(None)
         }
         Target::TimestampWithOffset(_) => {
-            let s = recast.as_struct();
+            let s = recast.as_struct_opt().ok_or("recast is not a struct")?;
             let back = arrow_cast(s.column(0).as_ref(), &AT::Utf8)?;
             let (back, off) = (back.as_string::<i32>(), s.column(1).as_primitive::<Int16Type>());
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
@@ -1262,11 +1267,13 @@ fn order(c: &mut [Candidate]) {
     });
 }
 
-/// Tries the candidates in order; the first success is chosen, failures keep their reason.
+/// Tries the candidates in order; the first success is chosen, failures keep their
+/// reason. Only `not_tried` candidates are attempted (rejected ones, and ones that
+/// could not be sized, already carry their outcome).
 fn first_success<T>(mut cands: Vec<Candidate>, mut attempt: impl FnMut(&Target) -> Result<T, String>) -> (usize, T, Vec<Candidate>) {
     order(&mut cands);
     for i in 0..cands.len() {
-        if cands[i].outcome == Outcome::Rejected {
+        if cands[i].outcome != Outcome::NotTried {
             continue;
         }
         match attempt(&cands[i].target) {
@@ -1400,8 +1407,14 @@ fn wrap(t: &Target, values: &ArrayRef, rows: &[Option<(usize, usize)>], inner: &
     }
 }
 
-fn candidate(target: Target, rank: Rank, rule: &str, evidence: String, predicted: f64, projected: f64) -> Candidate {
-    Candidate { target, rank, rule: rule.into(), evidence, predicted: predicted as u64, projected, outcome: Outcome::NotTried, reason: None }
+/// A candidate with its (predicted, projected) sizes; one that cannot be sized is
+/// listed as failed with the reason, and never tried.
+fn candidate(target: Target, rank: Rank, rule: &str, evidence: String, sizes: Result<(f64, f64), String>) -> Candidate {
+    let (predicted, projected, outcome, reason) = match sizes {
+        Ok((p, q)) => (p as u64, q, Outcome::NotTried, None),
+        Err(e) => (0, f64::INFINITY, Outcome::Failed, Some(e)),
+    };
+    Candidate { target, rank, rule: rule.into(), evidence, predicted, projected, outcome, reason }
 }
 
 /// Lists: choose the inner type first, then wrap it — as a scalar when every list
@@ -1427,8 +1440,7 @@ fn choose_list(lvl: &Level, inner: &Level, rows: &[Option<(usize, usize)>], widt
             ic.rank,
             "list→scalar",
             format!("min_len=1 max_len=1 n_null={} inner_n_null={}", lvl.n_null(), inner.n_null()),
-            body_size(&t, &shape),
-            body_size(&t, &shape.project(r, c)),
+            body_size(&t, &shape).and_then(|p| Ok((p, body_size(&t, &shape.project(r, c))?))),
         ));
     }
     match width {
@@ -1437,8 +1449,10 @@ fn choose_list(lvl: &Level, inner: &Level, rows: &[Option<(usize, usize)>], widt
             Rank::List,
             "large_list→list",
             format!("inner_n_values={}", inner.n_rows()),
-            validity(n, nulls) + pad(4.0 * (n + 1.0)) + ic.predicted as f64,
-            validity(n * r, nulls * r) + pad(4.0 * (n * r + 1.0)) + ic.projected,
+            Ok((
+                validity(n, nulls) + pad(4.0 * (n + 1.0)) + ic.predicted as f64,
+                validity(n * r, nulls * r) + pad(4.0 * (n * r + 1.0)) + ic.projected,
+            )),
         )),
         // An Array whose inner type is kept is the original type: no candidate.
         Some(w) if !kept => {
@@ -1451,8 +1465,7 @@ fn choose_list(lvl: &Level, inner: &Level, rows: &[Option<(usize, usize)>], widt
                 Rank::List,
                 "array→array",
                 format!("width={w}"),
-                validity(n, nulls) + body_size(&t, &shape),
-                validity(n * r, nulls * r) + body_size(&t, &shape.project(r, c)),
+                body_size(&t, &shape).and_then(|p| Ok((validity(n, nulls) + p, validity(n * r, nulls * r) + body_size(&t, &shape.project(r, c))?))),
             ));
         }
         _ => {}
@@ -1788,14 +1801,14 @@ mod tests {
     fn predicted_sizes_match_sizes_rs() {
         let s = StringArray::from(vec![Some("ab"), None]);
         let shape = Shape { n: 2.0, nulls: 1.0, sum_len: 2.0, d: 1.0, sum_len_unique: 2.0 };
-        assert_eq!(body_size(&AT::Utf8, &shape), ipc_body_bytes(&s, None).unwrap() as f64);
+        assert_eq!(body_size(&AT::Utf8, &shape), Ok(ipc_body_bytes(&s, None).unwrap() as f64));
         let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
         for v in ["a", "b", "a"] {
             builder.append_value(v);
         }
         let d: DictionaryArray<UInt8Type> = builder.finish();
         let shape = Shape { n: 3.0, nulls: 0.0, sum_len: 3.0, d: 2.0, sum_len_unique: 2.0 };
-        assert_eq!(body_size(&Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type(), &shape), ipc_body_bytes(&d, None).unwrap() as f64);
+        assert_eq!(body_size(&Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type(), &shape), Ok(ipc_body_bytes(&d, None).unwrap() as f64));
     }
 
     #[test]
@@ -1803,6 +1816,20 @@ mod tests {
         assert!(lower_eq("TRUE", "true") && lower_eq("tRuE", "true") && !lower_eq("true ", "true"));
         assert!(lower_eq("\u{212A}", "k")); // Kelvin sign lower-cases to ASCII k
         assert!(!lower_eq("É", "e") && lower_eq("É", "é"));
+    }
+
+    #[test]
+    fn unsized_types_are_errors_not_panics() {
+        let shape = Shape { n: 3.0, ..Default::default() };
+        assert!(body_size(&AT::Utf8View, &shape).is_err());
+        assert!(body_size(&Target::List(Box::new(Target::Fixed(AT::UInt8))).arrow_type(), &shape).is_err());
+        assert!(body_size(&AT::Struct(Fields::from(vec![AField::new("a", AT::Int8, true)])), &shape).is_err());
+        assert!(body_size(&AT::Dictionary(Box::new(AT::Utf8), Box::new(AT::Utf8)), &shape).is_err());
+        assert_eq!(body_size(&timestamp_with_offset(TimeUnit::Millisecond), &shape), Ok(24.0 + 8.0));
+        let c = candidate(Target::Fixed(AT::Utf8View), Rank::Plain, "r", String::new(), Err("no size".into()));
+        assert_eq!((c.outcome, c.reason.as_deref()), (Outcome::Failed, Some("no size")));
+        let a: ArrayRef = Arc::new(arrow_array::Int64Array::from(vec![1]));
+        assert!(list_parts(&a).is_err());
     }
 
     #[test]
@@ -1894,6 +1921,24 @@ mod tests {
     }
 
     #[test]
+    fn missing_profile_parts_give_no_type_candidates_not_panics() {
+        // A profile whose parts do not match the dtype (Describe never builds one): the
+        // rules bail instead of panicking — only the original (and text's plain/dictionary).
+        let ints = Series::new("x".into(), &[1i64, 2]);
+        let d = describe_one(&ints, 0).unwrap();
+        let values = to_arrow_rs(&ints, CompatLevel::oldest()).unwrap();
+        for dtype in [PT::Float64, PT::Decimal(Some(10), Some(2)), PT::String] {
+            let lvl = Level {
+                dtype: &dtype, values: values.clone(), p: &d.outer, n_midnight: None, size_bytes: 0,
+                est: level_estimate(&d.outer, 2, None), r: 1.0, prefix: "", text: Default::default(),
+            };
+            let got: Vec<String> = candidates(&lvl, &params()).unwrap().iter().map(|c| c.rule.clone()).collect();
+            let expected: &[&str] = if dtype == PT::String { &["string→utf8", "string→dictionary", "original"] } else { &["original"] };
+            assert_eq!(got, expected, "{dtype}");
+        }
+    }
+
+    #[test]
     fn dictionary_gate_rejects() {
         let p = Params { categorical_threshold: 1, ..params() };
         let got = types(Series::new("x".into(), &["a", "b", "a", "b"]), &p);
@@ -1978,7 +2023,7 @@ mod tests {
         assert_eq!(s.column(0).null_count(), 0);
         assert_eq!(s.column(1).null_count(), 0);
         let shape = Shape { n: 3.0, nulls: 1.0, ..Default::default() };
-        assert_eq!(ipc_body_bytes(a.as_ref(), None).unwrap() as f64, body_size(&timestamp_with_offset(TimeUnit::Second), &shape));
+        assert_eq!(Ok(ipc_body_bytes(a.as_ref(), None).unwrap() as f64), body_size(&timestamp_with_offset(TimeUnit::Second), &shape));
     }
 
     #[test]
