@@ -37,9 +37,9 @@ class DescribeDataFusion(Describe):
       - every group A metric of List/Array/Struct columns whose values hold floats,
         Enum, Categorical or Int128: the Polars reference helpers (SQL cannot key
         nested -0.0/NaN, list-of-dictionary children, Enum order or Int128 exactly);
-      - max_frac_digits: the shared parser over CAST(v AS VARCHAR) of distinct finite values.
+      - max_frac_digits: the shared parser over CAST(v AS VARCHAR) of distinct finite values;
       - gcd: Python math.gcd over the physical values (as GcdMath; SQL has no exact GCD aggregate);
-      - sum_len / sum_len_unique of Binary: pyarrow binary_length;
+      - sum_len / sum_len_unique of Binary: pyarrow binary_length.
     Int128 is registered as Decimal(38, 0); values beyond 38 digits are not supported.
     """
 
@@ -208,8 +208,8 @@ def _strings(ctx: SessionContext, s: pl.Series) -> dict:
               MAX(CASE WHEN nint AND {sig} <= 38 THEN CAST(v AS DECIMAL(38, 0)) END) AS int_max,
               MAX(CASE WHEN num THEN length(regexp_match(v, '{INT_DIGITS}')[1]) END) AS int_digits,
               MAX(CASE WHEN num THEN COALESCE(length(regexp_match(v, '{FRAC_DIGITS}')[1]), 0) END) AS frac_digits,
-              MIN(CASE WHEN num THEN COALESCE(length(regexp_match(v, '{FRAC_DIGITS}')[1]), 0) END) AS min_frac,
-              MAX(CASE WHEN num THEN length(ltrim(concat(COALESCE(regexp_match(v, '{INT_DIGITS}')[1], ''), COALESCE(regexp_match(v, '{FRAC_DIGITS}')[1], '')), '0')) END) AS sig,
+              MIN(CASE WHEN num THEN COALESCE(length(regexp_match(v, '{FRAC_DIGITS}')[1]), 0) END) AS min_frac_digits,
+              MAX(CASE WHEN num THEN length(ltrim(concat(COALESCE(regexp_match(v, '{INT_DIGITS}')[1], ''), COALESCE(regexp_match(v, '{FRAC_DIGITS}')[1], '')), '0')) END) AS sig_digits,
               SUM(CAST(d AND dok AS BIGINT)) AS n_iso_date,
               SUM(CAST(tm AS BIGINT)) AS n_iso_time,
               SUM(CAST(dt AND dok AS BIGINT)) AS n_iso_datetime,
@@ -229,8 +229,8 @@ def _strings(ctx: SessionContext, s: pl.Series) -> dict:
         "numeric_int_max": int(r["int_max"]) if in_range else None,
         "numeric_max_int_digits": r["int_digits"],
         "numeric_max_frac_digits": r["frac_digits"],
-        "numeric_min_frac_digits": r["min_frac"],
-        "numeric_max_sig_digits": r["sig"],
+        "numeric_min_frac_digits": r["min_frac_digits"],
+        "numeric_max_sig_digits": r["sig_digits"],
         "n_iso_date": r["n_iso_date"] or 0,
         "n_iso_time": r["n_iso_time"] or 0,
         "n_iso_datetime": r["n_iso_datetime"] or 0,
