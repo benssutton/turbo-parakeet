@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// describe — Arrow IPC body sizes (group E) and the `column_sizes` plugin
+// sizes — Arrow IPC body sizes (Describe group E; recast sizes for recommend.rs)
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Mirrors pyarrow's IPC writer (checked against pyarrow 24; the Python oracle is
@@ -9,24 +9,21 @@
 // an empty buffer takes no space; List/Utf8 offsets are rebased to 0 and their
 // child/values sliced to the referenced range. With ZSTD each non-empty buffer is
 // an 8-byte uncompressed-length prefix plus one ZSTD frame (content size
-// included) — pyarrow never falls back to raw bytes.
+// included) — pyarrow never falls back to raw bytes. arrow-rs's own IPC writer is
+// not used because it does not expose the ZSTD level.
 //
-// Arrow sizes use CompatLevel::oldest() (LargeUtf8, LargeList); Polars sizes are
-// the plain and ZSTD body of CompatLevel::newest() (view types).
-// Columns nesting Int128 inside List/Array/Struct get null sizes: pyarrow cannot
-// import them, so there is no oracle to agree with.
+// Works on arrow-rs ArrayData; Series arrive through shared::to_arrow_rs. Arrow
+// sizes use CompatLevel::oldest() (LargeUtf8, LargeList); Polars sizes the plain
+// and ZSTD body of CompatLevel::newest() (view types). Columns nesting Int128
+// inside List/Array/Struct get null sizes: pyarrow cannot import them, so there
+// is no oracle to agree with.
 
-use bytemuck::Pod;
+use crate::shared::to_arrow_rs;
+use arrow_array::Array;
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, ToByteSlice};
+use arrow_data::ArrayData;
+use arrow_schema::DataType as AT;
 use polars::prelude::*;
-use polars_arrow::array::{
-    Array, BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray, FixedSizeListArray, ListArray, PrimitiveArray,
-    StructArray, Utf8Array, Utf8ViewArray, View,
-};
-use polars_arrow::bitmap::Bitmap;
-use polars_arrow::buffer::Buffer;
-use polars_arrow::datatypes::PhysicalType;
-use polars_arrow::offset::{Offset, OffsetsBuffer};
-use polars_arrow::with_match_primitive_type_full;
 use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -49,105 +46,94 @@ impl Body {
         Ok(())
     }
 
-    fn bits(&mut self, bm: &Bitmap) -> PolarsResult<()> {
-        let (bytes, offset, len) = bm.as_slice();
-        if offset == 0 {
-            return self.buffer(&bytes[..len.div_ceil(8)]);
-        }
-        let packed: Bitmap = bm.iter().collect(); // re-align to bit 0, as pyarrow does
-        self.bits(&packed)
+    fn bits(&mut self, b: &BooleanBuffer) -> PolarsResult<()> {
+        let packed = b.sliced(); // re-aligned to bit 0, as pyarrow writes it
+        self.buffer(&packed.as_slice()[..b.len().div_ceil(8)])
     }
 
-    fn validity(&mut self, arr: &dyn Array) -> PolarsResult<()> {
-        match arr.validity() {
-            Some(bm) if arr.null_count() > 0 => self.bits(bm),
+    fn validity(&mut self, d: &ArrayData) -> PolarsResult<()> {
+        match d.nulls() {
+            Some(n) if n.null_count() > 0 => self.bits(n.inner()),
             _ => Ok(()),
         }
     }
 
-    fn slice<T: Pod>(&mut self, values: &[T]) -> PolarsResult<()> {
-        self.buffer(bytemuck::cast_slice(values))
+    fn fixed(&mut self, d: &ArrayData, width: usize) -> PolarsResult<()> {
+        self.validity(d)?;
+        let start = d.offset() * width;
+        self.buffer(&d.buffers()[0].as_slice()[start..start + d.len() * width])
     }
 
-    /// Writes the offsets (rebased to 0); returns the referenced values range.
-    fn offsets<O: Offset + Pod>(&mut self, offsets: &OffsetsBuffer<O>) -> PolarsResult<(usize, usize)> {
-        let (first, last) = (offsets.first().to_usize(), offsets.last().to_usize());
+    /// Writes the offsets (rebased to 0); returns the referenced child/values range.
+    fn offsets<O: ArrowNativeType>(&mut self, d: &ArrayData) -> PolarsResult<(usize, usize)> {
+        if d.len() == 0 {
+            self.buffer(&vec![0u8; std::mem::size_of::<O>()])?; // pyarrow writes the single offset [0]
+            return Ok((0, 0));
+        }
+        let o = &d.buffers()[0].typed_data::<O>()[d.offset()..=d.offset() + d.len()];
+        let (first, last) = (o[0].as_usize(), o[d.len()].as_usize());
         if first == 0 {
-            self.slice(offsets.as_slice())?;
+            self.buffer(o.to_byte_slice())?;
         } else {
-            let rebased: Vec<O> = offsets.as_slice().iter().map(|o| O::from_as_usize(o.to_usize() - first)).collect();
-            self.slice(&rebased)?;
+            let rebased: Vec<O> = o.iter().map(|x| O::usize_as(x.as_usize() - first)).collect();
+            self.buffer(rebased.as_slice().to_byte_slice())?;
         }
         Ok((first, last))
     }
 
-    fn var_size<O: Offset + Pod>(&mut self, arr: &dyn Array, offsets: &OffsetsBuffer<O>, values: &Buffer<u8>) -> PolarsResult<()> {
-        self.validity(arr)?;
-        let (first, last) = self.offsets(offsets)?;
-        self.buffer(&values.as_slice()[first..last])
+    fn var_size<O: ArrowNativeType>(&mut self, d: &ArrayData) -> PolarsResult<()> {
+        self.validity(d)?;
+        let (first, last) = self.offsets::<O>(d)?;
+        self.buffer(&d.buffers()[1].as_slice()[first..last])
     }
 
-    fn views(&mut self, arr: &dyn Array, views: &Buffer<View>, data: &[Buffer<u8>]) -> PolarsResult<()> {
-        self.validity(arr)?;
-        self.slice(views.as_slice())?;
-        data.iter().try_for_each(|b| self.buffer(b.as_slice()))
+    fn list<O: ArrowNativeType>(&mut self, d: &ArrayData) -> PolarsResult<()> {
+        self.validity(d)?;
+        let (first, last) = self.offsets::<O>(d)?;
+        self.array(&d.child_data()[0].slice(first, last - first))
     }
 
-    fn list<O: Offset + Pod>(&mut self, arr: &dyn Array, a: &ListArray<O>) -> PolarsResult<()> {
-        self.validity(arr)?;
-        let (first, last) = self.offsets(a.offsets())?;
-        self.array(a.values().sliced(first, last - first).as_ref())
-    }
-
-    fn array(&mut self, arr: &dyn Array) -> PolarsResult<()> {
-        let any = arr.as_any();
-        match arr.dtype().to_physical_type() {
-            PhysicalType::Null => Ok(()),
-            PhysicalType::Boolean => {
-                self.validity(arr)?;
-                self.bits(any.downcast_ref::<BooleanArray>().unwrap().values())
+    fn array(&mut self, d: &ArrayData) -> PolarsResult<()> {
+        match d.data_type() {
+            AT::Null => Ok(()),
+            AT::Boolean => {
+                self.validity(d)?;
+                self.bits(&BooleanBuffer::new(d.buffers()[0].clone(), d.offset(), d.len()))
             }
-            PhysicalType::Primitive(p) => with_match_primitive_type_full!(p, |$T| {
-                self.validity(arr)?;
-                self.slice(any.downcast_ref::<PrimitiveArray<$T>>().unwrap().values().as_slice())
-            }),
-            PhysicalType::Utf8 => { let a = any.downcast_ref::<Utf8Array<i32>>().unwrap(); self.var_size(arr, a.offsets(), a.values()) }
-            PhysicalType::LargeUtf8 => { let a = any.downcast_ref::<Utf8Array<i64>>().unwrap(); self.var_size(arr, a.offsets(), a.values()) }
-            PhysicalType::Binary => { let a = any.downcast_ref::<BinaryArray<i32>>().unwrap(); self.var_size(arr, a.offsets(), a.values()) }
-            PhysicalType::LargeBinary => { let a = any.downcast_ref::<BinaryArray<i64>>().unwrap(); self.var_size(arr, a.offsets(), a.values()) }
-            PhysicalType::Utf8View => { let a = any.downcast_ref::<Utf8ViewArray>().unwrap(); self.views(arr, a.views(), a.data_buffers()) }
-            PhysicalType::BinaryView => { let a = any.downcast_ref::<BinaryViewArray>().unwrap(); self.views(arr, a.views(), a.data_buffers()) }
-            PhysicalType::List => self.list(arr, any.downcast_ref::<ListArray<i32>>().unwrap()),
-            PhysicalType::LargeList => self.list(arr, any.downcast_ref::<ListArray<i64>>().unwrap()),
-            PhysicalType::FixedSizeList => {
-                let a = any.downcast_ref::<FixedSizeListArray>().unwrap();
-                self.validity(arr)?;
-                self.array(a.values().sliced(0, a.len() * a.size()).as_ref())
+            AT::Utf8 | AT::Binary => self.var_size::<i32>(d),
+            AT::LargeUtf8 | AT::LargeBinary => self.var_size::<i64>(d),
+            AT::Utf8View | AT::BinaryView => {
+                self.validity(d)?;
+                self.buffer(&d.buffers()[0].as_slice()[d.offset() * 16..(d.offset() + d.len()) * 16])?;
+                d.buffers()[1..].iter().try_for_each(|b| self.buffer(b.as_slice()))
             }
-            PhysicalType::Struct => {
-                self.validity(arr)?;
-                any.downcast_ref::<StructArray>().unwrap().values().iter().try_for_each(|f| self.array(f.as_ref()))
+            AT::List(_) => self.list::<i32>(d),
+            AT::LargeList(_) => self.list::<i64>(d),
+            AT::FixedSizeList(_, w) => {
+                self.validity(d)?;
+                let w = *w as usize;
+                self.array(&d.child_data()[0].slice(d.offset() * w, d.len() * w))
             }
-            PhysicalType::Dictionary(_) => {
-                macro_rules! dict {
-                    ($($k:ty),*) => {$(
-                        if let Some(d) = any.downcast_ref::<DictionaryArray<$k>>() {
-                            self.array(d.keys())?;
-                            return self.array(d.values().as_ref()); // the dictionary batch
-                        }
-                    )*};
-                }
-                dict!(u8, u16, u32, u64, i8, i16, i32, i64);
-                polars_bail!(ComputeError: "describe sizes: unexpected dictionary key type")
+            AT::Struct(_) => {
+                self.validity(d)?;
+                d.child_data().iter().try_for_each(|c| self.array(&c.slice(d.offset(), d.len())))
             }
-            other => polars_bail!(ComputeError: "describe sizes: unsupported Arrow type {other:?}"),
+            AT::Dictionary(k, _) => {
+                self.fixed(d, k.primitive_width().expect("integer dictionary key"))?; // the keys
+                self.array(&d.child_data()[0]) // the dictionary batch
+            }
+            t => match t.primitive_width() {
+                Some(w) => self.fixed(d, w),
+                None => polars_bail!(ComputeError: "sizes: unsupported Arrow type {t}"),
+            },
         }
     }
 }
 
+/// Arrow IPC body bytes of `arr`: uncompressed (`level` None) or ZSTD at `level`.
 pub(crate) fn ipc_body_bytes(arr: &dyn Array, level: Option<i32>) -> PolarsResult<u64> {
     let mut body = Body { level, bytes: 0 };
-    body.array(arr)?;
+    body.array(&arr.to_data())?;
     Ok(body.bytes)
 }
 
@@ -159,19 +145,15 @@ fn nests_int128(dtype: &DataType) -> bool {
     }
 }
 
-type Sizes = [Option<u64>; 4];
-const SIZE_FIELDS: [&str; 4] = ["size_bytes", "size_zstd_bytes", "size_polars_bytes", "size_polars_zstd_bytes"];
+pub(crate) type Sizes = [Option<u64>; 4];
+pub(crate) const SIZE_FIELDS: [&str; 4] = ["size_bytes", "size_zstd_bytes", "size_polars_bytes", "size_polars_zstd_bytes"];
 
-fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
+pub(crate) fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
     if nests_int128(s.dtype()) {
         return Ok([None; 4]);
     }
-    let s = s.rechunk();
-    if s.n_chunks() == 0 {
-        return Ok([Some(0); 4]);
-    }
-    let classic = s.to_arrow(0, CompatLevel::oldest());
-    let native = s.to_arrow(0, CompatLevel::newest());
+    let classic = to_arrow_rs(s, CompatLevel::oldest())?;
+    let native = to_arrow_rs(s, CompatLevel::newest())?;
     Ok([
         Some(ipc_body_bytes(classic.as_ref(), None)?),
         Some(ipc_body_bytes(classic.as_ref(), Some(level))?),
@@ -209,8 +191,8 @@ fn column_sizes(inputs: &[Series], kwargs: SizesKwargs) -> PolarsResult<Series> 
 mod tests {
     use super::*;
 
-    fn arrow(s: &Series) -> ArrayRef {
-        s.rechunk().to_arrow(0, CompatLevel::oldest())
+    fn arrow(s: &Series) -> arrow_array::ArrayRef {
+        crate::shared::to_arrow_rs(s, CompatLevel::oldest()).unwrap()
     }
 
     #[test]
@@ -240,5 +222,18 @@ mod tests {
     fn nested_int128_sizes_are_null() {
         let s = Series::new("x".into(), [Some(Series::new("".into(), &[1i128]))]);
         assert_eq!(sizes(&s, 1).unwrap(), [None; 4]);
+    }
+
+    #[test]
+    fn polars_size_is_native_ipc_body() {
+        assert_eq!(sizes(&Series::new("x".into(), &[Some("ab"), None]), 1).unwrap()[2], Some(40));
+    }
+
+    #[test]
+    fn dictionary_keys_and_values() {
+        use polars::datatypes::Categories;
+        let cats = Categories::global();
+        let cat = Series::new("x".into(), &["a", "b", "a"]).cast(&DataType::Categorical(cats.clone(), cats.mapping())).unwrap();
+        assert_eq!(sizes(&cat, 1).unwrap()[0], Some(48)); // pyarrow: keys 16 + dictionary 32 (see test_describe.py)
     }
 }
