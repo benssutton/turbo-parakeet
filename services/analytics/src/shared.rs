@@ -451,6 +451,75 @@ pub(crate) fn resolve_pairs(
         .collect()
 }
 
+/// A Series handed to arrow-rs zero-copy through the Arrow C Data Interface, in the
+/// given Polars layout (oldest: LargeUtf8/LargeList — Arrow's classic layout;
+/// newest: Utf8View/BinaryView — Polars' native one). Int128, which arrow-rs cannot
+/// import, crosses as decimal128(38, 0) over the same 16-byte values (as pyarrow
+/// receives it in analytics/describe/_sizes.py).
+pub(crate) fn to_arrow_rs(s: &Series, compat: CompatLevel) -> PolarsResult<arrow_array::ArrayRef> {
+    let s = match s.dtype() {
+        DataType::Int128 => s.i128()?.clone().into_decimal_unchecked(Some(38), 0).into_series(),
+        _ => s.rechunk(),
+    };
+    let arr: Box<dyn polars_arrow::array::Array> = if s.n_chunks() == 0 {
+        polars_arrow::array::new_empty_array(s.dtype().to_arrow(compat))
+    } else {
+        s.rechunk().to_arrow(0, compat)
+    };
+    let field = polars_arrow::datatypes::Field::new(s.name().clone(), arr.dtype().clone(), true);
+    let schema = polars_arrow::ffi::export_field_to_c(&field);
+    let array = polars_arrow::ffi::export_array_to_c(arr);
+    // SAFETY: `polars_arrow::ffi::{ArrowSchema, ArrowArray}` (bindgen-generated, in
+    // ffi/generated.rs) and `arrow_schema::ffi::FFI_ArrowSchema` /
+    // `arrow_data::ffi::FFI_ArrowArray` are independent bindings of the *same* C ABI
+    // structs defined by the Arrow C Data Interface spec. Both sides declare the same
+    // fields, in the same order, with the same sizes (format/name/metadata pointers,
+    // flags, n_children, children/dictionary pointers, release fn-pointer,
+    // private_data pointer for the schema; length/null_count/offset/n_buffers/
+    // n_children, buffers/children/dictionary pointers, release fn-pointer,
+    // private_data for the array) — a pointer's pointee type never affects its own
+    // size/alignment, so the two struct layouts are bit-for-bit identical and
+    // `size_of` matches (transmute is a compile error otherwise, which is why no
+    // pointer-based fallback was needed here). `transmute` takes each value *by
+    // value*: the source binding (`array`/`schema`, both polars-arrow types with a
+    // `Drop` that invokes `release`) is consumed without running its destructor, and
+    // the destination binding is what carries the `release` callback onward — so
+    // ownership (and the single eventual `release` call that frees the boxed
+    // polars-arrow `Array`/`Field` behind `private_data`) moves exactly once, with no
+    // double-release and no leak. `from_ffi` below takes the transmuted
+    // `FFI_ArrowArray` by value and wraps it in an `Arc`, deriving every buffer via
+    // `Buffer::from_custom_allocation(ptr, len, owner)` — so the imported arrow-rs
+    // array keeps the polars-arrow-owned buffers alive (and calls `release` exactly
+    // once, on last-Arc-drop) instead of copying them: this is the zero-copy
+    // hand-over. `schema` is only borrowed by `from_ffi` and is dropped normally at
+    // the end of this function, releasing the exported `Field` once.
+    let (array, schema): (arrow_data::ffi::FFI_ArrowArray, arrow_schema::ffi::FFI_ArrowSchema) =
+        unsafe { (std::mem::transmute(array), std::mem::transmute(schema)) };
+    let data = unsafe { arrow_array::ffi::from_ffi(array, &schema) }
+        .map_err(|e| polars_err!(ComputeError: "arrow C data interface: {e}"))?;
+    Ok(arrow_array::make_array(data))
+}
+
+#[cfg(test)]
+mod arrow_rs_tests {
+    use super::*;
+    use arrow_array::Array as _;
+    use arrow_schema::DataType as AT;
+
+    #[test]
+    fn series_cross_to_arrow_rs() {
+        let a = to_arrow_rs(&Series::new("x".into(), &[Some(1i32), None]), CompatLevel::oldest()).unwrap();
+        assert_eq!((a.len(), a.null_count(), a.data_type().clone()), (2, 1, AT::Int32));
+        assert_eq!(to_arrow_rs(&Series::new("x".into(), &["a"]), CompatLevel::oldest()).unwrap().data_type(), &AT::LargeUtf8);
+        assert_eq!(to_arrow_rs(&Series::new("x".into(), &["a"]), CompatLevel::newest()).unwrap().data_type(), &AT::Utf8View);
+        assert_eq!(to_arrow_rs(&Series::new("x".into(), &[1i128]), CompatLevel::oldest()).unwrap().data_type(), &AT::Decimal128(38, 0));
+        assert_eq!(to_arrow_rs(&Series::new_empty("x".into(), &DataType::String), CompatLevel::oldest()).unwrap().len(), 0);
+        let sliced = to_arrow_rs(&Series::new("x".into(), &[1i64, 2, 3]).slice(1, 2), CompatLevel::oldest()).unwrap();
+        let ints = sliced.as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        assert_eq!(ints.values().to_vec(), vec![2, 3]);
+    }
+}
+
 pub(crate) fn resolve_triplets(
     raw_triplets: &[Vec<String>],
     name_map: &HashMap<String, usize>,

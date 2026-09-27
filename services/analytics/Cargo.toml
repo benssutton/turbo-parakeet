@@ -43,6 +43,14 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"
 bytemuck = "1"
 
+#Arrow-native core (recommend.rs, sizes.rs): arrow-rs, fed zero-copy through the C Data Interface
+arrow-array = { version = "60", features = ["ffi"] }
+arrow-buffer = "60"
+arrow-cast = "60"
+arrow-data = { version = "60", features = ["ffi"] }
+arrow-schema = { version = "60", features = ["ffi"] }
+arrow-select = "60"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
