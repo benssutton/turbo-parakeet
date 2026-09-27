@@ -161,7 +161,7 @@ Arrow's canonical extension type: storage `Struct{timestamp: Timestamp(u, "UTC")
 | Dictionary<k, Utf8> | V + pad(N·k) + pad(4(d+1)) + pad(`sum_len_unique`) |
 | timestamp_with_offset | V + pad(8N) + pad(2N) |
 | List(x) / LargeList(x) | V + pad(4(N+1)) or pad(8(N+1)) + predicted(x) over the inner values (`inner_n_values`, `inner_n_null`) |
-| FixedSizeList(x, w) | V + predicted(x) |
+| FixedSizeList(x, w) | V + predicted(x) over n·w inner slots, whose nulls include the w slots of every null row (the child keeps them; Polars exports them as null) |
 
 These mirror `sizes.rs` exactly, so **predicted = measured** for every successful candidate (asserted in tests; a mismatch is a bug).
 
