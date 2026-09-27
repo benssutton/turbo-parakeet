@@ -301,14 +301,21 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
         s = frames[r["df_a"]][r["col_a"]].rechunk()
         chosen = _outer_chosen(r)
         assert chosen["predicted_bytes"] == r["rec_arrow_size_bytes"], r["col_a"]
-        if chosen["rule"].endswith("original"):
+        original = chosen["rule"].endswith("original")
+        if original:
             assert (r["rec_arrow_size_bytes"], r["rec_polars_size_bytes"]) == (r["size_bytes"], r["size_polars_bytes"])
-            continue
-        skippable = _string_source(s.dtype)
+            assert r["rec_polars_type"] == str(s.dtype), r["col_a"]  # the Polars side is an identity cast
+            # Kept-original columns go through the same identity cast and measurement below. The only skip is a
+            # type pa_type cannot spell (e.g. a generic struct<...>), where there is no pyarrow type to cast to.
+            try:
+                pa_type(r["rec_arrow_type"])
+            except NotImplementedError:
+                continue
+        skippable = _string_source(s.dtype) and not original
         try:
             arrow = _sizes._to_arrow(_unlist(s, r["rec_arrow_type"]).rechunk(), pl.CompatLevel.oldest())
             arrow = arrow.cast(pa_type(r["rec_arrow_type"]), safe=False)
-            polars = _unlist(s, r["rec_arrow_type"]).cast(pl_dtype(r["rec_polars_type"])).rechunk()
+            polars = s if original else _unlist(s, r["rec_arrow_type"]).cast(pl_dtype(r["rec_polars_type"])).rechunk()
         except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pl.exceptions.PolarsError, NotImplementedError):
             assert skippable, f"{r['col_a']}: pyarrow/Polars cannot cast a non-string column to {r['rec_arrow_type']}"
             continue
@@ -340,4 +347,4 @@ def test_rust_cardinality_matches_python_estimators(population_rows):
             expected = max(r[f"{prefix}{m[2]}"], r[f"{prefix}n_unique"])
             assert float(m[1]) == approx(expected, rel=1e-9), (r["col_a"], c["rule"])
             checked += 1
-    assert checked > 0
+    assert checked >= 5
