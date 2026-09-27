@@ -198,3 +198,129 @@ def test_population_projection_chooses_plain_over_dictionary():
     assert dictionary["predicted_bytes"] < plain["predicted_bytes"]  # smaller on the frame …
     assert dictionary["projected_population_bytes"] > plain["projected_population_bytes"]  # … larger in the population
     assert r["rec_arrow_type"] == "string"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Oracles (single implementation: no reference agreement)
+
+_SIMPLE = {
+    "null": pa.null(), "bool": pa.bool_(), "float": pa.float32(), "double": pa.float64(),
+    "string": pa.string(), "large_string": pa.large_string(), "binary": pa.binary(), "large_binary": pa.large_binary(),
+    "date32[day]": pa.date32(),
+    **{n: getattr(pa, n)() for n in ("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64")},
+}
+
+
+def pa_type(name: str) -> pa.DataType:
+    """pyarrow type from the `str(type)` spellings recommend emits."""
+    if name in _SIMPLE:
+        return _SIMPLE[name]
+    if m := re.fullmatch(r"decimal(32|64|128)\((\d+), (\d+)\)", name):
+        return getattr(pa, f"decimal{m[1]}")(int(m[2]), int(m[3]))
+    if m := re.fullmatch(r"(time32|time64|duration)\[(\w+)\]", name):
+        return getattr(pa, m[1])(m[2])
+    if m := re.fullmatch(r"timestamp\[(\w+)(?:, tz=(.+))?\]", name):
+        return pa.timestamp(m[1], m[2])
+    if m := re.fullmatch(r"large_list<item: (.+)>", name):
+        return pa.large_list(pa_type(m[1]))
+    if m := re.fullmatch(r"list<item: (.+)>", name):
+        return pa.list_(pa_type(m[1]))
+    if m := re.fullmatch(r"fixed_size_list<item: (.+)>\[(\d+)\]", name):
+        return pa.list_(pa_type(m[1]), int(m[2]))
+    if m := re.fullmatch(r"dictionary<values=(.+), indices=(\w+), ordered=0>", name):
+        return pa.dictionary(pa_type(m[2]), pa_type(m[1]))
+    raise NotImplementedError(name)
+
+
+def pl_dtype(name: str) -> pl.DataType:
+    """Polars dtype from its Python `str(dtype)` spelling."""
+    return eval(name, {"__builtins__": {}}, {"pl": pl, **{k: getattr(pl, k) for k in dir(pl) if k[:1].isupper()}})
+
+
+def _string_source(dtype: pl.DataType) -> bool:
+    if isinstance(dtype, (pl.List, pl.Array)):
+        return _string_source(dtype.inner)
+    return isinstance(dtype, (pl.String, pl.Categorical, pl.Enum))
+
+
+def _outer_chosen(r: dict) -> dict:
+    """The chosen candidate for the column itself (list columns also report the inner level's, rule "inner: …")."""
+    return next(c for c in r["rec_candidates"] if c["outcome"] == "chosen" and not c["rule"].startswith("inner: "))
+
+
+def _unlist(s: pl.Series, target: str) -> pl.Series:
+    """A list → scalar recommendation (every row holds at most one item) is a first-item extraction, not a cast."""
+    if isinstance(s.dtype, (pl.List, pl.Array)) and "list" not in target:
+        return s.list.first() if isinstance(s.dtype, pl.List) else s.arr.first()
+    return s
+
+
+def list_frame(n: int = 600) -> pl.DataFrame:
+    """List / Array columns: single-item ones become scalars (checked through `_unlist`), the rest stay lists."""
+    return pl.DataFrame([
+        pl.Series("one_int", [[i % 200] if i % 7 else None for i in range(n)], dtype=pl.List(pl.Int64)),
+        pl.Series("one_str", [[f"s{i % 9}"] if i % 5 else None for i in range(n)], dtype=pl.List(pl.String)),
+        pl.Series("one_float", [[i / 4] for i in range(n)], dtype=pl.List(pl.Float64)),
+        pl.Series("arr1", [[i % 50] if i % 3 else None for i in range(n)], dtype=pl.Array(pl.Int64, 1)),
+        pl.Series("arr2", [[i % 50, i % 3] for i in range(n)], dtype=pl.Array(pl.Int64, 2)),
+        pl.Series("multi", [[i, i + 1][: 1 + i % 2] for i in range(n)], dtype=pl.List(pl.Int64)),
+    ])
+
+
+ORACLE_FRAMES = [
+    pytest.param(lambda: {"mixed": describe_mixed(2_000)}, id="mixed"),
+    pytest.param(lambda: {"lists": list_frame()}, id="lists"),
+    pytest.param(lambda: {"strings": stringified(describe_mixed(500))}, id="stringified"),
+    pytest.param(lambda: {"large": pl.read_ipc(LARGE)}, id="large", marks=pytest.mark.slow),
+]
+
+
+@pytest.mark.parametrize("make", ORACLE_FRAMES)
+def test_sizes_match_pyarrow_and_polars_casts(make):
+    frames = make()
+    result = run(impl(), frames)
+    checked = 0
+    for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
+        s = frames[r["df_a"]][r["col_a"]].rechunk()
+        chosen = _outer_chosen(r)
+        assert chosen["predicted_bytes"] == r["rec_arrow_size_bytes"], r["col_a"]
+        if chosen["rule"].endswith("original"):
+            assert (r["rec_arrow_size_bytes"], r["rec_polars_size_bytes"]) == (r["size_bytes"], r["size_polars_bytes"])
+            continue
+        skippable = _string_source(s.dtype)
+        try:
+            arrow = _sizes._to_arrow(_unlist(s, r["rec_arrow_type"]).rechunk(), pl.CompatLevel.oldest())
+            arrow = arrow.cast(pa_type(r["rec_arrow_type"]), safe=False)
+            polars = _unlist(s, r["rec_arrow_type"]).cast(pl_dtype(r["rec_polars_type"])).rechunk()
+        except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pl.exceptions.PolarsError, NotImplementedError):
+            assert skippable, f"{r['col_a']}: pyarrow/Polars cannot cast a non-string column to {r['rec_arrow_type']}"
+            continue
+        if arrow.null_count != s.null_count() or polars.null_count() != s.null_count():
+            assert skippable, f"{r['col_a']}: the library cast lost values"
+            continue
+        level = 1
+        assert _sizes.ipc_body_bytes(arrow, None) == r["rec_arrow_size_bytes"], r["col_a"]
+        assert _sizes.ipc_body_bytes(arrow, level) == approx(r["rec_arrow_size_zstd_bytes"], rel=0.01, abs=16), r["col_a"]
+        native = _sizes.column_sizes(polars, level)
+        assert native["size_polars_bytes"] == r["rec_polars_size_bytes"], r["col_a"]
+        assert native["size_polars_zstd_bytes"] == approx(r["rec_polars_size_zstd_bytes"], rel=0.01, abs=16), r["col_a"]
+        checked += 1
+    assert checked >= min(10, result.height)
+
+
+@pytest.mark.parametrize("population_rows", [None, 1_000_000])
+def test_rust_cardinality_matches_python_estimators(population_rows):
+    frames = {"mixed": describe_mixed(2_000), "strings": stringified(describe_mixed(500))}
+    result = run(impl(), frames, population_rows=population_rows)
+    checked = 0
+    for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
+        for c in r["rec_candidates"]:
+            m = re.search(r"c=(\S+) from (est_high|est_cardinality)", c["evidence"] or "")
+            if m is None:
+                continue
+            prefix = "inner_" if c["rule"].startswith("inner: ") else ""
+            # Rust floors the cardinality at the observed distinct count.
+            expected = max(r[f"{prefix}{m[2]}"], r[f"{prefix}n_unique"])
+            assert float(m[1]) == approx(expected, rel=1e-9), (r["col_a"], c["rule"])
+            checked += 1
+    assert checked > 0
