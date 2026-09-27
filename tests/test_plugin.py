@@ -42,3 +42,62 @@ def test_128_bit_integer_columns_are_ineligible(spec):
     touches_wide = out.filter(pl.any_horizontal(pl.col(c).is_in(wide) for c in names))
     assert touches_wide.height > 0
     assert touches_wide["status"].unique().to_list() == ["ineligible"]
+
+
+# ── the binding (analytics.analytics) ─────────────────────────────────────────
+
+import pyarrow as pa
+
+from analytics import analytics as rs
+
+
+def test_binding_takes_and_returns_arrow():
+    out = pl.DataFrame(rs.column_gcd(pl.DataFrame({"a": [12, 18], "b": [7, 14]})))
+    assert out.columns == ["column", "dtype", "gcd"]
+    assert out["gcd"].to_list() == [6, 7]
+    assert pa.table(rs.column_gcd(pa.table({"a": [12, 18]}))).num_rows == 1
+
+
+def test_bloom_bits_are_bytes():
+    bits = rs.bloom_filter(pl.DataFrame({"a": [1, 2, 3]}), 3, 64)
+    assert isinstance(bits, bytes) and len(bits) == 8
+    ratios = pl.DataFrame(rs.membership_ratio(pl.DataFrame({"a": [1, 2, 3]}), bits, 3, 64))
+    assert ratios["ratio_non_null"].to_list() == [1.0]
+
+
+def test_unknown_pair_column_is_value_error():
+    with pytest.raises(ValueError, match='unknown column "nope"'):
+        rs.pairwise_joint_entropy(pl.DataFrame({"a": [1, 2]}), [("a", "nope")])
+
+
+def test_wrong_bloom_length_is_value_error():
+    with pytest.raises(ValueError, match="requires 8 bytes"):
+        rs.membership_ratio(pl.DataFrame({"a": [1]}), b"\x00", 3, 64)
+
+
+def test_wrong_column_type_is_value_error():
+    # api.rs classifies kernel type errors (SchemaMismatch etc.) as InvalidInput; the
+    # Compute → RuntimeError mapping is covered by api.rs's unit test of `compute`.
+    with pytest.raises(ValueError):
+        rs.lsh_candidates(pl.DataFrame({"qualified_name": ["a"], "minhash": [1]}), 1, 1)
+
+
+def test_zero_bloom_parameters_are_value_errors():
+    with pytest.raises(ValueError):
+        rs.bloom_filter(pl.DataFrame({"a": [1]}), 0, 64)
+
+
+def test_non_arrow_input_is_type_error():
+    with pytest.raises(TypeError, match="__arrow_c_stream__"):
+        rs.column_gcd(42)
+
+
+WIDE = [pl.Series("x", [1], dtype=pl.Int128), pl.Series("x", [[1]], dtype=pl.List(pl.Int128))]
+if hasattr(pl, "UInt128"):
+    WIDE.append(pl.Series("x", [1], dtype=pl.UInt128))
+
+
+@pytest.mark.parametrize("s", WIDE, ids=lambda s: str(s.dtype))
+def test_128_bit_integers_are_rejected_at_the_binding(s):
+    with pytest.raises(ValueError, match='column "x" holds .*128-bit'):
+        rs.column_gcd(s.to_frame())

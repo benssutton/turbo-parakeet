@@ -3,6 +3,7 @@ mod minhash;
 mod shared;
 mod arrow_io;
 mod api;
+mod python;
 mod entropy;
 mod chi_squared;
 mod contingency;
