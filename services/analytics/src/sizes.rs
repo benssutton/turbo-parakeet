@@ -14,9 +14,7 @@
 //
 // Works on arrow-rs ArrayData; Series arrive through shared::to_arrow_rs. Arrow
 // sizes use CompatLevel::oldest() (LargeUtf8, LargeList); Polars sizes the plain
-// and ZSTD body of CompatLevel::newest() (view types). Columns nesting Int128
-// inside List/Array/Struct get null sizes: pyarrow cannot import them, so there
-// is no oracle to agree with.
+// and ZSTD body of CompatLevel::newest() (view types).
 
 use crate::shared::to_arrow_rs;
 use arrow_array::Array;
@@ -148,35 +146,26 @@ pub(crate) fn ipc_body_bytes(arr: &dyn Array, level: Option<i32>) -> PolarsResul
     Ok(body.bytes)
 }
 
-pub(crate) fn nests_int128(dtype: &DataType) -> bool {
-    match dtype {
-        DataType::List(inner) | DataType::Array(inner, _) => **inner == DataType::Int128 || nests_int128(inner),
-        DataType::Struct(fields) => fields.iter().any(|f| *f.dtype() == DataType::Int128 || nests_int128(f.dtype())),
-        _ => false,
-    }
-}
-
-pub(crate) type Sizes = [Option<u64>; 4];
+pub(crate) type Sizes = [u64; 4];
 pub(crate) const SIZE_FIELDS: [&str; 4] = ["size_bytes", "size_zstd_bytes", "size_polars_bytes", "size_polars_zstd_bytes"];
 
-/// `s`'s classic layout (CompatLevel::oldest), or None when `sizes` is null (nested Int128).
-pub(crate) fn classic_layout(s: &Series) -> PolarsResult<Option<arrow_array::ArrayRef>> {
-    if nests_int128(s.dtype()) { Ok(None) } else { to_arrow_rs(s, CompatLevel::oldest()).map(Some) }
+/// `s`'s classic layout (CompatLevel::oldest).
+pub(crate) fn classic_layout(s: &Series) -> PolarsResult<arrow_array::ArrayRef> {
+    to_arrow_rs(s, CompatLevel::oldest())
 }
 
 pub(crate) fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
-    sizes_of(s, classic_layout(s)?.as_ref(), level)
+    sizes_of(s, &classic_layout(s)?, level)
 }
 
 /// `sizes` given `s`'s `classic_layout` (exported once by callers that reuse it).
-pub(crate) fn sizes_of(s: &Series, classic: Option<&arrow_array::ArrayRef>, level: i32) -> PolarsResult<Sizes> {
-    let Some(classic) = classic else { return Ok([None; 4]) };
+pub(crate) fn sizes_of(s: &Series, classic: &arrow_array::ArrayRef, level: i32) -> PolarsResult<Sizes> {
     let native = to_arrow_rs(s, CompatLevel::newest())?;
     Ok([
-        Some(ipc_body_bytes(classic.as_ref(), None)?),
-        Some(ipc_body_bytes(classic.as_ref(), Some(level))?),
-        Some(ipc_body_bytes(native.as_ref(), None)?),
-        Some(ipc_body_bytes(native.as_ref(), Some(level))?),
+        ipc_body_bytes(classic.as_ref(), None)?,
+        ipc_body_bytes(classic.as_ref(), Some(level))?,
+        ipc_body_bytes(native.as_ref(), None)?,
+        ipc_body_bytes(native.as_ref(), Some(level))?,
     ])
 }
 
@@ -195,7 +184,7 @@ pub(crate) fn column_sizes_impl(inputs: &[Series], level: i32) -> PolarsResult<S
     let rows: Vec<Sizes> = inputs.par_iter().map(|s| sizes(s, level)).collect::<PolarsResult<_>>()?;
     let mut columns = vec![StringChunked::from_iter(inputs.iter().map(|s| s.name().as_str())).into_series().with_name("column".into())];
     for (j, name) in SIZE_FIELDS.iter().enumerate() {
-        columns.push(UInt64Chunked::from_iter_options((*name).into(), rows.iter().map(|r| r[j])).into_series());
+        columns.push(UInt64Chunked::from_iter_values((*name).into(), rows.iter().map(|r| r[j])).into_series());
     }
     Ok(StructChunked::from_series("column_sizes".into(), inputs.len(), columns.iter())?.into_series())
 }
@@ -237,14 +226,8 @@ mod tests {
     }
 
     #[test]
-    fn nested_int128_sizes_are_null() {
-        let s = Series::new("x".into(), [Some(Series::new("".into(), &[1i128]))]);
-        assert_eq!(sizes(&s, 1).unwrap(), [None; 4]);
-    }
-
-    #[test]
     fn polars_size_is_native_ipc_body() {
-        assert_eq!(sizes(&Series::new("x".into(), &[Some("ab"), None]), 1).unwrap()[2], Some(40));
+        assert_eq!(sizes(&Series::new("x".into(), &[Some("ab"), None]), 1).unwrap()[2], 40);
     }
 
     #[test]
@@ -252,6 +235,6 @@ mod tests {
         use polars::datatypes::Categories;
         let cats = Categories::global();
         let cat = Series::new("x".into(), &["a", "b", "a"]).cast(&DataType::Categorical(cats.clone(), cats.mapping())).unwrap();
-        assert_eq!(sizes(&cat, 1).unwrap()[0], Some(48)); // pyarrow: keys 16 + dictionary 32 (see test_describe.py)
+        assert_eq!(sizes(&cat, 1).unwrap()[0], 48); // pyarrow: keys 16 + dictionary 32 (see test_describe.py)
     }
 }

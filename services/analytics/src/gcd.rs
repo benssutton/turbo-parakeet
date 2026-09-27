@@ -30,7 +30,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 // Arrow has no plain 128-bit integer; decimal128(38, 0) is the widest native type.
 const GCD_DTYPE: DataType = DataType::Decimal(Some(38), Some(0));
-const GCD_LIMIT: u128 = 10u128.pow(38);
 
 const CHUNK: usize = 1 << 16;
 /// Values folded between checks of the early-exit flag.
@@ -65,7 +64,7 @@ fn step_u64(g: u64, v: u64) -> u64 {
     if g == 0 { v } else { binary_u64(g, v % g) }
 }
 
-/// u128 twin of [`step_u64`] (Int128 / Decimal).
+/// u128 twin of [`step_u64`] (Decimal).
 #[inline]
 fn step_u128(g: u128, v: u128) -> u128 {
     if g == 0 { v } else { binary_u128(g, v % g) }
@@ -157,7 +156,6 @@ fn is_integer_backed(dtype: &DataType) -> bool {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
-            | DataType::Int128
             | DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
@@ -170,8 +168,8 @@ fn is_integer_backed(dtype: &DataType) -> bool {
     )
 }
 
-/// Whole-column GCD of `s`. `None` for non-integer-backed dtypes, and for a GCD
-/// of more than 38 digits (not representable as Decimal(38, 0)).
+/// Whole-column GCD of `s`; `None` for non-integer-backed dtypes. The Int128 arm
+/// reads Decimal's physical values, whose magnitudes fit in 38 digits.
 pub(crate) fn series_gcd(s: &Series) -> PolarsResult<Option<i128>> {
     if !is_integer_backed(s.dtype()) {
         return Ok(None);
@@ -193,7 +191,7 @@ pub(crate) fn series_gcd(s: &Series) -> PolarsResult<Option<i128>> {
             ))
         }
     };
-    Ok((g < GCD_LIMIT).then_some(g as i128))
+    Ok(Some(g as i128))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -277,12 +275,10 @@ mod tests {
         assert_eq!(gcd_of(Series::new("a".into(), &[i64::MIN])), Some(1i128 << 63));
         assert_eq!(gcd_of(Series::new("a".into(), &[i64::MIN, 1i64 << 62])), Some(1i128 << 62));
         assert_eq!(gcd_of(Series::new("a".into(), &[u64::MAX])), Some(u64::MAX as i128));
-        assert_eq!(gcd_of(Series::new("a".into(), &[i128::MIN, 1i128 << 126])), Some(1i128 << 126));
-        // More than 38 digits is not representable as Decimal(38, 0) → null.
-        assert_eq!(gcd_of(Series::new("a".into(), &[10i128.pow(38) - 1])), Some(10i128.pow(38) - 1));
-        assert_eq!(gcd_of(Series::new("a".into(), &[10i128.pow(38)])), None);
-        assert_eq!(gcd_of(Series::new("a".into(), &[i128::MAX])), None);
-        assert_eq!(gcd_of(Series::new("a".into(), &[i128::MIN])), None);
+        let dec = |v: &[i128]| Int128Chunked::from_slice("a".into(), v).into_decimal_unchecked(Some(38), 0).into_series();
+        assert_eq!(gcd_of(dec(&[10i128.pow(38) - 1])), Some(10i128.pow(38) - 1));
+        assert_eq!(gcd_of(dec(&[-(10i128.pow(37)), 10i128.pow(36)])), Some(10i128.pow(36)));
+        assert_eq!(gcd_of(Series::new("a".into(), &[12i128])), None); // Int128 is not integer-backed
     }
 
     #[test]

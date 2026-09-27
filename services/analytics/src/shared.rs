@@ -112,14 +112,6 @@ pub(crate) fn encode_series(series: &Series) -> PolarsResult<EncodedColumn> {
             .iter()
             .map(|v| v.map_or((0, true), |x| (x as u64, false)))
             .unzip(),
-        DataType::Int128 => {
-            let build_hasher = FoldHashFixed::default();
-            series
-                .i128()?
-                .iter()
-                .map(|v| v.map_or((0, true), |x| (hash_one(&build_hasher, x), false)))
-                .unzip()
-        }
         DataType::UInt8 => series
             .u8()?
             .iter()

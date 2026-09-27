@@ -1096,23 +1096,6 @@ mod tests {
     }
 
     #[test]
-    fn test_int128_to_u64() {
-        let s = Series::new("test".into(), &[Some(1i64), Some(2i64), None])
-            .cast(&DataType::Int128)
-            .unwrap();
-        let enc = encode_series(&s).unwrap();
-        assert_ne!(enc.values[0], enc.values[1]); // distinct values → distinct hashes
-        assert!(enc.is_null[2]);
-
-        // Same value in a separate series must hash identically (fixed seed)
-        let s2 = Series::new("test2".into(), &[Some(1i64)])
-            .cast(&DataType::Int128)
-            .unwrap();
-        let enc2 = encode_series(&s2).unwrap();
-        assert_eq!(enc.values[0], enc2.values[0]);
-    }
-
-    #[test]
     fn test_decimal_to_u64() {
         let s = Series::new("test".into(), &[1i32, 2, 1])
             .cast(&DataType::Decimal(Some(10), Some(0)))

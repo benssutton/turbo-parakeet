@@ -625,7 +625,7 @@ pub(crate) fn text_of(values: &ArrayRef) -> Result<LargeStringArray, String> {
     Ok(arrow_cast(values.as_ref(), &AT::LargeUtf8)?.as_string::<i64>().clone())
 }
 
-/// Row `i` as an exact integer (integer columns; Int128 arrives as decimal128(38, 0)).
+/// Row `i` as an exact integer (integer columns).
 fn int_at(a: &ArrayRef, i: u64) -> Option<i128> {
     let v = arrow_cast(a.slice(i as usize, 1).as_ref(), &AT::Decimal128(38, 0)).ok()?;
     let v = v.as_primitive::<Decimal128Type>();
@@ -885,7 +885,7 @@ pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>,
         r.push(Target::Null, Rank::Null, "all-null→null", format!("n_null={} n_rows={}", lvl.n_null(), lvl.n_rows()));
     } else if lvl.n() > 0 {
         match lvl.dtype {
-            PT::Int8 | PT::Int16 | PT::Int32 | PT::Int64 | PT::Int128 | PT::UInt8 | PT::UInt16 | PT::UInt32 | PT::UInt64 => {
+            PT::Int8 | PT::Int16 | PT::Int32 | PT::Int64 | PT::UInt8 | PT::UInt16 | PT::UInt32 | PT::UInt64 => {
                 if let (Some(a), Some(b)) = (lvl.p.range.argmin, lvl.p.range.argmax) {
                     if let (Some(lo), Some(hi)) = (int_at(&lvl.values, a), int_at(&lvl.values, b)) {
                         r.integers(lo, hi, "integer", "");
@@ -1590,10 +1590,10 @@ pub(crate) struct Rec {
     pub candidates: Vec<Candidate>,
 }
 
-/// The recommendation for one column; None when its sizes are null (nested Int128).
+/// The recommendation for one column.
 /// `values` is `s` in the classic layout (sizes.rs's `classic_layout`).
-pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes, params: &Params) -> PolarsResult<Option<Rec>> {
-    let (Some(size_bytes), Some(polars_bytes), Some(polars_zstd)) = (sz[0], sz[2], sz[3]) else { return Ok(None) };
+pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes, params: &Params) -> PolarsResult<Rec> {
+    let [size_bytes, _, polars_bytes, polars_zstd] = *sz;
     let name = s.name().as_str();
     let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
     let q = params.population_rows.map(|p| if p == d.n_rows { 1.0 } else { d.n_rows as f64 / p as f64 });
@@ -1638,7 +1638,7 @@ pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes
             ipc_body_bytes(layout.as_ref(), Some(params.zstd_level))?,
         )
     };
-    Ok(Some(Rec {
+    Ok(Rec {
         nullable: chosen.array.logical_null_count() > 0,
         arrow_type: pa_name(&t),
         arrow_size: ipc_body_bytes(chosen.array.as_ref(), None)?,
@@ -1648,7 +1648,7 @@ pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes
         polars_zstd,
         lossy: chosen.lossy,
         candidates: chosen.candidates,
-    }))
+    })
 }
 
 // ── plugin entry ─────────────────────────────────────────────────────────────
@@ -1708,8 +1708,7 @@ fn candidates_series(c: &[Candidate]) -> Series {
     StructChunked::from_series("candidate".into(), c.len(), cols.iter()).expect("equal-length fields").into_series()
 }
 
-fn rec_row(rec: Option<&Rec>) -> Row {
-    let Some(r) = rec else { return vec![AnyValue::Null; rec_fields().len()] };
+fn rec_row(r: &Rec) -> Row {
     let text = |s: &str| AnyValue::StringOwned(s.into());
     vec![
         AnyValue::Boolean(r.nullable),
@@ -1730,14 +1729,11 @@ pub(crate) fn describe_and_recommend_impl(inputs: &[Series], params: &Params) ->
         .map(|s| {
             let d = describe_one(s, params.seed)?;
             let classic = classic_layout(s)?;
-            let sz = sizes_of(s, classic.as_ref(), params.zstd_level)?;
-            let rec = match &classic {
-                Some(values) => recommend(s, values, &d, &sz, params)?,
-                None => None,
-            };
+            let sz = sizes_of(s, &classic, params.zstd_level)?;
+            let rec = recommend(s, &classic, &d, &sz, params)?;
             let mut row = d.row();
-            row.extend(sz.iter().map(|v| v.map_or(AnyValue::Null, AnyValue::UInt64)));
-            row.extend(rec_row(rec.as_ref()));
+            row.extend(sz.iter().map(|&v| AnyValue::UInt64(v)));
+            row.extend(rec_row(&rec));
             Ok(row)
         })
         .collect::<PolarsResult<_>>()?;
@@ -2139,7 +2135,7 @@ mod tests {
     fn rec(s: Series) -> Rec {
         let d = describe_one(&s, 0).unwrap();
         let sz = sizes(&s, 1).unwrap();
-        recommend(&s, &classic_layout(&s).unwrap().unwrap(), &d, &sz, &params()).unwrap().unwrap()
+        recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &params()).unwrap()
     }
 
     fn chosen(r: &Rec) -> &Candidate {
@@ -2241,7 +2237,7 @@ mod tests {
     fn inner_chosen(s: &Series) -> Chosen {
         let d = describe_one(s, 0).unwrap();
         let inner = d.inner.as_ref().unwrap();
-        let (_, child, _) = list_parts(&classic_layout(s).unwrap().unwrap()).unwrap();
+        let (_, child, _) = list_parts(&classic_layout(s).unwrap()).unwrap();
         let lvl = Level {
             dtype: inner.values.dtype(), size_bytes: ipc_body_bytes(child.as_ref(), None).unwrap(), values: child,
             p: &inner.profile, n_midnight: None,
@@ -2277,7 +2273,7 @@ mod tests {
         let s = Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]);
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
         let exact = Params { population_rows: Some(6), ..params() };
-        let r = recommend(&s, &classic_layout(&s).unwrap().unwrap(), &d, &sz, &exact).unwrap().unwrap();
+        let r = recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &exact).unwrap();
         assert_eq!(r.polars_type.as_deref(), Some("Enum(categories=['a', 'b'])"));
         let many: Vec<&str> = (0..200).map(|i| if i % 2 == 0 { "alpha" } else { "beta" }).collect();
         let r = rec(Series::new("x".into(), &many));
@@ -2291,7 +2287,7 @@ mod tests {
 
     fn rec_with(s: Series, population_rows: Option<u64>) -> Rec {
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
-        recommend(&s, &classic_layout(&s).unwrap().unwrap(), &d, &sz, &Params { population_rows, ..params() }).unwrap().unwrap()
+        recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &Params { population_rows, ..params() }).unwrap()
     }
 
     #[test]
@@ -2337,8 +2333,8 @@ mod tests {
 
     #[test]
     fn plugin_output_matches_declared_schema() {
-        let nested_int128 = Series::new("n".into(), [Some(Series::new("".into(), &[1i128])), None]);
-        let inputs = [Series::new("a".into(), &[Some(0i64), Some(5), None]), Series::new("s".into(), &["x", "y", "x"]), nested_int128];
+        let nested = Series::new("n".into(), [Some(Series::new("".into(), &[1i64])), None, Some(Series::new("".into(), &[2i64]))]);
+        let inputs = [Series::new("a".into(), &[Some(0i64), Some(5), None]), Series::new("s".into(), &["x", "y", "x"]), nested];
         let out = describe_and_recommend_impl(&inputs, &params()).unwrap();
         assert_eq!(out.dtype(), recommend_output_type(&[]).unwrap().dtype());
         assert_eq!(out.len(), 3);
@@ -2347,10 +2343,10 @@ mod tests {
         let get = |n: &str| fields.iter().find(|f| f.name().as_str() == n).unwrap().clone();
         let types = get("rec_arrow_type");
         assert_eq!(types.str().unwrap().get(0), Some("uint8"));
-        assert_eq!(types.str().unwrap().get(2), None); // nested Int128: null recommendation
+        assert_eq!(types.null_count(), 0);
         let cands = get("rec_candidates");
         let first = cands.list().unwrap().get_as_series(0).unwrap();
         assert!(first.len() >= 2);
-        assert!(cands.list().unwrap().get_as_series(2).is_none());
+        assert!(cands.list().unwrap().get_as_series(2).is_some());
     }
 }
