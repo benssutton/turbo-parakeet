@@ -1,30 +1,9 @@
 use crate::contingency::{ContingencyTable, build_contingency};
 use crate::shared::{PairwiseKwargs, build_dense_cache_par, resolve_pairs};
 use polars::prelude::*;
-use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
 use statrs::distribution::{ChiSquared, ContinuousCDF};
 use std::collections::{HashMap, HashSet};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Output type
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn chi_squared_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    let fields = vec![
-        Field::new("col_a".into(), DataType::String),
-        Field::new("col_b".into(), DataType::String),
-        Field::new("chi2_stat".into(), DataType::Float64),
-        Field::new("p_value".into(), DataType::Float64),
-        Field::new("cramers_v".into(), DataType::Float64),
-        Field::new("low_expected_count".into(), DataType::Boolean),
-        Field::new("n_valid".into(), DataType::UInt32),
-    ];
-    Ok(Field::new(
-        "pairwise_chi_squared".into(),
-        DataType::Struct(fields),
-    ))
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Implementation
@@ -236,22 +215,12 @@ fn build_empty_result() -> PolarsResult<Series> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Plugin entry point
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[polars_expr(output_type_func=chi_squared_output_type)]
-fn pairwise_chi_squared(inputs: &[Series], kwargs: PairwiseKwargs) -> PolarsResult<Series> {
-    pairwise_chi_squared_impl(inputs, kwargs)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::*;
 
     fn no_pairs() -> PairwiseKwargs {
         PairwiseKwargs { pairs: None }

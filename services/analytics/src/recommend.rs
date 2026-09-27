@@ -12,9 +12,8 @@
 // against the original and measured with sizes.rs; the first that verifies is
 // chosen. The original type is always a candidate and cannot fail.
 //
-// Everything below the plugin entry works on arrow-rs arrays (Series cross in
-// through arrow_io::export_series), so moving the Python↔Rust boundary to Arrow
-// tables later changes only the entry point.
+// Everything below the entry works on arrow-rs arrays (Series cross in
+// through arrow_io::export_series), so the Python↔Rust boundary is Arrow tables.
 //
 // Leading-zero rule (Spec A §5.1): an integer-looking string with a leading zero
 // ("007") must stay a String — identifiers such as UUID fragments, account
@@ -42,9 +41,7 @@ use polars::prelude::{
     polars_err, AnyValue, DataType as PT, Field as PField, Float64Chunked, IntoSeries, NewChunkedArray, PolarsResult, Series,
     StringChunked, StructChunked, UInt64Chunked,
 };
-use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
-use serde::Deserialize;
 use std::cell::OnceCell;
 use std::sync::Arc;
 
@@ -503,8 +500,8 @@ pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
 // ── candidates (Spec B §4, §5.2) ────────────────────────────────────────────
 
 
-/// Plugin keyword arguments (Recommend's constructor keywords).
-#[derive(Deserialize, Clone, Debug)]
+/// Recommend's constructor keywords.
+#[derive(Clone, Debug)]
 pub(crate) struct Params {
     pub seed: u64,
     pub zstd_level: i32,
@@ -1651,7 +1648,7 @@ pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes
     })
 }
 
-// ── plugin entry ─────────────────────────────────────────────────────────────
+// ── entry ────────────────────────────────────────────────────────────────────
 
 fn candidate_type() -> PT {
     PT::Struct(vec![
@@ -1687,11 +1684,6 @@ fn output_fields() -> Vec<(String, PT)> {
     f.extend(SIZE_FIELDS.iter().map(|n| (n.to_string(), PT::UInt64)));
     f.extend(rec_fields());
     f
-}
-
-fn recommend_output_type(_input_fields: &[PField]) -> PolarsResult<PField> {
-    let fields = output_fields().into_iter().map(|(n, d)| PField::new(n.into(), d)).collect();
-    Ok(PField::new("recommend".into(), PT::Struct(fields)))
 }
 
 fn candidates_series(c: &[Candidate]) -> Series {
@@ -1738,11 +1730,6 @@ pub(crate) fn describe_and_recommend_impl(inputs: &[Series], params: &Params) ->
         })
         .collect::<PolarsResult<_>>()?;
     assemble("recommend", &output_fields(), &rows)
-}
-
-#[polars_expr(output_type_func=recommend_output_type)]
-fn describe_and_recommend(inputs: &[Series], kwargs: Params) -> PolarsResult<Series> {
-    describe_and_recommend_impl(inputs, &kwargs)
 }
 
 #[cfg(test)]
@@ -2332,11 +2319,12 @@ mod tests {
     }
 
     #[test]
-    fn plugin_output_matches_declared_schema() {
+    fn output_matches_declared_schema() {
         let nested = Series::new("n".into(), [Some(Series::new("".into(), &[1i64])), None, Some(Series::new("".into(), &[2i64]))]);
         let inputs = [Series::new("a".into(), &[Some(0i64), Some(5), None]), Series::new("s".into(), &["x", "y", "x"]), nested];
         let out = describe_and_recommend_impl(&inputs, &params()).unwrap();
-        assert_eq!(out.dtype(), recommend_output_type(&[]).unwrap().dtype());
+        let declared = PT::Struct(output_fields().into_iter().map(|(n, d)| PField::new(n.into(), d)).collect());
+        assert_eq!(out.dtype(), &declared);
         assert_eq!(out.len(), 3);
         let ca = out.struct_().unwrap();
         let fields = ca.fields_as_series();

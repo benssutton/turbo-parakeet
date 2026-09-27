@@ -1,8 +1,6 @@
 use polars::prelude::*;
-use pyo3_polars::derive::polars_expr;
 use xxhash_rust::xxh3::xxh3_128;
 use rayon::prelude::*;
-use serde::Deserialize;
 use std::collections::HashSet;
 use crate::shared::{EncodedColumn, build_column_cache_par, encode_series};
 
@@ -55,7 +53,6 @@ fn validate_bit_array(bit_array: &[u8], m: usize) -> PolarsResult<()> {
 }
 
 /// Kwargs struct for bloom_filter
-#[derive(Deserialize)]
 pub(crate) struct BloomFilterKwargs {
     pub(crate) bit_array_bytes: Vec<u8>,
     pub(crate) k: usize,
@@ -63,20 +60,10 @@ pub(crate) struct BloomFilterKwargs {
 }
 
 /// Kwargs struct for membership / membership_ratio
-#[derive(Deserialize)]
 pub(crate) struct MembershipKwargs {
     pub(crate) bit_array_bytes: Vec<u8>,
     pub(crate) k: usize,
     pub(crate) m: usize,
-}
-
-/// Kwargs struct for membership_ratio_sample
-#[derive(Deserialize)]
-struct MembershipRatioSampleKwargs {
-    bit_array_bytes: Vec<u8>,
-    k: usize,
-    m: usize,
-    sample_frac: f64,
 }
 
 pub(crate) fn bloom_filter_impl(series: &Series, kwargs: BloomFilterKwargs) -> PolarsResult<Vec<u8>> {
@@ -130,45 +117,6 @@ pub(crate) fn bloom_filter_impl(series: &Series, kwargs: BloomFilterKwargs) -> P
     Ok(bit_array)
 }
 
-/// Add all items from a Polars Series to a Bloom filter bit array.
-/// Returns a length-1 Binary Series containing the updated bit array.
-#[polars_expr(output_type=Binary)]
-pub fn bloom_filter(inputs: &[Series], kwargs: BloomFilterKwargs) -> PolarsResult<Series> {
-    let bytes = bloom_filter_impl(&inputs[0], kwargs)?;
-    Ok(Series::new("bloom_filter".into(), &[bytes]))
-}
-
-fn membership_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<Series> {
-    let bit_array = &kwargs.bit_array_bytes;
-    let k = kwargs.k;
-    let m = kwargs.m;
-    validate_bit_array(bit_array, m)?;
-
-    let enc = encode_series(series)?;
-    let n = enc.len();
-
-    // One result per input row (nulls → false). with_min_len preserves ordering
-    // while chunking the parallel work.
-    let results: Vec<bool> = (0..n)
-        .into_par_iter()
-        .with_min_len(chunk_size(n))
-        .map(|idx| {
-            !enc.is_null[idx]
-                && check_item_membership(&enc.values[idx].to_le_bytes(), bit_array, k, m)
-        })
-        .collect();
-
-    Ok(BooleanChunked::from_iter(results.into_iter())
-        .into_series()
-        .with_name(series.name().clone()))
-}
-
-/// Check membership for all items in a Polars Series against a Bloom filter.
-#[polars_expr(output_type=Boolean)]
-pub fn membership(inputs: &[Series], kwargs: MembershipKwargs) -> PolarsResult<Series> {
-    membership_impl(&inputs[0], &kwargs)
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // membership_ratio  (batch plugin — one result row per input column)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -199,42 +147,6 @@ fn compute_ratio(col: &EncodedColumn, bit_array: &[u8], k: usize, m: usize) -> (
         found as f64 / (total - null_count) as f64
     };
     (ratio_all, ratio_non_null)
-}
-
-/// Single-series membership ratio (used by test helpers and sample impl).
-fn membership_ratio_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<(f64, f64)> {
-    validate_bit_array(&kwargs.bit_array_bytes, kwargs.m)?;
-    let enc = encode_series(series)?;
-    Ok(compute_ratio(&enc, &kwargs.bit_array_bytes, kwargs.k, kwargs.m))
-}
-
-/// Single-series sampled membership ratio.
-fn membership_ratio_sample_impl(
-    series: &Series,
-    kwargs: &MembershipRatioSampleKwargs,
-) -> PolarsResult<(f64, f64)> {
-    let sampled = if kwargs.sample_frac >= 1.0 || series.len() <= 10 {
-        series.clone()
-    } else {
-        series.sample_frac(kwargs.sample_frac, false, false, None)?
-    };
-    let membership_kwargs = MembershipKwargs {
-        bit_array_bytes: kwargs.bit_array_bytes.clone(),
-        k: kwargs.k,
-        m: kwargs.m,
-    };
-    membership_ratio_impl(&sampled, &membership_kwargs)
-}
-
-fn membership_ratio_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    Ok(Field::new(
-        "membership_ratio".into(),
-        DataType::Struct(vec![
-            Field::new("col_name".into(), DataType::String),
-            Field::new("ratio_all".into(), DataType::Float64),
-            Field::new("ratio_non_null".into(), DataType::Float64),
-        ]),
-    ))
 }
 
 /// Multi-column batch impl: checks each input column independently.
@@ -276,43 +188,6 @@ pub(crate) fn membership_ratio_multi_impl(
         [col_name_s, ratio_all_s, ratio_non_null_s].iter(),
     )?;
     Ok(struct_ca.into_series())
-}
-
-/// Return membership ratio for each input column independently.
-/// Output: struct Series with one row per column containing col_name, ratio_all, ratio_non_null.
-#[polars_expr(output_type_func=membership_ratio_output_type)]
-pub fn membership_ratio(inputs: &[Series], kwargs: MembershipKwargs) -> PolarsResult<Series> {
-    membership_ratio_multi_impl(inputs, &kwargs)
-}
-
-/// Sampled variant of membership_ratio — samples each column to sample_frac before checking.
-#[polars_expr(output_type_func=membership_ratio_output_type)]
-pub fn membership_ratio_sample(
-    inputs: &[Series],
-    kwargs: MembershipRatioSampleKwargs,
-) -> PolarsResult<Series> {
-    let membership_kwargs = MembershipKwargs {
-        bit_array_bytes: kwargs.bit_array_bytes.clone(),
-        k: kwargs.k,
-        m: kwargs.m,
-    };
-
-    if kwargs.sample_frac >= 1.0 {
-        return membership_ratio_multi_impl(inputs, &membership_kwargs);
-    }
-
-    let sampled: Vec<Series> = inputs
-        .iter()
-        .map(|s| {
-            if s.len() <= 10 {
-                Ok(s.clone())
-            } else {
-                s.sample_frac(kwargs.sample_frac, false, false, None)
-            }
-        })
-        .collect::<PolarsResult<Vec<_>>>()?;
-
-    membership_ratio_multi_impl(&sampled, &membership_kwargs)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -380,23 +255,48 @@ fn bloom_filter_test(series: &Series, kwargs: BloomFilterKwargs) -> PolarsResult
 }
 
 #[cfg(test)]
+fn membership_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<Series> {
+    let bit_array = &kwargs.bit_array_bytes;
+    let k = kwargs.k;
+    let m = kwargs.m;
+    validate_bit_array(bit_array, m)?;
+
+    let enc = encode_series(series)?;
+    let n = enc.len();
+
+    // One result per input row (nulls → false). with_min_len preserves ordering
+    // while chunking the parallel work.
+    let results: Vec<bool> = (0..n)
+        .into_par_iter()
+        .with_min_len(chunk_size(n))
+        .map(|idx| {
+            !enc.is_null[idx]
+                && check_item_membership(&enc.values[idx].to_le_bytes(), bit_array, k, m)
+        })
+        .collect();
+
+    Ok(BooleanChunked::from_iter(results.into_iter())
+        .into_series()
+        .with_name(series.name().clone()))
+}
+
+#[cfg(test)]
 fn membership_test(series: &Series, kwargs: MembershipKwargs) -> PolarsResult<Series> {
     membership_impl(series, &kwargs)
+}
+
+/// Single-series membership ratio (used by test helpers).
+#[cfg(test)]
+fn membership_ratio_impl(series: &Series, kwargs: &MembershipKwargs) -> PolarsResult<(f64, f64)> {
+    validate_bit_array(&kwargs.bit_array_bytes, kwargs.m)?;
+    let enc = encode_series(series)?;
+    Ok(compute_ratio(&enc, &kwargs.bit_array_bytes, kwargs.k, kwargs.m))
 }
 
 /// Returns (ratio_all, ratio_non_null).
 #[cfg(test)]
 fn membership_ratio_test(series: &Series, kwargs: MembershipKwargs) -> PolarsResult<(f64, f64)> {
     membership_ratio_impl(series, &kwargs)
-}
-
-/// Returns (ratio_all, ratio_non_null) from a sampled series.
-#[cfg(test)]
-fn membership_ratio_sample_test(
-    series: &Series,
-    kwargs: MembershipRatioSampleKwargs,
-) -> PolarsResult<(f64, f64)> {
-    membership_ratio_sample_impl(series, &kwargs)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -615,70 +515,6 @@ mod tests {
         assert_eq!(ratio_all, 0.5, "Nulls count in denominator: 2/4 = 0.5");
         // ratio_non_null: 2 found out of 3 non-null rows = 2/3
         assert!((ratio_non_null - 2.0 / 3.0).abs() < 1e-10, "ratio_non_null should be 2/3");
-    }
-
-    // ── membership_ratio_sample tests ─────────────────────────────────────────
-
-    #[test]
-    fn test_membership_ratio_sample_full_sample() {
-        let series = Series::new("items".into(), &["a", "b", "c", "d"]);
-        let m = 1000;
-        let num_bytes = (m + 7) / 8;
-        let kwargs = BloomFilterKwargs { bit_array_bytes: vec![0u8; num_bytes], k: 5, m };
-        let bit_array = bloom_filter_test(&series, kwargs).unwrap();
-
-        let sample_kwargs = MembershipRatioSampleKwargs {
-            bit_array_bytes: bit_array, k: 5, m, sample_frac: 1.0,
-        };
-        let (ratio, _) = membership_ratio_sample_test(&series, sample_kwargs).unwrap();
-        assert_eq!(ratio, 1.0, "All items should be found with full sample");
-    }
-
-    #[test]
-    fn test_membership_ratio_sample_partial() {
-        let items: Vec<i64> = (0..100).collect();
-        let series = Series::new("items".into(), &items);
-        let m = 10000;
-        let num_bytes = (m + 7) / 8;
-        let kwargs = BloomFilterKwargs { bit_array_bytes: vec![0u8; num_bytes], k: 7, m };
-        let bit_array = bloom_filter_test(&series, kwargs).unwrap();
-
-        let sample_kwargs = MembershipRatioSampleKwargs {
-            bit_array_bytes: bit_array, k: 7, m, sample_frac: 0.5,
-        };
-        let (ratio, _) = membership_ratio_sample_test(&series, sample_kwargs).unwrap();
-        assert_eq!(ratio, 1.0, "All sampled items should be found");
-    }
-
-    #[test]
-    fn test_membership_ratio_sample_none_found() {
-        let series = Series::new("items".into(), &["a", "b", "c"]);
-        let m = 1000;
-        let num_bytes = (m + 7) / 8;
-        let kwargs = BloomFilterKwargs { bit_array_bytes: vec![0u8; num_bytes], k: 5, m };
-        let bit_array = bloom_filter_test(&series, kwargs).unwrap();
-
-        let test_series = Series::new("test".into(), &["x", "y", "z", "w", "v", "u", "t", "s", "r", "q", "p"]);
-        let sample_kwargs = MembershipRatioSampleKwargs {
-            bit_array_bytes: bit_array, k: 5, m, sample_frac: 0.5,
-        };
-        let (ratio, _) = membership_ratio_sample_test(&test_series, sample_kwargs).unwrap();
-        assert_eq!(ratio, 0.0, "No sampled items should be found");
-    }
-
-    #[test]
-    fn test_membership_ratio_sample_small_series() {
-        let series = Series::new("items".into(), &["a", "b", "c"]);
-        let m = 1000;
-        let num_bytes = (m + 7) / 8;
-        let kwargs = BloomFilterKwargs { bit_array_bytes: vec![0u8; num_bytes], k: 5, m };
-        let bit_array = bloom_filter_test(&series, kwargs).unwrap();
-
-        let sample_kwargs = MembershipRatioSampleKwargs {
-            bit_array_bytes: bit_array, k: 5, m, sample_frac: 0.01,
-        };
-        let (ratio, _) = membership_ratio_sample_test(&series, sample_kwargs).unwrap();
-        assert_eq!(ratio, 1.0, "Small series should use full data");
     }
 
     // ── numeric type tests ────────────────────────────────────────────────────

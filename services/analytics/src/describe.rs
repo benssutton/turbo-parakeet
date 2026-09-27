@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// describe — per-column profile (plugin entry points `describe_columns`, `column_sizes`)
+// describe — per-column profile (entry points `describe_columns`, `column_sizes`)
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Spec: docs/superpowers/specs/2026-09-26-describe-technique-design.md. One pass
@@ -15,9 +15,7 @@ use polars::chunked_array::ops::row_encode::_get_rows_encoded_arr;
 use polars::prelude::*;
 use polars_arrow::array::Array;
 use polars_arrow::bitmap::Bitmap;
-use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
-use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -730,7 +728,7 @@ impl StringStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// describe — column profile assembly and the `describe_columns` plugin entry
+// describe — column profile assembly and the `describe_columns` entry
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub(crate) type Row = Vec<AnyValue<'static>>;
@@ -761,11 +759,6 @@ pub(crate) fn fields() -> Vec<(String, DataType)> {
     f.push(("inner_n_null".into(), DataType::UInt64));
     f.extend(value_fields().into_iter().map(|(n, d)| (format!("inner_{n}"), d)));
     f
-}
-
-fn describe_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    let fields = fields().into_iter().map(|(n, d)| Field::new(n.into(), d)).collect();
-    Ok(Field::new("describe".into(), DataType::Struct(fields)))
 }
 
 fn u64v(v: Option<u64>) -> AnyValue<'static> { v.map_or(AnyValue::Null, AnyValue::UInt64) }
@@ -979,16 +972,6 @@ pub(crate) fn assemble(name: &str, fields: &[(String, DataType)], rows: &[Row]) 
 pub(crate) fn describe_columns_impl(inputs: &[Series], seed: u64) -> PolarsResult<Series> {
     let rows: Vec<Row> = inputs.par_iter().map(|s| describe_one(s, seed).map(|d| d.row())).collect::<PolarsResult<_>>()?;
     assemble("describe", &fields(), &rows)
-}
-
-#[derive(Deserialize)]
-struct DescribeKwargs {
-    seed: u64,
-}
-
-#[polars_expr(output_type_func=describe_output_type)]
-fn describe_columns(inputs: &[Series], kwargs: DescribeKwargs) -> PolarsResult<Series> {
-    describe_columns_impl(inputs, kwargs.seed)
 }
 
 #[cfg(test)]

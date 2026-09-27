@@ -2,7 +2,6 @@ use foldhash::fast::RandomState as FoldHashFast;
 use rayon::prelude::*;
 use wide::f64x4;
 use polars::prelude::*;
-use pyo3_polars::derive::polars_expr;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
@@ -209,18 +208,6 @@ fn entropy_from_count_of_counts(coc: &[(u64, u64)], logr: f64, r_f: f64) -> f64 
 // Pairwise (2-way)
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn pairwise_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    let fields = vec![
-        Field::new("col_a".into(), DataType::String),
-        Field::new("col_b".into(), DataType::String),
-        Field::new("entropy".into(), DataType::Float64),
-    ];
-    Ok(Field::new(
-        "pairwise_entropy".into(),
-        DataType::Struct(fields),
-    ))
-}
-
 pub(crate) fn pairwise_joint_entropy_impl(
     inputs: &[Series],
     kwargs: PairwiseKwargs,
@@ -338,27 +325,9 @@ pub(crate) fn pairwise_joint_entropy_impl(
     Ok(struct_ca.into_series())
 }
 
-#[polars_expr(output_type_func=pairwise_entropy_output_type)]
-fn pairwise_joint_entropy(inputs: &[Series], kwargs: PairwiseKwargs) -> PolarsResult<Series> {
-    pairwise_joint_entropy_impl(inputs, kwargs)
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Threeway (3-way)
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn threeway_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    let fields = vec![
-        Field::new("col_a".into(), DataType::String),
-        Field::new("col_b".into(), DataType::String),
-        Field::new("col_c".into(), DataType::String),
-        Field::new("entropy".into(), DataType::Float64),
-    ];
-    Ok(Field::new(
-        "threeway_entropy".into(),
-        DataType::Struct(fields),
-    ))
-}
 
 pub(crate) fn threeway_joint_entropy_impl(
     inputs: &[Series],
@@ -476,11 +445,6 @@ pub(crate) fn threeway_joint_entropy_impl(
     Ok(struct_ca.into_series())
 }
 
-#[polars_expr(output_type_func=threeway_entropy_output_type)]
-fn threeway_joint_entropy(inputs: &[Series], kwargs: ThreewayKwargs) -> PolarsResult<Series> {
-    threeway_joint_entropy_impl(inputs, kwargs)
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Marginal (single-column)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -492,17 +456,6 @@ fn threeway_joint_entropy(inputs: &[Series], kwargs: ThreewayKwargs) -> PolarsRe
 // keeps the marginal path an independent cross-check of the SIMD entropy
 // reduction (entropy_from_counts_iter / entropy_from_count_of_counts) and the
 // encoder, uncoupled from the newer dense re-encoding counting strategy.
-
-fn marginal_entropy_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    let fields = vec![
-        Field::new("col_name".into(), DataType::String),
-        Field::new("entropy".into(), DataType::Float64),
-    ];
-    Ok(Field::new(
-        "marginal_entropy".into(),
-        DataType::Struct(fields),
-    ))
-}
 
 thread_local! {
     static FREQ_MARGINAL: RefCell<HashMap<(u64, bool), u64, FoldHashFast>> =
@@ -588,11 +541,6 @@ pub(crate) fn marginal_entropy_impl(inputs: &[Series]) -> PolarsResult<Series> {
     )?;
 
     Ok(struct_ca.into_series())
-}
-
-#[polars_expr(output_type_func=marginal_entropy_output_type)]
-fn marginal_entropy(inputs: &[Series]) -> PolarsResult<Series> {
-    marginal_entropy_impl(inputs)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

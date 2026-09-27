@@ -22,9 +22,7 @@ use arrow_buffer::{ArrowNativeType, BooleanBuffer, ToByteSlice};
 use arrow_data::ArrayData;
 use arrow_schema::DataType as AT;
 use polars::prelude::*;
-use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
-use serde::Deserialize;
 
 struct Body {
     level: Option<i32>,
@@ -169,17 +167,6 @@ pub(crate) fn sizes_of(s: &Series, classic: &arrow_array::ArrayRef, level: i32) 
     ])
 }
 
-fn sizes_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    let mut fields = vec![Field::new("column".into(), DataType::String)];
-    fields.extend(SIZE_FIELDS.iter().map(|n| Field::new((*n).into(), DataType::UInt64)));
-    Ok(Field::new("column_sizes".into(), DataType::Struct(fields)))
-}
-
-#[derive(Deserialize)]
-struct SizesKwargs {
-    zstd_level: i32,
-}
-
 pub(crate) fn column_sizes_impl(inputs: &[Series], level: i32) -> PolarsResult<Series> {
     let rows: Vec<Sizes> = inputs.par_iter().map(|s| sizes(s, level)).collect::<PolarsResult<_>>()?;
     let mut columns = vec![StringChunked::from_iter(inputs.iter().map(|s| s.name().as_str())).into_series().with_name("column".into())];
@@ -187,11 +174,6 @@ pub(crate) fn column_sizes_impl(inputs: &[Series], level: i32) -> PolarsResult<S
         columns.push(UInt64Chunked::from_iter_values((*name).into(), rows.iter().map(|r| r[j])).into_series());
     }
     Ok(StructChunked::from_series("column_sizes".into(), inputs.len(), columns.iter())?.into_series())
-}
-
-#[polars_expr(output_type_func=sizes_output_type)]
-fn column_sizes(inputs: &[Series], kwargs: SizesKwargs) -> PolarsResult<Series> {
-    column_sizes_impl(inputs, kwargs.zstd_level)
 }
 
 #[cfg(test)]

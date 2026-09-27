@@ -24,29 +24,12 @@
 use gcd::{binary_u128, binary_u64};
 use polars::prelude::*;
 use polars_arrow::bitmap::Bitmap;
-use pyo3_polars::derive::polars_expr;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-// Arrow has no plain 128-bit integer; decimal128(38, 0) is the widest native type.
-const GCD_DTYPE: DataType = DataType::Decimal(Some(38), Some(0));
 
 const CHUNK: usize = 1 << 16;
 /// Values folded between checks of the early-exit flag.
 const BLOCK: usize = 1 << 10;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Output type
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn gcd_output_type(_input_fields: &[Field]) -> PolarsResult<Field> {
-    let fields = vec![
-        Field::new("column".into(), DataType::String),
-        Field::new("dtype".into(), DataType::String),
-        Field::new("gcd".into(), GCD_DTYPE),
-    ];
-    Ok(Field::new("column_gcd".into(), DataType::Struct(fields)))
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kernel
@@ -225,15 +208,6 @@ pub(crate) fn column_gcd_impl(inputs: &[Series]) -> PolarsResult<Series> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Plugin entry point
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[polars_expr(output_type_func=gcd_output_type)]
-fn column_gcd(inputs: &[Series]) -> PolarsResult<Series> {
-    column_gcd_impl(inputs)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -241,6 +215,9 @@ fn column_gcd(inputs: &[Series]) -> PolarsResult<Series> {
 mod tests {
     use super::*;
     use polars_arrow::bitmap::Bitmap;
+
+    // Arrow has no plain 128-bit integer; decimal128(38, 0) is the widest native type.
+    const GCD_DTYPE: DataType = DataType::Decimal(Some(38), Some(0));
 
     fn gcd_of(s: Series) -> Option<i128> {
         series_gcd(&s).unwrap()

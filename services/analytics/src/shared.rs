@@ -5,7 +5,6 @@
 use foldhash::fast::FixedState as FoldHashFixed;
 use polars::prelude::*;
 use rayon::prelude::*;
-use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher};
 
@@ -13,12 +12,10 @@ use std::hash::{BuildHasher, Hash, Hasher};
 // Kwargs structs
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
 pub(crate) struct PairwiseKwargs {
     pub pairs: Option<Vec<Vec<String>>>,
 }
 
-#[derive(Deserialize)]
 pub(crate) struct ThreewayKwargs {
     pub triplets: Option<Vec<Vec<String>>>,
 }

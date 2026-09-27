@@ -1,6 +1,4 @@
 use polars::prelude::*;
-use pyo3_polars::derive::polars_expr;
-use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher};
 use foldhash::fast::{FixedState as FoldHashFixed, RandomState as FoldHashFast};
@@ -9,7 +7,7 @@ use rayon::prelude::*;
 use crate::shared::encode_series;
 
 /// Parameters for LSH candidate finding
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub(crate) struct LSHKwargs {
     pub(crate) num_bands: usize,
     pub(crate) rows_per_band: usize,
@@ -32,11 +30,6 @@ pub(crate) struct LSHKwargs {
 ///
 /// # Returns
 /// A DataFrame with columns (col_a: Utf8, col_b: Utf8) containing candidate pairs
-#[polars_expr(output_type_func=lsh_candidates_output)]
-fn lsh_candidates(inputs: &[Series], kwargs: LSHKwargs) -> PolarsResult<Series> {
-    lsh_candidates_impl(inputs, &kwargs)
-}
-
 pub(crate) fn lsh_candidates_impl(inputs: &[Series], kwargs: &LSHKwargs) -> PolarsResult<Series> {
     let names = &inputs[0];
     let signatures = &inputs[1];
@@ -133,19 +126,8 @@ fn hash_band(band: &[u32]) -> u64 {
     hasher.finish()
 }
 
-/// Output type function for find_lsh_candidates
-fn lsh_candidates_output(_input_fields: &[Field]) -> PolarsResult<Field> {
-    Ok(Field::new(
-        "candidates".into(),
-        DataType::Struct(vec![
-            Field::new("col_a".into(), DataType::String),
-            Field::new("col_b".into(), DataType::String),
-        ])
-    ))
-}
-
 /// Parameters for batch MinHash computation
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub(crate) struct MinHashKwargs {
     pub(crate) df_name: String,
     pub(crate) num_perm: usize,
@@ -165,11 +147,6 @@ pub(crate) struct MinHashKwargs {
 /// A struct series with M rows (one per input column), each containing:
 /// - qualified_name: String with "{df_name}|{column_name}" format
 /// - minhash: List[UInt32] with MinHash signature
-#[polars_expr(output_type_func=minhash_output)]
-fn minhash(inputs: &[Series], kwargs: MinHashKwargs) -> PolarsResult<Series> {
-    minhash_impl(inputs, &kwargs)
-}
-
 pub(crate) fn minhash_impl(inputs: &[Series], kwargs: &MinHashKwargs) -> PolarsResult<Series> {
     let struct_series = &inputs[0];
     let df_name = &kwargs.df_name;
@@ -294,18 +271,6 @@ fn compute_signature_for_series_with_coeffs(
 
     Ok(Some(minhash_sig))
 }
-
-/// Output type function for compute_minhash_batch
-fn minhash_output(_input_fields: &[Field]) -> PolarsResult<Field> {
-    Ok(Field::new(
-        "minhash_result".into(),
-        DataType::Struct(vec![
-            Field::new("qualified_name".into(), DataType::String),
-            Field::new("minhash".into(), DataType::List(Box::new(DataType::UInt32))),
-        ])
-    ))
-}
-
 
 // ============================================================================
 // Unit Tests
