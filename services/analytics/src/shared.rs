@@ -451,16 +451,25 @@ pub(crate) fn resolve_pairs(
         .collect()
 }
 
-/// A Series handed to arrow-rs zero-copy through the Arrow C Data Interface, in the
+/// A Series handed to arrow-rs zero-copy across the Arrow C Data Interface, in the
 /// given Polars layout (oldest: LargeUtf8/LargeList — Arrow's classic layout;
-/// newest: Utf8View/BinaryView — Polars' native one). Int128, which arrow-rs cannot
-/// import, crosses as decimal128(38, 0) over the same 16-byte values (as pyarrow
-/// receives it in analytics/describe/_sizes.py).
+/// newest: Utf8View/BinaryView — Polars' native one). Only the C Data Interface
+/// handover itself is zero-copy: getting to a single contiguous array in the
+/// requested layout may copy (e.g. Utf8View → LargeUtf8, or concatenating a
+/// multi-chunk Series). Int128, which arrow-rs cannot import, is relabelled as
+/// decimal128(38, 0) over the same 16-byte values (as pyarrow receives it in
+/// analytics/describe/_sizes.py) — this does not validate precision: i128 can
+/// hold up to 39 decimal digits, one more than the declared precision (38), so
+/// consumers must rely on the actual values, never the declared precision.
 pub(crate) fn to_arrow_rs(s: &Series, compat: CompatLevel) -> PolarsResult<arrow_array::ArrayRef> {
     let s = match s.dtype() {
         DataType::Int128 => s.i128()?.clone().into_decimal_unchecked(Some(38), 0).into_series(),
-        _ => s.rechunk(),
+        _ => s.clone(),
     };
+    // A zero-chunk Series (e.g. Series::new_empty) must be checked before any
+    // rechunk(): rechunk concatenates the existing chunks, which panics on an
+    // empty chunk list. Rechunk exactly once otherwise (ChunkedArray::rechunk is
+    // a Cow, so this is a no-op when `s` is already single-chunk).
     let arr: Box<dyn polars_arrow::array::Array> = if s.n_chunks() == 0 {
         polars_arrow::array::new_empty_array(s.dtype().to_arrow(compat))
     } else {
@@ -517,6 +526,45 @@ mod arrow_rs_tests {
         let sliced = to_arrow_rs(&Series::new("x".into(), &[1i64, 2, 3]).slice(1, 2), CompatLevel::oldest()).unwrap();
         let ints = sliced.as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
         assert_eq!(ints.values().to_vec(), vec![2, 3]);
+    }
+
+    #[test]
+    fn sliced_int32_with_nulls_at_unaligned_offset() {
+        // 20 values, null every 3rd; slice(3, 10) starts at a validity-bitmap
+        // offset (3) that is not a multiple of 8, exercising bit-level slicing.
+        let vals: Vec<Option<i32>> = (0..20i32).map(|i| if i % 3 == 0 { None } else { Some(i) }).collect();
+        let sliced = Series::new("x".into(), vals.as_slice()).slice(3, 10);
+        let a = to_arrow_rs(&sliced, CompatLevel::oldest()).unwrap();
+        assert_eq!(a.len(), 10);
+        assert_eq!(a.null_count(), 4);
+        let ints = a.as_any().downcast_ref::<arrow_array::Int32Array>().unwrap();
+        let expected: Vec<Option<i32>> = (3..13i32).map(|i| if i % 3 == 0 { None } else { Some(i) }).collect();
+        assert_eq!(ints.iter().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn boolean_series_round_trips() {
+        let a = to_arrow_rs(
+            &Series::new("x".into(), &[Some(true), None, Some(false)]),
+            CompatLevel::oldest(),
+        )
+        .unwrap();
+        assert_eq!(a.len(), 3);
+        assert_eq!(a.null_count(), 1);
+        let bools = a.as_any().downcast_ref::<arrow_array::BooleanArray>().unwrap();
+        assert_eq!(bools.iter().collect::<Vec<_>>(), vec![Some(true), None, Some(false)]);
+    }
+
+    #[test]
+    fn multi_chunk_series_is_rechunked() {
+        let mut s = Series::new("x".into(), &[1i64, 2, 3]);
+        let s2 = Series::new("x".into(), &[4i64, 5]);
+        s.append(&s2).unwrap();
+        assert!(s.n_chunks() > 1);
+        let a = to_arrow_rs(&s, CompatLevel::oldest()).unwrap();
+        assert_eq!(a.len(), 5);
+        let ints = a.as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        assert_eq!(ints.values().to_vec(), vec![1, 2, 3, 4, 5]);
     }
 }
 
