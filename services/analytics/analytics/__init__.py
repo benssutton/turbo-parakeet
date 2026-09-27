@@ -10,7 +10,7 @@ Multi-set:  analytics.membership, analytics.similarity
 Ordered:    analytics.chi_squared, analytics.pairwise_entropy,
             analytics.threeway_entropy, analytics.adjusted_rand
 
-The Rust plugin wrappers in analytics._plugin are private.
+The Rust extension wrappers in analytics._plugin are private.
 """
 
 __version__ = "0.1.0"
