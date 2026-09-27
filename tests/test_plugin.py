@@ -3,8 +3,10 @@
 import importlib
 
 import polars as pl
+import pyarrow as pa
 import pytest
 
+from analytics import analytics as rs
 from analytics._dtypes import holds_wide_integer
 from harness import load, run
 
@@ -46,16 +48,30 @@ def test_128_bit_integer_columns_are_ineligible(spec):
 
 # ── the binding (analytics.analytics) ─────────────────────────────────────────
 
-import pyarrow as pa
-
-from analytics import analytics as rs
-
 
 def test_binding_takes_and_returns_arrow():
     out = pl.DataFrame(rs.column_gcd(pl.DataFrame({"a": [12, 18], "b": [7, 14]})))
     assert out.columns == ["column", "dtype", "gcd"]
     assert out["gcd"].to_list() == [6, 7]
     assert pa.table(rs.column_gcd(pa.table({"a": [12, 18]}))).num_rows == 1
+
+
+def test_multi_chunk_table_is_accepted():
+    table = pa.concat_tables([pa.table({"a": [12, 18]}), pa.table({"a": [24]})])
+    assert pa.table(rs.column_gcd(table))["gcd"].to_pylist() == [6]
+
+
+def test_multi_batch_record_batch_reader_is_accepted():
+    table = pa.concat_tables([pa.table({"a": [12, 18]}), pa.table({"a": [24]})])
+    reader = pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
+    assert pa.table(rs.column_gcd(reader))["gcd"].to_pylist() == [6]
+
+
+def test_result_table_can_be_exported_twice():
+    out = rs.column_gcd(pl.DataFrame({"a": [12, 18]}))
+    as_arrow = pa.table(out)
+    as_polars = pl.DataFrame(out)
+    assert as_arrow["gcd"].to_pylist() == as_polars["gcd"].to_list()
 
 
 def test_bloom_bits_are_bytes():
@@ -92,7 +108,11 @@ def test_non_arrow_input_is_type_error():
         rs.column_gcd(42)
 
 
-WIDE = [pl.Series("x", [1], dtype=pl.Int128), pl.Series("x", [[1]], dtype=pl.List(pl.Int128))]
+WIDE = [
+    pl.Series("x", [1], dtype=pl.Int128),
+    pl.Series("x", [[1]], dtype=pl.List(pl.Int128)),
+    pl.Series("x", [{"v": 1}], dtype=pl.Struct({"v": pl.Int128})),
+]
 if hasattr(pl, "UInt128"):
     WIDE.append(pl.Series("x", [1], dtype=pl.UInt128))
 

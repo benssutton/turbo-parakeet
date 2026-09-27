@@ -3,7 +3,7 @@
 //! and leave as `ArrowTable`, which implements it too. Errors: invalid input →
 //! ValueError, kernel failure → RuntimeError.
 
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
@@ -64,7 +64,20 @@ unsafe fn reject_wide_integers(stream: *mut RawStream) -> PyResult<()> {
     let get_schema = unsafe { (*stream).get_schema }.ok_or_else(|| value_error("arrow stream already released"))?;
     let mut schema = FFI_ArrowSchema::empty();
     if unsafe { get_schema(stream, &mut schema) } != 0 {
-        return Err(value_error("arrow stream: get_schema failed"));
+        let detail = unsafe { (*stream).get_last_error }.and_then(|get_last_error| {
+            let msg = unsafe { get_last_error(stream) };
+            if msg.is_null() {
+                None
+            } else {
+                // SAFETY: a non-null `get_last_error` result is a valid, NUL-terminated
+                // C string owned by the stream, live at least until the next call on it.
+                Some(unsafe { CStr::from_ptr(msg) }.to_string_lossy().into_owned())
+            }
+        });
+        return Err(value_error(match detail {
+            Some(msg) => format!("arrow stream: get_schema failed: {msg}"),
+            None => "arrow stream: get_schema failed".to_owned(),
+        }));
     }
     for column in schema.children() {
         if let Some(kind) = wide_integer(column) {
