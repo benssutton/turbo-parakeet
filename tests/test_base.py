@@ -231,7 +231,7 @@ def test_bad_frame_name_raises(name):
 
 
 def test_non_frame_raises():
-    with pytest.raises(TypeError, match="DataFrame or LazyFrame"):
+    with pytest.raises(TypeError, match="DataFrame or LazyFrame, or Arrow tabular data"):
         Toy().add({"f": {"a": [1]}})
 
 

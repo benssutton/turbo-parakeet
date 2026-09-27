@@ -27,7 +27,7 @@ import importlib
 import math
 from abc import ABC, abstractmethod
 from itertools import combinations
-from typing import Callable, ClassVar, Literal, Self, Sequence
+from typing import Any, Callable, ClassVar, Literal, Self, Sequence
 
 import polars as pl
 
@@ -54,18 +54,26 @@ class Technique(ABC):
 
     # ── public API ────────────────────────────────────────────────────────────
 
-    def add(self, frames: dict[str, pl.DataFrame | pl.LazyFrame]) -> Self:
-        """Register named frames. Names are unique for the life of the instance."""
+    def add(self, frames: dict[str, Any]) -> Self:
+        """Register named frames: Polars DataFrames / LazyFrames, or any Arrow tabular
+        object implementing the Arrow PyCapsule interface (pyarrow Table, RecordBatch,
+        RecordBatchReader, …), read once into a Polars DataFrame. Names are unique for
+        the life of the instance."""
+        accepted = {}
         for name, frame in frames.items():
             if not isinstance(name, str) or not name:
                 raise ValueError(f"frame names must be non-empty strings, got {name!r}")
             if not isinstance(frame, (pl.DataFrame, pl.LazyFrame)):
-                raise TypeError(
-                    f"frame {name!r} must be a polars DataFrame or LazyFrame, got {type(frame).__name__}"
-                )
+                if not (hasattr(frame, "__arrow_c_stream__") or hasattr(frame, "__arrow_c_array__")):
+                    raise TypeError(
+                        f"frame {name!r} must be a polars DataFrame or LazyFrame, or Arrow tabular data "
+                        f"(an object with __arrow_c_stream__), got {type(frame).__name__}"
+                    )
+                frame = pl.DataFrame(frame)
             if name in self._frames:
                 raise ValueError(f"frame {name!r} already added")
-        self._frames.update(frames)
+            accepted[name] = frame
+        self._frames.update(accepted)
         self._on_add()
         return self
 

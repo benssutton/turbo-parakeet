@@ -5,9 +5,11 @@ import importlib
 import polars as pl
 import pyarrow as pa
 import pytest
+from polars.testing import assert_frame_equal
 
 from analytics import analytics as rs
 from analytics._dtypes import holds_wide_integer
+from datagen import mixed_dtypes
 from harness import load, run
 
 PACKAGES = (
@@ -121,3 +123,23 @@ if hasattr(pl, "UInt128"):
 def test_128_bit_integers_are_rejected_at_the_binding(s):
     with pytest.raises(ValueError, match='column "x" holds .*128-bit'):
         rs.column_gcd(s.to_frame())
+
+
+# ── Arrow inputs to the technique classes ─────────────────────────────────────
+
+RUST_AND_REFERENCE = [
+    pytest.param(f"{p}:{n}", id=n)
+    for p in PACKAGES
+    for n in importlib.import_module(p).IMPLEMENTATIONS
+    if n.endswith("Rust") or n == importlib.import_module(p).REFERENCE
+]
+
+
+@pytest.mark.parametrize("kind", ["table", "record_batch", "reader"])
+@pytest.mark.parametrize("spec", RUST_AND_REFERENCE)
+def test_arrow_inputs_match_polars(spec, kind):
+    df = mixed_dtypes(200, seed=1)
+    table = pa.table(df)  # through __arrow_c_stream__: keeps Polars' Categorical metadata
+    arrow = {"table": table, "record_batch": table.combine_chunks().to_batches()[0], "reader": table.to_reader()}[kind]
+    cls = load(spec)
+    assert_frame_equal(run(cls, {"t": arrow}), run(cls, {"t": df}))
