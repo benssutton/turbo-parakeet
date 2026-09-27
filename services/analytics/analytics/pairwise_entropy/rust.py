@@ -6,8 +6,8 @@ from analytics.pairwise_entropy.base import PairwiseEntropy
 
 
 class PairwiseEntropyRust(PairwiseEntropy):
-    """Rust plugins `marginal_entropy` + `pairwise_joint_entropy`: dense-id encoding,
-    flat-array counting, rayon-parallel across pairs."""
+    """Rust extension functions `marginal_entropy` + `pairwise_joint_entropy`: dense-id
+    encoding, flat-array counting, rayon-parallel across pairs."""
 
     def _compute(self, frames, combos):
         parts = []

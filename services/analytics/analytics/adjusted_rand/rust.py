@@ -6,7 +6,7 @@ from analytics.base import group_by_frame
 
 
 class AdjustedRandRust(AdjustedRand):
-    """Rust plugin `pairwise_adjusted_rand`: shared dense contingency builder, rayon-parallel across pairs."""
+    """Rust extension `pairwise_adjusted_rand`: shared dense contingency builder, rayon-parallel across pairs."""
 
     def _compute(self, frames, combos):
         parts = []

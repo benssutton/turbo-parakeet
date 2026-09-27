@@ -4,7 +4,7 @@ from analytics.describe.base import Describe
 
 
 class DescribeRust(Describe):
-    """Rust plugin: `describe_columns` (one pass per column; rayon across columns and
+    """Rust extension: `describe_columns` (one pass per column; rayon across columns and
     64K-row chunks; hash-map frequencies, byte scanners, row-encoded extremes) and
     `column_sizes` (Arrow buffer walk + zstd, mirroring pyarrow's IPC writer)."""
 

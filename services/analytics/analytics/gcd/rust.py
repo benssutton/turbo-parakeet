@@ -4,7 +4,7 @@ from analytics.gcd.base import Gcd
 
 
 class GcdRust(Gcd):
-    """Rust plugin `column_gcd`: rayon-parallel across columns and 64K-value chunks;
+    """Rust extension `column_gcd`: rayon-parallel across columns and 64K-value chunks;
     binary GCD after one hardware remainder per value; early exit once the GCD is 1."""
 
     def _compute(self, frames, combos):

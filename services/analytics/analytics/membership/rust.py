@@ -9,14 +9,14 @@ from analytics.membership.base import BloomMembership
 
 def bloom_geometry(n: int, fp_rate: float) -> tuple[int, int]:
     """Optimal (m bits, k hashes) for n items: m = -n·ln(p)/ln(2)², rounded up to
-    whole bytes (the plugin expects m in bits and ceil(m/8) bytes); k = (m/n)·ln 2."""
+    whole bytes (the Rust core expects m in bits and ceil(m/8) bytes); k = (m/n)·ln 2."""
     m = -(n * math.log(fp_rate)) / (math.log(2) ** 2)
     m = (int(math.ceil(m)) + 7) // 8 * 8
     return m, max(1, int(math.ceil((m / n) * math.log(2))))
 
 
 class BloomRust(BloomMembership):
-    """Rust plugin: one Bloom filter per column over its distinct values (`bloom_filter`),
+    """Rust extension: one Bloom filter per column over its distinct values (`bloom_filter`),
     then `membership_ratio` checks all partner columns against it in one rayon-parallel
     call (partners' distinct values null-padded to one frame; ratio_non_null is the
     distinct-value ratio)."""

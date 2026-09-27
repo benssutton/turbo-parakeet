@@ -4,7 +4,7 @@ from analytics.recommend.base import Recommend
 
 
 class RecommendRust(Recommend):
-    """Rust plugin `describe_and_recommend`: Describe's metrics and sizes, then the
+    """Rust extension `describe_and_recommend`: Describe's metrics and sizes, then the
     candidate types cast, verified and measured with arrow-rs (src/recommend.rs)."""
 
     def _compute(self, frames, combos):

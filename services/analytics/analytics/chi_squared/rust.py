@@ -6,7 +6,7 @@ from analytics.chi_squared.base import ChiSquared
 
 
 class ChiSquaredRust(ChiSquared):
-    """Rust plugin `pairwise_chi_squared`: dense-id contingency tables, rayon-parallel across pairs."""
+    """Rust extension `pairwise_chi_squared`: dense-id contingency tables, rayon-parallel across pairs."""
 
     def _compute(self, frames, combos):
         parts = []

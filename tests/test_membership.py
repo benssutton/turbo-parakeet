@@ -188,13 +188,12 @@ def test_bloom_agreement_rate_check_still_fires_above_min_negatives():
     assert any("false-positive rate" in p for p in problems)
 
 
-# ── plugin-level regression: bloom_filter_bits on a multi-chunk Series ──────
+# ── binding-level regression: bloom_filter_bits on a multi-chunk Series ─────
 
 def test_bloom_filter_bits_multi_chunk_matches_rechunked():
-    """Task 9 fixed a bug where is_elementwise=True let Polars invoke the plugin
-    once per physical chunk, silently building the filter from one chunk's rows
-    only. bloom_filter_bits (is_elementwise=False) must give identical results on
-    a multi-chunk Series and its rechunked equivalent."""
+    """A multi-chunk Series must give the same Bloom bits as its rechunked form:
+    bloom_filter_bits concatenates the stream into one batch before hashing, so
+    chunking never changes which rows are counted."""
     a = pl.Series("v", list(range(0, 500)))
     b = pl.Series("v", list(range(500, 1000)))
     multi = pl.concat([a, b], rechunk=False)

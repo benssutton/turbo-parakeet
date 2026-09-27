@@ -22,7 +22,7 @@ def optimal_lsh_params(threshold: float, num_perm: int) -> tuple[int, int]:
 
 
 class MinHashRust(Similarity):
-    """Rust plugins `minhash` (signatures for all columns, rayon-parallel) and
+    """Rust extension functions `minhash` (signatures for all columns, rayon-parallel) and
     `lsh_candidates` (banded LSH); candidates then verified exactly, the rest pruned."""
 
     EXACT = False

@@ -6,7 +6,7 @@ from analytics.threeway_entropy.base import ThreewayEntropy
 
 
 class ThreewayEntropyRust(ThreewayEntropy):
-    """Rust plugin `threeway_joint_entropy`: dense-id arithmetic keys, rayon-parallel across triplets."""
+    """Rust extension `threeway_joint_entropy`: dense-id arithmetic keys, rayon-parallel across triplets."""
 
     def _compute(self, frames, combos):
         parts = []
