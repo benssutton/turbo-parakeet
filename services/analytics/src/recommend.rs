@@ -2343,6 +2343,7 @@ mod tests {
         let get = |n: &str| fields.iter().find(|f| f.name().as_str() == n).unwrap().clone();
         let types = get("rec_arrow_type");
         assert_eq!(types.str().unwrap().get(0), Some("uint8"));
+        assert_eq!(types.str().unwrap().get(2), Some("uint8"));
         assert_eq!(types.null_count(), 0);
         let cands = get("rec_candidates");
         let first = cands.list().unwrap().get_as_series(0).unwrap();

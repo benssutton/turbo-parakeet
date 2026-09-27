@@ -805,7 +805,7 @@ pub(crate) struct Profile {
     pub range: Range,
     pub floats: Option<FloatStats>,
     pub strings: Option<StringStats>,
-    /// GCD of the physical values (gcd.rs); None for non-integer dtypes or > 38 digits.
+    /// GCD of the physical values (gcd.rs); None for non-integer dtypes.
     pub gcd: Option<i128>,
     /// Total byte length of the non-null values (String, Categorical, Enum or Binary columns).
     pub sum_len: Option<u64>,
