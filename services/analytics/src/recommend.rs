@@ -13,7 +13,7 @@
 // chosen. The original type is always a candidate and cannot fail.
 //
 // Everything below the plugin entry works on arrow-rs arrays (Series cross in
-// through shared::to_arrow_rs), so moving the Python↔Rust boundary to Arrow
+// through arrow_io::export_series), so moving the Python↔Rust boundary to Arrow
 // tables later changes only the entry point.
 //
 // Leading-zero rule (Spec A §5.1): an integer-looking string with a leading zero
@@ -1860,7 +1860,7 @@ mod tests {
     }
 
     use crate::describe::describe_one;
-    use crate::shared::to_arrow_rs;
+    use crate::arrow_io::export_series;
     use polars::prelude::{CompatLevel, DataType as PT, IntoSeries, NamedFrom, NewChunkedArray, Series, TimeUnit as PTimeUnit};
 
     pub(super) fn params() -> Params {
@@ -1870,7 +1870,7 @@ mod tests {
     fn types(s: Series, p: &Params) -> Vec<(String, Outcome)> {
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
-            dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
             n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, d.n_rows - d.n_null, None), r: 1.0, prefix: "", text: Default::default(),
         };
         candidates(&lvl, p).unwrap().iter().map(|c| (pa_name(&c.target.arrow_type()), c.outcome)).collect()
@@ -1924,7 +1924,7 @@ mod tests {
         // rules bail instead of panicking — only the original (and text's plain/dictionary).
         let ints = Series::new("x".into(), &[1i64, 2]);
         let d = describe_one(&ints, 0).unwrap();
-        let values = to_arrow_rs(&ints, CompatLevel::oldest()).unwrap();
+        let values = export_series(&ints, CompatLevel::oldest()).unwrap();
         for dtype in [PT::Float64, PT::Decimal(Some(10), Some(2)), PT::String] {
             let lvl = Level {
                 dtype: &dtype, values: values.clone(), p: &d.outer, n_midnight: None, size_bytes: 0,
@@ -1942,7 +1942,7 @@ mod tests {
         let d = describe_one(&s, 0).unwrap();
         let evidence = |q: Option<f64>| {
             let lvl = Level {
-                dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer, n_midnight: None, size_bytes: 0,
+                dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer, n_midnight: None, size_bytes: 0,
                 est: level_estimate(&d.outer, 5, q), r: 1.0, prefix: "", text: Default::default(),
             };
             candidates(&lvl, &params()).unwrap().into_iter().find(|c| c.rule == "string→dictionary").unwrap().evidence
@@ -1969,7 +1969,7 @@ mod tests {
         let d = describe_one(&s, 0).unwrap();
         assert_eq!(d.outer.freq.n_unique, 3);
         let lvl = Level {
-            dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
             n_midnight: d.n_midnight, size_bytes: 0,
             est: Estimate {
                 est_cardinality: 1.0,
@@ -2050,7 +2050,7 @@ mod tests {
         for s in [Series::new("x".into(), &[None::<i64>, None]), Series::new("x".into(), &[None::<&str>, None])] {
             let d = describe_one(&s, 0).unwrap();
             let lvl = Level {
-                dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+                dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
                 n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 0, None), r: 1.0, prefix: "", text: Default::default(),
             };
             let recast = cast_to(&Target::Null, &lvl).unwrap();
@@ -2060,7 +2060,7 @@ mod tests {
         let s = Series::new("x".into(), &[Some(1i64), None]);
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
-            dtype: s.dtype(), values: to_arrow_rs(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
+            dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
             n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 1, None), r: 1.0, prefix: "", text: Default::default(),
         };
         let recast = cast_to(&Target::Null, &lvl).unwrap();

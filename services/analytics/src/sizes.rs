@@ -12,11 +12,11 @@
 // included) — pyarrow never falls back to raw bytes. arrow-rs's own IPC writer is
 // not used because it does not expose the ZSTD level.
 //
-// Works on arrow-rs ArrayData; Series arrive through shared::to_arrow_rs. Arrow
+// Works on arrow-rs ArrayData; Series arrive through arrow_io::export_series. Arrow
 // sizes use CompatLevel::oldest() (LargeUtf8, LargeList); Polars sizes the plain
 // and ZSTD body of CompatLevel::newest() (view types).
 
-use crate::shared::to_arrow_rs;
+use crate::arrow_io::export_series;
 use arrow_array::Array;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, ToByteSlice};
 use arrow_data::ArrayData;
@@ -151,7 +151,7 @@ pub(crate) const SIZE_FIELDS: [&str; 4] = ["size_bytes", "size_zstd_bytes", "siz
 
 /// `s`'s classic layout (CompatLevel::oldest).
 pub(crate) fn classic_layout(s: &Series) -> PolarsResult<arrow_array::ArrayRef> {
-    to_arrow_rs(s, CompatLevel::oldest())
+    export_series(s, CompatLevel::oldest())
 }
 
 pub(crate) fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
@@ -160,7 +160,7 @@ pub(crate) fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
 
 /// `sizes` given `s`'s `classic_layout` (exported once by callers that reuse it).
 pub(crate) fn sizes_of(s: &Series, classic: &arrow_array::ArrayRef, level: i32) -> PolarsResult<Sizes> {
-    let native = to_arrow_rs(s, CompatLevel::newest())?;
+    let native = export_series(s, CompatLevel::newest())?;
     Ok([
         ipc_body_bytes(classic.as_ref(), None)?,
         ipc_body_bytes(classic.as_ref(), Some(level))?,
@@ -199,7 +199,7 @@ mod tests {
     use super::*;
 
     fn arrow(s: &Series) -> arrow_array::ArrayRef {
-        crate::shared::to_arrow_rs(s, CompatLevel::oldest()).unwrap()
+        crate::arrow_io::export_series(s, CompatLevel::oldest()).unwrap()
     }
 
     #[test]
