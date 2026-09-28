@@ -239,7 +239,12 @@ jobs:
   status:
     name: Pipeline Status
     runs-on: ubuntu-latest
-    needs: [rust-coverage, python-tests, codeql, semagrep, lint]
+    needs:
+      - rust-coverage
+      - python-tests
+      - codeql
+      - semagrep
+      - lint
     if: always()
     
     steps:
