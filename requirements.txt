@@ -5,6 +5,7 @@ maturin>=1.0
 polars>=1.0
 pyarrow>=14.0
 numpy>=1.26
+datafusion>=54.0.0
 
 # Testing
 pytest>=7.4
