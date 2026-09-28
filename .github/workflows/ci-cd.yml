@@ -167,9 +167,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: 
-            - python
-            - cpp
+          languages: ['python', 'cpp']
       
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
@@ -241,13 +239,13 @@ jobs:
   status:
     name: Pipeline Status
     runs-on: ubuntu-latest
+    if: always()
     needs:
       - rust-coverage
       - python-tests
       - codeql
       - semagrep
       - lint
-    if: always()
     
     steps:
       - name: Check workflow status
