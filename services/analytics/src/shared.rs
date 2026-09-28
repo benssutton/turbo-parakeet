@@ -469,3 +469,276 @@ pub(crate) fn resolve_triplets(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use polars_arrow::bitmap::Bitmap;
+
+    // ── Float canonicalization ─────────────────────────────────────────────
+
+    #[test]
+    fn positive_and_negative_zero_canonicalise_to_same_key() {
+        assert_eq!(canon_f64(0.0), canon_f64(-0.0));
+        assert_eq!(canon_f32(0.0), canon_f32(-0.0));
+    }
+
+    #[test]
+    fn every_nan_payload_canonicalises_to_one_key() {
+        let a = f64::NAN;
+        let b = -f64::NAN;
+        let c = f64::from_bits(0x7ff8000000000001); // a different NaN payload
+        assert_eq!(canon_f64(a), canon_f64(b));
+        assert_eq!(canon_f64(a), canon_f64(c));
+
+        let fa = f32::NAN;
+        let fb = f32::from_bits(0x7fc00001);
+        assert_eq!(canon_f32(fa), canon_f32(fb));
+    }
+
+    #[test]
+    fn distinct_finite_values_get_distinct_keys() {
+        assert_ne!(canon_f64(1.0), canon_f64(2.0));
+        assert_ne!(canon_f32(1.0), canon_f32(2.0));
+    }
+
+    #[test]
+    fn infinities_are_not_swept_into_zero_or_nan() {
+        assert_ne!(canon_f64(f64::INFINITY), canon_f64(0.0));
+        assert_ne!(canon_f64(f64::NEG_INFINITY), canon_f64(0.0));
+        assert_ne!(canon_f64(f64::INFINITY), canon_f64(f64::NAN));
+        assert_ne!(canon_f64(f64::INFINITY), canon_f64(f64::NEG_INFINITY));
+    }
+
+    // ── encode_series: arms with no coverage elsewhere ─────────────────────
+
+    #[test]
+    fn negative_signed_integer_sign_extends_to_u64_max() {
+        let s = Series::new("a".into(), &[-1i32]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], u64::MAX);
+    }
+
+    #[test]
+    fn uint64_passes_through_unchanged() {
+        let s = Series::new("a".into(), &[Some(42u64), None]);
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], 42u64);
+        assert!(enc.is_null[1]);
+    }
+
+    #[test]
+    fn binary_hashes_by_content() {
+        let s = Series::new(
+            "a".into(),
+            &[Some(b"ab".as_ref()), Some(b"ab".as_ref()), Some(b"cd".as_ref()), None],
+        );
+        let enc = encode_series(&s).unwrap();
+        assert_eq!(enc.values[0], enc.values[1]);
+        assert_ne!(enc.values[0], enc.values[2]);
+        assert!(enc.is_null[3]);
+    }
+
+    #[test]
+    fn decimal_hashes_unscaled_physical_value_not_rendered_value() {
+        // Same unscaled i128 (100) declared at different scales (2 vs 0, so they'd
+        // render as different values, 1.00 vs 100) built directly via AnyValue::Decimal
+        // (unscaled, scale) → encode_series hashes to_physical_repr()'s raw i128, so
+        // these must hash equal regardless of the differing scale metadata.
+        let a = Series::from_any_values("a".into(), &[AnyValue::Decimal(100, 2)], false).unwrap();
+        let b = Series::from_any_values("b".into(), &[AnyValue::Decimal(100, 0)], false).unwrap();
+        let ea = encode_series(&a).unwrap();
+        let eb = encode_series(&b).unwrap();
+        assert_eq!(ea.values[0], eb.values[0]);
+    }
+
+    #[test]
+    fn null_struct_row_does_not_alias_all_null_fields_struct() {
+        let a = Series::new("a".into(), &[Some(1i32), None, Some(1)]);
+        let b = Series::new("b".into(), &[Some("x"), None, Some("x")]);
+        let all_null_fields = StructChunked::from_series("s".into(), 3, [a, b].iter())
+            .unwrap()
+            .into_series();
+
+        // Same shape, but row 1's outer validity is explicitly unset: the struct
+        // itself is null there (not merely holding all-null fields).
+        let a2 = Series::new("a".into(), &[Some(1i32), None, Some(1)]);
+        let b2 = Series::new("b".into(), &[Some("x"), None, Some("x")]);
+        let ca = StructChunked::from_series("s".into(), 3, [a2, b2].iter()).unwrap();
+        let outer_validity: Bitmap = vec![true, false, true].into_iter().collect();
+        let outer_null = ca.with_outer_validity(Some(outer_validity)).into_series();
+
+        let enc_all_null_fields = encode_series(&all_null_fields).unwrap();
+        let enc_outer_null = encode_series(&outer_null).unwrap();
+
+        // Row 1: all-null fields, struct itself present → not null.
+        assert!(!enc_all_null_fields.is_null[1]);
+        // Row 1 with outer validity unset → the struct itself is null.
+        assert!(enc_outer_null.is_null[1]);
+    }
+
+    #[test]
+    fn unsupported_dtype_is_a_compute_error() {
+        let s = Series::new_empty("a".into(), &DataType::Null);
+        assert!(encode_series(&s).is_err());
+    }
+
+    // ── densify ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn densify_all_distinct_gets_sequential_ids_in_encounter_order() {
+        let s = Series::new("a".into(), &[30i32, 10, 20]);
+        let enc = encode_series(&s).unwrap();
+        let dense = densify(&enc);
+        assert_eq!(dense.card, 3);
+        assert_eq!(dense.ids, vec![0, 1, 2]); // encounter order, not sorted by value
+    }
+
+    #[test]
+    fn densify_repeated_values_get_id_of_first_occurrence() {
+        let s = Series::new("a".into(), &[5i32, 9, 5, 9, 5]);
+        let enc = encode_series(&s).unwrap();
+        let dense = densify(&enc);
+        assert_eq!(dense.card, 2);
+        assert_eq!(dense.ids, vec![0, 1, 0, 1, 0]);
+    }
+
+    #[test]
+    fn densify_empty_column_has_zero_cardinality() {
+        let s = Series::new_empty("a".into(), &DataType::Int32);
+        let enc = encode_series(&s).unwrap();
+        let dense = densify(&enc);
+        assert_eq!(dense.card, 0);
+        assert!(dense.ids.is_empty());
+        assert_eq!(dense.null_id, None);
+    }
+
+    // ── build_dense_cache_par / build_column_cache_par ──────────────────────
+
+    #[test]
+    fn build_dense_cache_par_only_processes_needed_indices() {
+        let cols = vec![
+            Series::new("a".into(), &[1i32, 2, 1]),
+            Series::new("b".into(), &[9i32, 9, 9]),
+            Series::new("c".into(), &[1i32, 1, 2]),
+        ];
+        let needed: HashSet<usize> = [0, 2].into_iter().collect();
+        let cache = build_dense_cache_par(&cols, &needed).unwrap();
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache[0].card, 2); // processed
+        assert_eq!(cache[2].card, 2); // processed
+        // index 1 untouched → placeholder
+        assert_eq!(cache[1].card, 0);
+        assert!(cache[1].ids.is_empty());
+        assert_eq!(cache[1].null_id, None);
+    }
+
+    #[test]
+    fn build_dense_cache_par_preserves_original_index_order_under_parallelism() {
+        // Each column gets a distinct expected cardinality (i+1) so a scatter-back
+        // bug (results landing at the wrong original index under rayon) would
+        // very likely produce a mismatch somewhere in the 32 columns.
+        let cols: Vec<Series> = (0..32)
+            .map(|i| {
+                let vals: Vec<i32> = (0..(i + 1)).collect();
+                Series::new(format!("c{i}").into(), &vals)
+            })
+            .collect();
+        let needed: HashSet<usize> = (0..32).collect();
+        let cache = build_dense_cache_par(&cols, &needed).unwrap();
+        for i in 0..32 {
+            assert_eq!(cache[i].card as usize, i + 1, "column {i} should have cardinality {}", i + 1);
+        }
+    }
+
+    #[test]
+    fn build_dense_cache_par_propagates_encode_error() {
+        let cols = vec![
+            Series::new("a".into(), &[1i32]),
+            Series::new_empty("bad".into(), &DataType::Null),
+        ];
+        let needed: HashSet<usize> = [0, 1].into_iter().collect();
+        assert!(build_dense_cache_par(&cols, &needed).is_err());
+    }
+
+    #[test]
+    fn build_column_cache_par_only_processes_needed_indices() {
+        let cols = vec![
+            Series::new("a".into(), &[Some(1i32), None]),
+            Series::new("b".into(), &[7i32, 7]),
+        ];
+        let needed: HashSet<usize> = [0].into_iter().collect();
+        let cache = build_column_cache_par(&cols, &needed).unwrap();
+        assert_eq!(cache[0].values.len(), 2);
+        assert!(cache[0].is_null[1]);
+        // index 1 untouched → placeholder empty EncodedColumn
+        assert!(cache[1].values.is_empty());
+        assert!(cache[1].is_null.is_empty());
+    }
+
+    // ── resolve_pairs / resolve_triplets ────────────────────────────────────
+
+    #[test]
+    fn resolve_pairs_maps_names_to_indices_preserving_order() {
+        let name_map: HashMap<String, usize> =
+            [("a".to_string(), 0), ("b".to_string(), 1), ("c".to_string(), 2)].into_iter().collect();
+        let raw = vec![
+            vec!["c".to_string(), "a".to_string()],
+            vec!["b".to_string(), "b".to_string()],
+        ];
+        let pairs = resolve_pairs(&raw, &name_map).unwrap();
+        assert_eq!(pairs, vec![(2, 0), (1, 1)]);
+    }
+
+    #[test]
+    fn resolve_pairs_rejects_wrong_arity() {
+        let name_map: HashMap<String, usize> = [("a".to_string(), 0)].into_iter().collect();
+        assert!(resolve_pairs(&[vec!["a".to_string()]], &name_map).is_err());
+        let raw3 = vec![vec!["a".to_string(), "a".to_string(), "a".to_string()]];
+        assert!(resolve_pairs(&raw3, &name_map).is_err());
+    }
+
+    #[test]
+    fn resolve_pairs_rejects_unknown_column_name() {
+        let name_map: HashMap<String, usize> = [("a".to_string(), 0)].into_iter().collect();
+        let raw = vec![vec!["a".to_string(), "nope".to_string()]];
+        assert!(resolve_pairs(&raw, &name_map).is_err());
+    }
+
+    #[test]
+    fn resolve_pairs_does_not_deduplicate() {
+        let name_map: HashMap<String, usize> =
+            [("a".to_string(), 0), ("b".to_string(), 1)].into_iter().collect();
+        let raw = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["a".to_string(), "b".to_string()],
+        ];
+        let pairs = resolve_pairs(&raw, &name_map).unwrap();
+        assert_eq!(pairs, vec![(0, 1), (0, 1)]);
+    }
+
+    #[test]
+    fn resolve_triplets_maps_names_to_indices_preserving_order() {
+        let name_map: HashMap<String, usize> =
+            [("a".to_string(), 0), ("b".to_string(), 1), ("c".to_string(), 2)].into_iter().collect();
+        let raw = vec![vec!["c".to_string(), "a".to_string(), "b".to_string()]];
+        let triplets = resolve_triplets(&raw, &name_map).unwrap();
+        assert_eq!(triplets, vec![(2, 0, 1)]);
+    }
+
+    #[test]
+    fn resolve_triplets_rejects_wrong_arity() {
+        let name_map: HashMap<String, usize> =
+            [("a".to_string(), 0), ("b".to_string(), 1)].into_iter().collect();
+        let raw = vec![vec!["a".to_string(), "b".to_string()]];
+        assert!(resolve_triplets(&raw, &name_map).is_err());
+    }
+
+    #[test]
+    fn resolve_triplets_rejects_unknown_column_name() {
+        let name_map: HashMap<String, usize> =
+            [("a".to_string(), 0), ("b".to_string(), 1), ("c".to_string(), 2)].into_iter().collect();
+        let raw = vec![vec!["a".to_string(), "b".to_string(), "nope".to_string()]];
+        assert!(resolve_triplets(&raw, &name_map).is_err());
+    }
+}
