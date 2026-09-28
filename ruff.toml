@@ -1,0 +1,4 @@
+# Pin the rule set so lint results don't change with the ruff release
+# (ruff 0.16 widened the defaults; these are the long-standing ones).
+[lint]
+select = ["E4", "E7", "E9", "F"]
