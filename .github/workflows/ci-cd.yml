@@ -6,236 +6,227 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: '0 0 * * 1'  # Weekly coverage report
+    - cron: '0 0 * * 1'  # Weekly scan
 
 permissions:
   contents: read
   security-events: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  # ============================================================================
-  # RUST TESTS & COVERAGE - runs before Python tests
-  # ============================================================================
+  # ==========================================================================
+  # RUST TESTS & COVERAGE
+  # ==========================================================================
   rust-coverage:
     name: Rust Tests & Coverage
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust (stable + llvm-tools)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: services/analytics
-      
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-      
+
       - name: Run Rust tests with coverage
         working-directory: services/analytics
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov --all-features --workspace \
             --lcov --output-path lcov.info
-          cargo llvm-cov --all-features --workspace \
-            --html --output-dir coverage-html
-      
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
+          cargo llvm-cov report --html --output-dir coverage-html
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@v5
         with:
           files: ./services/analytics/lcov.info
           flags: rust
           fail_ci_if_error: false
-      
-      - name: Upload coverage HTML artifacts
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload Rust coverage HTML artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: rust-coverage-report
           path: services/analytics/coverage-html
 
-  # ============================================================================
-  # BUILD PYTHON BINDINGS WITH MATURIN
-  # ============================================================================
-  build-python-bindings:
-    name: Build Python Bindings
-    runs-on: ubuntu-latest
-    needs: rust-coverage  # Wait for Rust tests to complete
-    
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-      
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: services/analytics
-      
-      - name: Install build dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install maturin
-      
-      - name: Build Python bindings with Maturin (develop mode)
-        run: |
-          cd services/analytics
-          maturin develop --release
-      
-      - name: Verify bindings were built
-        run: python -c "import analytics; print('Analytics module loaded successfully')"
-
-  # ============================================================================
-  # PYTHON TESTS (depends on Maturin build)
-  # ============================================================================
+  # ==========================================================================
+  # BUILD BINDINGS (MATURIN) + PYTHON TESTS
+  # ==========================================================================
   python-tests:
-    name: Python Tests
+    name: Python Tests (${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: build-python-bindings
-    
+    needs: rust-coverage
+
     strategy:
+      fail-fast: false
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-      
+          cache: pip
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: services/analytics
-      
+
+      # `maturin develop` requires a virtualenv, so create one and
+      # make it active for all following steps.
+      - name: Create virtualenv
+        run: |
+          python -m venv .venv
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> "$GITHUB_ENV"
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install maturin pytest pytest-cov
-          # Install any additional requirements
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-      
-      - name: Build Python bindings again
-        run: |
-          cd services/analytics
-          maturin develop --release
-      
+
+      - name: Build Rust extension with Maturin
+        working-directory: services/analytics
+        run: maturin develop --release
+
+      - name: Verify extension imports
+        run: python -c "import analytics; print('analytics module loaded')"
+
       - name: Run Python tests with coverage
-        run: |
-          pytest --cov=. --cov-report=xml --cov-report=html
-      
+        run: pytest --cov=. --cov-report=xml --cov-report=html
+
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
-          flags: python
+          flags: python-${{ matrix.python-version }}
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
-  # ============================================================================
-  # CODE QUALITY SCANNING
-  # ============================================================================
+  # ==========================================================================
+  # CODEQL
+  # ==========================================================================
   codeql:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
-    
+    # CodeQL on private repos needs GitHub Advanced Security.
+    # Remove this line if you have it enabled.
+    if: ${{ !github.event.repository.private }}
+    permissions:
+      contents: read
+      security-events: write
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: ['python', 'cpp']
-      
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-      
+          languages: python, rust
+          build-mode: none
+
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
 
-  semagrep:
-    name: Semagrep SAST Scan
+  # ==========================================================================
+  # SEMGREP
+  # ==========================================================================
+  semgrep:
+    name: Semgrep SAST Scan
     runs-on: ubuntu-latest
     container:
-      image: returntocorp/semgrep
-    
+      image: semgrep/semgrep
+    permissions:
+      contents: read
+      security-events: write
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Run Semagrep scan
-        run: semgrep ci --json --json-output semgrep.sarif
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-      
-      - name: Upload to GitHub Security
+
+      - name: Run Semgrep scan
+        run: >
+          semgrep scan
+          --config p/default
+          --sarif --sarif-output=semgrep.sarif
+
+      - name: Upload SARIF to GitHub Security tab
+        # Uploading needs code scanning to be available on the repo
+        if: ${{ always() && !github.event.repository.private }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
 
-  # ============================================================================
-  # LINTING & CODE QUALITY (optional but recommended)
-  # ============================================================================
+      - name: Keep SARIF as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+
+  # ==========================================================================
+  # LINTING
+  # ==========================================================================
   lint:
     name: Linting & Formatting
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      
+
       - name: Install linting tools
         run: |
           python -m pip install --upgrade pip
           python -m pip install ruff black
-      
+
       - name: Check Rust formatting
         working-directory: services/analytics
         run: cargo fmt --all -- --check
-      
+
       - name: Run Rust clippy
         working-directory: services/analytics
         run: cargo clippy --all-features --all-targets -- -D warnings
-      
+
       - name: Check Python formatting
         run: black --check .
-      
+
       - name: Run Ruff linter
         run: ruff check .
 
-  # ============================================================================
-  # STATUS CHECK
-  # ============================================================================
+  # ==========================================================================
+  # STATUS CHECK (single job to use for branch protection)
+  # ==========================================================================
   status:
     name: Pipeline Status
     runs-on: ubuntu-latest
@@ -244,28 +235,15 @@ jobs:
       - rust-coverage
       - python-tests
       - codeql
-      - semagrep
+      - semgrep
       - lint
-    
+
     steps:
-      - name: Check workflow status
+      - name: Fail if any required job failed or was cancelled
         run: |
-          if [[ "${{ needs.rust-coverage.result }}" == "failure" ]]; then
-            echo "::error::Rust coverage job failed"
+          echo '${{ toJSON(needs) }}'
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || \
+                "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::One or more jobs failed"
             exit 1
-          fi
-          if [[ "${{ needs.python-tests.result }}" == "failure" ]]; then
-            echo "::error::Python tests job failed"
-            exit 1
-          fi
-          if [[ "${{ needs.codeql.result }}" == "failure" ]]; then
-            echo "::error::CodeQL analysis failed"
-            exit 1
-          fi
-          if [[ "${{ needs.semagrep.result }}" == "failure" ]]; then
-            echo "::error::Semagrep scan failed"
-            exit 1
-          fi
-          if [[ "${{ needs.lint.result }}" == "failure" ]]; then
-            echo "::warning::Linting failed"
           fi
