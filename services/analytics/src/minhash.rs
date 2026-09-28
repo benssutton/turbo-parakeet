@@ -1,8 +1,8 @@
-use polars::prelude::*;
-use std::collections::{HashMap, HashSet};
-use std::hash::{BuildHasher, Hash, Hasher};
 use foldhash::fast::{FixedState as FoldHashFixed, RandomState as FoldHashFast};
+use polars::prelude::*;
 use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, Hasher};
 
 use crate::shared::encode_series;
 
@@ -59,10 +59,7 @@ pub(crate) fn lsh_candidates_impl(inputs: &[Series], kwargs: &LSHKwargs) -> Pola
                     let band_slice = &sig[start..end];
                     let band_hash = hash_band(band_slice);
 
-                    buckets
-                        .entry((band_idx, band_hash))
-                        .or_default()
-                        .push(idx);
+                    buckets.entry((band_idx, band_hash)).or_default().push(idx);
                 }
             }
         }
@@ -107,10 +104,7 @@ pub(crate) fn lsh_candidates_impl(inputs: &[Series], kwargs: &LSHKwargs) -> Pola
     let col_b = StringChunked::from_iter_values("col_b".into(), pairs_b.iter().map(|s| s.as_str()));
 
     // Create a struct with two fields
-    let df = DataFrame::new(vec![
-        col_a.into_series().into(),
-        col_b.into_series().into(),
-    ])?;
+    let df = DataFrame::new(vec![col_a.into_series().into(), col_b.into_series().into()])?;
 
     // Convert to series
     Ok(df.into_struct("candidates".into()).into_series())
@@ -121,9 +115,8 @@ pub(crate) fn lsh_candidates_impl(inputs: &[Series], kwargs: &LSHKwargs) -> Pola
 /// Uses foldhash FixedState for deterministic, high-quality hashing.
 fn hash_band(band: &[u32]) -> u64 {
     let state = FoldHashFixed::default();
-    let mut hasher = state.build_hasher();
-    band.hash(&mut hasher);
-    hasher.finish()
+
+    state.hash_one(band)
 }
 
 /// Parameters for batch MinHash computation
@@ -171,7 +164,8 @@ pub(crate) fn minhash_impl(inputs: &[Series], kwargs: &MinHashKwargs) -> PolarsR
         .map(|field_name| -> PolarsResult<(String, Option<Vec<u32>>)> {
             let series = struct_ca.field_by_name(field_name.as_str())?;
             let qualified_name = format!("{}|{}", df_name, field_name);
-            let signature = compute_signature_for_series_with_coeffs(&series, num_perm, &a_coeffs, &b_coeffs)?;
+            let signature =
+                compute_signature_for_series_with_coeffs(&series, num_perm, &a_coeffs, &b_coeffs)?;
             Ok((qualified_name, signature))
         })
         .collect::<PolarsResult<Vec<_>>>()?;
@@ -287,14 +281,16 @@ mod tests {
             Column::new("A".into(), &[1i64, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             Column::new("B".into(), &[3i64, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
             Column::new("C".into(), &[10i64, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         // DataFrame 2:
         let df2 = DataFrame::new(vec![
             Column::new("A".into(), &[1i64, 2, 3, 4, 5]),
             Column::new("B".into(), &[4i64, 5, 6, 7, 8]),
             Column::new("C".into(), &[10i64, 11, 12, 13, 14]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         (df1, df2)
     }
@@ -307,7 +303,10 @@ mod tests {
         let s = Series::new("x".into(), &[Option::<i64>::None, None, None]);
         let (a, b) = generate_permutation_coeffs(16);
         let result = compute_signature_for_series_with_coeffs(&s, 16, &a, &b).unwrap();
-        assert!(result.is_none(), "all-null column must yield None, not all-MAX signature");
+        assert!(
+            result.is_none(),
+            "all-null column must yield None, not all-MAX signature"
+        );
     }
 
     #[test]
@@ -350,14 +349,17 @@ mod tests {
             .expect("MinHash computation for df2 failed");
 
         // Combine the two minhash results into a single series
-        let combined = minhash_result_1.append(&minhash_result_2)
+        let combined = minhash_result_1
+            .append(&minhash_result_2)
             .expect("Failed to combine minhash results");
 
         // Extract the struct fields to pass to lsh_candidates_impl
         let struct_ca = combined.struct_().expect("Expected struct type");
-        let qualified_names = struct_ca.field_by_name("qualified_name")
+        let qualified_names = struct_ca
+            .field_by_name("qualified_name")
             .expect("qualified_name field not found");
-        let minhash_sigs = struct_ca.field_by_name("minhash")
+        let minhash_sigs = struct_ca
+            .field_by_name("minhash")
             .expect("minhash field not found");
 
         // Step 3: Find LSH candidate pairs
@@ -365,15 +367,15 @@ mod tests {
             num_bands: 32,
             rows_per_band: 4,
         };
-        let candidates_result = lsh_candidates_impl(
-            &[qualified_names, minhash_sigs],
-            &lsh_kwargs
-        ).expect("LSH candidate finding failed");
+        let candidates_result = lsh_candidates_impl(&[qualified_names, minhash_sigs], &lsh_kwargs)
+            .expect("LSH candidate finding failed");
 
         // Step 4: Assert that at least 5 candidate pairs were found
-        let candidates_struct = candidates_result.struct_()
+        let candidates_struct = candidates_result
+            .struct_()
             .expect("Expected struct type for candidates");
-        let col_a = candidates_struct.field_by_name("col_a")
+        let col_a = candidates_struct
+            .field_by_name("col_a")
             .expect("col_a field not found");
 
         let num_candidates = col_a.len();
@@ -386,5 +388,4 @@ mod tests {
 
         println!("Successfully found {} candidate pairs", num_candidates);
     }
-
 }

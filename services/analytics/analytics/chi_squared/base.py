@@ -34,7 +34,9 @@ class ChiSquared(Technique):
     RTOL = 1e-4
     ATOL = 1e-12
 
-    def __init__(self, *, cramers_v_threshold: float = 0.3, max_unique: int | None = 1000):
+    def __init__(
+        self, *, cramers_v_threshold: float = 0.3, max_unique: int | None = 1000
+    ):
         super().__init__()
         check_unit("cramers_v_threshold", cramers_v_threshold)
         if max_unique is not None and max_unique < 2:
@@ -50,4 +52,6 @@ class ChiSquared(Technique):
         )
 
     def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:
-        return out.with_columns(associated=computed(at_least("cramers_v", self.cramers_v_threshold)))
+        return out.with_columns(
+            associated=computed(at_least("cramers_v", self.cramers_v_threshold))
+        )

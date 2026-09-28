@@ -52,9 +52,21 @@ class Recommend(Describe):
 
     METRICS = {**Describe.METRICS, **REC_METRICS}
 
-    def __init__(self, *, boolean_pairs: tuple[tuple[str, str], ...] = (("true", "false"),), **describe_params) -> None:
+    def __init__(
+        self,
+        *,
+        boolean_pairs: tuple[tuple[str, str], ...] = (("true", "false"),),
+        **describe_params,
+    ) -> None:
         super().__init__(**describe_params)
         pairs = tuple(tuple(p) for p in boolean_pairs)
-        if any(len(p) != 2 or not all(isinstance(v, str) and v for v in p) or p[0].lower() == p[1].lower() for p in pairs):
-            raise ValueError(f"boolean_pairs must be pairs of distinct non-empty strings, got {boolean_pairs!r}")
+        if any(
+            len(p) != 2
+            or not all(isinstance(v, str) and v for v in p)
+            or p[0].lower() == p[1].lower()
+            for p in pairs
+        ):
+            raise ValueError(
+                f"boolean_pairs must be pairs of distinct non-empty strings, got {boolean_pairs!r}"
+            )
         self.boolean_pairs = pairs

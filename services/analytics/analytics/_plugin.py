@@ -35,12 +35,16 @@ def membership_ratio(df: Frame, bits: bytes, k: int, m: int) -> pl.DataFrame:
     return pl.DataFrame(_rs.membership_ratio(_collected(df), bits, k, m))
 
 
-def pairwise_joint_entropy(df: Frame, pairs: Sequence[tuple[str, str]] | None = None) -> pl.DataFrame:
+def pairwise_joint_entropy(
+    df: Frame, pairs: Sequence[tuple[str, str]] | None = None
+) -> pl.DataFrame:
     """col_a, col_b, entropy (H(A,B) in bits); every pair when `pairs` is None."""
     return pl.DataFrame(_rs.pairwise_joint_entropy(_collected(df), _tuples(pairs)))
 
 
-def threeway_joint_entropy(df: Frame, triplets: Sequence[tuple[str, str, str]] | None = None) -> pl.DataFrame:
+def threeway_joint_entropy(
+    df: Frame, triplets: Sequence[tuple[str, str, str]] | None = None
+) -> pl.DataFrame:
     """col_a, col_b, col_c, entropy (H(A,B,C) in bits); every triplet when None —
     no cap (C(101, 3) = 166,650 at 101 columns, ~65 s at 50K rows)."""
     return pl.DataFrame(_rs.threeway_joint_entropy(_collected(df), _tuples(triplets)))
@@ -52,12 +56,16 @@ def marginal_entropy(df: Frame) -> pl.DataFrame:
     return pl.DataFrame(_rs.marginal_entropy(_collected(df)))
 
 
-def pairwise_chi_squared(df: Frame, pairs: Sequence[tuple[str, str]] | None = None) -> pl.DataFrame:
+def pairwise_chi_squared(
+    df: Frame, pairs: Sequence[tuple[str, str]] | None = None
+) -> pl.DataFrame:
     """col_a, col_b, chi2_stat, p_value, cramers_v, low_expected_count, n_valid."""
     return pl.DataFrame(_rs.pairwise_chi_squared(_collected(df), _tuples(pairs)))
 
 
-def pairwise_adjusted_rand(df: Frame, pairs: Sequence[tuple[str, str]] | None = None) -> pl.DataFrame:
+def pairwise_adjusted_rand(
+    df: Frame, pairs: Sequence[tuple[str, str]] | None = None
+) -> pl.DataFrame:
     """col_a, col_b, ari, n_valid; null rows dropped pairwise (sklearn conventions)."""
     return pl.DataFrame(_rs.pairwise_adjusted_rand(_collected(df), _tuples(pairs)))
 
@@ -72,9 +80,15 @@ def minhash(df: Frame, name: str, num_perm: int = 128) -> pl.DataFrame:
     return pl.DataFrame(_rs.minhash(_collected(df), name, num_perm))
 
 
-def lsh_candidates(signatures: pl.DataFrame, num_bands: int, rows_per_band: int) -> pl.DataFrame:
+def lsh_candidates(
+    signatures: pl.DataFrame, num_bands: int, rows_per_band: int
+) -> pl.DataFrame:
     """col_a, col_b per LSH candidate pair of `signatures` (as `minhash` returns them)."""
-    return pl.DataFrame(_rs.lsh_candidates(signatures.select("qualified_name", "minhash"), num_bands, rows_per_band))
+    return pl.DataFrame(
+        _rs.lsh_candidates(
+            signatures.select("qualified_name", "minhash"), num_bands, rows_per_band
+        )
+    )
 
 
 def describe_columns(df: pl.DataFrame, seed: int) -> pl.DataFrame:

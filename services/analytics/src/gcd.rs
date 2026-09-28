@@ -44,13 +44,21 @@ const BLOCK: usize = 1 << 10;
 /// `binary_gcd(g, 0) = g`, and `g == 0` (nothing folded yet) returns `v`.
 #[inline]
 fn step_u64(g: u64, v: u64) -> u64 {
-    if g == 0 { v } else { binary_u64(g, v % g) }
+    if g == 0 {
+        v
+    } else {
+        binary_u64(g, v % g)
+    }
 }
 
 /// u128 twin of [`step_u64`] (Decimal).
 #[inline]
 fn step_u128(g: u128, v: u128) -> u128 {
-    if g == 0 { v } else { binary_u128(g, v % g) }
+    if g == 0 {
+        v
+    } else {
+        binary_u128(g, v % g)
+    }
 }
 
 /// GCD of `mag(v)` over the valid slots of one Arrow array's values.
@@ -237,39 +245,76 @@ mod tests {
     fn zeros_are_identity_and_empty_is_zero() {
         assert_eq!(gcd_of(Series::new("a".into(), &[0i64, 0, 21, 0])), Some(21));
         assert_eq!(gcd_of(Series::new("a".into(), &[0i64, 0])), Some(0));
-        assert_eq!(gcd_of(Series::new_empty("a".into(), &DataType::Int64)), Some(0));
+        assert_eq!(
+            gcd_of(Series::new_empty("a".into(), &DataType::Int64)),
+            Some(0)
+        );
     }
 
     #[test]
     fn nulls_skipped_and_all_null_is_zero() {
-        assert_eq!(gcd_of(Series::new("a".into(), &[Some(12i64), None, Some(18)])), Some(6));
-        assert_eq!(gcd_of(Series::new("a".into(), &[None::<i64>, None])), Some(0));
+        assert_eq!(
+            gcd_of(Series::new("a".into(), &[Some(12i64), None, Some(18)])),
+            Some(6)
+        );
+        assert_eq!(
+            gcd_of(Series::new("a".into(), &[None::<i64>, None])),
+            Some(0)
+        );
     }
 
     #[test]
     fn signed_and_unsigned_extremes() {
         assert_eq!(gcd_of(Series::new("a".into(), &[i8::MIN])), Some(128));
-        assert_eq!(gcd_of(Series::new("a".into(), &[i64::MIN])), Some(1i128 << 63));
-        assert_eq!(gcd_of(Series::new("a".into(), &[i64::MIN, 1i64 << 62])), Some(1i128 << 62));
-        assert_eq!(gcd_of(Series::new("a".into(), &[u64::MAX])), Some(u64::MAX as i128));
-        let dec = |v: &[i128]| Int128Chunked::from_slice("a".into(), v).into_decimal_unchecked(Some(38), 0).into_series();
+        assert_eq!(
+            gcd_of(Series::new("a".into(), &[i64::MIN])),
+            Some(1i128 << 63)
+        );
+        assert_eq!(
+            gcd_of(Series::new("a".into(), &[i64::MIN, 1i64 << 62])),
+            Some(1i128 << 62)
+        );
+        assert_eq!(
+            gcd_of(Series::new("a".into(), &[u64::MAX])),
+            Some(u64::MAX as i128)
+        );
+        let dec = |v: &[i128]| {
+            Int128Chunked::from_slice("a".into(), v)
+                .into_decimal_unchecked(Some(38), 0)
+                .into_series()
+        };
         assert_eq!(gcd_of(dec(&[10i128.pow(38) - 1])), Some(10i128.pow(38) - 1));
-        assert_eq!(gcd_of(dec(&[-(10i128.pow(37)), 10i128.pow(36)])), Some(10i128.pow(36)));
+        assert_eq!(
+            gcd_of(dec(&[-(10i128.pow(37)), 10i128.pow(36)])),
+            Some(10i128.pow(36))
+        );
         assert_eq!(gcd_of(Series::new("a".into(), &[12i128])), None); // Int128 is not integer-backed
     }
 
     #[test]
     fn step_matches_binary_gcd() {
         let pairs_64 = [
-            (0u64, 0u64), (0, 7), (7, 0), (3_600, (1u64 << 52) + 7_200), (12, 18),
-            (u64::MAX, 3), (3, u64::MAX), (1u64 << 63, 1u64 << 62), (1, u64::MAX),
+            (0u64, 0u64),
+            (0, 7),
+            (7, 0),
+            (3_600, (1u64 << 52) + 7_200),
+            (12, 18),
+            (u64::MAX, 3),
+            (3, u64::MAX),
+            (1u64 << 63, 1u64 << 62),
+            (1, u64::MAX),
         ];
         for (g, v) in pairs_64 {
             assert_eq!(step_u64(g, v), binary_u64(g, v), "step_u64({g}, {v})");
         }
         let pairs_128 = [
-            (0u128, 0u128), (0, 5), (5, 0), (10u128.pow(20), 10u128.pow(35) + 10u128.pow(20)),
-            (1u128 << 127, 1u128 << 126), (u128::MAX, 15), (1u128 << 127, 0),
+            (0u128, 0u128),
+            (0, 5),
+            (5, 0),
+            (10u128.pow(20), 10u128.pow(35) + 10u128.pow(20)),
+            (1u128 << 127, 1u128 << 126),
+            (u128::MAX, 15),
+            (1u128 << 127, 0),
         ];
         for (g, v) in pairs_128 {
             assert_eq!(step_u128(g, v), binary_u128(g, v), "step_u128({g}, {v})");
@@ -277,7 +322,13 @@ mod tests {
     }
 
     fn slice_gcd(values: &[u64], validity: Option<&Bitmap>) -> u64 {
-        gcd_slice(values, validity, |v: u64| v, step_u64, &AtomicBool::new(false))
+        gcd_slice(
+            values,
+            validity,
+            |v: u64| v,
+            step_u64,
+            &AtomicBool::new(false),
+        )
     }
 
     #[test]
@@ -322,7 +373,10 @@ mod tests {
         // Chunks already running when the flag is set stop at their next block,
         // so only a small fraction of the n values is ever read.
         let seen = visited.load(Ordering::Relaxed);
-        assert!(seen < n / 4, "early exit did not stop the scan: visited {seen} of {n}");
+        assert!(
+            seen < n / 4,
+            "early exit did not stop the scan: visited {seen} of {n}"
+        );
     }
 
     #[test]
@@ -337,7 +391,10 @@ mod tests {
             visited.fetch_add(1, Ordering::Relaxed);
             v
         };
-        assert_eq!(gcd_slice(&values[..], None, mag, step_u64, &AtomicBool::new(false)), 2);
+        assert_eq!(
+            gcd_slice(&values[..], None, mag, step_u64, &AtomicBool::new(false)),
+            2
+        );
         assert_eq!(visited.load(Ordering::Relaxed), n);
     }
 
@@ -345,14 +402,17 @@ mod tests {
     fn early_exit_across_arrow_chunks() {
         // Chunk 1 reaches 1; chunk 2 (a huge multiple of 12) must not change it.
         let mut s = Series::new("a".into(), &[12i64, 7]);
-        s.append(&Series::new("a".into(), vec![12i64; 2 * CHUNK])).unwrap();
+        s.append(&Series::new("a".into(), vec![12i64; 2 * CHUNK]))
+            .unwrap();
         assert_eq!(s.n_chunks(), 2);
         assert_eq!(gcd_of(s), Some(1));
     }
 
     #[test]
     fn temporal_uses_physical_values() {
-        let d = Series::new("d".into(), &[7i32, 14, 21]).cast(&DataType::Date).unwrap();
+        let d = Series::new("d".into(), &[7i32, 14, 21])
+            .cast(&DataType::Date)
+            .unwrap();
         assert_eq!(gcd_of(d), Some(7));
         let dt = Series::new("t".into(), &[3_600_000_000i64, 7_200_000_000])
             .cast(&DataType::Datetime(TimeUnit::Microseconds, None))
@@ -379,8 +439,20 @@ mod tests {
         let c = Series::new("c".into(), &[9u8, 6]);
         let out = column_gcd_impl(&[a, b, c]).unwrap();
         let df = out.into_frame().unnest(["column_gcd"]).unwrap();
-        let cols: Vec<_> = df.column("column").unwrap().str().unwrap().into_no_null_iter().collect();
-        let dtypes: Vec<_> = df.column("dtype").unwrap().str().unwrap().into_no_null_iter().collect();
+        let cols: Vec<_> = df
+            .column("column")
+            .unwrap()
+            .str()
+            .unwrap()
+            .into_no_null_iter()
+            .collect();
+        let dtypes: Vec<_> = df
+            .column("dtype")
+            .unwrap()
+            .str()
+            .unwrap()
+            .into_no_null_iter()
+            .collect();
         let gcd = df.column("gcd").unwrap();
         assert_eq!(gcd.dtype(), &GCD_DTYPE);
         let gcds: Vec<_> = gcd.decimal().unwrap().physical().into_iter().collect();

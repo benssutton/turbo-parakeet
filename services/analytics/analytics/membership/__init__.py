@@ -10,6 +10,11 @@ IMPLEMENTATIONS = ("BloomRust", "BloomFastbloom", "MembershipExact")
 
 __getattr__ = lazy_attributes(__name__, {"BloomFastbloom": ".fastbloom"})
 __all__ = [
-    "Membership", "BloomMembership", "BloomRust", "BloomFastbloom", "MembershipExact",
-    "REFERENCE", "IMPLEMENTATIONS",
+    "Membership",
+    "BloomMembership",
+    "BloomRust",
+    "BloomFastbloom",
+    "MembershipExact",
+    "REFERENCE",
+    "IMPLEMENTATIONS",
 ]

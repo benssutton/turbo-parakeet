@@ -1,5 +1,5 @@
-use crate::contingency::{ContingencyTable, build_contingency};
-use crate::shared::{PairwiseKwargs, build_dense_cache_par, resolve_pairs};
+use crate::contingency::{build_contingency, ContingencyTable};
+use crate::shared::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
 use polars::prelude::*;
 use rayon::prelude::*;
 use statrs::distribution::{ChiSquared, ContinuousCDF};
@@ -117,7 +117,7 @@ pub(crate) fn pairwise_chi_squared_impl(
     let chi2_s = Float64Chunked::from_vec("chi2_stat".into(), chi2_values).into_series();
     let p_s = Float64Chunked::from_vec("p_value".into(), p_values).into_series();
     let v_s = Float64Chunked::from_vec("cramers_v".into(), cramers_v_values).into_series();
-    let low_exp_s = BooleanChunked::from_iter(low_exp_values.into_iter())
+    let low_exp_s = BooleanChunked::from_iter(low_exp_values)
         .into_series()
         .with_name("low_expected_count".into());
     let n_valid_s = UInt32Chunked::from_vec("n_valid".into(), n_valid_values).into_series();
@@ -233,10 +233,25 @@ mod tests {
         let s1 = Series::new("a".into(), &[0i32, 0, 1, 1]);
         let s2 = Series::new("b".into(), &[0i32, 1, 0, 1]);
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
-        let chi2 = df.column("chi2_stat").unwrap().f64().unwrap().get(0).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_chi_squared"])
+            .unwrap();
+        let chi2 = df
+            .column("chi2_stat")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap();
         let p = df.column("p_value").unwrap().f64().unwrap().get(0).unwrap();
-        let v = df.column("cramers_v").unwrap().f64().unwrap().get(0).unwrap();
+        let v = df
+            .column("cramers_v")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap();
         assert!(chi2.abs() < 1e-10, "Expected chi2~0, got {}", chi2);
         assert!((p - 1.0).abs() < 1e-6, "Expected p~1, got {}", p);
         assert!(v.abs() < 1e-10, "Expected V~0, got {}", v);
@@ -248,13 +263,36 @@ mod tests {
         let s1 = Series::new("a".into(), &[0i32, 0, 1, 1]);
         let s2 = Series::new("b".into(), &[0i32, 0, 1, 1]);
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
-        let chi2 = df.column("chi2_stat").unwrap().f64().unwrap().get(0).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_chi_squared"])
+            .unwrap();
+        let chi2 = df
+            .column("chi2_stat")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap();
         let p = df.column("p_value").unwrap().f64().unwrap().get(0).unwrap();
-        let v = df.column("cramers_v").unwrap().f64().unwrap().get(0).unwrap();
+        let v = df
+            .column("cramers_v")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap();
         assert!(chi2 > 0.0, "Expected chi2 > 0 for perfect association");
-        assert!(p < 0.05, "Expected p < 0.05 for perfect association, got {}", p);
-        assert!((v - 1.0).abs() < 1e-10, "Expected V=1 for perfect association, got {}", v);
+        assert!(
+            p < 0.05,
+            "Expected p < 0.05 for perfect association, got {}",
+            p
+        );
+        assert!(
+            (v - 1.0).abs() < 1e-10,
+            "Expected V=1 for perfect association, got {}",
+            v
+        );
     }
 
     // Constant column → NaN (test undefined).
@@ -263,9 +301,22 @@ mod tests {
         let s1 = Series::new("a".into(), &[1i32, 1, 1, 1]);
         let s2 = Series::new("b".into(), &[0i32, 1, 0, 1]);
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
-        let chi2 = df.column("chi2_stat").unwrap().f64().unwrap().get(0).unwrap();
-        assert!(chi2.is_nan(), "Expected NaN for constant column, got {}", chi2);
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_chi_squared"])
+            .unwrap();
+        let chi2 = df
+            .column("chi2_stat")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert!(
+            chi2.is_nan(),
+            "Expected NaN for constant column, got {}",
+            chi2
+        );
     }
 
     // Null rows are dropped before computing.
@@ -275,8 +326,17 @@ mod tests {
         let s1 = Series::new("a".into(), &[Some(0i32), None, Some(1), Some(1)]);
         let s2 = Series::new("b".into(), &[Some(0i32), Some(1), Some(0), Some(1)]);
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
-        let chi2 = df.column("chi2_stat").unwrap().f64().unwrap().get(0).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_chi_squared"])
+            .unwrap();
+        let chi2 = df
+            .column("chi2_stat")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap();
         assert!(!chi2.is_nan(), "Should produce a result with nulls dropped");
     }
 
@@ -304,8 +364,17 @@ mod tests {
         let s1 = Series::new("a".into(), &a);
         let s2 = Series::new("b".into(), &b);
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
-        let low = df.column("low_expected_count").unwrap().bool().unwrap().get(0).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_chi_squared"])
+            .unwrap();
+        let low = df
+            .column("low_expected_count")
+            .unwrap()
+            .bool()
+            .unwrap()
+            .get(0)
+            .unwrap();
         assert!(low, "sparse contingency table must set low_expected_count");
     }
 
@@ -317,9 +386,21 @@ mod tests {
         let s1 = Series::new("a".into(), &a);
         let s2 = Series::new("b".into(), &b);
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
-        let low = df.column("low_expected_count").unwrap().bool().unwrap().get(0).unwrap();
-        assert!(!low, "dense 2×2 table (n=10000) must not set low_expected_count");
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_chi_squared"])
+            .unwrap();
+        let low = df
+            .column("low_expected_count")
+            .unwrap()
+            .bool()
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert!(
+            !low,
+            "dense 2×2 table (n=10000) must not set low_expected_count"
+        );
     }
 
     // 3 columns → 3 pairs.
@@ -335,10 +416,19 @@ mod tests {
     #[test]
     fn test_n_valid_counts_non_null_overlap() {
         // Rows 2 (a null) and 3 (b null) dropped → n_valid = 4.
-        let s1 = Series::new("a".into(), &[Some(0i32), Some(0), None, Some(1), Some(1), Some(0)]);
-        let s2 = Series::new("b".into(), &[Some(0i32), Some(1), Some(0), None, Some(1), Some(0)]);
+        let s1 = Series::new(
+            "a".into(),
+            &[Some(0i32), Some(0), None, Some(1), Some(1), Some(0)],
+        );
+        let s2 = Series::new(
+            "b".into(),
+            &[Some(0i32), Some(1), Some(0), None, Some(1), Some(0)],
+        );
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_chi_squared"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_chi_squared"])
+            .unwrap();
         let n_valid = df.column("n_valid").unwrap().u32().unwrap().get(0).unwrap();
         assert_eq!(n_valid, 4);
     }

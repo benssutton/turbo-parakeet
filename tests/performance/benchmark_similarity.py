@@ -16,11 +16,15 @@ if __name__ == "__main__":
         "analytics.similarity",
         [
             large_dataset(),
-            Dataset("narrow related 3 frames x 1M rows", lambda: related_frames(1_000_000)),
+            Dataset(
+                "narrow related 3 frames x 1M rows", lambda: related_frames(1_000_000)
+            ),
             Dataset("medium 2 frames x 20 cols", lambda: similar_frames()),
             Dataset(
                 "wide 2 frames x 100 cols",
-                lambda: similar_frames(n_similar=50, n_independent=50, col_size=5_000, n_elements=100_000),
+                lambda: similar_frames(
+                    n_similar=50, n_independent=50, col_size=5_000, n_elements=100_000
+                ),
             ),
         ],
     )

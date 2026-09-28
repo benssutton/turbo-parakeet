@@ -19,7 +19,15 @@ from analytics import _plugin
 from analytics.membership import BloomMembership, Membership
 from analytics.membership.rust import bloom_geometry
 from datagen import mixed_dtypes, related_frames
-from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
+from harness import (
+    assert_agrees,
+    assert_contract,
+    implementation_params,
+    load,
+    reference,
+    run,
+    with_metrics,
+)
 
 PKG = "analytics.membership"
 ALL = implementation_params(PKG)
@@ -39,7 +47,9 @@ def test_contract(impl):
     "make",
     [
         pytest.param(lambda: related_frames(1_000), id="related"),
-        pytest.param(lambda: {"x": mixed_dtypes(300), "y": mixed_dtypes(300, seed=7)}, id="mixed"),
+        pytest.param(
+            lambda: {"x": mixed_dtypes(300), "y": mixed_dtypes(300, seed=7)}, id="mixed"
+        ),
     ],
 )
 def test_agrees_with_reference(impl, make):
@@ -49,23 +59,38 @@ def test_agrees_with_reference(impl, make):
 
 
 def test_reference_known_containment():
-    frames = {"p": pl.DataFrame({"id": [1, 2, 3, 4]}), "c": pl.DataFrame({"pid": [1, 1, 2, None]})}
+    frames = {
+        "p": pl.DataFrame({"id": [1, 2, 3, 4]}),
+        "c": pl.DataFrame({"pid": [1, 1, 2, None]}),
+    }
     r = run(reference(PKG), frames).row(0, named=True)
     assert (r["ratio_a_in_b"], r["ratio_b_in_a"]) == (0.5, 1.0)
-    assert (r["n_distinct_a"], r["n_distinct_b"], r["n_non_null_a"], r["n_non_null_b"]) == (4, 2, 4, 3)
+    assert (
+        r["n_distinct_a"],
+        r["n_distinct_b"],
+        r["n_non_null_a"],
+        r["n_non_null_b"],
+    ) == (4, 2, 4, 3)
     assert (r["unique_a"], r["unique_b"], r["relationship"]) == (True, False, "pk_fk")
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_planted_relationships(impl):
     out = run(load(impl), related_frames(1_000))
-    rel = {(r["df_a"], r["col_a"], r["df_b"], r["col_b"]): r["relationship"] for r in out.iter_rows(named=True)}
+    rel = {
+        (r["df_a"], r["col_a"], r["df_b"], r["col_b"]): r["relationship"]
+        for r in out.iter_rows(named=True)
+    }
     assert rel[("customers", "id", "orders", "customer_id")] == "pk_fk"
     assert rel[("customers", "id", "archive", "id")] == "pk_pk"
     assert rel[("customers", "name", "orders", "customer_name")] == "pk_fk"
     assert rel[("customers", "region", "orders", "region")] == "b_in_a"
-    assert rel[("customers", "name", "archive", "name")] == "none"  # ~93% shared: similar, not contained
-    assert rel[("customers", "id", "customers", "name")] is None  # Int64 vs String: ineligible
+    assert (
+        rel[("customers", "name", "archive", "name")] == "none"
+    )  # ~93% shared: similar, not contained
+    assert (
+        rel[("customers", "id", "customers", "name")] is None
+    )  # Int64 vs String: ineligible
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -107,7 +132,10 @@ def test_categorical_values_match_by_label_across_frames(impl):
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_false_positive_rate_on_disjoint_sets(impl):
-    frames = {"a": pl.DataFrame({"v": list(range(2_000))}), "b": pl.DataFrame({"w": list(range(10_000, 12_000))})}
+    frames = {
+        "a": pl.DataFrame({"v": list(range(2_000))}),
+        "b": pl.DataFrame({"w": list(range(10_000, 12_000))}),
+    }
     r = run(load(impl), frames).row(0, named=True)
     assert r["ratio_a_in_b"] <= 0.03 and r["ratio_b_in_a"] <= 0.03
 
@@ -120,13 +148,13 @@ def test_fp_rate_validation(impl):
 
 # ── optional-dependency import isolation ────────────────────────────────────
 
+
 def test_import_and_use_without_fastbloom_rs():
     """analytics.membership must import, and BloomRust/MembershipExact must work,
     when fastbloom_rs cannot be imported (it's an optional reference impl, lazily
     imported by BloomFastbloom only). Run in a subprocess so faking the ImportError
     can't leak into other tests via sys.modules."""
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import sys
         sys.modules["fastbloom_rs"] = None  # forces ImportError on `import fastbloom_rs`
         import polars as pl
@@ -143,14 +171,16 @@ def test_import_and_use_without_fastbloom_rs():
         else:
             raise SystemExit("BloomFastbloom should have raised ImportError")
         print("OK")
-        """
+        """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK" in result.stdout
 
 
 # ── BloomMembership.agreement FP-rate bound ─────────────────────────────────
+
 
 class _ConcreteBloom(BloomMembership):
     """BloomMembership is abstract (_compute); agreement() never calls it."""
@@ -190,6 +220,7 @@ def test_bloom_agreement_rate_check_still_fires_above_min_negatives():
 
 # ── binding-level regression: bloom_filter_bits on a multi-chunk Series ─────
 
+
 def test_bloom_filter_bits_multi_chunk_matches_rechunked():
     """A multi-chunk Series must give the same Bloom bits as its rechunked form:
     bloom_filter_bits concatenates the stream into one batch before hashing, so
@@ -201,7 +232,9 @@ def test_bloom_filter_bits_multi_chunk_matches_rechunked():
     rechunked = multi.rechunk()
     assert rechunked.n_chunks() == 1
     m, k = bloom_geometry(multi.len(), 0.01)
-    assert _plugin.bloom_filter_bits(multi, k=k, m=m) == _plugin.bloom_filter_bits(rechunked, k=k, m=m)
+    assert _plugin.bloom_filter_bits(multi, k=k, m=m) == _plugin.bloom_filter_bits(
+        rechunked, k=k, m=m
+    )
 
 
 def test_conclusions_default_override_and_nan():
@@ -217,9 +250,40 @@ def test_conclusions_default_override_and_nan():
     df = pl.DataFrame({c: [1] for c in "abcde"})  # C(5,2) = 10 pairs
     out = Fixed().add({"t": df}).result()
     assert out["relationship"].to_list() == [
-        "pk_pk", "fk_pk", "pk_fk", "mutual", "a_in_b", "b_in_a", "none", "none", "none", "none"
+        "pk_pk",
+        "fk_pk",
+        "pk_fk",
+        "mutual",
+        "a_in_b",
+        "b_in_a",
+        "none",
+        "none",
+        "none",
+        "none",
     ]
-    assert out["unique_a"].to_list() == [True, False, True, False, False, False, True, False, True, True]
-    assert out["unique_b"].to_list() == [True, True, False, False, False, False, True, False, True, True]
+    assert out["unique_a"].to_list() == [
+        True,
+        False,
+        True,
+        False,
+        False,
+        False,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert out["unique_b"].to_list() == [
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        True,
+        True,
+    ]
     relaxed = Fixed(containment_threshold=0.5).add({"t": df}).result()
     assert relaxed["relationship"][6] == "pk_pk"

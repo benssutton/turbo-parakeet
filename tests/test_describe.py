@@ -17,7 +17,16 @@ import pytest
 from pytest import approx
 
 from analytics.describe import Describe, _sizes, estimators
-from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
+from datagen import describe_mixed, stringified
+from harness import (
+    assert_agrees,
+    assert_contract,
+    implementation_params,
+    load,
+    reference,
+    run,
+    with_metrics,
+)
 
 LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
 
@@ -25,12 +34,17 @@ LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Conclusions — estimators (pure functions)
 
+
 def test_chao1_with_doubletons():
-    assert estimators.chao1(10, 4, 2) == approx((12.0, 10.249903382590167, 26.00618590489368))
+    assert estimators.chao1(10, 4, 2) == approx(
+        (12.0, 10.249903382590167, 26.00618590489368)
+    )
 
 
 def test_chao1_without_doubletons():
-    assert estimators.chao1(5, 3, 0) == approx((8.0, 5.369121767830802, 29.38219792045809))
+    assert estimators.chao1(5, 3, 0) == approx(
+        (8.0, 5.369121767830802, 29.38219792045809)
+    )
 
 
 def test_chao1_without_unseen_mass_is_exact():
@@ -68,25 +82,40 @@ HISTORY_10 = [0, 0, 0, 0, 0, 0, 10]
 
 def test_estimate_picks_exact_then_duj1_then_schnabel_then_chao1():
     exact = estimators.estimate(10, 40, 4, 2, HISTORY_10, q=1.0)
-    assert (exact["est_method"], exact["est_cardinality"], exact["est_low"], exact["est_high"]) == ("exact", 10.0, 10.0, 10.0)
+    assert (
+        exact["est_method"],
+        exact["est_cardinality"],
+        exact["est_low"],
+        exact["est_high"],
+    ) == ("exact", 10.0, 10.0, 10.0)
     duj = estimators.estimate(10, 40, 4, 2, HISTORY_10, q=0.5)
-    assert duj["est_method"] == "duj1" and duj["est_cardinality"] == approx(10.526315789473685)
+    assert duj["est_method"] == "duj1" and duj["est_cardinality"] == approx(
+        10.526315789473685
+    )
     assert duj["est_low"] is None and duj["est_high"] is None
     sch = estimators.estimate(10, 40, 4, 2, HISTORY_10, q=None)
-    assert sch["est_method"] == "schnabel" and sch["est_cardinality"] == approx(9.523809523809524)
+    assert sch["est_method"] == "schnabel" and sch["est_cardinality"] == approx(
+        9.523809523809524
+    )
     assert sch["estimates_agree"] is True  # [10.25, 26.0] overlaps [6.47, 16.38]
-    chao = estimators.estimate(10, 15, 4, 2, HISTORY_10, q=None)  # d/n ≥ 0.5 → Schnabel invalid
+    chao = estimators.estimate(
+        10, 15, 4, 2, HISTORY_10, q=None
+    )  # d/n ≥ 0.5 → Schnabel invalid
     assert chao["est_method"] == "chao1" and chao["est_cardinality"] == 12.0
     assert chao["schnabel"] is None and chao["estimates_agree"] is None
 
 
 def test_estimates_disagree_under_heavy_skew():
-    e = estimators.estimate(10, 40, 8, 0, HISTORY_10, q=None)  # Chao1 [17.47, 114.95] vs Schnabel [6.47, 16.38]
+    e = estimators.estimate(
+        10, 40, 8, 0, HISTORY_10, q=None
+    )  # Chao1 [17.47, 114.95] vs Schnabel [6.47, 16.38]
     assert e["estimates_agree"] is False
 
 
 def test_unique_flag():
-    assert estimators.estimate(5, 5, 5, 0, [5, 0, 0, 0, 0, 0, 0], None)["unique"] is True
+    assert (
+        estimators.estimate(5, 5, 5, 0, [5, 0, 0, 0, 0, 0, 0], None)["unique"] is True
+    )
     assert estimators.estimate(0, 0, 0, 0, [0] * 7, None)["unique"] is False
 
 
@@ -94,10 +123,21 @@ def test_unique_flag():
 # 4. Conclusions — rendering, estimates, classification (via with_metrics)
 
 DEFAULTS = {
-    "n_rows": 4, "n_null": 0, "n_unique": 4, "entropy": 2.0, "f1": 4, "f2": 0,
-    "argmin": 0, "argmax": 3, "top5_idx": [0, 1, 2, 3], "top5_count": [1, 1, 1, 1],
+    "n_rows": 4,
+    "n_null": 0,
+    "n_unique": 4,
+    "entropy": 2.0,
+    "f1": 4,
+    "f2": 0,
+    "argmin": 0,
+    "argmax": 3,
+    "top5_idx": [0, 1, 2, 3],
+    "top5_count": [1, 1, 1, 1],
     "capture_history": [1, 1, 0, 1, 0, 0, 1],
-    "size_bytes": 32, "size_zstd_bytes": 32, "size_polars_bytes": 32, "size_polars_zstd_bytes": 32,
+    "size_bytes": 32,
+    "size_zstd_bytes": 32,
+    "size_polars_bytes": 32,
+    "size_polars_zstd_bytes": 32,
 }
 
 
@@ -109,7 +149,13 @@ def conclude(s: pl.Series, params: dict | None = None, **overrides) -> dict:
 
 
 def test_renders_min_max_and_top5_from_indices():
-    r = conclude(pl.Series("x", [3.5, 1.25, None, 3.5]), argmin=1, argmax=0, top5_idx=[0, 1], top5_count=[2, 1])
+    r = conclude(
+        pl.Series("x", [3.5, 1.25, None, 3.5]),
+        argmin=1,
+        argmax=0,
+        top5_idx=[0, 1],
+        top5_count=[2, 1],
+    )
     assert (r["min"], r["max"]) == ("1.25", "3.5")
     assert r["top5"] == [{"value": "3.5", "count": 2}, {"value": "1.25", "count": 1}]
 
@@ -117,8 +163,17 @@ def test_renders_min_max_and_top5_from_indices():
 def test_renders_inner_values_from_flattened_indices():
     s = pl.Series("x", [[1, 2], None, [], [3]], dtype=pl.List(pl.Int64))
     r = conclude(
-        s, n_null=1, inner_n_values=3, inner_n_null=0, inner_n_unique=3, inner_f1=3, inner_f2=0,
-        inner_argmin=0, inner_argmax=2, inner_top5_idx=[2], inner_top5_count=[1],
+        s,
+        n_null=1,
+        inner_n_values=3,
+        inner_n_null=0,
+        inner_n_unique=3,
+        inner_f1=3,
+        inner_f2=0,
+        inner_argmin=0,
+        inner_argmax=2,
+        inner_top5_idx=[2],
+        inner_top5_count=[1],
         inner_capture_history=[1, 1, 1, 0, 0, 0, 0],
     )
     assert (r["inner_min"], r["inner_max"]) == ("1", "3")
@@ -127,12 +182,18 @@ def test_renders_inner_values_from_flattened_indices():
 
 def test_scalar_columns_have_null_inner_conclusions():
     r = conclude(pl.Series("x", [1, 2, 3, 4]))
-    assert r["inner_min"] is None and r["inner_class"] is None and r["inner_est_method"] is None
+    assert (
+        r["inner_min"] is None
+        and r["inner_class"] is None
+        and r["inner_est_method"] is None
+    )
 
 
 def test_estimate_branches_follow_population_rows():
     s = pl.Series("x", [1, 2, 3, 4])
-    assert conclude(s)["est_method"] == "chao1" and conclude(s)["est_cardinality"] == 10.0
+    assert (
+        conclude(s)["est_method"] == "chao1" and conclude(s)["est_cardinality"] == 10.0
+    )
     assert conclude(s, {"population_rows": 4})["est_method"] == "exact"
     duj = conclude(s, {"population_rows": 8})
     assert duj["est_method"] == "duj1" and duj["est_cardinality"] == approx(8.0)
@@ -143,27 +204,123 @@ def test_estimate_branches_follow_population_rows():
 
 def test_schnabel_branch_and_agreement_flag():
     s = pl.Series("x", list(range(10)) * 4)
-    agree = conclude(s, n_rows=40, n_unique=10, f1=0, f2=0, capture_history=[0, 0, 0, 0, 0, 0, 10])
+    agree = conclude(
+        s, n_rows=40, n_unique=10, f1=0, f2=0, capture_history=[0, 0, 0, 0, 0, 0, 10]
+    )
     assert agree["est_method"] == "schnabel" and agree["estimates_agree"] is True
-    skew = conclude(s, n_rows=40, n_unique=10, f1=8, f2=0, capture_history=[0, 0, 0, 0, 0, 0, 10])
+    skew = conclude(
+        s, n_rows=40, n_unique=10, f1=8, f2=0, capture_history=[0, 0, 0, 0, 0, 0, 10]
+    )
     assert skew["estimates_agree"] is False
 
 
 D = datetime(2024, 1, 1)
 CLASS_CASES = [
-    pytest.param(pl.Series("x", [None] * 4, dtype=pl.Int64), dict(n_null=4, n_unique=0, argmin=None, argmax=None), {}, "null", id="null"),
-    pytest.param(pl.Series("x", [7, 7, None, 7]), dict(n_null=1, n_unique=1), {}, "constant", id="constant"),
-    pytest.param(pl.Series("x", [1, 5, 1, 5]), dict(n_unique=2, argmax=1), {}, "boolean", id="boolean"),
-    pytest.param(pl.Series("x", [0, 4, 1, 2, 3]), dict(n_rows=5, n_unique=5, argmin=0, argmax=1), {}, "ordinal", id="ordinal_before_categorical"),
-    pytest.param(pl.Series("x", [-3, 5, 1, 2]), dict(argmin=0, argmax=1), {}, "categorical", id="negative_not_ordinal"),
-    pytest.param(pl.Series("x", [-3, 5, 1, 2]), dict(argmin=0, argmax=1), {"categorical_threshold": 5}, "discrete", id="over_threshold"),
-    pytest.param(pl.Series("x", [0, 9, 1, 2]), dict(argmin=0, argmax=1), {}, "categorical", id="max_over_2N"),
-    pytest.param(pl.Series("x", [0, 9, 1, 2]), dict(argmin=0, argmax=1), {"population_rows": 100}, "ordinal", id="2N_uses_population"),
-    pytest.param(pl.Series("x", [0.0, 2.0, 1.0, 3.0]), dict(argmax=3, n_nan=0, n_inf=0, n_fractional=0), {}, "ordinal", id="whole_floats"),
-    pytest.param(pl.Series("x", [0.0, 2.5, 1.0, 3.0]), dict(argmax=3, n_nan=0, n_inf=0, n_fractional=1), {}, "categorical", id="fractional_floats"),
-    pytest.param(pl.Series("x", ["3", "1", "2", "0"]), dict(argmin=3, argmax=0, n_numeric_int=4, n_leading_zero=0, numeric_int_min=0, numeric_int_max=3), {}, "ordinal", id="integer_strings"),
-    pytest.param(pl.Series("x", ["3", "01", "2", "0"]), dict(argmin=3, argmax=0, n_numeric_int=4, n_leading_zero=1, numeric_int_min=0, numeric_int_max=3), {}, "categorical", id="leading_zero_strings"),
-    pytest.param(pl.Series("x", [D, D, D, D]).dt.date(), dict(), {}, "categorical", id="temporal_never_ordinal"),
+    pytest.param(
+        pl.Series("x", [None] * 4, dtype=pl.Int64),
+        dict(n_null=4, n_unique=0, argmin=None, argmax=None),
+        {},
+        "null",
+        id="null",
+    ),
+    pytest.param(
+        pl.Series("x", [7, 7, None, 7]),
+        dict(n_null=1, n_unique=1),
+        {},
+        "constant",
+        id="constant",
+    ),
+    pytest.param(
+        pl.Series("x", [1, 5, 1, 5]),
+        dict(n_unique=2, argmax=1),
+        {},
+        "boolean",
+        id="boolean",
+    ),
+    pytest.param(
+        pl.Series("x", [0, 4, 1, 2, 3]),
+        dict(n_rows=5, n_unique=5, argmin=0, argmax=1),
+        {},
+        "ordinal",
+        id="ordinal_before_categorical",
+    ),
+    pytest.param(
+        pl.Series("x", [-3, 5, 1, 2]),
+        dict(argmin=0, argmax=1),
+        {},
+        "categorical",
+        id="negative_not_ordinal",
+    ),
+    pytest.param(
+        pl.Series("x", [-3, 5, 1, 2]),
+        dict(argmin=0, argmax=1),
+        {"categorical_threshold": 5},
+        "discrete",
+        id="over_threshold",
+    ),
+    pytest.param(
+        pl.Series("x", [0, 9, 1, 2]),
+        dict(argmin=0, argmax=1),
+        {},
+        "categorical",
+        id="max_over_2N",
+    ),
+    pytest.param(
+        pl.Series("x", [0, 9, 1, 2]),
+        dict(argmin=0, argmax=1),
+        {"population_rows": 100},
+        "ordinal",
+        id="2N_uses_population",
+    ),
+    pytest.param(
+        pl.Series("x", [0.0, 2.0, 1.0, 3.0]),
+        dict(argmax=3, n_nan=0, n_inf=0, n_fractional=0),
+        {},
+        "ordinal",
+        id="whole_floats",
+    ),
+    pytest.param(
+        pl.Series("x", [0.0, 2.5, 1.0, 3.0]),
+        dict(argmax=3, n_nan=0, n_inf=0, n_fractional=1),
+        {},
+        "categorical",
+        id="fractional_floats",
+    ),
+    pytest.param(
+        pl.Series("x", ["3", "1", "2", "0"]),
+        dict(
+            argmin=3,
+            argmax=0,
+            n_numeric_int=4,
+            n_leading_zero=0,
+            numeric_int_min=0,
+            numeric_int_max=3,
+        ),
+        {},
+        "ordinal",
+        id="integer_strings",
+    ),
+    pytest.param(
+        pl.Series("x", ["3", "01", "2", "0"]),
+        dict(
+            argmin=3,
+            argmax=0,
+            n_numeric_int=4,
+            n_leading_zero=1,
+            numeric_int_min=0,
+            numeric_int_max=3,
+        ),
+        {},
+        "categorical",
+        id="leading_zero_strings",
+    ),
+    pytest.param(
+        pl.Series("x", [D, D, D, D]).dt.date(),
+        dict(),
+        {},
+        "categorical",
+        id="temporal_never_ordinal",
+    ),
 ]
 
 
@@ -174,16 +331,36 @@ def test_classification(s, overrides, params, expected):
 
 def test_zero_row_column_conclusions():
     r = conclude(
-        pl.Series("x", [], dtype=pl.Int64), n_rows=0, n_unique=0, entropy=float("nan"), f1=0, f2=0,
-        argmin=None, argmax=None, top5_idx=[], top5_count=[], capture_history=[0] * 7,
+        pl.Series("x", [], dtype=pl.Int64),
+        n_rows=0,
+        n_unique=0,
+        entropy=float("nan"),
+        f1=0,
+        f2=0,
+        argmin=None,
+        argmax=None,
+        top5_idx=[],
+        top5_count=[],
+        capture_history=[0] * 7,
     )
     assert r["class"] == "null" and r["top5"] == [] and r["min"] is None
-    assert r["est_method"] == "chao1" and r["est_cardinality"] == 0.0 and r["unique"] is False
+    assert (
+        r["est_method"] == "chao1"
+        and r["est_cardinality"] == 0.0
+        and r["unique"] is False
+    )
 
 
 @pytest.mark.parametrize(
     "params",
-    [{"categorical_threshold": -1}, {"zstd_level": 0}, {"zstd_level": 23}, {"seed": -1}, {"population_rows": -5}, {"population_rows": {"t": -1}}],
+    [
+        {"categorical_threshold": -1},
+        {"zstd_level": 0},
+        {"zstd_level": 23},
+        {"seed": -1},
+        {"population_rows": -5},
+        {"population_rows": {"t": -1}},
+    ],
 )
 def test_constructor_validates(params):
     cls = with_metrics(Describe, **{m: [None] for m in Describe.METRICS})
@@ -193,8 +370,27 @@ def test_constructor_validates(params):
 
 def test_agreement_tolerances():
     s = pl.Series("x", list(range(10)) * 4)
-    base = dict(n_rows=40, n_unique=10, f1=0, f2=0, capture_history=[0, 0, 0, 0, 0, 0, 10], entropy=3.0, size_zstd_bytes=1_000)
-    ref = run(with_metrics(Describe, **{k: [v] for k, v in ({m: None for m in Describe.METRICS} | DEFAULTS | base).items()}), {"t": s.to_frame()})
+    base = dict(
+        n_rows=40,
+        n_unique=10,
+        f1=0,
+        f2=0,
+        capture_history=[0, 0, 0, 0, 0, 0, 10],
+        entropy=3.0,
+        size_zstd_bytes=1_000,
+    )
+    ref = run(
+        with_metrics(
+            Describe,
+            **{
+                k: [v]
+                for k, v in (
+                    {m: None for m in Describe.METRICS} | DEFAULTS | base
+                ).items()
+            },
+        ),
+        {"t": s.to_frame()},
+    )
 
     def compare(**changes) -> list[str]:
         metrics = {m: None for m in Describe.METRICS} | DEFAULTS | base | changes
@@ -212,36 +408,51 @@ def test_agreement_tolerances():
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Known answers — the pyarrow size oracle itself
 
+
 def test_ipc_body_bytes_framing():
     seq = pa.array(np.arange(1_000, dtype=np.int32))
     assert _sizes.ipc_body_bytes(seq, None) == 4_000
-    assert _sizes.ipc_body_bytes(seq, 1) == 1_912  # 8-byte prefix + ZSTD frame, padded to 8
+    assert (
+        _sizes.ipc_body_bytes(seq, 1) == 1_912
+    )  # 8-byte prefix + ZSTD frame, padded to 8
     with_nulls = pa.array([None if i % 3 == 0 else i for i in range(1_000)], pa.int32())
-    assert _sizes.ipc_body_bytes(with_nulls, None) == 4_128  # + 125-byte validity padded to 128
+    assert (
+        _sizes.ipc_body_bytes(with_nulls, None) == 4_128
+    )  # + 125-byte validity padded to 128
     assert _sizes.ipc_body_bytes(pa.array([], pa.int32()), None) == 0
     assert _sizes.ipc_body_bytes(pa.array([1], pa.int32()), 1) == 24
     assert _sizes.ipc_body_bytes(pa.array(["ab", None], pa.large_string()), None) == 40
-    assert _sizes.ipc_body_bytes(pa.array([], pa.large_string()), None) == 8  # offsets [0]
+    assert (
+        _sizes.ipc_body_bytes(pa.array([], pa.large_string()), None) == 8
+    )  # offsets [0]
 
 
 def test_column_sizes_arrow_and_polars():
     s = pl.Series("x", np.arange(1_000, dtype=np.int32))
     assert _sizes.column_sizes(s, 1) == {
-        "size_bytes": 4_000, "size_zstd_bytes": 1_912, "size_polars_bytes": 4_000, "size_polars_zstd_bytes": 1_912,
+        "size_bytes": 4_000,
+        "size_zstd_bytes": 1_912,
+        "size_polars_bytes": 4_000,
+        "size_polars_zstd_bytes": 1_912,
     }
 
 
 def test_categorical_size_includes_its_dictionary():
     s = pl.Series("x", ["a", "b", "a"], dtype=pl.Categorical)
-    assert _sizes.column_sizes(s, 1)["size_bytes"] == 48  # dictionary batch 32 + keys 16
+    assert (
+        _sizes.column_sizes(s, 1)["size_bytes"] == 48
+    )  # dictionary batch 32 + keys 16
 
 
 def test_polars_size_is_the_native_ipc_body():
-    assert _sizes.column_sizes(pl.Series("x", ["ab", None]), 1)["size_polars_bytes"] == 40  # validity 8 + 2 views × 16
-    assert _sizes.column_sizes(pl.Series("x", ["a" * 20, "b"]), 1)["size_polars_bytes"] == 56  # views 32 + 20-byte buffer → 24
+    assert (
+        _sizes.column_sizes(pl.Series("x", ["ab", None]), 1)["size_polars_bytes"] == 40
+    )  # validity 8 + 2 views × 16
+    assert (
+        _sizes.column_sizes(pl.Series("x", ["a" * 20, "b"]), 1)["size_polars_bytes"]
+        == 56
+    )  # views 32 + 20-byte buffer → 24
 
-
-from datagen import describe_mixed, stringified
 
 PKG = "analytics.describe"
 ALL = implementation_params(PKG)
@@ -254,8 +465,14 @@ def profile(impl: str, s: pl.Series, **params) -> dict:
 
 
 def ineligible_frame() -> pl.DataFrame:
-    cols = [pl.Series("obj", [object(), object()], dtype=pl.Object), pl.Series("nul", [None, None], dtype=pl.Null)]
-    cols += [pl.Series("i128", [1, 2], dtype=pl.Int128), pl.Series("list_i128", [[1], [2]], dtype=pl.List(pl.Int128))]
+    cols = [
+        pl.Series("obj", [object(), object()], dtype=pl.Object),
+        pl.Series("nul", [None, None], dtype=pl.Null),
+    ]
+    cols += [
+        pl.Series("i128", [1, 2], dtype=pl.Int128),
+        pl.Series("list_i128", [[1], [2]], dtype=pl.List(pl.Int128)),
+    ]
     if hasattr(pl, "UInt128"):
         cols.append(pl.Series("u128", [1, 2], dtype=pl.UInt128))
     return pl.DataFrame(cols)
@@ -264,9 +481,14 @@ def ineligible_frame() -> pl.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Contract
 
+
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"mixed": describe_mixed(300), "empty": describe_mixed(50).clear(), "bad": ineligible_frame()}
+    frames = {
+        "mixed": describe_mixed(300),
+        "empty": describe_mixed(50).clear(),
+        "bad": ineligible_frame(),
+    }
     cls = load(impl)
     result = run(cls, frames)
     assert_contract(cls, result, frames)
@@ -277,9 +499,14 @@ def test_contract(impl):
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Reference agreement
 
+
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"mixed": describe_mixed(2_000), "strings": stringified(describe_mixed(500)), "empty": describe_mixed(50).clear()}
+    frames = {
+        "mixed": describe_mixed(2_000),
+        "strings": stringified(describe_mixed(500)),
+        "empty": describe_mixed(50).clear(),
+    }
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -295,10 +522,17 @@ def test_agrees_with_reference_on_large_dataset(impl):
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Known answers (the reference is included, so these are its oracle tests)
 
+
 @pytest.mark.parametrize("impl", ALL)
 def test_frequencies_entropy_and_top5(impl):
     r = profile(impl, pl.Series("x", ["a", "a", "b", None]))
-    assert (r["n_rows"], r["n_null"], r["n_unique"], r["f1"], r["f2"]) == (4, 1, 2, 1, 1)
+    assert (r["n_rows"], r["n_null"], r["n_unique"], r["f1"], r["f2"]) == (
+        4,
+        1,
+        2,
+        1,
+        1,
+    )
     assert r["entropy"] == approx(1.5)
     assert (r["top5_idx"], r["top5_count"]) == ([0, 2], [2, 1])
     assert sum(r["capture_history"]) == 2
@@ -319,13 +553,25 @@ def test_extremes_are_first_occurrences(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_float_zero_and_nan_are_one_value_each(impl):
     r = profile(impl, pl.Series("x", [0.0, -0.0, float("nan"), float("nan"), 1.5]))
-    assert (r["n_unique"], r["n_nan"], r["argmin"], r["argmax"], r["n_fractional"], r["max_frac_digits"]) == (3, 2, 0, 4, 1, 1)
+    assert (
+        r["n_unique"],
+        r["n_nan"],
+        r["argmin"],
+        r["argmax"],
+        r["n_fractional"],
+        r["max_frac_digits"],
+    ) == (3, 2, 0, 4, 1, 1)
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_float_decimal_places_and_specials(impl):
     r = profile(impl, pl.Series("x", [0.1, 1e-7, 1.5e20, 3.0, float("inf"), None]))
-    assert (r["max_frac_digits"], r["n_fractional"], r["n_inf"], r["n_nan"]) == (7, 2, 1, 0)
+    assert (r["max_frac_digits"], r["n_fractional"], r["n_inf"], r["n_nan"]) == (
+        7,
+        2,
+        1,
+        0,
+    )
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -343,7 +589,10 @@ def test_float32_uses_its_own_shortest_repr(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_non_float_columns_have_null_float_stats(impl):
     r = profile(impl, pl.Series("x", [1, 2]))
-    assert all(r[k] is None for k in ("n_nan", "n_inf", "n_fractional", "max_frac_digits", "n_f32_inexact"))
+    assert all(
+        r[k] is None
+        for k in ("n_nan", "n_inf", "n_fractional", "max_frac_digits", "n_f32_inexact")
+    )
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -365,16 +614,38 @@ def test_enum_orders_by_category_and_categorical_by_string(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_equal_struct_values_count_once(impl):
-    r = profile(impl, pl.Series("x", [{"a": 1, "b": "x"}, {"a": 1, "b": "x"}, {"a": 1, "b": None}, None]))
+    r = profile(
+        impl,
+        pl.Series(
+            "x", [{"a": 1, "b": "x"}, {"a": 1, "b": "x"}, {"a": 1, "b": None}, None]
+        ),
+    )
     assert (r["n_unique"], r["n_null"]) == (2, 1)
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_list_whole_and_inner_values(impl):
-    r = profile(impl, pl.Series("x", [[1, None], None, [], [3, 1]], dtype=pl.List(pl.Int64)))
-    assert (r["n_rows"], r["n_null"], r["n_unique"], r["argmin"], r["argmax"]) == (4, 1, 3, 2, 3)
-    assert (r["inner_n_values"], r["inner_n_null"], r["inner_n_unique"]) == (4, 1, 2)  # [1, None, 3, 1]
-    assert (r["inner_argmin"], r["inner_argmax"], r["inner_f1"], r["inner_f2"]) == (0, 2, 1, 1)
+    r = profile(
+        impl, pl.Series("x", [[1, None], None, [], [3, 1]], dtype=pl.List(pl.Int64))
+    )
+    assert (r["n_rows"], r["n_null"], r["n_unique"], r["argmin"], r["argmax"]) == (
+        4,
+        1,
+        3,
+        2,
+        3,
+    )
+    assert (r["inner_n_values"], r["inner_n_null"], r["inner_n_unique"]) == (
+        4,
+        1,
+        2,
+    )  # [1, None, 3, 1]
+    assert (r["inner_argmin"], r["inner_argmax"], r["inner_f1"], r["inner_f2"]) == (
+        0,
+        2,
+        1,
+        1,
+    )
     assert (r["inner_top5_idx"], r["inner_top5_count"]) == ([0, 2], [2, 1])
     assert (r["inner_min"], r["inner_max"]) == ("1", "3")
 
@@ -382,19 +653,35 @@ def test_list_whole_and_inner_values(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_n_midnight_uses_local_time(impl):
     s = pl.Series(
-        "x", [datetime(2024, 3, 31, 0, 0), datetime(2024, 3, 31, 12, 0), datetime(2024, 7, 1, 0, 0), datetime(2024, 10, 28, 0, 0, 0, 1)]
+        "x",
+        [
+            datetime(2024, 3, 31, 0, 0),
+            datetime(2024, 3, 31, 12, 0),
+            datetime(2024, 7, 1, 0, 0),
+            datetime(2024, 10, 28, 0, 0, 0, 1),
+        ],
     ).dt.replace_time_zone("Europe/London")
     # local midnight, noon, local midnight in BST (23:00 UTC — a UTC check would miss it), 1 µs past midnight
     assert profile(impl, s)["n_midnight"] == 2
-    assert profile(impl, pl.Series("x", [datetime(2024, 1, 1), datetime(2024, 1, 1, 1)]))["n_midnight"] == 1
+    assert (
+        profile(impl, pl.Series("x", [datetime(2024, 1, 1), datetime(2024, 1, 1, 1)]))[
+            "n_midnight"
+        ]
+        == 1
+    )
     assert profile(impl, pl.Series("x", [1]))["n_midnight"] is None
-
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_zero_row_and_all_null_columns(impl):
     z = profile(impl, pl.Series("x", [], dtype=pl.Int32))
-    assert (z["n_rows"], z["n_unique"], z["argmin"], z["top5_idx"], z["capture_history"]) == (0, 0, None, [], [0] * 7)
+    assert (
+        z["n_rows"],
+        z["n_unique"],
+        z["argmin"],
+        z["top5_idx"],
+        z["capture_history"],
+    ) == (0, 0, None, [], [0] * 7)
     assert math.isnan(z["entropy"]) and z["size_bytes"] == 0 and z["min_len"] is None
     a = profile(impl, pl.Series("x", [None, None], dtype=pl.String))
     assert (a["n_unique"], a["entropy"], a["argmin"]) == (0, 0.0, None)
@@ -414,7 +701,15 @@ def test_sizes_through_the_technique(impl):
     r = profile(impl, pl.Series("x", np.arange(1_000, dtype=np.int32)))
     assert (r["size_bytes"], r["size_polars_bytes"]) == (4_000, 4_000)
     assert r["size_zstd_bytes"] == approx(1_912, rel=0.01)
-    assert profile(impl, pl.Series("x", [None if i % 3 == 0 else i for i in range(1_000)], dtype=pl.Int32))["size_bytes"] == 4_128
+    assert (
+        profile(
+            impl,
+            pl.Series(
+                "x", [None if i % 3 == 0 else i for i in range(1_000)], dtype=pl.Int32
+            ),
+        )["size_bytes"]
+        == 4_128
+    )
     assert profile(impl, pl.Series("x", ["ab", None]))["size_polars_bytes"] == 40
 
 
@@ -422,8 +717,16 @@ def test_sizes_through_the_technique(impl):
 def test_gcd_metric(impl):
     assert profile(impl, pl.Series("x", [10, None, 20, 30]))["gcd"] == 10
     assert profile(impl, pl.Series("x", [None, None], dtype=pl.Int32))["gcd"] == 0
-    assert profile(impl, pl.Series("x", [Decimal("1.20"), Decimal("3.40")], dtype=pl.Decimal(10, 2)))["gcd"] == 20
-    days = pl.Series("x", [datetime(2024, 1, 1), datetime(2024, 1, 2)], dtype=pl.Datetime("us"))
+    assert (
+        profile(
+            impl,
+            pl.Series("x", [Decimal("1.20"), Decimal("3.40")], dtype=pl.Decimal(10, 2)),
+        )["gcd"]
+        == 20
+    )
+    days = pl.Series(
+        "x", [datetime(2024, 1, 1), datetime(2024, 1, 2)], dtype=pl.Datetime("us")
+    )
     assert profile(impl, days)["gcd"] == 86_400_000_000
     assert profile(impl, pl.Series("x", [1.5, 2.5]))["gcd"] is None
     assert profile(impl, pl.Series("x", ["a"], dtype=pl.Categorical))["gcd"] is None
@@ -441,7 +744,11 @@ def test_sum_len_metrics(impl):
     assert (b["sum_len"], b["sum_len_unique"]) == (4, 2)
     assert profile(impl, pl.Series("x", [1, 2]))["sum_len"] is None
     lists = profile(impl, pl.Series("x", [["ab", "c"], ["ab"]]))
-    assert (lists["sum_len"], lists["inner_sum_len"], lists["inner_sum_len_unique"]) == (None, 5, 3)
+    assert (
+        lists["sum_len"],
+        lists["inner_sum_len"],
+        lists["inner_sum_len_unique"],
+    ) == (None, 5, 3)
     empty = profile(impl, pl.Series("x", [], dtype=pl.String))
     assert (empty["sum_len"], empty["sum_len_unique"]) == (0, 0)
 
@@ -449,7 +756,11 @@ def test_sum_len_metrics(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_numeric_fraction_and_significant_digits(impl):
     r = profile(impl, pl.Series("x", ["1.50", "0.00120", "7", "abc", None]))
-    assert (r["numeric_min_frac_digits"], r["numeric_max_frac_digits"], r["numeric_max_sig_digits"]) == (0, 4, 2)
+    assert (
+        r["numeric_min_frac_digits"],
+        r["numeric_max_frac_digits"],
+        r["numeric_max_sig_digits"],
+    ) == (0, 4, 2)
     r = profile(impl, pl.Series("x", ["1200", "-0.0", "12.50"]))
     assert (r["numeric_min_frac_digits"], r["numeric_max_sig_digits"]) == (0, 4)
     r = profile(impl, pl.Series("x", ["0.25", "1.125"]))
@@ -460,20 +771,75 @@ def test_numeric_fraction_and_significant_digits(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_iso_significant_fraction_digits(impl):
-    r = profile(impl, pl.Series("x", ["10:00:00.120", "2024-01-05T10:00:00.000", "2024-01-05", None]))
+    r = profile(
+        impl,
+        pl.Series("x", ["10:00:00.120", "2024-01-05T10:00:00.000", "2024-01-05", None]),
+    )
     assert (r["iso_max_frac_digits"], r["iso_max_sig_frac_digits"]) == (3, 2)
-    r = profile(impl, pl.Series("x", ["2024-01-05 10:00", "2024-01-05T10:00:00.000000+02:00"]))
+    r = profile(
+        impl, pl.Series("x", ["2024-01-05 10:00", "2024-01-05T10:00:00.000000+02:00"])
+    )
     assert (r["iso_max_frac_digits"], r["iso_max_sig_frac_digits"]) == (6, 0)
-    assert profile(impl, pl.Series("x", ["2024-01-05"]))["iso_max_sig_frac_digits"] is None
+    assert (
+        profile(impl, pl.Series("x", ["2024-01-05"]))["iso_max_sig_frac_digits"] is None
+    )
 
 
 NUMERIC_CASES = [
-    pytest.param(["5.", ".5", "1.2.3", "+5", "1e5", " 5", "5 ", "٣"], dict(n_numeric=0, n_numeric_int=0, n_leading_zero=0, numeric_max_int_digits=None), id="rejected"),
-    pytest.param(["007", "-012"], dict(n_numeric=2, n_numeric_int=2, n_leading_zero=2, numeric_int_min=-12, numeric_int_max=7), id="leading_zero"),
-    pytest.param(["0", "-0"], dict(n_numeric=2, n_numeric_int=2, n_leading_zero=0, numeric_max_int_digits=0), id="zero_is_not_leading"),
-    pytest.param(["007.50"], dict(n_numeric=1, n_numeric_int=0, n_leading_zero=0, numeric_max_int_digits=1, numeric_max_frac_digits=1), id="decimal_ignores_zeros"),
-    pytest.param(["12", "-7", "300", "0.25"], dict(numeric_int_min=-7, numeric_int_max=300, numeric_max_int_digits=3, numeric_max_frac_digits=2), id="ranges"),
-    pytest.param(["1" + "0" * 38], dict(n_numeric_int=1, numeric_int_min=None, numeric_int_max=None, numeric_max_int_digits=39), id="39_digits"),
+    pytest.param(
+        ["5.", ".5", "1.2.3", "+5", "1e5", " 5", "5 ", "٣"],
+        dict(
+            n_numeric=0, n_numeric_int=0, n_leading_zero=0, numeric_max_int_digits=None
+        ),
+        id="rejected",
+    ),
+    pytest.param(
+        ["007", "-012"],
+        dict(
+            n_numeric=2,
+            n_numeric_int=2,
+            n_leading_zero=2,
+            numeric_int_min=-12,
+            numeric_int_max=7,
+        ),
+        id="leading_zero",
+    ),
+    pytest.param(
+        ["0", "-0"],
+        dict(n_numeric=2, n_numeric_int=2, n_leading_zero=0, numeric_max_int_digits=0),
+        id="zero_is_not_leading",
+    ),
+    pytest.param(
+        ["007.50"],
+        dict(
+            n_numeric=1,
+            n_numeric_int=0,
+            n_leading_zero=0,
+            numeric_max_int_digits=1,
+            numeric_max_frac_digits=1,
+        ),
+        id="decimal_ignores_zeros",
+    ),
+    pytest.param(
+        ["12", "-7", "300", "0.25"],
+        dict(
+            numeric_int_min=-7,
+            numeric_int_max=300,
+            numeric_max_int_digits=3,
+            numeric_max_frac_digits=2,
+        ),
+        id="ranges",
+    ),
+    pytest.param(
+        ["1" + "0" * 38],
+        dict(
+            n_numeric_int=1,
+            numeric_int_min=None,
+            numeric_int_max=None,
+            numeric_max_int_digits=39,
+        ),
+        id="39_digits",
+    ),
 ]
 
 
@@ -485,14 +851,49 @@ def test_numeric_scanner(impl, values, expected):
 
 
 ISO_CASES = [
-    pytest.param(["2024-02-29", "2023-02-29", "2024-13-01", "2024-1-05"], dict(n_iso_date=1, iso_max_frac_digits=None), id="calendar"),
-    pytest.param(["23:59", "24:00", "23:59:60", "10:00:00.123456789", "10:00:00.1234567890", "10:00:00."], dict(n_iso_time=2, iso_max_frac_digits=9), id="times"),
-    pytest.param(["2024-01-05T10:00", "2024-01-05 10:00:00", "2024-01-05t10:00"], dict(n_iso_datetime=2, n_iso_datetime_tz=0, iso_max_frac_digits=0), id="separator"),
     pytest.param(
-        ["2024-01-05T10:00:00Z", "2024-01-05 10:00:00+00:00", "2024-01-05T10:00-00:00", "2024-01-05T10:00+02:00", "2024-01-05T10:00+0200"],
-        dict(n_iso_datetime_tz=4, iso_n_offsets=2), id="offsets",
+        ["2024-02-29", "2023-02-29", "2024-13-01", "2024-1-05"],
+        dict(n_iso_date=1, iso_max_frac_digits=None),
+        id="calendar",
     ),
-    pytest.param(["2024-01-05T00:00:00.000", "2024-01-05T00:00", "2024-01-05T00:00:01", "2024-01-05T00:00Z"], dict(n_iso_datetime=3, n_iso_datetime_tz=1, iso_n_midnight=3), id="midnight"),
+    pytest.param(
+        [
+            "23:59",
+            "24:00",
+            "23:59:60",
+            "10:00:00.123456789",
+            "10:00:00.1234567890",
+            "10:00:00.",
+        ],
+        dict(n_iso_time=2, iso_max_frac_digits=9),
+        id="times",
+    ),
+    pytest.param(
+        ["2024-01-05T10:00", "2024-01-05 10:00:00", "2024-01-05t10:00"],
+        dict(n_iso_datetime=2, n_iso_datetime_tz=0, iso_max_frac_digits=0),
+        id="separator",
+    ),
+    pytest.param(
+        [
+            "2024-01-05T10:00:00Z",
+            "2024-01-05 10:00:00+00:00",
+            "2024-01-05T10:00-00:00",
+            "2024-01-05T10:00+02:00",
+            "2024-01-05T10:00+0200",
+        ],
+        dict(n_iso_datetime_tz=4, iso_n_offsets=2),
+        id="offsets",
+    ),
+    pytest.param(
+        [
+            "2024-01-05T00:00:00.000",
+            "2024-01-05T00:00",
+            "2024-01-05T00:00:01",
+            "2024-01-05T00:00Z",
+        ],
+        dict(n_iso_datetime=3, n_iso_datetime_tz=1, iso_n_midnight=3),
+        id="midnight",
+    ),
 ]
 
 
@@ -512,7 +913,15 @@ def test_scanners_on_categorical_and_non_strings(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_adversarial_long_strings(impl):
-    s = pl.Series("x", ["0" * 10**6 + "." + "0" * 10**6 + ".", "0" * 10**6, "2024-01-05T" + "0" * 10**6, "9" * 39])
+    s = pl.Series(
+        "x",
+        [
+            "0" * 10**6 + "." + "0" * 10**6 + ".",
+            "0" * 10**6,
+            "2024-01-05T" + "0" * 10**6,
+            "9" * 39,
+        ],
+    )
     r = profile(impl, s)
     assert (r["n_numeric"], r["n_numeric_int"], r["n_leading_zero"]) == (2, 2, 1)
     assert r["numeric_int_min"] is None  # "9"*39 has more than 38 significant digits
@@ -532,15 +941,26 @@ def test_stringified_describe_mixed(impl):
         assert out[c]["n_numeric_int"] == _non_null(source, c), c
         assert out[c]["n_leading_zero"] == 0, c
     assert out["date"]["n_iso_date"] == _non_null(source, "date")
-    assert out["dt_naive"]["n_iso_datetime"] == _non_null(source, "dt_naive")  # "2024-01-05 10:00:00.000000"
-    assert out["dt_tz"]["n_iso_datetime_tz"] == _non_null(source, "dt_tz")  # "…+00:00" / "…+01:00"
+    assert out["dt_naive"]["n_iso_datetime"] == _non_null(
+        source, "dt_naive"
+    )  # "2024-01-05 10:00:00.000000"
+    assert out["dt_tz"]["n_iso_datetime_tz"] == _non_null(
+        source, "dt_tz"
+    )  # "…+00:00" / "…+01:00"
     assert out["dt_tz"]["iso_n_offsets"] == 2  # GMT and BST across 2024
     assert out["time"]["n_iso_time"] == _non_null(source, "time")
     assert out["f64_price"]["n_numeric"] == _non_null(source, "f64_price")
-    assert out["dec"]["n_numeric"] == _non_null(source, "dec") and out["dec"]["numeric_max_frac_digits"] <= 2
+    assert (
+        out["dec"]["n_numeric"] == _non_null(source, "dec")
+        and out["dec"]["numeric_max_frac_digits"] <= 2
+    )
     # Polars writes "1e-7", "1.5e+20", "inf", "NaN": exponent and special forms are deliberately not numeric.
-    assert out["f64"]["n_numeric"] == int(text["f64"].is_in(["0.0", "-0.0", "0.1"]).sum())
-    assert out["bool"]["n_numeric"] == 0 and out["bool"]["n_iso_date"] == 0  # "true" / "false"
+    assert out["f64"]["n_numeric"] == int(
+        text["f64"].is_in(["0.0", "-0.0", "0.1"]).sum()
+    )
+    assert (
+        out["bool"]["n_numeric"] == 0 and out["bool"]["n_iso_date"] == 0
+    )  # "true" / "false"
     lst = out["list_i64"]
     assert lst["inner_n_numeric_int"] == lst["inner_n_values"] - lst["inner_n_null"]
 
@@ -548,9 +968,16 @@ def test_stringified_describe_mixed(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_stringified_large_dataset_columns(impl):
     large = pl.read_ipc(LARGE).head(5_000)
-    cols = [c for c, dt in large.schema.items() if dt in (pl.Int32, pl.Int64, pl.Date, pl.Float64)][:25]
+    cols = [
+        c
+        for c, dt in large.schema.items()
+        if dt in (pl.Int32, pl.Int64, pl.Date, pl.Float64)
+    ][:25]
     source = large.select(cols)
-    out = {r["col_a"]: r for r in run(load(impl), {"s": stringified(source)}).iter_rows(named=True)}
+    out = {
+        r["col_a"]: r
+        for r in run(load(impl), {"s": stringified(source)}).iter_rows(named=True)
+    }
     for c in cols:
         n = _non_null(source, c)
         if source[c].dtype in (pl.Int32, pl.Int64):
@@ -563,33 +990,57 @@ def test_stringified_large_dataset_columns(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_multi_chunk_and_sliced_input(impl):
-    parts = [pl.Series("x", ["b", None]), pl.Series("x", ["a", "c"]), pl.Series("x", ["a"])]
+    parts = [
+        pl.Series("x", ["b", None]),
+        pl.Series("x", ["a", "c"]),
+        pl.Series("x", ["a"]),
+    ]
     s = pl.concat(parts, rechunk=False)
     assert s.n_chunks() == 3
     r = profile(impl, s)
-    assert (r["n_unique"], r["argmin"], r["argmax"], r["top5_idx"]) == (3, 2, 3, [2, 0, 3])
-    sliced = pl.Series("x", [[9], [1, 2], None, [3]], dtype=pl.List(pl.Int64)).slice(1, 3)
+    assert (r["n_unique"], r["argmin"], r["argmax"], r["top5_idx"]) == (
+        3,
+        2,
+        3,
+        [2, 0, 3],
+    )
+    sliced = pl.Series("x", [[9], [1, 2], None, [3]], dtype=pl.List(pl.Int64)).slice(
+        1, 3
+    )
     q = profile(impl, sliced)
-    assert (q["inner_n_values"], q["inner_argmin"], q["size_bytes"]) == (3, 0, profile(impl, pl.Series("x", [[1, 2], None, [3]], dtype=pl.List(pl.Int64)))["size_bytes"])
+    assert (q["inner_n_values"], q["inner_argmin"], q["size_bytes"]) == (
+        3,
+        0,
+        profile(impl, pl.Series("x", [[1, 2], None, [3]], dtype=pl.List(pl.Int64)))[
+            "size_bytes"
+        ],
+    )
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_first_occurrence_across_parallel_chunks(impl):
     chunk = 1 << 16
     values = np.full(3 * chunk + 17, 5, dtype=np.int64)
-    values[2 * chunk + 3] = 1   # first minimum, third chunk
-    values[3 * chunk + 1] = 1   # later minimum, fourth chunk
-    values[chunk + 7] = 9       # maximum, second chunk
+    values[2 * chunk + 3] = 1  # first minimum, third chunk
+    values[3 * chunk + 1] = 1  # later minimum, fourth chunk
+    values[chunk + 7] = 9  # maximum, second chunk
     r = profile(impl, pl.Series("x", values))
     assert (r["argmin"], r["argmax"]) == (2 * chunk + 3, chunk + 7)
-    assert (r["top5_idx"], r["top5_count"]) == ([0, 2 * chunk + 3, chunk + 7], [len(values) - 3, 2, 1])
+    assert (r["top5_idx"], r["top5_count"]) == (
+        [0, 2 * chunk + 3, chunk + 7],
+        [len(values) - 3, 2, 1],
+    )
 
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_categorical_and_enum_sizes_agree(impl):
     frame = describe_mixed(1_000).select("cat", "enum", "str_free")
     exact = ["col_a", "size_bytes", "size_polars_bytes"]
-    assert run(load(impl), {"t": frame}).select(exact).equals(run(reference(PKG), {"t": frame}).select(exact))
+    assert (
+        run(load(impl), {"t": frame})
+        .select(exact)
+        .equals(run(reference(PKG), {"t": frame}).select(exact))
+    )
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -603,12 +1054,18 @@ def test_nested_ordering_with_null_elements(impl):
 # ─────────────────────────────────────────────────────────────────────────────
 # Final-review regressions
 
+
 @pytest.mark.parametrize("impl", ALL)
 def test_array_lengths_with_null_rows(impl):
     # Polars marks arr.len() sorted even with a null in the middle, so a naive .max() returns None.
-    r = profile(impl, pl.Series("x", [[1, 2], None, [3, 4]], dtype=pl.Array(pl.Int64, 2)))
+    r = profile(
+        impl, pl.Series("x", [[1, 2], None, [3, 4]], dtype=pl.Array(pl.Int64, 2))
+    )
     assert (r["min_len"], r["max_len"]) == (2, 2)
-    nested = profile(impl, pl.Series("x", [[[1, 2], None, [3, 4]]], dtype=pl.List(pl.Array(pl.Int64, 2))))
+    nested = profile(
+        impl,
+        pl.Series("x", [[[1, 2], None, [3, 4]]], dtype=pl.List(pl.Array(pl.Int64, 2))),
+    )
     assert (nested["inner_min_len"], nested["inner_max_len"]) == (2, 2)
 
 
@@ -635,22 +1092,52 @@ print("OK" if not problems else problems)
 @pytest.mark.parametrize("impl", ALL)
 def test_sliced_nested_with_nulls(impl):
     """A sliced Array/Struct with nulls must describe exactly like the same rows built
-    fresh — and must never crash the interpreter (run in a subprocess to observe that)."""
+    fresh — and must never crash the interpreter (run in a subprocess to observe that).
+    """
     import subprocess
     import sys
+
     tests_dir = Path(__file__).parent
     code = _SLICED.format(impl=impl)
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tests_dir, timeout=300)
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=tests_dir,
+        timeout=300,
+    )
     assert out.returncode == 0, f"exit {out.returncode}: {out.stderr[-2000:]}"
     assert out.stdout.strip().endswith("OK"), out.stdout[-2000:]
 
 
 NESTED_CASES = [
-    pytest.param(pl.Series("x", [[0.0], [-0.0], [1.5]]), dict(n_unique=2, argmin=0, argmax=2), id="list_negzero"),
-    pytest.param(pl.Series("x", [{"a": 0.0}, {"a": -0.0}, {"a": 1.0}]), dict(n_unique=2, argmin=0, argmax=2), id="struct_negzero"),
-    pytest.param(pl.Series("x", [["a"], ["z"], ["a"]], dtype=pl.List(pl.Enum(["z", "a"]))), dict(n_unique=2, argmin=1, argmax=0), id="list_enum"),
-    pytest.param(pl.Series("x", [["b"], ["a"], ["b"]], dtype=pl.List(pl.Categorical)), dict(n_unique=2, argmin=1, argmax=0), id="list_categorical"),
-    pytest.param(pl.Series("x", [{"e": "a"}, {"e": "z"}], dtype=pl.Struct({"e": pl.Enum(["z", "a"])})), dict(n_unique=2, argmin=1, argmax=0), id="struct_enum"),
+    pytest.param(
+        pl.Series("x", [[0.0], [-0.0], [1.5]]),
+        dict(n_unique=2, argmin=0, argmax=2),
+        id="list_negzero",
+    ),
+    pytest.param(
+        pl.Series("x", [{"a": 0.0}, {"a": -0.0}, {"a": 1.0}]),
+        dict(n_unique=2, argmin=0, argmax=2),
+        id="struct_negzero",
+    ),
+    pytest.param(
+        pl.Series("x", [["a"], ["z"], ["a"]], dtype=pl.List(pl.Enum(["z", "a"]))),
+        dict(n_unique=2, argmin=1, argmax=0),
+        id="list_enum",
+    ),
+    pytest.param(
+        pl.Series("x", [["b"], ["a"], ["b"]], dtype=pl.List(pl.Categorical)),
+        dict(n_unique=2, argmin=1, argmax=0),
+        id="list_categorical",
+    ),
+    pytest.param(
+        pl.Series(
+            "x", [{"e": "a"}, {"e": "z"}], dtype=pl.Struct({"e": pl.Enum(["z", "a"])})
+        ),
+        dict(n_unique=2, argmin=1, argmax=0),
+        id="struct_enum",
+    ),
 ]
 
 

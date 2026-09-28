@@ -12,7 +12,11 @@ class DescribeRust(Describe):
         rows: dict[tuple[str, str], dict] = {}
         for frame, group in group_by_frame(combos).items():
             df = frames[frame].select([c for ((_, c),) in group])
-            stats = _plugin.describe_columns(df, self.seed).join(_plugin.column_sizes(df, self.zstd_level), on="column")
+            stats = _plugin.describe_columns(df, self.seed).join(
+                _plugin.column_sizes(df, self.zstd_level), on="column"
+            )
             for r in stats.iter_rows(named=True):
                 rows[frame, r["column"]] = r
-        return self.metrics_frame(combos, {m: [rows[k[0]][m] for k in combos] for m in self.METRICS})
+        return self.metrics_frame(
+            combos, {m: [rows[k[0]][m] for k in combos] for m in self.METRICS}
+        )

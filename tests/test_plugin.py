@@ -16,12 +16,20 @@ from datagen import mixed_dtypes
 from harness import load, run
 
 PACKAGES = (
-    "analytics.gcd", "analytics.describe", "analytics.recommend", "analytics.membership",
-    "analytics.similarity", "analytics.chi_squared", "analytics.pairwise_entropy",
-    "analytics.threeway_entropy", "analytics.adjusted_rand",
+    "analytics.gcd",
+    "analytics.describe",
+    "analytics.recommend",
+    "analytics.membership",
+    "analytics.similarity",
+    "analytics.chi_squared",
+    "analytics.pairwise_entropy",
+    "analytics.threeway_entropy",
+    "analytics.adjusted_rand",
 )
 EVERY_IMPLEMENTATION = [
-    pytest.param(f"{p}:{n}", id=n) for p in PACKAGES for n in importlib.import_module(p).IMPLEMENTATIONS
+    pytest.param(f"{p}:{n}", id=n)
+    for p in PACKAGES
+    for n in importlib.import_module(p).IMPLEMENTATIONS
 ]
 
 
@@ -38,7 +46,10 @@ def wide_integer_frame() -> tuple[pl.DataFrame, list[str]]:
 
 
 def test_holds_wide_integer_detects_nested_dtype_classes():
-    assert all(holds_wide_integer(d) for d in (pl.Int128, pl.List(pl.Int128), pl.Struct({"a": pl.Int128})))
+    assert all(
+        holds_wide_integer(d)
+        for d in (pl.Int128, pl.List(pl.Int128), pl.Struct({"a": pl.Int128}))
+    )
 
 
 @pytest.mark.parametrize("spec", EVERY_IMPLEMENTATION)
@@ -82,7 +93,9 @@ def test_result_table_can_be_exported_twice():
 def test_bloom_bits_are_bytes():
     bits = rs.bloom_filter(pl.DataFrame({"a": [1, 2, 3]}), 3, 64)
     assert isinstance(bits, bytes) and len(bits) == 8
-    ratios = pl.DataFrame(rs.membership_ratio(pl.DataFrame({"a": [1, 2, 3]}), bits, 3, 64))
+    ratios = pl.DataFrame(
+        rs.membership_ratio(pl.DataFrame({"a": [1, 2, 3]}), bits, 3, 64)
+    )
     assert ratios["ratio_non_null"].to_list() == [1.0]
 
 
@@ -142,8 +155,14 @@ RUST_AND_REFERENCE = [
 @pytest.mark.parametrize("spec", RUST_AND_REFERENCE)
 def test_arrow_inputs_match_polars(spec, kind):
     df = mixed_dtypes(200, seed=1)
-    table = pa.table(df)  # through __arrow_c_stream__: keeps Polars' Categorical metadata
-    arrow = {"table": table, "record_batch": table.combine_chunks().to_batches()[0], "reader": table.to_reader()}[kind]
+    table = pa.table(
+        df
+    )  # through __arrow_c_stream__: keeps Polars' Categorical metadata
+    arrow = {
+        "table": table,
+        "record_batch": table.combine_chunks().to_batches()[0],
+        "reader": table.to_reader(),
+    }[kind]
     cls = load(spec)
     assert_frame_equal(run(cls, {"t": arrow}), run(cls, {"t": df}))
 
@@ -183,6 +202,12 @@ def test_sliced_array_struct_columns_do_not_crash(package):
     specs = [f"{package}:{n}" for n in importlib.import_module(package).IMPLEMENTATIONS]
     code = _SLICED_ARRAY_STRUCT.format(specs=specs)
     tests_dir = Path(__file__).parent
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tests_dir, timeout=300)
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=tests_dir,
+        timeout=300,
+    )
     assert out.returncode == 0, f"exit {out.returncode}: {out.stderr[-2000:]}"
     assert out.stdout.strip().endswith("DONE"), out.stdout[-2000:]

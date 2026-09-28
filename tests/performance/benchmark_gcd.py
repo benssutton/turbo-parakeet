@@ -20,8 +20,20 @@ if __name__ == "__main__":
         "analytics.gcd",
         [
             large_dataset(),
-            Dataset("narrow 10M x 4", lambda: {"t": integer_multiples(10_000_000, 4, G)}, exclude=("GcdMath",)),
-            Dataset("wide 1M x 100", lambda: {"t": integer_multiples(1_000_000, 100, G)}, exclude=("GcdMath",)),
-            Dataset("early exit 10M x 4", lambda: {"t": integer_random(10_000_000, 4)}, exclude=("GcdMath",)),
+            Dataset(
+                "narrow 10M x 4",
+                lambda: {"t": integer_multiples(10_000_000, 4, G)},
+                exclude=("GcdMath",),
+            ),
+            Dataset(
+                "wide 1M x 100",
+                lambda: {"t": integer_multiples(1_000_000, 100, G)},
+                exclude=("GcdMath",),
+            ),
+            Dataset(
+                "early exit 10M x 4",
+                lambda: {"t": integer_random(10_000_000, 4)},
+                exclude=("GcdMath",),
+            ),
         ],
     )

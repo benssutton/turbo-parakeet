@@ -13,7 +13,15 @@ import pytest
 
 from analytics.adjusted_rand import AdjustedRand
 from datagen import mixed_dtypes
-from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
+from harness import (
+    assert_agrees,
+    assert_contract,
+    implementation_params,
+    load,
+    reference,
+    run,
+    with_metrics,
+)
 
 PKG = "analytics.adjusted_rand"
 ALL = implementation_params(PKG)
@@ -42,15 +50,25 @@ def _ari(impl, a, b):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_known_answers(impl):
-    assert _ari(impl, [0, 0, 1, 1], [5, 5, 7, 7])["ari"] == pytest.approx(1.0)  # identical partitions, relabelled
-    assert _ari(impl, [0, 0, 1, 1], [0, 1, 0, 1])["ari"] == pytest.approx(-0.5)  # maximally crossed
-    assert _ari(impl, [1, 1, 1, 1], [2, 2, 2, 2])["ari"] == pytest.approx(1.0)  # both constant (sklearn convention)
+    assert _ari(impl, [0, 0, 1, 1], [5, 5, 7, 7])["ari"] == pytest.approx(
+        1.0
+    )  # identical partitions, relabelled
+    assert _ari(impl, [0, 0, 1, 1], [0, 1, 0, 1])["ari"] == pytest.approx(
+        -0.5
+    )  # maximally crossed
+    assert _ari(impl, [1, 1, 1, 1], [2, 2, 2, 2])["ari"] == pytest.approx(
+        1.0
+    )  # both constant (sklearn convention)
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_no_overlap_is_nan(impl):
     row = _ari(impl, [1, 2, None, None], [None, None, 1, 2])
-    assert math.isnan(row["ari"]) and row["n_valid"] == 0 and row["same_partition"] is False
+    assert (
+        math.isnan(row["ari"])
+        and row["n_valid"] == 0
+        and row["same_partition"] is False
+    )
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -62,13 +80,21 @@ def test_negative_zero_and_zero_are_one_label(impl):
 def test_conclusions_default_override_and_nan():
     Fixed = with_metrics(AdjustedRand, ari=[0.89, 0.9, float("nan")], n_valid=[4] * 3)
     df = pl.DataFrame({"a": [1, 2], "b": [1, 2], "c": [1, 2]})
-    assert Fixed().add({"t": df}).result()["same_partition"].to_list() == [False, True, False]
-    assert Fixed(ari_threshold=0.5).add({"t": df}).result()["same_partition"].to_list() == [True, True, False]
+    assert Fixed().add({"t": df}).result()["same_partition"].to_list() == [
+        False,
+        True,
+        False,
+    ]
+    assert Fixed(ari_threshold=0.5).add({"t": df}).result()[
+        "same_partition"
+    ].to_list() == [True, True, False]
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_zero_row_frame_is_ineligible(impl):
-    df = pl.DataFrame({"a": pl.Series([], dtype=pl.Int64), "b": pl.Series([], dtype=pl.Int64)})
+    df = pl.DataFrame(
+        {"a": pl.Series([], dtype=pl.Int64), "b": pl.Series([], dtype=pl.Int64)}
+    )
     assert run(load(impl), {"t": df})["status"].to_list() == ["ineligible"]
 
 

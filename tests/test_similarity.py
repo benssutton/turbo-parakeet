@@ -22,7 +22,15 @@ import pytest
 
 from analytics.similarity import Similarity, SimilarityExactLRU
 from datagen import containment_pairs, related_frames, similar_frames
-from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
+from harness import (
+    assert_agrees,
+    assert_contract,
+    implementation_params,
+    load,
+    reference,
+    run,
+    with_metrics,
+)
 
 PKG = "analytics.similarity"
 ALL = implementation_params(PKG)
@@ -30,13 +38,23 @@ OTHERS = implementation_params(PKG, include_reference=False)
 NAN = float("nan")
 
 SMALL = {
-    "df1": pl.DataFrame({"A": list(range(1, 11)), "B": list(range(3, 13)), "C": list(range(10, 20))}),
-    "df2": pl.DataFrame({"A": list(range(1, 6)), "B": list(range(4, 9)), "C": list(range(10, 15))}),
+    "df1": pl.DataFrame(
+        {"A": list(range(1, 11)), "B": list(range(3, 13)), "C": list(range(10, 20))}
+    ),
+    "df2": pl.DataFrame(
+        {"A": list(range(1, 6)), "B": list(range(4, 9)), "C": list(range(10, 15))}
+    ),
 }
 
 
 @pytest.mark.parametrize("impl", ALL)
-@pytest.mark.parametrize("make", [pytest.param(lambda: SMALL, id="small"), pytest.param(lambda: related_frames(200), id="related")])
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(lambda: SMALL, id="small"),
+        pytest.param(lambda: related_frames(200), id="related"),
+    ],
+)
 def test_contract(impl, make):
     frames = make()
     cls = load(impl)
@@ -44,7 +62,13 @@ def test_contract(impl, make):
 
 
 @pytest.mark.parametrize("impl", OTHERS)
-@pytest.mark.parametrize("make", [pytest.param(lambda: SMALL, id="small"), pytest.param(lambda: related_frames(1_000), id="related")])
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(lambda: SMALL, id="small"),
+        pytest.param(lambda: related_frames(1_000), id="related"),
+    ],
+)
 def test_agrees_with_reference(impl, make):
     frames = make()
     cls = load(impl)
@@ -87,13 +111,21 @@ def test_reference_known_pairs():
         ("df1", "B", "df2", "B"),
         ("df1", "C", "df2", "C"),
     }
-    aa = out.filter((pl.col("col_a") == "A") & (pl.col("df_b") == "df2") & (pl.col("col_b") == "A")).row(0, named=True)
+    aa = out.filter(
+        (pl.col("col_a") == "A") & (pl.col("df_b") == "df2") & (pl.col("col_b") == "A")
+    ).row(0, named=True)
     assert (aa["jaccard"], aa["overlap"]) == (0.5, 1.0)
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_value_families(impl):
-    df = pl.DataFrame({"i32": pl.Series([1, 2], dtype=pl.Int32), "i64": pl.Series([1, 2], dtype=pl.Int64), "s": ["1", "2"]})
+    df = pl.DataFrame(
+        {
+            "i32": pl.Series([1, 2], dtype=pl.Int32),
+            "i64": pl.Series([1, 2], dtype=pl.Int64),
+            "s": ["1", "2"],
+        }
+    )
     out = run(load(impl), {"t": df})
     assert out.select("col_a", "col_b", "status").rows() == [
         ("i32", "i64", "computed"),
@@ -105,7 +137,10 @@ def test_value_families(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_pipe_and_shared_names(impl):
-    frames = {"x|y": pl.DataFrame({"a|b": [1, 2, 3]}), "z": pl.DataFrame({"a|b": [1, 2, 3]})}
+    frames = {
+        "x|y": pl.DataFrame({"a|b": [1, 2, 3]}),
+        "z": pl.DataFrame({"a|b": [1, 2, 3]}),
+    }
     r = run(load(impl), frames).row(0, named=True)
     assert (r["df_a"], r["col_a"], r["df_b"], r["col_b"]) == ("x|y", "a|b", "z", "a|b")
     assert r["status"] == "computed" and (r["jaccard"], r["overlap"]) == (1.0, 1.0)
@@ -114,9 +149,16 @@ def test_pipe_and_shared_names(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_empty_column(impl):
     df = pl.DataFrame(
-        {"e": pl.Series([None, None], dtype=pl.Int64), "v": [1, 2], "e2": pl.Series([None, None], dtype=pl.Int64)}
+        {
+            "e": pl.Series([None, None], dtype=pl.Int64),
+            "v": [1, 2],
+            "e2": pl.Series([None, None], dtype=pl.Int64),
+        }
     )
-    rows = {(r["col_a"], r["col_b"]): r for r in run(load(impl), {"t": df}).iter_rows(named=True)}
+    rows = {
+        (r["col_a"], r["col_b"]): r
+        for r in run(load(impl), {"t": df}).iter_rows(named=True)
+    }
     ev, ee = rows[("e", "v")], rows[("e", "e2")]
     assert ev["status"] == ee["status"] == "computed"
     assert ev["jaccard"] == 0.0 and math.isnan(ev["overlap"])
@@ -137,13 +179,13 @@ def test_conclusions_default_override_and_nan():
 
 # ── optional-dependency import isolation ────────────────────────────────────
 
+
 def test_import_and_use_without_datasketch():
     """analytics.similarity must import, and MinHashRust/SimilarityExactLRU must
     work, when datasketch cannot be imported (it's an optional reference impl,
     lazily imported by MinHashDatasketch only). Run in a subprocess so faking the
     ImportError can't leak into other tests via sys.modules."""
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import sys
         sys.modules["datasketch"] = None  # forces ImportError on `import datasketch`
         import polars as pl
@@ -160,14 +202,16 @@ def test_import_and_use_without_datasketch():
         else:
             raise SystemExit("MinHashDatasketch should have raised ImportError")
         print("OK")
-        """
+        """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK" in result.stdout
 
 
 # ── the deliberate LRU cache ────────────────────────────────────────────────
+
 
 def test_lru_is_per_instance_and_cleared_on_add():
     a, b = SimilarityExactLRU(), SimilarityExactLRU()

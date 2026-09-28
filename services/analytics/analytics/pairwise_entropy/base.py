@@ -10,7 +10,9 @@ from analytics.base import Technique, at_least, check_unit, computed
 
 def near_unique(h_column: str, margin: float) -> pl.Expr:
     """Joint entropy within `margin` bits of log2(n_rows): combinations are (almost) all distinct."""
-    return (pl.col("n_rows") > 1) & (pl.col(h_column) >= pl.col("n_rows").cast(pl.Float64).log(2) - margin)
+    return (pl.col("n_rows") > 1) & (
+        pl.col(h_column) >= pl.col("n_rows").cast(pl.Float64).log(2) - margin
+    )
 
 
 class PairwiseEntropy(Technique):
@@ -39,7 +41,9 @@ class PairwiseEntropy(Technique):
         super().__init__()
         check_unit("nmi_threshold", nmi_threshold)
         if near_unique_margin < 0:
-            raise ValueError(f"near_unique_margin must be >= 0, got {near_unique_margin}")
+            raise ValueError(
+                f"near_unique_margin must be >= 0, got {near_unique_margin}"
+            )
         self.nmi_threshold = nmi_threshold
         self.near_unique_margin = near_unique_margin
 
@@ -49,9 +53,20 @@ class PairwiseEntropy(Technique):
     def entropy_rows(self, combos, h_a, h_b, h_ab, n_rows) -> pl.DataFrame:
         """Metrics frame from marginal and joint entropies (MI/NMI derived here, once)."""
         mi = [a + b - ab for a, b, ab in zip(h_a, h_b, h_ab)]
-        nmi = [m / min(a, b) if min(a, b) > 0 else math.nan for m, a, b in zip(mi, h_a, h_b)]
+        nmi = [
+            m / min(a, b) if min(a, b) > 0 else math.nan
+            for m, a, b in zip(mi, h_a, h_b)
+        ]
         return self.metrics_frame(
-            combos, {"h_a": h_a, "h_b": h_b, "h_ab": h_ab, "mi": mi, "nmi": nmi, "n_rows": n_rows}
+            combos,
+            {
+                "h_a": h_a,
+                "h_b": h_b,
+                "h_ab": h_ab,
+                "mi": mi,
+                "nmi": nmi,
+                "n_rows": n_rows,
+            },
         )
 
     def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:

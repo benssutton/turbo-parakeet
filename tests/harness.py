@@ -56,19 +56,35 @@ def assert_contract(cls: type[Technique], result: pl.DataFrame, frames: dict) ->
         **cls.CONCLUSIONS,
     }
     assert list(result.schema.items()) == list(expected.items())
-    assert result.to_arrow().num_rows == result.height, "result must export to native Arrow"
-    collected = {n: f.collect() if isinstance(f, pl.LazyFrame) else f for n, f in frames.items()}
-    assert result.select(keys).equals(cls.keys_frame(cls.enumerate(collected))), "rows must be every combination, in canonical order"
+    assert (
+        result.to_arrow().num_rows == result.height
+    ), "result must export to native Arrow"
+    collected = {
+        n: f.collect() if isinstance(f, pl.LazyFrame) else f for n, f in frames.items()
+    }
+    assert result.select(keys).equals(
+        cls.keys_frame(cls.enumerate(collected))
+    ), "rows must be every combination, in canonical order"
     idle = result.filter(pl.col("status") != "computed")
     for col in [*cls.METRICS, *cls.CONCLUSIONS]:
-        assert idle[col].null_count() == idle.height, f"{col} must be null where status != computed"
+        assert (
+            idle[col].null_count() == idle.height
+        ), f"{col} must be null where status != computed"
     for col in cls.DESCRIPTORS:
-        assert result[col].null_count() == 0, f"descriptor {col} must be filled on every row"
+        assert (
+            result[col].null_count() == 0
+        ), f"descriptor {col} must be filled on every row"
 
 
-def assert_agrees(impl: Technique, result: pl.DataFrame, reference_result: pl.DataFrame) -> None:
+def assert_agrees(
+    impl: Technique, result: pl.DataFrame, reference_result: pl.DataFrame
+) -> None:
     problems = impl.agreement(result, reference_result)
-    assert not problems, f"{type(impl).__name__} disagrees with the reference:\n" + "\n".join(problems[:20])
+    assert (
+        not problems
+    ), f"{type(impl).__name__} disagrees with the reference:\n" + "\n".join(
+        problems[:20]
+    )
 
 
 def with_metrics(base: type[Technique], **metrics: list) -> type[Technique]:

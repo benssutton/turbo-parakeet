@@ -166,8 +166,14 @@ mod tests {
     #[test]
     fn test_null_rows_dropped() {
         // Row 2 (a null) and row 3 (b null) are excluded everywhere.
-        let a = dense(&Series::new("a".into(), &[Some(1i32), Some(1), None, Some(2), Some(2)]));
-        let b = dense(&Series::new("b".into(), &[Some(7i32), Some(7), Some(7), None, Some(8)]));
+        let a = dense(&Series::new(
+            "a".into(),
+            &[Some(1i32), Some(1), None, Some(2), Some(2)],
+        ));
+        let b = dense(&Series::new(
+            "b".into(),
+            &[Some(7i32), Some(7), Some(7), None, Some(8)],
+        ));
         let t = build_contingency(&a, &b, 5);
         assert_eq!(t.n_valid, 3);
         let total_cells: u64 = t.cells.iter().map(|&(_, _, c)| c).sum();
@@ -184,11 +190,15 @@ mod tests {
         // Σ cells == Σ marg_a == Σ marg_b == n_valid, on data with nulls.
         let a = dense(&Series::new(
             "a".into(),
-            &(0..100).map(|i| if i % 7 == 0 { None } else { Some(i % 5) }).collect::<Vec<Option<i32>>>(),
+            &(0..100)
+                .map(|i| if i % 7 == 0 { None } else { Some(i % 5) })
+                .collect::<Vec<Option<i32>>>(),
         ));
         let b = dense(&Series::new(
             "b".into(),
-            &(0..100).map(|i| if i % 11 == 0 { None } else { Some(i % 3) }).collect::<Vec<Option<i32>>>(),
+            &(0..100)
+                .map(|i| if i % 11 == 0 { None } else { Some(i % 3) })
+                .collect::<Vec<Option<i32>>>(),
         ));
         let t = build_contingency(&a, &b, 100);
         let s_cells: u64 = t.cells.iter().map(|&(_, _, c)| c).sum();

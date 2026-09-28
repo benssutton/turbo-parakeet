@@ -69,7 +69,10 @@ class Technique(ABC):
             if not isinstance(name, str) or not name:
                 raise ValueError(f"frame names must be non-empty strings, got {name!r}")
             if not isinstance(frame, (pl.DataFrame, pl.LazyFrame)):
-                if not (hasattr(frame, "__arrow_c_stream__") or hasattr(frame, "__arrow_c_array__")):
+                if not (
+                    hasattr(frame, "__arrow_c_stream__")
+                    or hasattr(frame, "__arrow_c_array__")
+                ):
                     raise TypeError(
                         f"frame {name!r} must be a polars DataFrame or LazyFrame, or Arrow tabular data "
                         f"(an object with __arrow_c_stream__), got {type(frame).__name__}"
@@ -77,7 +80,9 @@ class Technique(ABC):
                 try:
                     frame = pl.DataFrame(frame)
                 except Exception as exc:
-                    raise TypeError(f"frame {name!r} is not Arrow tabular data: {exc}") from exc
+                    raise TypeError(
+                        f"frame {name!r} is not Arrow tabular data: {exc}"
+                    ) from exc
             if name in self._frames:
                 raise ValueError(f"frame {name!r} already added")
             accepted[name] = _normalise(frame)
@@ -88,19 +93,31 @@ class Technique(ABC):
     def result(self) -> pl.DataFrame:
         if not self._frames:
             raise ValueError(f"{type(self).__name__}.result() called before add()")
-        frames = {n: f.collect() if isinstance(f, pl.LazyFrame) else f for n, f in self._frames.items()}
+        frames = {
+            n: f.collect() if isinstance(f, pl.LazyFrame) else f
+            for n, f in self._frames.items()
+        }
         self._collected = frames
         try:
-            ok = {(n, c): self.eligible(f[c]) for n, f in frames.items() for c in f.columns}
-            dtypes = {(n, c): dt for n, f in frames.items() for c, dt in f.schema.items()}
+            ok = {
+                (n, c): self.eligible(f[c])
+                for n, f in frames.items()
+                for c in f.columns
+            }
+            dtypes = {
+                (n, c): dt for n, f in frames.items() for c, dt in f.schema.items()
+            }
             combos = self.enumerate(frames)
             usable = [
-                all(ok[col] for col in k) and self.compatible([dtypes[col] for col in k])
+                all(ok[col] for col in k)
+                and self.compatible([dtypes[col] for col in k])
                 for k in combos
             ]
             good = [k for k, u in zip(combos, usable) if u]
             bad = [k for k, u in zip(combos, usable) if not u]
-            rows = self._compute(frames, good) if good else self.null_frame([], "computed")
+            rows = (
+                self._compute(frames, good) if good else self.null_frame([], "computed")
+            )
             self._check(rows, len(good))
             keys = self.key_columns()
             columns = [*keys, "status", *self.METRICS]
@@ -115,9 +132,16 @@ class Technique(ABC):
                     f"{type(self).__name__}._compute must return exactly one row per eligible combination"
                 )
             described = self.describe(frames, combos)
-            out = out.with_columns([pl.Series(k, v, dtype=self.DESCRIPTORS[k]) for k, v in described.items()])
+            out = out.with_columns(
+                [
+                    pl.Series(k, v, dtype=self.DESCRIPTORS[k])
+                    for k, v in described.items()
+                ]
+            )
             out = self._conclude(out)
-            return out.select(*keys, "status", *self.DESCRIPTORS, *self.METRICS, *self.CONCLUSIONS)
+            return out.select(
+                *keys, "status", *self.DESCRIPTORS, *self.METRICS, *self.CONCLUSIONS
+            )
         finally:
             self._collected = {}
             self._on_result_end()
@@ -140,7 +164,11 @@ class Technique(ABC):
                 for k in combinations([(n, c) for c in f.columns], cls.ARITY)
             ]
         if cls.SCOPE == "multi_set":
-            return list(combinations([(n, c) for n, f in frames.items() for c in f.columns], cls.ARITY))
+            return list(
+                combinations(
+                    [(n, c) for n, f in frames.items() for c in f.columns], cls.ARITY
+                )
+            )
         raise ValueError(f"unknown SCOPE {cls.SCOPE!r}")
 
     @classmethod
@@ -162,12 +190,17 @@ class Technique(ABC):
         statuses = [status] * len(combos) if isinstance(status, str) else list(status)
         return cls.keys_frame(combos).with_columns(
             pl.Series("status", statuses, dtype=STATUS),
-            *(_metric_series(name, metrics[name], dtype) for name, dtype in cls.METRICS.items()),
+            *(
+                _metric_series(name, metrics[name], dtype)
+                for name, dtype in cls.METRICS.items()
+            ),
         )
 
     @classmethod
     def null_frame(cls, combos: Sequence[Combo], status: str) -> pl.DataFrame:
-        return cls.metrics_frame(combos, {m: [None] * len(combos) for m in cls.METRICS}, status)
+        return cls.metrics_frame(
+            combos, {m: [None] * len(combos) for m in cls.METRICS}, status
+        )
 
     @classmethod
     def rows_from_plugin(cls, frame: str, plugin_rows: pl.DataFrame) -> pl.DataFrame:
@@ -175,7 +208,11 @@ class Technique(ABC):
         return plugin_rows.with_columns(
             *(pl.lit(frame).alias(f"df_{s}") for s in _SUFFIXES[: cls.ARITY]),
             pl.lit("computed", dtype=STATUS).alias("status"),
-        ).select(*cls.key_columns(), "status", *(pl.col(m).cast(dt) for m, dt in cls.METRICS.items()))
+        ).select(
+            *cls.key_columns(),
+            "status",
+            *(pl.col(m).cast(dt) for m, dt in cls.METRICS.items()),
+        )
 
     # ── hooks ─────────────────────────────────────────────────────────────────
 
@@ -187,12 +224,16 @@ class Technique(ABC):
         """Technique base: may these columns be compared with each other?"""
         return True
 
-    def describe(self, frames: dict[str, pl.DataFrame], combos: list[Combo]) -> dict[str, list]:
+    def describe(
+        self, frames: dict[str, pl.DataFrame], combos: list[Combo]
+    ) -> dict[str, list]:
         """Technique base: DESCRIPTORS values for every combo (eligible or not)."""
         return {}
 
     @abstractmethod
-    def _compute(self, frames: dict[str, pl.DataFrame], combos: list[Combo]) -> pl.DataFrame:
+    def _compute(
+        self, frames: dict[str, pl.DataFrame], combos: list[Combo]
+    ) -> pl.DataFrame:
         """Implementation: keys + status ("computed"/"pruned") + METRICS for exactly `combos`."""
 
     def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:
@@ -208,22 +249,40 @@ class Technique(ABC):
 
     def agreement(self, result: pl.DataFrame, reference: pl.DataFrame) -> list[str]:
         """Problems found comparing `result` with the reference implementation's result."""
-        return metric_mismatches(result, reference, self.key_columns(), list(self.METRICS), self.RTOL, self.ATOL)
+        return metric_mismatches(
+            result,
+            reference,
+            self.key_columns(),
+            list(self.METRICS),
+            self.RTOL,
+            self.ATOL,
+        )
 
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _check(self, rows: pl.DataFrame, expected_rows: int) -> None:
         name = type(self).__name__
-        expected = {**{k: pl.String for k in self.key_columns()}, "status": STATUS, **self.METRICS}
+        expected = {
+            **{k: pl.String for k in self.key_columns()},
+            "status": STATUS,
+            **self.METRICS,
+        }
         if dict(rows.schema) != expected:
-            raise TypeError(f"{name}._compute returned schema {dict(rows.schema)}, expected {expected}")
+            raise TypeError(
+                f"{name}._compute returned schema {dict(rows.schema)}, expected {expected}"
+            )
         if rows.height != expected_rows:
-            raise ValueError(f"{name}._compute returned {rows.height} rows for {expected_rows} combinations")
+            raise ValueError(
+                f"{name}._compute returned {rows.height} rows for {expected_rows} combinations"
+            )
         if (rows["status"] == "ineligible").any():
-            raise ValueError(f"{name}._compute may only return status 'computed' or 'pruned'")
+            raise ValueError(
+                f"{name}._compute may only return status 'computed' or 'pruned'"
+            )
 
 
 # ── helpers for technique bases and implementations ─────────────────────────────
+
 
 def _holds_array_or_struct(dtype: pl.DataType) -> bool:
     if isinstance(dtype, (pl.Array, pl.Struct)):
@@ -273,7 +332,9 @@ def _metric_series(name: str, values: Sequence, dtype: pl.DataType) -> pl.Series
     if isinstance(dtype, pl.Decimal):
         # polars cannot build a Decimal Series from Python ints; the cast is strict,
         # so a value too wide for the precision raises rather than being dropped.
-        return pl.Series(name, [None if v is None else int(v) for v in values], dtype=pl.Int128).cast(dtype)
+        return pl.Series(
+            name, [None if v is None else int(v) for v in values], dtype=pl.Int128
+        ).cast(dtype)
     return pl.Series(name, list(values), dtype=dtype, strict=True)
 
 
@@ -299,14 +360,18 @@ def metric_mismatches(
     key_rows = result.select(keys).rows()
     if key_rows != reference.select(keys).rows():
         return ["key columns differ from the reference"]
-    labels = [" ~ ".join(f"{r[i]}.{r[i + 1]}" for i in range(0, len(r), 2)) for r in key_rows]
+    labels = [
+        " ~ ".join(f"{r[i]}.{r[i + 1]}" for i in range(0, len(r), 2)) for r in key_rows
+    ]
     problems = [
         f"{label}: status {got} != {want}"
         for label, got, want in zip(labels, result["status"], reference["status"])
         if got != want
     ]
     for m in metrics:
-        for label, got, want in zip(labels, result[m].to_list(), reference[m].to_list()):
+        for label, got, want in zip(
+            labels, result[m].to_list(), reference[m].to_list()
+        ):
             if not same_value(got, want, rtol, atol):
                 problems.append(f"{label}: {m} {got!r} != {want!r}")
     return problems

@@ -41,7 +41,9 @@ fn read_batch(data: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
     let capsule = data.call_method0("__arrow_c_stream__")?;
     let capsule = capsule.downcast::<PyCapsule>()?;
     if capsule.name()? != Some(c"arrow_array_stream") {
-        return Err(value_error("__arrow_c_stream__ did not return an arrow_array_stream capsule"));
+        return Err(value_error(
+            "__arrow_c_stream__ did not return an arrow_array_stream capsule",
+        ));
     }
     let stream = capsule.pointer() as *mut FFI_ArrowArrayStream;
     // SAFETY: an "arrow_array_stream" capsule holds a valid, unreleased
@@ -61,7 +63,8 @@ fn read_batch(data: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
 ///
 /// SAFETY: `stream` points to a valid, unreleased ArrowArrayStream.
 unsafe fn reject_wide_integers(stream: *mut RawStream) -> PyResult<()> {
-    let get_schema = unsafe { (*stream).get_schema }.ok_or_else(|| value_error("arrow stream already released"))?;
+    let get_schema = unsafe { (*stream).get_schema }
+        .ok_or_else(|| value_error("arrow stream already released"))?;
     let mut schema = FFI_ArrowSchema::empty();
     if unsafe { get_schema(stream, &mut schema) } != 0 {
         let detail = unsafe { (*stream).get_last_error }.and_then(|get_last_error| {
@@ -71,7 +74,11 @@ unsafe fn reject_wide_integers(stream: *mut RawStream) -> PyResult<()> {
             } else {
                 // SAFETY: a non-null `get_last_error` result is a valid, NUL-terminated
                 // C string owned by the stream, live at least until the next call on it.
-                Some(unsafe { CStr::from_ptr(msg) }.to_string_lossy().into_owned())
+                Some(
+                    unsafe { CStr::from_ptr(msg) }
+                        .to_string_lossy()
+                        .into_owned(),
+                )
             }
         });
         return Err(value_error(match detail {
@@ -94,7 +101,10 @@ fn wide_integer(s: &FFI_ArrowSchema) -> Option<&'static str> {
     match s.format() {
         "_pli128" => Some("Int128"),
         "_plu128" => Some("UInt128"),
-        _ => s.children().find_map(wide_integer).or_else(|| s.dictionary().and_then(wide_integer)),
+        _ => s
+            .children()
+            .find_map(wide_integer)
+            .or_else(|| s.dictionary().and_then(wide_integer)),
     }
 }
 
@@ -107,7 +117,11 @@ struct ArrowTable(RecordBatch);
 impl ArrowTable {
     /// `requested_schema` is not supported: the table is exported as it is.
     #[pyo3(signature = (requested_schema=None))]
-    fn __arrow_c_stream__<'py>(&self, py: Python<'py>, requested_schema: Option<Bound<'py, PyAny>>) -> PyResult<Bound<'py, PyCapsule>> {
+    fn __arrow_c_stream__<'py>(
+        &self,
+        py: Python<'py>,
+        requested_schema: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyCapsule>> {
         let _ = requested_schema;
         let reader = RecordBatchIterator::new([Ok(self.0.clone())], self.0.schema());
         let stream = FFI_ArrowArrayStream::new(Box::new(reader));
@@ -136,7 +150,11 @@ fn marginal_entropy(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTa
 
 #[pyfunction]
 #[pyo3(signature = (data, pairs=None))]
-fn pairwise_joint_entropy(py: Python<'_>, data: &Bound<'_, PyAny>, pairs: Option<Vec<(String, String)>>) -> PyResult<ArrowTable> {
+fn pairwise_joint_entropy(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    pairs: Option<Vec<(String, String)>>,
+) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::pairwise_joint_entropy(&batch, pairs.as_deref())).map(ArrowTable)
 }
@@ -149,44 +167,76 @@ fn threeway_joint_entropy(
     triplets: Option<Vec<(String, String, String)>>,
 ) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
-    run(py, || api::threeway_joint_entropy(&batch, triplets.as_deref())).map(ArrowTable)
+    run(py, || {
+        api::threeway_joint_entropy(&batch, triplets.as_deref())
+    })
+    .map(ArrowTable)
 }
 
 #[pyfunction]
 #[pyo3(signature = (data, pairs=None))]
-fn pairwise_chi_squared(py: Python<'_>, data: &Bound<'_, PyAny>, pairs: Option<Vec<(String, String)>>) -> PyResult<ArrowTable> {
+fn pairwise_chi_squared(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    pairs: Option<Vec<(String, String)>>,
+) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::pairwise_chi_squared(&batch, pairs.as_deref())).map(ArrowTable)
 }
 
 #[pyfunction]
 #[pyo3(signature = (data, pairs=None))]
-fn pairwise_adjusted_rand(py: Python<'_>, data: &Bound<'_, PyAny>, pairs: Option<Vec<(String, String)>>) -> PyResult<ArrowTable> {
+fn pairwise_adjusted_rand(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    pairs: Option<Vec<(String, String)>>,
+) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::pairwise_adjusted_rand(&batch, pairs.as_deref())).map(ArrowTable)
 }
 
 #[pyfunction]
-fn bloom_filter<'py>(py: Python<'py>, data: &Bound<'py, PyAny>, k: usize, m: usize) -> PyResult<Bound<'py, PyBytes>> {
+fn bloom_filter<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    k: usize,
+    m: usize,
+) -> PyResult<Bound<'py, PyBytes>> {
     let batch = read_batch(data)?;
     let bits = run(py, || api::bloom_filter(&batch, k, m))?;
     Ok(PyBytes::new(py, &bits))
 }
 
 #[pyfunction]
-fn membership_ratio(py: Python<'_>, data: &Bound<'_, PyAny>, bits: &[u8], k: usize, m: usize) -> PyResult<ArrowTable> {
+fn membership_ratio(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    bits: &[u8],
+    k: usize,
+    m: usize,
+) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::membership_ratio(&batch, bits, k, m)).map(ArrowTable)
 }
 
 #[pyfunction]
-fn minhash(py: Python<'_>, data: &Bound<'_, PyAny>, df_name: String, num_perm: usize) -> PyResult<ArrowTable> {
+fn minhash(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    df_name: String,
+    num_perm: usize,
+) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::minhash(&batch, &df_name, num_perm)).map(ArrowTable)
 }
 
 #[pyfunction]
-fn lsh_candidates(py: Python<'_>, signatures: &Bound<'_, PyAny>, num_bands: usize, rows_per_band: usize) -> PyResult<ArrowTable> {
+fn lsh_candidates(
+    py: Python<'_>,
+    signatures: &Bound<'_, PyAny>,
+    num_bands: usize,
+    rows_per_band: usize,
+) -> PyResult<ArrowTable> {
     let batch = read_batch(signatures)?;
     run(py, || api::lsh_candidates(&batch, num_bands, rows_per_band)).map(ArrowTable)
 }
@@ -215,8 +265,17 @@ fn describe_and_recommend(
     boolean_pairs: Vec<(String, String)>,
 ) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
-    run(py, || api::describe_and_recommend(&batch, seed, zstd_level, population_rows, categorical_threshold, boolean_pairs))
-        .map(ArrowTable)
+    run(py, || {
+        api::describe_and_recommend(
+            &batch,
+            seed,
+            zstd_level,
+            population_rows,
+            categorical_threshold,
+            boolean_pairs,
+        )
+    })
+    .map(ArrowTable)
 }
 
 #[pymodule]

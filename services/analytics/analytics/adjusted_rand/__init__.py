@@ -8,4 +8,10 @@ REFERENCE = "AdjustedRandSklearn"
 IMPLEMENTATIONS = ("AdjustedRandRust", "AdjustedRandSklearn")
 
 __getattr__ = lazy_attributes(__name__, {"AdjustedRandSklearn": ".sklearn"})
-__all__ = ["AdjustedRand", "AdjustedRandRust", "AdjustedRandSklearn", "REFERENCE", "IMPLEMENTATIONS"]
+__all__ = [
+    "AdjustedRand",
+    "AdjustedRandRust",
+    "AdjustedRandSklearn",
+    "REFERENCE",
+    "IMPLEMENTATIONS",
+]

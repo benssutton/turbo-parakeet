@@ -10,6 +10,11 @@ IMPLEMENTATIONS = ("MinHashRust", "MinHashDatasketch", "SimilarityExactLRU")
 
 __getattr__ = lazy_attributes(__name__, {"MinHashDatasketch": ".datasketch"})
 __all__ = [
-    "Similarity", "MinHashRust", "MinHashDatasketch", "SimilarityExactLRU", "optimal_lsh_params",
-    "REFERENCE", "IMPLEMENTATIONS",
+    "Similarity",
+    "MinHashRust",
+    "MinHashDatasketch",
+    "SimilarityExactLRU",
+    "optimal_lsh_params",
+    "REFERENCE",
+    "IMPLEMENTATIONS",
 ]

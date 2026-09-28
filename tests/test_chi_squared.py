@@ -14,7 +14,15 @@ import pytest
 
 from analytics.chi_squared import ChiSquared
 from datagen import mixed_dtypes
-from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
+from harness import (
+    assert_agrees,
+    assert_contract,
+    implementation_params,
+    load,
+    reference,
+    run,
+    with_metrics,
+)
 
 PKG = "analytics.chi_squared"
 ALL = implementation_params(PKG)
@@ -56,13 +64,26 @@ def test_known_2x2_table(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_nulls_dropped_and_constant_column_undefined(impl):
-    df = pl.DataFrame({"a": ["x", "y", "x", "y", None], "b": ["p", "p", "q", "q", "p"], "c": ["k"] * 5})
-    rows = {(r["col_a"], r["col_b"]): r for r in run(load(impl), {"t": df}).iter_rows(named=True)}
+    df = pl.DataFrame(
+        {
+            "a": ["x", "y", "x", "y", None],
+            "b": ["p", "p", "q", "q", "p"],
+            "c": ["k"] * 5,
+        }
+    )
+    rows = {
+        (r["col_a"], r["col_b"]): r
+        for r in run(load(impl), {"t": df}).iter_rows(named=True)
+    }
     assert rows[("a", "b")]["n_valid"] == 4
     assert rows[("a", "b")]["low_expected_count"] is True
     for pair in [("a", "c"), ("b", "c")]:
         r = rows[pair]
-        assert math.isnan(r["chi2_stat"]) and math.isnan(r["p_value"]) and math.isnan(r["cramers_v"])
+        assert (
+            math.isnan(r["chi2_stat"])
+            and math.isnan(r["p_value"])
+            and math.isnan(r["cramers_v"])
+        )
         assert r["low_expected_count"] is False
         assert r["associated"] is False
     assert rows[("a", "c")]["n_valid"] == 4
@@ -79,8 +100,14 @@ def test_conclusions_default_override_and_nan():
         n_valid=[10] * 3,
     )
     df = pl.DataFrame({"a": [1, 2], "b": [1, 2], "c": [1, 2]})
-    assert Fixed().add({"t": df}).result()["associated"].to_list() == [False, True, False]
-    assert Fixed(cramers_v_threshold=0.2).add({"t": df}).result()["associated"].to_list() == [True, True, False]
+    assert Fixed().add({"t": df}).result()["associated"].to_list() == [
+        False,
+        True,
+        False,
+    ]
+    assert Fixed(cramers_v_threshold=0.2).add({"t": df}).result()[
+        "associated"
+    ].to_list() == [True, True, False]
 
 
 def test_threshold_validation():
@@ -94,7 +121,9 @@ def test_threshold_validation():
 # Eligibility
 @pytest.mark.parametrize("impl", ALL)
 def test_zero_row_frame_is_ineligible(impl):
-    df = pl.DataFrame({"a": pl.Series([], dtype=pl.String), "b": pl.Series([], dtype=pl.Int64)})
+    df = pl.DataFrame(
+        {"a": pl.Series([], dtype=pl.String), "b": pl.Series([], dtype=pl.Int64)}
+    )
     assert run(load(impl), {"t": df})["status"].to_list() == ["ineligible"]
 
 
