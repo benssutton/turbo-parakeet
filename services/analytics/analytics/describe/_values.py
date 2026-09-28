@@ -9,7 +9,16 @@ import polars as pl
 
 FLOATS = (pl.Float32, pl.Float64)
 STRING_LIKE = (pl.String, pl.Categorical, pl.Enum)
-INTEGERS = (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64)
+INTEGERS = (
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.Int64,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    pl.UInt64,
+)
 
 
 def flatten(s: pl.Series) -> pl.Series:
@@ -46,7 +55,9 @@ def frequency_summary(count, first, mask, n_rows: int, n_null: int) -> dict:
         "f2": int((count == 2).sum()),
         "top5_idx": first[top].tolist(),
         "top5_count": count[top].tolist(),
-        "capture_history": np.bincount(np.asarray(mask, dtype=np.int64), minlength=8)[1:8].tolist(),
+        "capture_history": np.bincount(np.asarray(mask, dtype=np.int64), minlength=8)[
+            1:8
+        ].tolist(),
     }
 
 
@@ -56,7 +67,9 @@ def frac_digits(reprs: pl.Series) -> int | None:
     None when there are none."""
     if reprs.len() == 0:
         return None
-    parts = reprs.str.extract_groups(r"^-?[0-9]+(?:\.([0-9]*?)0*)?(?:[eE]\+?(-?[0-9]+))?$")
+    parts = reprs.str.extract_groups(
+        r"^-?[0-9]+(?:\.([0-9]*?)0*)?(?:[eE]\+?(-?[0-9]+))?$"
+    )
     frac = parts.struct.field("1").str.len_bytes().fill_null(0).cast(pl.Int64)
     exp = parts.struct.field("2").cast(pl.Int64).fill_null(0)
     return int((frac - exp).clip(lower_bound=0).max())
@@ -83,8 +96,8 @@ def n_midnight(s: pl.Series) -> int | None:
 NUMERIC = r"^-?[0-9]+(\.[0-9]+)?$"
 NUMERIC_INT = r"^-?[0-9]+$"
 LEADING_ZERO = r"^-?0[0-9]+$"
-INT_DIGITS = r"^-?0*([0-9]*)"          # significant integer-part digits
-FRAC_DIGITS = r"\.([0-9]*?)0*$"        # fraction digits without trailing zeros
+INT_DIGITS = r"^-?0*([0-9]*)"  # significant integer-part digits
+FRAC_DIGITS = r"\.([0-9]*?)0*$"  # fraction digits without trailing zeros
 
 _DATE = r"[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"  # days-per-month checked by parsing
 _TIME = r"([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]{1,9})?)?"
@@ -93,7 +106,7 @@ ISO_DATE = f"^{_DATE}$"
 ISO_TIME = f"^{_TIME}$"
 ISO_DATETIME = f"^{_DATE}[T ]{_TIME}$"
 ISO_DATETIME_TZ = f"^{_DATE}[T ]{_TIME}{_OFFSET}$"
-ISO_FRACTION = r":[0-5][0-9]\.([0-9]+)"        # fractional-second digits as written
+ISO_FRACTION = r":[0-5][0-9]\.([0-9]+)"  # fractional-second digits as written
 ISO_OFFSET = r"(Z|[+-][0-9]{2}:[0-9]{2})$"
 ISO_MIDNIGHT = r"[T ]00:00(:00(\.0+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$"
 

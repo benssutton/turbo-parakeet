@@ -8,4 +8,10 @@ REFERENCE = "ThreewayEntropyPolars"
 IMPLEMENTATIONS = ("ThreewayEntropyRust", "ThreewayEntropyPolars")
 
 __getattr__ = lazy_attributes(__name__, {"ThreewayEntropyPolars": ".polars"})
-__all__ = ["ThreewayEntropy", "ThreewayEntropyRust", "ThreewayEntropyPolars", "REFERENCE", "IMPLEMENTATIONS"]
+__all__ = [
+    "ThreewayEntropy",
+    "ThreewayEntropyRust",
+    "ThreewayEntropyPolars",
+    "REFERENCE",
+    "IMPLEMENTATIONS",
+]

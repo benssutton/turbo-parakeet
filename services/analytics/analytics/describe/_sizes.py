@@ -17,16 +17,29 @@ from __future__ import annotations
 import polars as pl
 import pyarrow as pa
 
-SIZE_KEYS = ("size_bytes", "size_zstd_bytes", "size_polars_bytes", "size_polars_zstd_bytes")
+SIZE_KEYS = (
+    "size_bytes",
+    "size_zstd_bytes",
+    "size_polars_bytes",
+    "size_polars_zstd_bytes",
+)
 
 
 def ipc_body_bytes(arr: pa.Array, zstd_level: int | None) -> int:
     batch = pa.record_batch([arr], names=["x"])
-    codec = None if zstd_level is None else pa.Codec("zstd", compression_level=zstd_level)
+    codec = (
+        None if zstd_level is None else pa.Codec("zstd", compression_level=zstd_level)
+    )
     sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, batch.schema, options=pa.ipc.IpcWriteOptions(compression=codec)) as writer:
+    with pa.ipc.new_stream(
+        sink, batch.schema, options=pa.ipc.IpcWriteOptions(compression=codec)
+    ) as writer:
         writer.write_batch(batch)
-    return sum(m.body.size for m in pa.ipc.MessageReader.open_stream(sink.getvalue()) if m.type != "schema")
+    return sum(
+        m.body.size
+        for m in pa.ipc.MessageReader.open_stream(sink.getvalue())
+        if m.type != "schema"
+    )
 
 
 def column_sizes(s: pl.Series, zstd_level: int) -> dict[str, int]:

@@ -14,4 +14,6 @@ class GcdMath(Gcd):
     so wide Decimal and MIN magnitudes are exact). Single core."""
 
     def _compute(self, frames, combos):
-        return self.metrics_frame(combos, {"gcd": [math_gcd(frames[n][c]) for ((n, c),) in combos]})
+        return self.metrics_frame(
+            combos, {"gcd": [math_gcd(frames[n][c]) for ((n, c),) in combos]}
+        )

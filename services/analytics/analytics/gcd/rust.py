@@ -12,5 +12,8 @@ class GcdRust(Gcd):
         for frame, group in group_by_frame(combos).items():
             columns = [c for ((_, c),) in group]
             out = _plugin.column_gcd(frames[frame].select(columns))
-            gcd.update(((frame, c), g) for c, g in zip(out["column"].to_list(), out["gcd"].to_list()))
+            gcd.update(
+                ((frame, c), g)
+                for c, g in zip(out["column"].to_list(), out["gcd"].to_list())
+            )
         return self.metrics_frame(combos, {"gcd": [gcd[k[0]] for k in combos]})

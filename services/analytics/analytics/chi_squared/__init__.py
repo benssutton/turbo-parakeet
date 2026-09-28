@@ -7,5 +7,14 @@ from analytics.chi_squared.rust import ChiSquaredRust
 REFERENCE = "ChiSquaredScipy"
 IMPLEMENTATIONS = ("ChiSquaredRust", "ChiSquaredScipy", "ChiSquaredPolarsDS")
 
-__getattr__ = lazy_attributes(__name__, {"ChiSquaredScipy": ".scipy", "ChiSquaredPolarsDS": ".polars_ds"})
-__all__ = ["ChiSquared", "ChiSquaredRust", "ChiSquaredScipy", "ChiSquaredPolarsDS", "REFERENCE", "IMPLEMENTATIONS"]
+__getattr__ = lazy_attributes(
+    __name__, {"ChiSquaredScipy": ".scipy", "ChiSquaredPolarsDS": ".polars_ds"}
+)
+__all__ = [
+    "ChiSquared",
+    "ChiSquaredRust",
+    "ChiSquaredScipy",
+    "ChiSquaredPolarsDS",
+    "REFERENCE",
+    "IMPLEMENTATIONS",
+]

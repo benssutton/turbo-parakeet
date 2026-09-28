@@ -9,7 +9,8 @@ from analytics.membership.base import BloomMembership
 
 def bloom_geometry(n: int, fp_rate: float) -> tuple[int, int]:
     """Optimal (m bits, k hashes) for n items: m = -n·ln(p)/ln(2)², rounded up to
-    whole bytes (the Rust core expects m in bits and ceil(m/8) bytes); k = (m/n)·ln 2."""
+    whole bytes (the Rust core expects m in bits and ceil(m/8) bytes); k = (m/n)·ln 2.
+    """
     m = -(n * math.log(fp_rate)) / (math.log(2) ** 2)
     m = (int(math.ceil(m)) + 7) // 8 * 8
     return m, max(1, int(math.ceil((m / n) * math.log(2))))
@@ -37,8 +38,17 @@ class BloomRust(BloomMembership):
             bits = _plugin.bloom_filter_bits(distinct[y], k=k, m=m)
             longest = max(distinct[x].len() for x in queries)
             padded = pl.DataFrame(
-                [distinct[x].extend_constant(None, longest - distinct[x].len()).alias(f"q{i}") for i, x in enumerate(queries)]
+                [
+                    distinct[x]
+                    .extend_constant(None, longest - distinct[x].len())
+                    .alias(f"q{i}")
+                    for i, x in enumerate(queries)
+                ]
             )
             ratios = _plugin.membership_ratio(padded, bits, k=k, m=m)
-            contained.update(((x, y), r) for x, r in zip(queries, ratios["ratio_non_null"].to_list()))
-        return self.membership_rows(frames, combos, {c: distinct[c].len() for c in columns}, contained)
+            contained.update(
+                ((x, y), r) for x, r in zip(queries, ratios["ratio_non_null"].to_list())
+            )
+        return self.membership_rows(
+            frames, combos, {c: distinct[c].len() for c in columns}, contained
+        )

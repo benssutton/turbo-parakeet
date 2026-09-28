@@ -26,7 +26,9 @@ class MinHashDatasketch(Similarity):
 
     def _compute(self, frames, combos):
         columns = columns_of(combos)
-        lsh = MinHashLSH(threshold=self.lsh_threshold, num_perm=self.num_perm, weights=(0.9, 0.1))
+        lsh = MinHashLSH(
+            threshold=self.lsh_threshold, num_perm=self.num_perm, weights=(0.9, 0.1)
+        )
         sketches = {}
         for i, (f, c) in enumerate(columns):
             values = [str(v).encode("utf8") for v in self._distinct(f, c)]
@@ -35,9 +37,21 @@ class MinHashDatasketch(Similarity):
                 sketch.update_batch(values)
                 sketches[i] = sketch
                 lsh.insert(i, sketch)
-        found = {frozenset((columns[i], columns[j])) for i, s in sketches.items() for j in lsh.query(s) if j != i}
+        found = {
+            frozenset((columns[i], columns[j]))
+            for i, s in sketches.items()
+            for j in lsh.query(s)
+            if j != i
+        }
         empty = {c for i, c in enumerate(columns) if i not in sketches}
-        chosen = [k for k in combos if frozenset(k) in found or k[0] in empty or k[1] in empty]
+        chosen = [
+            k for k in combos if frozenset(k) in found or k[0] in empty or k[1] in empty
+        ]
         chosen_set = set(chosen)
         pruned = [k for k in combos if k not in chosen_set]
-        return pl.concat([self.metrics_frame(chosen, self.verify(chosen)), self.null_frame(pruned, "pruned")])
+        return pl.concat(
+            [
+                self.metrics_frame(chosen, self.verify(chosen)),
+                self.null_frame(pruned, "pruned"),
+            ]
+        )

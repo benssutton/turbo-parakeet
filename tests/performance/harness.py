@@ -40,7 +40,9 @@ from typing import Callable
 import numpy as np
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).parents[1]))  # tests/ -> `import datagen` in benchmark scripts
+sys.path.insert(
+    0, str(Path(__file__).parents[1])
+)  # tests/ -> `import datagen` in benchmark scripts
 
 import analytics  # noqa: E402
 
@@ -54,7 +56,9 @@ _CHILD_ENV = "ANALYTICS_BENCH_CHILD"
 class Dataset:
     name: str
     make: Callable[[], dict[str, pl.DataFrame]]
-    exclude: tuple[str, ...] = ()  # implementations not run on this dataset (e.g. would exhaust memory)
+    exclude: tuple[
+        str, ...
+    ] = ()  # implementations not run on this dataset (e.g. would exhaust memory)
 
 
 def large_dataset(columns: int | None = None, exclude: tuple[str, ...] = ()) -> Dataset:
@@ -68,7 +72,9 @@ def large_dataset(columns: int | None = None, exclude: tuple[str, ...] = ()) -> 
     return Dataset(label, make, exclude)
 
 
-def time_call(fn: Callable[[], object], runs: int, budget_s: float) -> tuple[list[float] | None, object]:
+def time_call(
+    fn: Callable[[], object], runs: int, budget_s: float
+) -> tuple[list[float] | None, object]:
     t0 = time.perf_counter()
     result = fn()
     if time.perf_counter() - t0 > budget_s:
@@ -85,11 +91,29 @@ def speedups(rows: list[dict]) -> list[dict]:
     out = []
     for dataset in dict.fromkeys(r["dataset"] for r in rows):
         ok = [r for r in rows if r["dataset"] == dataset and r["status"] == "ok"]
-        others = [r["median_ms"] for r in ok if not r["implementation"].endswith("Rust")]
+        others = [
+            r["median_ms"] for r in ok if not r["implementation"].endswith("Rust")
+        ]
         best = min(others) if others else None
-        for impl in dict.fromkeys(r["implementation"] for r in ok if r["implementation"].endswith("Rust")):
-            n = next((r["median_ms"] for r in ok if r["implementation"] == impl and r["threads"] == "N"), None)
-            one = next((r["median_ms"] for r in ok if r["implementation"] == impl and r["threads"] == "1"), None)
+        for impl in dict.fromkeys(
+            r["implementation"] for r in ok if r["implementation"].endswith("Rust")
+        ):
+            n = next(
+                (
+                    r["median_ms"]
+                    for r in ok
+                    if r["implementation"] == impl and r["threads"] == "N"
+                ),
+                None,
+            )
+            one = next(
+                (
+                    r["median_ms"]
+                    for r in ok
+                    if r["implementation"] == impl and r["threads"] == "1"
+                ),
+                None,
+            )
             out.append(
                 {
                     "dataset": dataset,
@@ -110,11 +134,23 @@ def _load(module, name: str):
         return None
 
 
-def _measure(cls, frames, params: dict, runs: int, budget_s: float) -> tuple[dict, object]:
-    times, result = time_call(lambda: cls(**params).add(frames).result(), runs, budget_s)
+def _measure(
+    cls, frames, params: dict, runs: int, budget_s: float
+) -> tuple[dict, object]:
+    times, result = time_call(
+        lambda: cls(**params).add(frames).result(), runs, budget_s
+    )
     if times is None:
-        return {"status": f"skipped: over budget ({budget_s:.0f}s)", "median_ms": None, "min_ms": None}, None
-    return {"status": "ok", "median_ms": statistics.median(times) * 1e3, "min_ms": min(times) * 1e3}, result
+        return {
+            "status": f"skipped: over budget ({budget_s:.0f}s)",
+            "median_ms": None,
+            "min_ms": None,
+        }, None
+    return {
+        "status": "ok",
+        "median_ms": statistics.median(times) * 1e3,
+        "min_ms": min(times) * 1e3,
+    }, result
 
 
 def run(
@@ -127,7 +163,9 @@ def run(
 ) -> pl.DataFrame | None:
     params, impl_params = params or {}, impl_params or {}
     module = importlib.import_module(package)
-    names = [module.REFERENCE] + [n for n in module.IMPLEMENTATIONS if n != module.REFERENCE]
+    names = [module.REFERENCE] + [
+        n for n in module.IMPLEMENTATIONS if n != module.REFERENCE
+    ]
     classes = {n: c for n in names if (c := _load(module, n)) is not None}
     rust = [n for n in classes if n.endswith("Rust")]
     child = os.environ.get(_CHILD_ENV) == "1"
@@ -137,9 +175,21 @@ def run(
         frames = ds.make()
         ref_result = None
         for name in rust if child else classes:
-            base = {"dataset": ds.name, "implementation": name, "threads": "N" if name in rust else "default"}
+            base = {
+                "dataset": ds.name,
+                "implementation": name,
+                "threads": "N" if name in rust else "default",
+            }
             if name in ds.exclude:
-                rows.append({**base, "status": "excluded", "median_ms": None, "min_ms": None, "agrees": None})
+                rows.append(
+                    {
+                        **base,
+                        "status": "excluded",
+                        "median_ms": None,
+                        "min_ms": None,
+                        "agrees": None,
+                    }
+                )
                 continue
             print(f"  {ds.name}: {name} …", file=sys.stderr, flush=True)
             p = {**params, **impl_params.get(name, {})}
@@ -161,7 +211,9 @@ def run(
 
 
 def _single_thread_rows() -> list[dict]:
-    print("  re-running Rust implementations at 1 thread …", file=sys.stderr, flush=True)
+    print(
+        "  re-running Rust implementations at 1 thread …", file=sys.stderr, flush=True
+    )
     proc = subprocess.run(
         [sys.executable, *sys.argv],
         env={**os.environ, **SINGLE_THREAD_ENV, _CHILD_ENV: "1"},
@@ -179,15 +231,21 @@ def _fmt(x, spec: str) -> str:
 
 def _report(package: str, rows: list[dict]) -> pl.DataFrame:
     technique = package.rsplit(".", 1)[-1]
-    print(f"\n{technique} — median / min of timed runs, fresh instance per run, {os.cpu_count()} CPUs")
-    print(f"{'dataset':<36} {'implementation':<28} {'threads':>7} {'median ms':>11} {'min ms':>11} {'agrees':>7}  status")
+    print(
+        f"\n{technique} — median / min of timed runs, fresh instance per run, {os.cpu_count()} CPUs"
+    )
+    print(
+        f"{'dataset':<36} {'implementation':<28} {'threads':>7} {'median ms':>11} {'min ms':>11} {'agrees':>7}  status"
+    )
     for r in rows:
         agrees = {True: "yes", False: "NO", None: "—"}[r["agrees"]]
         print(
             f"{r['dataset']:<36} {r['implementation']:<28} {r['threads']:>7} "
             f"{_fmt(r['median_ms'], '11.2f')} {_fmt(r['min_ms'], '11.2f')} {agrees:>7}  {r['status']}"
         )
-    print(f"\n{'dataset':<36} {'Rust implementation':<28} {'algorithmic':>12} {'parallel':>9} {'total':>9}")
+    print(
+        f"\n{'dataset':<36} {'Rust implementation':<28} {'algorithmic':>12} {'parallel':>9} {'total':>9}"
+    )
     for s in speedups(rows):
         print(
             f"{s['dataset']:<36} {s['implementation']:<28} "

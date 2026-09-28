@@ -36,7 +36,11 @@ impl Body {
         }
         let len = match self.level {
             None => data.len(),
-            Some(level) => 8 + zstd::bulk::compress(data, level).map_err(|e| polars_err!(ComputeError: "zstd: {e}"))?.len(),
+            Some(level) => {
+                8 + zstd::bulk::compress(data, level)
+                    .map_err(|e| polars_err!(ComputeError: "zstd: {e}"))?
+                    .len()
+            }
         };
         self.bytes += len.next_multiple_of(8) as u64;
         Ok(())
@@ -62,7 +66,7 @@ impl Body {
 
     /// Writes the offsets (rebased to 0); returns the referenced child/values range.
     fn offsets<O: ArrowNativeType>(&mut self, d: &ArrayData) -> PolarsResult<(usize, usize)> {
-        if d.len() == 0 {
+        if d.is_empty() {
             self.buffer(&vec![0u8; std::mem::size_of::<O>()])?; // pyarrow writes the single offset [0]
             return Ok((0, 0));
         }
@@ -71,7 +75,10 @@ impl Body {
         if first == 0 {
             self.buffer(o.to_byte_slice())?;
         } else {
-            let rebased: Vec<O> = o.iter().map(|x| O::usize_as(x.as_usize() - first)).collect();
+            let rebased: Vec<O> = o
+                .iter()
+                .map(|x| O::usize_as(x.as_usize() - first))
+                .collect();
             self.buffer(rebased.as_slice().to_byte_slice())?;
         }
         Ok((first, last))
@@ -94,7 +101,11 @@ impl Body {
             AT::Null => Ok(()),
             AT::Boolean => {
                 self.validity(d)?;
-                self.bits(&BooleanBuffer::new(d.buffers()[0].clone(), d.offset(), d.len()))
+                self.bits(&BooleanBuffer::new(
+                    d.buffers()[0].clone(),
+                    d.offset(),
+                    d.len(),
+                ))
             }
             AT::Utf8 | AT::Binary => self.var_size::<i32>(d),
             AT::LargeUtf8 | AT::LargeBinary => self.var_size::<i64>(d),
@@ -105,8 +116,12 @@ impl Body {
                 // written whole even for a sliced view array — pyarrow does the same,
                 // since a view's inline/prefix bytes and buffer-index+offset already
                 // point at the right bytes regardless of which views are in range.
-                self.buffer(&d.buffers()[0].as_slice()[d.offset() * 16..(d.offset() + d.len()) * 16])?;
-                d.buffers()[1..].iter().try_for_each(|b| self.buffer(b.as_slice()))
+                self.buffer(
+                    &d.buffers()[0].as_slice()[d.offset() * 16..(d.offset() + d.len()) * 16],
+                )?;
+                d.buffers()[1..]
+                    .iter()
+                    .try_for_each(|b| self.buffer(b.as_slice()))
             }
             AT::List(_) => self.list::<i32>(d),
             AT::LargeList(_) => self.list::<i64>(d),
@@ -122,10 +137,14 @@ impl Body {
             }
             AT::Struct(_) => {
                 self.validity(d)?;
-                d.child_data().iter().try_for_each(|c| self.array(&c.slice(d.offset(), d.len())))
+                d.child_data()
+                    .iter()
+                    .try_for_each(|c| self.array(&c.slice(d.offset(), d.len())))
             }
             AT::Dictionary(k, _) => {
-                let width = k.primitive_width().ok_or_else(|| polars_err!(ComputeError: "sizes: non-integer dictionary key {k}"))?;
+                let width = k.primitive_width().ok_or_else(
+                    || polars_err!(ComputeError: "sizes: non-integer dictionary key {k}"),
+                )?;
                 self.fixed(d, width)?; // the keys
                 self.array(&d.child_data()[0]) // the dictionary batch
             }
@@ -145,7 +164,12 @@ pub(crate) fn ipc_body_bytes(arr: &dyn Array, level: Option<i32>) -> PolarsResul
 }
 
 pub(crate) type Sizes = [u64; 4];
-pub(crate) const SIZE_FIELDS: [&str; 4] = ["size_bytes", "size_zstd_bytes", "size_polars_bytes", "size_polars_zstd_bytes"];
+pub(crate) const SIZE_FIELDS: [&str; 4] = [
+    "size_bytes",
+    "size_zstd_bytes",
+    "size_polars_bytes",
+    "size_polars_zstd_bytes",
+];
 
 /// `s`'s classic layout (CompatLevel::oldest).
 pub(crate) fn classic_layout(s: &Series) -> PolarsResult<arrow_array::ArrayRef> {
@@ -157,7 +181,11 @@ pub(crate) fn sizes(s: &Series, level: i32) -> PolarsResult<Sizes> {
 }
 
 /// `sizes` given `s`'s `classic_layout` (exported once by callers that reuse it).
-pub(crate) fn sizes_of(s: &Series, classic: &arrow_array::ArrayRef, level: i32) -> PolarsResult<Sizes> {
+pub(crate) fn sizes_of(
+    s: &Series,
+    classic: &arrow_array::ArrayRef,
+    level: i32,
+) -> PolarsResult<Sizes> {
     let native = export_series(s, CompatLevel::newest())?;
     Ok([
         ipc_body_bytes(classic.as_ref(), None)?,
@@ -168,12 +196,25 @@ pub(crate) fn sizes_of(s: &Series, classic: &arrow_array::ArrayRef, level: i32) 
 }
 
 pub(crate) fn column_sizes_impl(inputs: &[Series], level: i32) -> PolarsResult<Series> {
-    let rows: Vec<Sizes> = inputs.par_iter().map(|s| sizes(s, level)).collect::<PolarsResult<_>>()?;
-    let mut columns = vec![StringChunked::from_iter(inputs.iter().map(|s| s.name().as_str())).into_series().with_name("column".into())];
+    let rows: Vec<Sizes> = inputs
+        .par_iter()
+        .map(|s| sizes(s, level))
+        .collect::<PolarsResult<_>>()?;
+    let mut columns = vec![
+        StringChunked::from_iter(inputs.iter().map(|s| s.name().as_str()))
+            .into_series()
+            .with_name("column".into()),
+    ];
     for (j, name) in SIZE_FIELDS.iter().enumerate() {
-        columns.push(UInt64Chunked::from_iter_values((*name).into(), rows.iter().map(|r| r[j])).into_series());
+        columns.push(
+            UInt64Chunked::from_iter_values((*name).into(), rows.iter().map(|r| r[j]))
+                .into_series(),
+        );
     }
-    Ok(StructChunked::from_series("column_sizes".into(), inputs.len(), columns.iter())?.into_series())
+    Ok(
+        StructChunked::from_series("column_sizes".into(), inputs.len(), columns.iter())?
+            .into_series(),
+    )
 }
 
 #[cfg(test)]
@@ -196,27 +237,58 @@ mod tests {
 
     #[test]
     fn validity_only_with_nulls() {
-        let s = Series::new("x".into(), (0..1_000).map(|i| (i % 3 != 0).then_some(i)).collect::<Vec<Option<i32>>>());
+        let s = Series::new(
+            "x".into(),
+            (0..1_000)
+                .map(|i| (i % 3 != 0).then_some(i))
+                .collect::<Vec<Option<i32>>>(),
+        );
         assert_eq!(ipc_body_bytes(arrow(&s).as_ref(), None).unwrap(), 4_128);
-        assert_eq!(ipc_body_bytes(arrow(&Series::new_empty("x".into(), &DataType::Int32)).as_ref(), None).unwrap(), 0);
+        assert_eq!(
+            ipc_body_bytes(
+                arrow(&Series::new_empty("x".into(), &DataType::Int32)).as_ref(),
+                None
+            )
+            .unwrap(),
+            0
+        );
     }
 
     #[test]
     fn large_utf8_offsets_values_validity() {
-        assert_eq!(ipc_body_bytes(arrow(&Series::new("x".into(), &[Some("ab"), None])).as_ref(), None).unwrap(), 40);
-        assert_eq!(ipc_body_bytes(arrow(&Series::new_empty("x".into(), &DataType::String)).as_ref(), None).unwrap(), 8);
+        assert_eq!(
+            ipc_body_bytes(
+                arrow(&Series::new("x".into(), &[Some("ab"), None])).as_ref(),
+                None
+            )
+            .unwrap(),
+            40
+        );
+        assert_eq!(
+            ipc_body_bytes(
+                arrow(&Series::new_empty("x".into(), &DataType::String)).as_ref(),
+                None
+            )
+            .unwrap(),
+            8
+        );
     }
 
     #[test]
     fn polars_size_is_native_ipc_body() {
-        assert_eq!(sizes(&Series::new("x".into(), &[Some("ab"), None]), 1).unwrap()[2], 40);
+        assert_eq!(
+            sizes(&Series::new("x".into(), &[Some("ab"), None]), 1).unwrap()[2],
+            40
+        );
     }
 
     #[test]
     fn dictionary_keys_and_values() {
         use polars::datatypes::Categories;
         let cats = Categories::global();
-        let cat = Series::new("x".into(), &["a", "b", "a"]).cast(&DataType::Categorical(cats.clone(), cats.mapping())).unwrap();
+        let cat = Series::new("x".into(), &["a", "b", "a"])
+            .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
+            .unwrap();
         assert_eq!(sizes(&cat, 1).unwrap()[0], 48); // pyarrow: keys 16 + dictionary 32 (see test_describe.py)
     }
 }

@@ -29,7 +29,11 @@ class AdjustedRand(Technique):
         self.ari_threshold = ari_threshold
 
     def eligible(self, series: pl.Series) -> bool:
-        return series.len() > 0 and encodable(series.dtype) and not is_nested(series.dtype)
+        return (
+            series.len() > 0 and encodable(series.dtype) and not is_nested(series.dtype)
+        )
 
     def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:
-        return out.with_columns(same_partition=computed(at_least("ari", self.ari_threshold)))
+        return out.with_columns(
+            same_partition=computed(at_least("ari", self.ari_threshold))
+        )

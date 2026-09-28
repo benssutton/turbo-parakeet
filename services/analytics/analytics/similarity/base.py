@@ -27,7 +27,13 @@ class Similarity(Technique):
     CONCLUSIONS = {"passes_jaccard": pl.Boolean, "passes_overlap": pl.Boolean}
     MIN_RECALL = 0.85
 
-    def __init__(self, *, jaccard_threshold: float = 0.6, overlap_threshold: float = 0.95, cache_size: int = 4096):
+    def __init__(
+        self,
+        *,
+        jaccard_threshold: float = 0.6,
+        overlap_threshold: float = 0.95,
+        cache_size: int = 4096,
+    ):
         super().__init__()
         check_unit("jaccard_threshold", jaccard_threshold)
         check_unit("overlap_threshold", overlap_threshold)
@@ -87,15 +93,22 @@ class Similarity(Technique):
             if (g == "ineligible") != (w == "ineligible")
         ]
         evaluated = [i for i, g in enumerate(got) if g == "computed"]
-        problems += metric_mismatches(result[evaluated], reference[evaluated], keys, list(self.METRICS), 0.0, 0.0)
+        problems += metric_mismatches(
+            result[evaluated], reference[evaluated], keys, list(self.METRICS), 0.0, 0.0
+        )
 
         def passing(df: pl.DataFrame) -> set[int]:
-            flags = (df["passes_jaccard"].fill_null(False) | df["passes_overlap"].fill_null(False)).to_list()
+            flags = (
+                df["passes_jaccard"].fill_null(False)
+                | df["passes_overlap"].fill_null(False)
+            ).to_list()
             return {i for i, p in enumerate(flags) if p}
 
         truth = passing(reference)
         if truth:
             recall = len(truth & passing(result)) / len(truth)
             if recall < self.MIN_RECALL:
-                problems.append(f"recall {recall:.3f} < {self.MIN_RECALL} (missed rows {sorted(truth - passing(result))[:10]})")
+                problems.append(
+                    f"recall {recall:.3f} < {self.MIN_RECALL} (missed rows {sorted(truth - passing(result))[:10]})"
+                )
         return problems

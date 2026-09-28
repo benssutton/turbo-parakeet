@@ -3,8 +3,22 @@ import polars as pl
 
 from analytics.gcd.base import Gcd
 
-_NATIVE = {pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64}
-_SIGNED_MIN = {pl.Int8: -(2**7), pl.Int16: -(2**15), pl.Int32: -(2**31), pl.Int64: -(2**63)}
+_NATIVE = {
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.Int64,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    pl.UInt64,
+}
+_SIGNED_MIN = {
+    pl.Int8: -(2**7),
+    pl.Int16: -(2**15),
+    pl.Int32: -(2**31),
+    pl.Int64: -(2**63),
+}
 
 
 def numpy_gcd(series: pl.Series) -> int:
@@ -27,4 +41,6 @@ class GcdNumpy(Gcd):
     values outside numpy's native integer range."""
 
     def _compute(self, frames, combos):
-        return self.metrics_frame(combos, {"gcd": [numpy_gcd(frames[n][c]) for ((n, c),) in combos]})
+        return self.metrics_frame(
+            combos, {"gcd": [numpy_gcd(frames[n][c]) for ((n, c),) in combos]}
+        )

@@ -87,16 +87,43 @@ pub(crate) struct Estimate {
 
 /// The estimate picked by rule: q == 1 → exact; q < 1 → Duj1; Schnabel valid →
 /// Schnabel; else Chao1. q = frame rows / population rows (None: unknown).
-pub(crate) fn estimate(d: u64, n: u64, f1: u64, f2: u64, history: &[u64; 7], q: Option<f64>) -> Estimate {
+pub(crate) fn estimate(
+    d: u64,
+    n: u64,
+    f1: u64,
+    f2: u64,
+    history: &[u64; 7],
+    q: Option<f64>,
+) -> Estimate {
     let (c, c_lo, c_hi) = chao1(d, f1, f2);
     match (q, schnabel(history, d, n)) {
-        (Some(q), _) if q == 1.0 => {
+        (Some(1.0), _) => {
             let d = d as f64;
-            Estimate { est_cardinality: d, est_low: Some(d), est_high: Some(d), method: Method::Exact }
+            Estimate {
+                est_cardinality: d,
+                est_low: Some(d),
+                est_high: Some(d),
+                method: Method::Exact,
+            }
         }
-        (Some(q), _) => Estimate { est_cardinality: duj1(d, f1, n, q), est_low: None, est_high: None, method: Method::Duj1 },
-        (None, Some((s, lo, hi))) => Estimate { est_cardinality: s, est_low: Some(lo), est_high: Some(hi), method: Method::Schnabel },
-        (None, None) => Estimate { est_cardinality: c, est_low: Some(c_lo), est_high: Some(c_hi), method: Method::Chao1 },
+        (Some(q), _) => Estimate {
+            est_cardinality: duj1(d, f1, n, q),
+            est_low: None,
+            est_high: None,
+            method: Method::Duj1,
+        },
+        (None, Some((s, lo, hi))) => Estimate {
+            est_cardinality: s,
+            est_low: Some(lo),
+            est_high: Some(hi),
+            method: Method::Schnabel,
+        },
+        (None, None) => Estimate {
+            est_cardinality: c,
+            est_low: Some(c_lo),
+            est_high: Some(c_hi),
+            method: Method::Chao1,
+        },
     }
 }
 
@@ -105,21 +132,35 @@ mod tests {
     use super::*;
 
     fn close(a: (f64, f64, f64), b: (f64, f64, f64)) -> bool {
-        [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|(x, y)| (x - y).abs() <= 1e-9 * y.abs().max(1.0))
+        [(a.0, b.0), (a.1, b.1), (a.2, b.2)]
+            .iter()
+            .all(|(x, y)| (x - y).abs() <= 1e-9 * y.abs().max(1.0))
     }
 
     #[test]
     fn chao1_cases() {
-        assert!(close(chao1(10, 4, 2), (12.0, 10.249903382590167, 26.00618590489368)));
-        assert!(close(chao1(5, 3, 0), (8.0, 5.369121767830802, 29.38219792045809)));
+        assert!(close(
+            chao1(10, 4, 2),
+            (12.0, 10.249903382590167, 26.00618590489368)
+        ));
+        assert!(close(
+            chao1(5, 3, 0),
+            (8.0, 5.369121767830802, 29.38219792045809)
+        ));
         assert_eq!(chao1(7, 0, 3), (7.0, 7.0, 7.0));
         assert_eq!(chao1(7, 1, 0), (7.0, 7.0, 7.0));
     }
 
     #[test]
     fn schnabel_cases() {
-        assert!(close(schnabel(&[0, 0, 0, 0, 0, 0, 10], 10, 30_000).unwrap(), (9.523809523809524, 6.474567576908709, 16.378255262343956)));
-        assert!(close(schnabel(&[5, 5, 5, 2, 2, 2, 1], 22, 1_000).unwrap(), (25.75, 15.69849888622768, 56.349688010901595)));
+        assert!(close(
+            schnabel(&[0, 0, 0, 0, 0, 0, 10], 10, 30_000).unwrap(),
+            (9.523809523809524, 6.474567576908709, 16.378255262343956)
+        ));
+        assert!(close(
+            schnabel(&[5, 5, 5, 2, 2, 2, 1], 22, 1_000).unwrap(),
+            (25.75, 15.69849888622768, 56.349688010901595)
+        ));
         assert!(schnabel(&[5, 5, 5, 2, 2, 2, 1], 22, 44).is_none());
         assert!(schnabel(&[3, 3, 0, 3, 0, 0, 0], 9, 100).is_none());
         assert!(schnabel(&[0; 7], 0, 0).is_none());
@@ -135,7 +176,10 @@ mod tests {
     fn estimate_picks_exact_then_duj1_then_schnabel_then_chao1() {
         let h = [0, 0, 0, 0, 0, 0, 10];
         let exact = estimate(10, 40, 4, 2, &h, Some(1.0));
-        assert_eq!((exact.method, exact.est_cardinality, exact.est_high), (Method::Exact, 10.0, Some(10.0)));
+        assert_eq!(
+            (exact.method, exact.est_cardinality, exact.est_high),
+            (Method::Exact, 10.0, Some(10.0))
+        );
         let duj = estimate(10, 40, 4, 2, &h, Some(0.5));
         assert_eq!((duj.method, duj.est_high), (Method::Duj1, None));
         assert!((duj.est_cardinality - 10.526315789473685).abs() < 1e-12);

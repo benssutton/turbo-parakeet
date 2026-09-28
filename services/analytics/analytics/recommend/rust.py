@@ -13,7 +13,9 @@ class RecommendRust(Recommend):
             df = frames[frame].select([c for ((_, c),) in group])
             pop = self._population(frame)
             if pop is not None and pop < df.height:
-                raise ValueError(f"population_rows {pop} < {df.height} rows in frame {frame!r}")
+                raise ValueError(
+                    f"population_rows {pop} < {df.height} rows in frame {frame!r}"
+                )
             out = _plugin.describe_and_recommend(
                 df,
                 seed=self.seed,
@@ -23,7 +25,11 @@ class RecommendRust(Recommend):
                 boolean_pairs=self.boolean_pairs,
             )
             for r in out.iter_rows(named=True):
-                if r["rec_arrow_type"] is not None and r["rec_polars_type"] is None:  # the original type was kept
+                if (
+                    r["rec_arrow_type"] is not None and r["rec_polars_type"] is None
+                ):  # the original type was kept
                     r["rec_polars_type"] = str(df.schema[r["column"]])
                 rows[frame, r["column"]] = r
-        return self.metrics_frame(combos, {m: [rows[k[0]][m] for k in combos] for m in self.METRICS})
+        return self.metrics_frame(
+            combos, {m: [rows[k[0]][m] for k in combos] for m in self.METRICS}
+        )

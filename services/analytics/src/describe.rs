@@ -40,6 +40,8 @@ struct Entry {
 }
 
 type Map = HashMap<u64, Entry, FixedState>;
+/// (first row index, value) of the running extreme.
+type Ext<T> = (u64, T);
 
 pub(crate) struct Frequencies {
     pub n_unique: u64,
@@ -72,7 +74,11 @@ fn count_chunk(values: &[u64], is_null: &[bool], start: usize, seed: u64) -> Map
             continue;
         }
         let row = (start + j) as u64;
-        let e = map.entry(key).or_insert(Entry { count: 0, first: row, mask: 0 });
+        let e = map.entry(key).or_insert(Entry {
+            count: 0,
+            first: row,
+            mask: 0,
+        });
         e.count += 1;
         e.mask |= 1 << subset(seed, row);
     }
@@ -166,8 +172,11 @@ fn lt<T: PartialOrd>(a: T, b: T) -> bool {
     a < b
 }
 
-fn extremes<T: Copy>(values: impl Iterator<Item = Option<T>>, lt: impl Fn(T, T) -> bool) -> (Option<u64>, Option<u64>) {
-    let (mut lo, mut hi): (Option<(u64, T)>, Option<(u64, T)>) = (None, None);
+fn extremes<T: Copy>(
+    values: impl Iterator<Item = Option<T>>,
+    lt: impl Fn(T, T) -> bool,
+) -> (Option<u64>, Option<u64>) {
+    let (mut lo, mut hi): (Option<Ext<T>>, Option<Ext<T>>) = (None, None);
     for (i, v) in values.enumerate() {
         let Some(v) = v else { continue };
         if lo.is_none_or(|(_, m)| lt(v, m)) {
@@ -191,7 +200,12 @@ fn arg_extremes(s: &Series) -> PolarsResult<(Option<u64>, Option<u64>)> {
         DataType::List(_) | DataType::Array(_, _) | DataType::Struct(_) => {
             let rows = _get_rows_encoded_arr(&[s.clone().into_column()], &[false], &[false])?;
             let valid = s.is_not_null();
-            extremes(rows.values_iter().zip(valid.iter()).map(|(r, ok)| (ok == Some(true)).then_some(r)), lt)
+            extremes(
+                rows.values_iter()
+                    .zip(valid.iter())
+                    .map(|(r, ok)| (ok == Some(true)).then_some(r)),
+                lt,
+            )
         }
         _ => {
             let p = s.to_physical_repr();
@@ -213,7 +227,10 @@ fn arg_extremes(s: &Series) -> PolarsResult<(Option<u64>, Option<u64>)> {
 
 fn min_max(values: impl Iterator<Item = Option<u64>>) -> (Option<u64>, Option<u64>) {
     values.flatten().fold((None, None), |(lo, hi), v| {
-        (Some(lo.map_or(v, |x: u64| x.min(v))), Some(hi.map_or(v, |x: u64| x.max(v))))
+        (
+            Some(lo.map_or(v, |x: u64| x.min(v))),
+            Some(hi.map_or(v, |x: u64| x.max(v))),
+        )
     })
 }
 
@@ -223,7 +240,10 @@ pub(crate) fn list_ranges(ca: &ListChunked) -> Vec<Option<(usize, usize)>> {
     ca.downcast_iter()
         .flat_map(|arr| {
             let offsets = arr.offsets().as_slice();
-            (0..arr.len()).map(move |i| arr.is_valid(i).then(|| (offsets[i] as usize, (offsets[i + 1] - offsets[i]) as usize)))
+            (0..arr.len()).map(move |i| {
+                arr.is_valid(i)
+                    .then(|| (offsets[i] as usize, (offsets[i + 1] - offsets[i]) as usize))
+            })
         })
         .collect()
 }
@@ -232,20 +252,37 @@ pub(crate) fn list_ranges(ca: &ListChunked) -> Vec<Option<(usize, usize)>> {
 /// `byte_lengths` vector (0 at null rows — filtered out via the series' validity,
 /// not the value, so a genuine zero-length string still counts).
 fn min_max_bytes(s: &Series, byte_lens: &[u64]) -> (Option<u64>, Option<u64>) {
-    min_max(s.is_not_null().iter().zip(byte_lens).map(|(ok, &l)| (ok == Some(true)).then_some(l)))
+    min_max(
+        s.is_not_null()
+            .iter()
+            .zip(byte_lens)
+            .map(|(ok, &l)| (ok == Some(true)).then_some(l)),
+    )
 }
 
 /// `byte_lens` must be `Some` (from `byte_lengths`) for String/Categorical/Enum/Binary.
 fn lengths(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<(Option<u64>, Option<u64>)> {
     Ok(match s.dtype() {
-        DataType::String | DataType::Categorical(_, _) | DataType::Enum(_, _) | DataType::Binary => {
-            min_max_bytes(s, byte_lens.expect("byte_lengths precomputed for String/Categorical/Enum/Binary"))
-        }
+        DataType::String
+        | DataType::Categorical(_, _)
+        | DataType::Enum(_, _)
+        | DataType::Binary => min_max_bytes(
+            s,
+            byte_lens.expect("byte_lengths precomputed for String/Categorical/Enum/Binary"),
+        ),
         DataType::List(_) => {
             let ca = s.list()?.rechunk();
-            min_max(list_ranges(&ca).into_iter().map(|r| r.map(|(_, len)| len as u64)))
+            min_max(
+                list_ranges(&ca)
+                    .into_iter()
+                    .map(|r| r.map(|(_, len)| len as u64)),
+            )
         }
-        DataType::Array(_, width) => min_max(s.is_not_null().iter().map(|ok| (ok == Some(true)).then_some(*width as u64))),
+        DataType::Array(_, width) => min_max(
+            s.is_not_null()
+                .iter()
+                .map(|ok| (ok == Some(true)).then_some(*width as u64)),
+        ),
         _ => (None, None),
     })
 }
@@ -253,9 +290,21 @@ fn lengths(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<(Option<u64>, 
 /// Byte length of every value (0 for nulls) of a String, Categorical, Enum or Binary series.
 fn byte_lengths(s: &Series) -> PolarsResult<Option<Vec<u64>>> {
     Ok(match s.dtype() {
-        DataType::String => Some(s.str()?.iter().map(|v| v.map_or(0, |x| x.len() as u64)).collect()),
-        DataType::Categorical(_, _) | DataType::Enum(_, _) => return byte_lengths(&s.cast(&DataType::String)?),
-        DataType::Binary => Some(s.binary()?.iter().map(|v| v.map_or(0, |x| x.len() as u64)).collect()),
+        DataType::String => Some(
+            s.str()?
+                .iter()
+                .map(|v| v.map_or(0, |x| x.len() as u64))
+                .collect(),
+        ),
+        DataType::Categorical(_, _) | DataType::Enum(_, _) => {
+            return byte_lengths(&s.cast(&DataType::String)?)
+        }
+        DataType::Binary => Some(
+            s.binary()?
+                .iter()
+                .map(|v| v.map_or(0, |x| x.len() as u64))
+                .collect(),
+        ),
         _ => None,
     })
 }
@@ -263,7 +312,12 @@ fn byte_lengths(s: &Series) -> PolarsResult<Option<Vec<u64>>> {
 pub(crate) fn range(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<Range> {
     let (argmin, argmax) = arg_extremes(s)?;
     let (min_len, max_len) = lengths(s, byte_lens)?;
-    Ok(Range { argmin, argmax, min_len, max_len })
+    Ok(Range {
+        argmin,
+        argmax,
+        min_len,
+        max_len,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,7 +344,10 @@ pub(crate) fn frac_digits(repr: &str) -> u32 {
         Some((m, e)) => (m, e.parse::<i64>().unwrap_or(0)),
         None => (repr, 0),
     };
-    let frac = mantissa.split_once('.').map_or("", |(_, f)| f).trim_end_matches('0');
+    let frac = mantissa
+        .split_once('.')
+        .map_or("", |(_, f)| f)
+        .trim_end_matches('0');
     (frac.len() as i64 - exp).max(0) as u32
 }
 
@@ -312,7 +369,9 @@ impl FloatStats {
             self.n_inf += 1;
         } else {
             self.n_fractional += (x != x.trunc()) as u64;
-            self.max_frac_digits = self.max_frac_digits.max(Some(frac_digits(buf.format_finite(x))));
+            self.max_frac_digits = self
+                .max_frac_digits
+                .max(Some(frac_digits(buf.format_finite(x))));
             self.n_f32_inexact += ((x as f32) as f64 != x) as u64;
         }
     }
@@ -324,13 +383,19 @@ impl FloatStats {
             self.n_inf += 1;
         } else {
             self.n_fractional += (x != x.trunc()) as u64;
-            self.max_frac_digits = self.max_frac_digits.max(Some(frac_digits(buf.format_finite(x))));
+            self.max_frac_digits = self
+                .max_frac_digits
+                .max(Some(frac_digits(buf.format_finite(x))));
         }
     }
 }
 
 /// Fold `add` over the valid values of one Arrow chunk, CHUNK values per task.
-fn fold<T: Copy + Sync>(values: &[T], validity: Option<&Bitmap>, add: impl Fn(&mut FloatStats, T, &mut ryu::Buffer) + Sync) -> FloatStats {
+fn fold<T: Copy + Sync>(
+    values: &[T],
+    validity: Option<&Bitmap>,
+    add: impl Fn(&mut FloatStats, T, &mut ryu::Buffer) + Sync,
+) -> FloatStats {
     let validity = validity.filter(|bm| bm.unset_bits() > 0);
     values
         .par_chunks(CHUNK)
@@ -414,11 +479,16 @@ pub(crate) fn scan_numeric(b: &[u8]) -> Option<Numeric> {
         _ => return None,
     };
     let frac = &frac[..frac.iter().rposition(|&c| c != b'0').map_or(0, |p| p + 1)];
-    let significant = int.iter().position(|&c| c != b'0').map_or(0, |p| int.len() - p);
+    let significant = int
+        .iter()
+        .position(|&c| c != b'0')
+        .map_or(0, |p| int.len() - p);
     let sig_digits = if significant > 0 {
         significant + frac.len()
     } else {
-        frac.iter().position(|&c| c != b'0').map_or(0, |p| frac.len() - p)
+        frac.iter()
+            .position(|&c| c != b'0')
+            .map_or(0, |p| frac.len() - p)
     };
     Some(Numeric {
         is_int: rest.is_empty(),
@@ -436,11 +506,16 @@ pub(crate) fn parse_i128(b: &[u8]) -> Option<i128> {
         Some(d) => (true, d),
         None => (false, b),
     };
-    let digits = &digits[digits.iter().position(|&c| c != b'0').unwrap_or(digits.len())..];
+    let digits = &digits[digits
+        .iter()
+        .position(|&c| c != b'0')
+        .unwrap_or(digits.len())..];
     if digits.len() > 38 {
         return None;
     }
-    let v = digits.iter().fold(0i128, |acc, &c| acc * 10 + (c - b'0') as i128);
+    let v = digits
+        .iter()
+        .fold(0i128, |acc, &c| acc * 10 + (c - b'0') as i128);
     Some(if neg { -v } else { v })
 }
 
@@ -448,9 +523,21 @@ pub(crate) fn parse_i128(b: &[u8]) -> Option<i128> {
 pub(crate) enum Iso {
     Date,
     /// frac = fractional-second digits as written; sig = without trailing zeros.
-    Time { frac: u32, sig: u32 },
-    DateTime { frac: u32, sig: u32, midnight: bool },
-    DateTimeTz { frac: u32, sig: u32, midnight: bool, offset_minutes: i32 },
+    Time {
+        frac: u32,
+        sig: u32,
+    },
+    DateTime {
+        frac: u32,
+        sig: u32,
+        midnight: bool,
+    },
+    DateTimeTz {
+        frac: u32,
+        sig: u32,
+        midnight: bool,
+        offset_minutes: i32,
+    },
 }
 
 #[inline]
@@ -463,7 +550,7 @@ fn days_in_month(y: u32, m: u32) -> u32 {
     match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) => 29,
+        2 if y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400)) => 29,
         2 => 28,
         _ => 0,
     }
@@ -495,7 +582,10 @@ fn time(b: &[u8], i: usize) -> Option<(usize, u32, u32, bool)> {
         zero &= s == 0;
         end += 3;
         if b.get(end) == Some(&b'.') {
-            let digits = b[end + 1..].iter().take_while(|c| c.is_ascii_digit()).count();
+            let digits = b[end + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
             if !(1..=9).contains(&digits) {
                 return None;
             }
@@ -532,9 +622,18 @@ pub(crate) fn scan_iso(b: &[u8]) -> Option<Iso> {
         }
         let (end, frac, sig, midnight) = time(b, d + 1)?;
         if end == b.len() {
-            return Some(Iso::DateTime { frac, sig, midnight });
+            return Some(Iso::DateTime {
+                frac,
+                sig,
+                midnight,
+            });
         }
-        return offset(b, end).map(|offset_minutes| Iso::DateTimeTz { frac, sig, midnight, offset_minutes });
+        return offset(b, end).map(|offset_minutes| Iso::DateTimeTz {
+            frac,
+            sig,
+            midnight,
+            offset_minutes,
+        });
     }
     let (end, frac, sig, _) = time(b, 0)?;
     (end == b.len()).then_some(Iso::Time { frac, sig })
@@ -578,7 +677,13 @@ pub(crate) fn parse_iso(b: &[u8]) -> Option<IsoValue> {
     let num = |i: usize| two(b, i).map(|v| v as i64);
     let date_days = || Some(days_from_civil(num(0)? * 100 + num(2)?, num(5)?, num(8)?));
     let (days, t) = match kind {
-        Iso::Date => return Some(IsoValue { days: date_days(), nanos: 0, offset_minutes: None }),
+        Iso::Date => {
+            return Some(IsoValue {
+                days: date_days(),
+                nanos: 0,
+                offset_minutes: None,
+            })
+        }
         Iso::Time { .. } => (None, 0),
         _ => (date_days(), 11),
     };
@@ -590,7 +695,9 @@ pub(crate) fn parse_iso(b: &[u8]) -> Option<IsoValue> {
             let (f, digits) = b[end + 4..]
                 .iter()
                 .take_while(|c| c.is_ascii_digit())
-                .fold((0i64, 0u32), |(a, n), &c| (a * 10 + (c - b'0') as i64, n + 1));
+                .fold((0i64, 0u32), |(a, n), &c| {
+                    (a * 10 + (c - b'0') as i64, n + 1)
+                });
             nanos += f * 10i64.pow(9 - digits);
         }
     }
@@ -598,7 +705,11 @@ pub(crate) fn parse_iso(b: &[u8]) -> Option<IsoValue> {
         Iso::DateTimeTz { offset_minutes, .. } => Some(offset_minutes),
         _ => None,
     };
-    Some(IsoValue { days, nanos, offset_minutes })
+    Some(IsoValue {
+        days,
+        nanos,
+        offset_minutes,
+    })
 }
 
 /// Exact unscaled value of a numeric string (scan_numeric grammar) at `scale`:
@@ -684,12 +795,21 @@ impl StringStats {
                 self.n_iso_time += 1;
                 self.fraction(frac, sig);
             }
-            Some(Iso::DateTime { frac, sig, midnight }) => {
+            Some(Iso::DateTime {
+                frac,
+                sig,
+                midnight,
+            }) => {
                 self.n_iso_datetime += 1;
                 self.fraction(frac, sig);
                 self.iso_n_midnight += midnight as u64;
             }
-            Some(Iso::DateTimeTz { frac, sig, midnight, offset_minutes }) => {
+            Some(Iso::DateTimeTz {
+                frac,
+                sig,
+                midnight,
+                offset_minutes,
+            }) => {
                 self.n_iso_datetime_tz += 1;
                 self.fraction(frac, sig);
                 self.iso_n_midnight += midnight as u64;
@@ -740,32 +860,78 @@ pub(crate) fn value_fields() -> Vec<(&'static str, DataType)> {
     // Arrow has no plain 128-bit integer; parse_i128 caps values at 38 digits.
     let d38 = DataType::Decimal(Some(38), Some(0));
     vec![
-        ("n_unique", U64), ("entropy", F64), ("f1", U64), ("f2", U64), ("argmin", U64), ("argmax", U64),
-        ("min_len", U64), ("max_len", U64), ("gcd", d38.clone()), ("sum_len", U64), ("sum_len_unique", U64),
-        ("top5_idx", list.clone()), ("top5_count", list.clone()), ("capture_history", list),
-        ("n_nan", U64), ("n_inf", U64), ("n_fractional", U64), ("max_frac_digits", U32), ("n_f32_inexact", U64),
-        ("n_numeric", U64), ("n_numeric_int", U64), ("n_leading_zero", U64), ("numeric_int_min", d38.clone()), ("numeric_int_max", d38),
-        ("numeric_max_int_digits", U32), ("numeric_max_frac_digits", U32), ("numeric_min_frac_digits", U32), ("numeric_max_sig_digits", U32),
-        ("n_iso_date", U64), ("n_iso_time", U64), ("n_iso_datetime", U64), ("n_iso_datetime_tz", U64),
-        ("iso_max_frac_digits", U32), ("iso_max_sig_frac_digits", U32), ("iso_n_offsets", U64), ("iso_n_midnight", U64),
+        ("n_unique", U64),
+        ("entropy", F64),
+        ("f1", U64),
+        ("f2", U64),
+        ("argmin", U64),
+        ("argmax", U64),
+        ("min_len", U64),
+        ("max_len", U64),
+        ("gcd", d38.clone()),
+        ("sum_len", U64),
+        ("sum_len_unique", U64),
+        ("top5_idx", list.clone()),
+        ("top5_count", list.clone()),
+        ("capture_history", list),
+        ("n_nan", U64),
+        ("n_inf", U64),
+        ("n_fractional", U64),
+        ("max_frac_digits", U32),
+        ("n_f32_inexact", U64),
+        ("n_numeric", U64),
+        ("n_numeric_int", U64),
+        ("n_leading_zero", U64),
+        ("numeric_int_min", d38.clone()),
+        ("numeric_int_max", d38),
+        ("numeric_max_int_digits", U32),
+        ("numeric_max_frac_digits", U32),
+        ("numeric_min_frac_digits", U32),
+        ("numeric_max_sig_digits", U32),
+        ("n_iso_date", U64),
+        ("n_iso_time", U64),
+        ("n_iso_datetime", U64),
+        ("n_iso_datetime_tz", U64),
+        ("iso_max_frac_digits", U32),
+        ("iso_max_sig_frac_digits", U32),
+        ("iso_n_offsets", U64),
+        ("iso_n_midnight", U64),
     ]
 }
 
 pub(crate) fn fields() -> Vec<(String, DataType)> {
-    let mut f = vec![("column".to_string(), DataType::String), ("n_rows".into(), DataType::UInt64), ("n_null".into(), DataType::UInt64)];
+    let mut f = vec![
+        ("column".to_string(), DataType::String),
+        ("n_rows".into(), DataType::UInt64),
+        ("n_null".into(), DataType::UInt64),
+    ];
     f.extend(value_fields().into_iter().map(|(n, d)| (n.to_string(), d)));
     f.push(("n_midnight".into(), DataType::UInt64));
     f.push(("inner_n_values".into(), DataType::UInt64));
     f.push(("inner_n_null".into(), DataType::UInt64));
-    f.extend(value_fields().into_iter().map(|(n, d)| (format!("inner_{n}"), d)));
+    f.extend(
+        value_fields()
+            .into_iter()
+            .map(|(n, d)| (format!("inner_{n}"), d)),
+    );
     f
 }
 
-fn u64v(v: Option<u64>) -> AnyValue<'static> { v.map_or(AnyValue::Null, AnyValue::UInt64) }
-fn u32v(v: Option<u32>) -> AnyValue<'static> { v.map_or(AnyValue::Null, AnyValue::UInt32) }
-fn d38v(v: Option<i128>) -> AnyValue<'static> { v.map_or(AnyValue::Null, |v| AnyValue::Decimal(v, 0)) }
-fn listv(v: &[u64]) -> AnyValue<'static> { AnyValue::List(Series::new(PlSmallStr::EMPTY, v)) }
-fn nulls(n: usize) -> Row { vec![AnyValue::Null; n] }
+fn u64v(v: Option<u64>) -> AnyValue<'static> {
+    v.map_or(AnyValue::Null, AnyValue::UInt64)
+}
+fn u32v(v: Option<u32>) -> AnyValue<'static> {
+    v.map_or(AnyValue::Null, AnyValue::UInt32)
+}
+fn d38v(v: Option<i128>) -> AnyValue<'static> {
+    v.map_or(AnyValue::Null, |v| AnyValue::Decimal(v, 0))
+}
+fn listv(v: &[u64]) -> AnyValue<'static> {
+    AnyValue::List(Series::new(PlSmallStr::EMPTY, v))
+}
+fn nulls(n: usize) -> Row {
+    vec![AnyValue::Null; n]
+}
 
 fn strings(s: &Series) -> PolarsResult<Option<StringStats>> {
     let st = match s.dtype() {
@@ -824,28 +990,60 @@ impl Profile {
     fn row(&self) -> Row {
         let (f, r) = (&self.freq, &self.range);
         let mut row: Row = vec![
-            AnyValue::UInt64(f.n_unique), AnyValue::Float64(f.entropy), AnyValue::UInt64(f.f1), AnyValue::UInt64(f.f2),
-            u64v(r.argmin), u64v(r.argmax), u64v(r.min_len), u64v(r.max_len),
-            d38v(self.gcd), u64v(self.sum_len), u64v(f.sum_len_unique),
-            listv(&f.top5_idx), listv(&f.top5_count), listv(&f.capture_history),
+            AnyValue::UInt64(f.n_unique),
+            AnyValue::Float64(f.entropy),
+            AnyValue::UInt64(f.f1),
+            AnyValue::UInt64(f.f2),
+            u64v(r.argmin),
+            u64v(r.argmax),
+            u64v(r.min_len),
+            u64v(r.max_len),
+            d38v(self.gcd),
+            u64v(self.sum_len),
+            u64v(f.sum_len_unique),
+            listv(&f.top5_idx),
+            listv(&f.top5_count),
+            listv(&f.capture_history),
         ];
         match self.floats {
             Some(fl) => row.extend([
-                AnyValue::UInt64(fl.n_nan), AnyValue::UInt64(fl.n_inf), AnyValue::UInt64(fl.n_fractional), u32v(fl.max_frac_digits),
-                if self.is_f32 { AnyValue::Null } else { AnyValue::UInt64(fl.n_f32_inexact) },
+                AnyValue::UInt64(fl.n_nan),
+                AnyValue::UInt64(fl.n_inf),
+                AnyValue::UInt64(fl.n_fractional),
+                u32v(fl.max_frac_digits),
+                if self.is_f32 {
+                    AnyValue::Null
+                } else {
+                    AnyValue::UInt64(fl.n_f32_inexact)
+                },
             ]),
             None => row.extend(nulls(5)),
         }
         match &self.strings {
             Some(st) => {
-                let (lo, hi) = if st.int_overflow { (None, None) } else { (st.int_min, st.int_max) };
+                let (lo, hi) = if st.int_overflow {
+                    (None, None)
+                } else {
+                    (st.int_min, st.int_max)
+                };
                 row.extend([
-                    AnyValue::UInt64(st.n_numeric), AnyValue::UInt64(st.n_numeric_int), AnyValue::UInt64(st.n_leading_zero),
-                    d38v(lo), d38v(hi), u32v(st.max_int_digits), u32v(st.max_frac_digits),
-                    u32v(st.min_frac_digits), u32v(st.max_sig_digits),
-                    AnyValue::UInt64(st.n_iso_date), AnyValue::UInt64(st.n_iso_time), AnyValue::UInt64(st.n_iso_datetime),
-                    AnyValue::UInt64(st.n_iso_datetime_tz), u32v(st.iso_max_frac_digits), u32v(st.iso_max_sig_frac_digits),
-                    AnyValue::UInt64(st.offsets.len() as u64), AnyValue::UInt64(st.iso_n_midnight),
+                    AnyValue::UInt64(st.n_numeric),
+                    AnyValue::UInt64(st.n_numeric_int),
+                    AnyValue::UInt64(st.n_leading_zero),
+                    d38v(lo),
+                    d38v(hi),
+                    u32v(st.max_int_digits),
+                    u32v(st.max_frac_digits),
+                    u32v(st.min_frac_digits),
+                    u32v(st.max_sig_digits),
+                    AnyValue::UInt64(st.n_iso_date),
+                    AnyValue::UInt64(st.n_iso_time),
+                    AnyValue::UInt64(st.n_iso_datetime),
+                    AnyValue::UInt64(st.n_iso_datetime_tz),
+                    u32v(st.iso_max_frac_digits),
+                    u32v(st.iso_max_sig_frac_digits),
+                    AnyValue::UInt64(st.offsets.len() as u64),
+                    AnyValue::UInt64(st.iso_n_midnight),
                 ])
             }
             None => row.extend(nulls(17)),
@@ -873,7 +1071,11 @@ pub(crate) struct Described {
 impl Described {
     /// One output row in `fields()` order.
     pub(crate) fn row(&self) -> Row {
-        let mut row: Row = vec![AnyValue::StringOwned(self.name.clone()), AnyValue::UInt64(self.n_rows), AnyValue::UInt64(self.n_null)];
+        let mut row: Row = vec![
+            AnyValue::StringOwned(self.name.clone()),
+            AnyValue::UInt64(self.n_rows),
+            AnyValue::UInt64(self.n_null),
+        ];
         row.extend(self.outer.row());
         row.push(u64v(self.n_midnight));
         match &self.inner {
@@ -890,7 +1092,9 @@ impl Described {
 
 /// Datetime values at exactly 00:00:00 local time (column time zone, else naive).
 fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
-    let DataType::Datetime(unit, tz) = s.dtype() else { return Ok(None) };
+    let DataType::Datetime(unit, tz) = s.dtype() else {
+        return Ok(None);
+    };
     let per_day: i64 = match unit {
         TimeUnit::Nanoseconds => 86_400_000_000_000,
         TimeUnit::Microseconds => 86_400_000_000,
@@ -899,17 +1103,25 @@ fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
     let phys = s.to_physical_repr();
     let values = phys.i64()?;
     let count = match tz {
-        None => values.into_iter().flatten().filter(|v| v.rem_euclid(per_day) == 0).count(),
+        None => values
+            .into_iter()
+            .flatten()
+            .filter(|v| v.rem_euclid(per_day) == 0)
+            .count(),
         Some(tz) => {
-            let zone: chrono_tz::Tz = tz.as_str().parse().map_err(|_| polars_err!(ComputeError: "describe: unknown time zone {tz}"))?;
+            let zone: chrono_tz::Tz = tz
+                .as_str()
+                .parse()
+                .map_err(|_| polars_err!(ComputeError: "describe: unknown time zone {tz}"))?;
             let per_sec = per_day / 86_400;
             values
                 .into_iter()
                 .flatten()
                 .filter(|&v| {
                     v.rem_euclid(per_sec) == 0
-                        && chrono::DateTime::from_timestamp(v.div_euclid(per_sec), 0)
-                            .is_some_and(|t| t.with_timezone(&zone).time() == chrono::NaiveTime::MIN)
+                        && chrono::DateTime::from_timestamp(v.div_euclid(per_sec), 0).is_some_and(
+                            |t| t.with_timezone(&zone).time() == chrono::NaiveTime::MIN,
+                        )
                 })
                 .count()
         }
@@ -929,12 +1141,20 @@ fn flatten(s: &Series) -> PolarsResult<Option<Series>> {
         DataType::Array(_, width) => {
             let ca = s.array()?.rechunk();
             let valid = ca.is_not_null();
-            let ranges = valid.iter().enumerate().map(|(i, ok)| (ok == Some(true)).then_some((i * width, *width))).collect();
+            let ranges = valid
+                .iter()
+                .enumerate()
+                .map(|(i, ok)| (ok == Some(true)).then_some((i * width, *width)))
+                .collect();
             (ca.get_inner(), ranges)
         }
         _ => return Ok(None),
     };
-    let idx: Vec<IdxSize> = ranges.into_iter().flatten().flat_map(|(start, len)| (start..start + len).map(|i| i as IdxSize)).collect();
+    let idx: Vec<IdxSize> = ranges
+        .into_iter()
+        .flatten()
+        .flat_map(|(start, len)| (start..start + len).map(|i| i as IdxSize))
+        .collect();
     Ok(Some(inner.take_slice(&idx)?))
 }
 
@@ -957,7 +1177,11 @@ pub(crate) fn describe_one(s: &Series, seed: u64) -> PolarsResult<Described> {
 }
 
 /// A Struct series `name` with one field per `fields` entry and one row per `rows` entry.
-pub(crate) fn assemble(name: &str, fields: &[(String, DataType)], rows: &[Row]) -> PolarsResult<Series> {
+pub(crate) fn assemble(
+    name: &str,
+    fields: &[(String, DataType)],
+    rows: &[Row],
+) -> PolarsResult<Series> {
     let columns = fields
         .iter()
         .enumerate()
@@ -970,7 +1194,10 @@ pub(crate) fn assemble(name: &str, fields: &[(String, DataType)], rows: &[Row]) 
 }
 
 pub(crate) fn describe_columns_impl(inputs: &[Series], seed: u64) -> PolarsResult<Series> {
-    let rows: Vec<Row> = inputs.par_iter().map(|s| describe_one(s, seed).map(|d| d.row())).collect::<PolarsResult<_>>()?;
+    let rows: Vec<Row> = inputs
+        .par_iter()
+        .map(|s| describe_one(s, seed).map(|d| d.row()))
+        .collect::<PolarsResult<_>>()?;
     assemble("describe", &fields(), &rows)
 }
 
@@ -984,7 +1211,10 @@ mod tests {
 
     #[test]
     fn counts_entropy_and_top5() {
-        let f = freq(Series::new("a".into(), &[Some("a"), Some("a"), Some("b"), None]));
+        let f = freq(Series::new(
+            "a".into(),
+            &[Some("a"), Some("a"), Some("b"), None],
+        ));
         assert_eq!((f.n_unique, f.f1, f.f2), (2, 1, 1));
         assert!((f.entropy - 1.5).abs() < 1e-12);
         assert_eq!((f.top5_idx, f.top5_count), (vec![0, 2], vec![2, 1]));
@@ -993,7 +1223,10 @@ mod tests {
     #[test]
     fn ties_break_by_first_occurrence() {
         let f = freq(Series::new("a".into(), &[3i64, 1, 2, 1, 2, 3, 4, 5, 6]));
-        assert_eq!((f.top5_idx, f.top5_count), (vec![0, 1, 2, 6, 7], vec![2, 2, 2, 1, 1]));
+        assert_eq!(
+            (f.top5_idx, f.top5_count),
+            (vec![0, 1, 2, 6, 7], vec![2, 2, 2, 1, 1])
+        );
     }
 
     #[test]
@@ -1005,14 +1238,25 @@ mod tests {
         v[3 * CHUNK + 2] = 9;
         let f = freq(Series::new("a".into(), v));
         assert_eq!(f.n_unique, 2);
-        assert_eq!((f.top5_idx, f.top5_count), (vec![0, (2 * CHUNK + 1) as u64], vec![(n - 2) as u64, 2]));
+        assert_eq!(
+            (f.top5_idx, f.top5_count),
+            (vec![0, (2 * CHUNK + 1) as u64], vec![(n - 2) as u64, 2])
+        );
     }
 
     #[test]
     fn capture_history_sums_to_n_unique_and_fills_all_subsets() {
-        let f = freq(Series::new("a".into(), (0..10_000i64).map(|i| i % 10).collect::<Vec<_>>()));
+        let f = freq(Series::new(
+            "a".into(),
+            (0..10_000i64).map(|i| i % 10).collect::<Vec<_>>(),
+        ));
         assert_eq!(f.capture_history, [0, 0, 0, 0, 0, 0, 10]);
-        let g = freq(Series::new("a".into(), (0..20_000i64).map(|i| (i * 7919) % 5_003).collect::<Vec<_>>()));
+        let g = freq(Series::new(
+            "a".into(),
+            (0..20_000i64)
+                .map(|i| (i * 7919) % 5_003)
+                .collect::<Vec<_>>(),
+        ));
         assert_eq!(g.capture_history.iter().sum::<u64>(), g.n_unique);
     }
 
@@ -1022,7 +1266,10 @@ mod tests {
         for row in 0..30_000 {
             counts[subset(0, row) as usize] += 1;
         }
-        assert!(counts.iter().all(|&c| (9_500..10_500).contains(&c)), "{counts:?}");
+        assert!(
+            counts.iter().all(|&c| (9_500..10_500).contains(&c)),
+            "{counts:?}"
+        );
     }
 
     #[test]
@@ -1038,9 +1285,14 @@ mod tests {
     fn struct_values_hash_whole_and_binary_encodes() {
         let a = Series::new("a".into(), &[1i32, 1, 1]);
         let b = Series::new("b".into(), &[Some("x"), Some("x"), None]);
-        let s = StructChunked::from_series("s".into(), 3, [a, b].iter()).unwrap().into_series();
+        let s = StructChunked::from_series("s".into(), 3, [a, b].iter())
+            .unwrap()
+            .into_series();
         assert_eq!(freq(s).n_unique, 2);
-        let bin = Series::new("b".into(), &[Some(b"ab".as_ref()), Some(b"ab".as_ref()), None]);
+        let bin = Series::new(
+            "b".into(),
+            &[Some(b"ab".as_ref()), Some(b"ab".as_ref()), None],
+        );
         assert_eq!(freq(bin).n_unique, 1);
     }
 
@@ -1052,43 +1304,99 @@ mod tests {
 
     #[test]
     fn first_occurrence_extremes() {
-        assert_eq!(r(Series::new("x".into(), &[5i64, 1, 3, 1, 5])), (Some(1), Some(0), None, None));
-        assert_eq!(r(Series::new("x".into(), &[0.0f64, -0.0, f64::NAN, 1.5])), (Some(0), Some(3), None, None));
-        assert_eq!(r(Series::new("x".into(), &[None::<i32>, None])), (None, None, None, None));
+        assert_eq!(
+            r(Series::new("x".into(), &[5i64, 1, 3, 1, 5])),
+            (Some(1), Some(0), None, None)
+        );
+        assert_eq!(
+            r(Series::new("x".into(), &[0.0f64, -0.0, f64::NAN, 1.5])),
+            (Some(0), Some(3), None, None)
+        );
+        assert_eq!(
+            r(Series::new("x".into(), &[None::<i32>, None])),
+            (None, None, None, None)
+        );
     }
 
     #[test]
     fn strings_bytes_and_lengths() {
-        assert_eq!(r(Series::new("x".into(), &[Some("ab"), Some(""), None, Some("héllo")])), (Some(1), Some(3), Some(0), Some(6)));
+        assert_eq!(
+            r(Series::new(
+                "x".into(),
+                &[Some("ab"), Some(""), None, Some("héllo")]
+            )),
+            (Some(1), Some(3), Some(0), Some(6))
+        );
     }
 
     #[test]
     fn lists_use_polars_sort_order() {
-        let s = Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 5])), Some(Series::new("".into(), &[2i64, 1])), None, Some(Series::new_empty("".into(), &DataType::Int64))]);
+        let s = Series::new(
+            "x".into(),
+            [
+                Some(Series::new("".into(), &[1i64, 5])),
+                Some(Series::new("".into(), &[2i64, 1])),
+                None,
+                Some(Series::new_empty("".into(), &DataType::Int64)),
+            ],
+        );
         assert_eq!(r(s), (Some(3), Some(1), Some(0), Some(2)));
     }
 
     #[test]
     fn decimal_places_of_shortest_reprs() {
-        for (repr, want) in [("0.1", 1), ("1e-7", 7), ("1.5e20", 0), ("1.5e+20", 0), ("3.0", 0), ("-0.0", 0), ("123.45", 2), ("1.25e-3", 5)] {
+        for (repr, want) in [
+            ("0.1", 1),
+            ("1e-7", 7),
+            ("1.5e20", 0),
+            ("1.5e+20", 0),
+            ("3.0", 0),
+            ("-0.0", 0),
+            ("123.45", 2),
+            ("1.25e-3", 5),
+        ] {
             assert_eq!(frac_digits(repr), want, "{repr}");
         }
     }
 
     #[test]
     fn f64_stats() {
-        let s = Series::new("x".into(), &[Some(0.1), Some(1e-7), Some(1.5e20), Some(3.0), Some(f64::INFINITY), Some(f64::NAN), None]);
+        let s = Series::new(
+            "x".into(),
+            &[
+                Some(0.1),
+                Some(1e-7),
+                Some(1.5e20),
+                Some(3.0),
+                Some(f64::INFINITY),
+                Some(f64::NAN),
+                None,
+            ],
+        );
         let st = float_stats(&s).unwrap().unwrap();
-        assert_eq!((st.n_nan, st.n_inf, st.n_fractional, st.max_frac_digits), (1, 1, 2, Some(7)));
+        assert_eq!(
+            (st.n_nan, st.n_inf, st.n_fractional, st.max_frac_digits),
+            (1, 1, 2, Some(7))
+        );
         assert_eq!(st.n_f32_inexact, 3); // 0.1, 1e-7, 1.5e20
     }
 
     #[test]
     fn f32_uses_its_own_repr_and_non_floats_are_none() {
-        let st = float_stats(&Series::new("x".into(), &[0.1f32, 0.25])).unwrap().unwrap();
+        let st = float_stats(&Series::new("x".into(), &[0.1f32, 0.25]))
+            .unwrap()
+            .unwrap();
         assert_eq!(st.max_frac_digits, Some(2));
-        assert!(float_stats(&Series::new("x".into(), &[1i32])).unwrap().is_none());
-        assert_eq!(float_stats(&Series::new("x".into(), &[f64::NAN])).unwrap().unwrap().max_frac_digits, None);
+        assert!(float_stats(&Series::new("x".into(), &[1i32]))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            float_stats(&Series::new("x".into(), &[f64::NAN]))
+                .unwrap()
+                .unwrap()
+                .max_frac_digits,
+            None
+        );
     }
 
     fn num(s: &str) -> Option<(bool, bool, u32, u32)> {
@@ -1097,7 +1405,9 @@ mod tests {
 
     #[test]
     fn numeric_grammar() {
-        for bad in ["5.", ".5", "1.2.3", "+5", "1e5", " 5", "5 ", "", "-", "\u{0663}"] {
+        for bad in [
+            "5.", ".5", "1.2.3", "+5", "1e5", " 5", "5 ", "", "-", "\u{0663}",
+        ] {
             assert_eq!(num(bad), None, "{bad:?}");
         }
         assert_eq!(num("007"), Some((true, true, 1, 0)));
@@ -1111,9 +1421,15 @@ mod tests {
     #[test]
     fn i128_parse_limit() {
         assert_eq!(parse_i128(b"-012"), Some(-12));
-        assert_eq!(parse_i128(format!("9{}", "0".repeat(37)).as_bytes()), Some(9 * 10i128.pow(37)));
+        assert_eq!(
+            parse_i128(format!("9{}", "0".repeat(37)).as_bytes()),
+            Some(9 * 10i128.pow(37))
+        );
         assert_eq!(parse_i128(format!("1{}", "0".repeat(38)).as_bytes()), None);
-        assert_eq!(parse_i128(format!("{}1", "0".repeat(50)).as_bytes()), Some(1));
+        assert_eq!(
+            parse_i128(format!("{}1", "0".repeat(50)).as_bytes()),
+            Some(1)
+        );
     }
 
     fn iso(s: &str) -> Option<Iso> {
@@ -1123,22 +1439,80 @@ mod tests {
     #[test]
     fn iso_grammar() {
         assert_eq!(iso("2024-02-29"), Some(Iso::Date));
-        for bad in ["2023-02-29", "2024-13-01", "2024-1-05", "24:00", "23:59:60", "10:00:00.1234567890", "10:00:00.", "2024-01-05t10:00", "2024-01-05T10:00+0200", "2024-01-05T10:00Zx"] {
+        for bad in [
+            "2023-02-29",
+            "2024-13-01",
+            "2024-1-05",
+            "24:00",
+            "23:59:60",
+            "10:00:00.1234567890",
+            "10:00:00.",
+            "2024-01-05t10:00",
+            "2024-01-05T10:00+0200",
+            "2024-01-05T10:00Zx",
+        ] {
             assert_eq!(iso(bad), None, "{bad:?}");
         }
         assert_eq!(iso("23:59"), Some(Iso::Time { frac: 0, sig: 0 }));
-        assert_eq!(iso("10:00:00.123456789"), Some(Iso::Time { frac: 9, sig: 9 }));
-        assert_eq!(iso("2024-01-05 10:00:00"), Some(Iso::DateTime { frac: 0, sig: 0, midnight: false }));
-        assert_eq!(iso("2024-01-05T00:00:00.000"), Some(Iso::DateTime { frac: 3, sig: 0, midnight: true }));
-        assert_eq!(iso("2024-01-05T00:00Z"), Some(Iso::DateTimeTz { frac: 0, sig: 0, midnight: true, offset_minutes: 0 }));
-        assert_eq!(iso("2024-01-05T10:00-00:00"), Some(Iso::DateTimeTz { frac: 0, sig: 0, midnight: false, offset_minutes: 0 }));
-        assert_eq!(iso("2024-01-05T10:00-05:30"), Some(Iso::DateTimeTz { frac: 0, sig: 0, midnight: false, offset_minutes: -330 }));
+        assert_eq!(
+            iso("10:00:00.123456789"),
+            Some(Iso::Time { frac: 9, sig: 9 })
+        );
+        assert_eq!(
+            iso("2024-01-05 10:00:00"),
+            Some(Iso::DateTime {
+                frac: 0,
+                sig: 0,
+                midnight: false
+            })
+        );
+        assert_eq!(
+            iso("2024-01-05T00:00:00.000"),
+            Some(Iso::DateTime {
+                frac: 3,
+                sig: 0,
+                midnight: true
+            })
+        );
+        assert_eq!(
+            iso("2024-01-05T00:00Z"),
+            Some(Iso::DateTimeTz {
+                frac: 0,
+                sig: 0,
+                midnight: true,
+                offset_minutes: 0
+            })
+        );
+        assert_eq!(
+            iso("2024-01-05T10:00-00:00"),
+            Some(Iso::DateTimeTz {
+                frac: 0,
+                sig: 0,
+                midnight: false,
+                offset_minutes: 0
+            })
+        );
+        assert_eq!(
+            iso("2024-01-05T10:00-05:30"),
+            Some(Iso::DateTimeTz {
+                frac: 0,
+                sig: 0,
+                midnight: false,
+                offset_minutes: -330
+            })
+        );
     }
 
     #[test]
     fn stats_accumulate_and_merge() {
         let mut a = StringStats::default();
-        for s in ["007", "12", "0.25", "2024-01-05T00:00Z", "2024-01-05T10:00+02:00"] {
+        for s in [
+            "007",
+            "12",
+            "0.25",
+            "2024-01-05T00:00Z",
+            "2024-01-05T10:00+02:00",
+        ] {
             a.add(s.as_bytes());
         }
         let mut b = StringStats::default();
@@ -1148,7 +1522,10 @@ mod tests {
         assert!(m.int_overflow);
         assert_eq!((m.max_int_digits, m.max_frac_digits), (Some(39), Some(2)));
         assert_eq!((m.min_frac_digits, m.max_sig_digits), (Some(0), Some(39)));
-        assert_eq!((m.n_iso_datetime_tz, m.offsets.len(), m.iso_n_midnight), (2, 2, 1));
+        assert_eq!(
+            (m.n_iso_datetime_tz, m.offsets.len(), m.iso_n_midnight),
+            (2, 2, 1)
+        );
         assert_eq!(m.iso_max_sig_frac_digits, Some(0));
     }
 
@@ -1172,7 +1549,14 @@ mod tests {
     #[test]
     fn iso_significant_fraction() {
         assert_eq!(iso("10:00:00.120"), Some(Iso::Time { frac: 3, sig: 2 }));
-        assert_eq!(iso("2024-01-05T00:00:00.000"), Some(Iso::DateTime { frac: 3, sig: 0, midnight: true }));
+        assert_eq!(
+            iso("2024-01-05T00:00:00.000"),
+            Some(Iso::DateTime {
+                frac: 3,
+                sig: 0,
+                midnight: true
+            })
+        );
     }
 
     #[test]
@@ -1180,7 +1564,10 @@ mod tests {
         let s = Series::new("a".into(), &[Some("ab"), Some("ab"), Some("c"), None]);
         let lens = byte_lengths(&s).unwrap().unwrap();
         assert_eq!(lens.iter().sum::<u64>(), 5);
-        assert_eq!(frequencies(&encode_series(&s).unwrap(), 0, Some(&lens)).sum_len_unique, Some(3));
+        assert_eq!(
+            frequencies(&encode_series(&s).unwrap(), 0, Some(&lens)).sum_len_unique,
+            Some(3)
+        );
     }
 
     #[test]
@@ -1188,7 +1575,10 @@ mod tests {
         let p = profile(&Series::new("x".into(), &[Some(10i64), None, Some(30)]), 0).unwrap();
         assert_eq!((p.gcd, p.sum_len), (Some(10), None));
         let s = profile(&Series::new("x".into(), &["ab", "ab", "c"]), 0).unwrap();
-        assert_eq!((s.gcd, s.sum_len, s.freq.sum_len_unique), (None, Some(5), Some(3)));
+        assert_eq!(
+            (s.gcd, s.sum_len, s.freq.sum_len_unique),
+            (None, Some(5), Some(3))
+        );
     }
 
     #[test]
@@ -1204,13 +1594,25 @@ mod tests {
 
     #[test]
     fn exact_iso_components() {
-        assert_eq!(parse_iso(b"1970-01-02"), Some(IsoValue { days: Some(1), nanos: 0, offset_minutes: None }));
+        assert_eq!(
+            parse_iso(b"1970-01-02"),
+            Some(IsoValue {
+                days: Some(1),
+                nanos: 0,
+                offset_minutes: None
+            })
+        );
         assert_eq!(parse_iso(b"2024-02-29").unwrap().days, Some(19_782));
         let t = parse_iso(b"10:00:00.12").unwrap();
         assert_eq!((t.days, t.nanos), (None, 36_000_120_000_000));
         let z = parse_iso(b"1970-01-01T05:30+05:30").unwrap();
         assert_eq!((z.offset_minutes, z.epoch_ns()), (Some(330), 0));
-        assert_eq!(parse_iso(b"1969-12-31 23:59:59.999999999").unwrap().epoch_ns(), -1);
+        assert_eq!(
+            parse_iso(b"1969-12-31 23:59:59.999999999")
+                .unwrap()
+                .epoch_ns(),
+            -1
+        );
         assert_eq!(parse_iso(b"2023-02-29"), None);
     }
 
@@ -1220,6 +1622,9 @@ mod tests {
         assert_eq!(parse_decimal(b"-1.5", 3), Some(-1500));
         assert_eq!(parse_decimal(b"12", 0), Some(12));
         assert_eq!(parse_decimal(b"1.25", 1), None); // needs 2 places
-        assert_eq!(parse_decimal(format!("1{}", "0".repeat(38)).as_bytes(), 0), None); // 39 digits
+        assert_eq!(
+            parse_decimal(format!("1{}", "0".repeat(38)).as_bytes(), 0),
+            None
+        ); // 39 digits
     }
 }

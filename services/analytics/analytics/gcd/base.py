@@ -5,9 +5,19 @@ import polars as pl
 from analytics.base import Technique, computed
 
 INTEGER_BACKED = (
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Decimal, pl.Date, pl.Datetime, pl.Duration, pl.Time,
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.Int64,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    pl.UInt64,
+    pl.Decimal,
+    pl.Date,
+    pl.Datetime,
+    pl.Duration,
+    pl.Time,
 )
 
 
@@ -32,7 +42,9 @@ class Gcd(Technique):
         return isinstance(series.dtype, INTEGER_BACKED)
 
     def describe(self, frames, combos):
-        dtypes = {(n, c): str(dt) for n, f in frames.items() for c, dt in f.schema.items()}
+        dtypes = {
+            (n, c): str(dt) for n, f in frames.items() for c, dt in f.schema.items()
+        }
         return {"dtype": [dtypes[n, c] for ((n, c),) in combos]}
 
     def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:

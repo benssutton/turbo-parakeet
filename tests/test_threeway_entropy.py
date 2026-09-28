@@ -9,7 +9,15 @@ import pytest
 
 from analytics.threeway_entropy import ThreewayEntropy
 from datagen import mixed_dtypes
-from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
+from harness import (
+    assert_agrees,
+    assert_contract,
+    implementation_params,
+    load,
+    reference,
+    run,
+    with_metrics,
+)
 
 PKG = "analytics.threeway_entropy"
 ALL = implementation_params(PKG)
@@ -41,10 +49,19 @@ def test_known_answers(impl):
 
 
 def test_conclusions():
-    Fixed = with_metrics(ThreewayEntropy, h_abc=[1.95, 1.5, 0.0, 1.95], n_rows=[4, 4, 1, 4])
+    Fixed = with_metrics(
+        ThreewayEntropy, h_abc=[1.95, 1.5, 0.0, 1.95], n_rows=[4, 4, 1, 4]
+    )
     df = pl.DataFrame({"a": [1], "b": [1], "c": [1], "d": [1]})  # C(4,3) = 4 triplets
-    assert Fixed().add({"t": df}).result()["near_unique"].to_list() == [True, False, False, True]
-    assert Fixed(near_unique_margin=0.01).add({"t": df}).result()["near_unique"].to_list() == [False, False, False, False]
+    assert Fixed().add({"t": df}).result()["near_unique"].to_list() == [
+        True,
+        False,
+        False,
+        True,
+    ]
+    assert Fixed(near_unique_margin=0.01).add({"t": df}).result()[
+        "near_unique"
+    ].to_list() == [False, False, False, False]
 
 
 @pytest.mark.parametrize("impl", ALL)

@@ -11,7 +11,9 @@ class BloomFastbloom(BloomMembership):
 
     def _compute(self, frames, combos):
         columns = columns_of(combos)
-        keys = {c: [str(v) for v in distinct_values(frames[c[0]][c[1]])] for c in columns}
+        keys = {
+            c: [str(v) for v in distinct_values(frames[c[0]][c[1]])] for c in columns
+        }
         partners: dict = {c: [] for c in columns}
         for a, b in combos:
             partners[a].append(b)
@@ -24,5 +26,9 @@ class BloomFastbloom(BloomMembership):
             bloom.add_str_batch(keys[y])
             for x in partners[y]:
                 if keys[x]:
-                    contained[(x, y)] = sum(bloom.contains_str_batch(keys[x])) / len(keys[x])
-        return self.membership_rows(frames, combos, {c: len(k) for c, k in keys.items()}, contained)
+                    contained[(x, y)] = sum(bloom.contains_str_batch(keys[x])) / len(
+                        keys[x]
+                    )
+        return self.membership_rows(
+            frames, combos, {c: len(k) for c, k in keys.items()}, contained
+        )

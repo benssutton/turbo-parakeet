@@ -23,23 +23,26 @@
 // matters for it; differing leading or trailing zeros set rec_lossy_formatting.
 
 use crate::cardinality_estimators::{estimate, Estimate};
-use crate::describe::{assemble, describe_one, fields, parse_decimal, parse_iso, Described, Profile, Row};
+use crate::describe::{
+    assemble, describe_one, fields, parse_decimal, parse_iso, Described, Profile, Row,
+};
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
 use arrow_array::builder::make_view;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int16Type};
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeListArray, Float32Array, Float64Array,
-    Int16Array, LargeListArray, LargeStringArray, ListArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt64Array,
+    Array, ArrayRef, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array,
+    FixedSizeListArray, Float32Array, Float64Array, Int16Array, LargeListArray, LargeStringArray,
+    ListArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt64Array,
 };
 use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_cast::cast::{cast_with_options, CastOptions};
 use arrow_schema::{DataType as AT, Field as AField, Fields, TimeUnit};
 use polars::prelude::{
-    polars_err, AnyValue, DataType as PT, Field as PField, Float64Chunked, IntoSeries, NewChunkedArray, PolarsResult, Series,
-    StringChunked, StructChunked, UInt64Chunked,
+    polars_err, AnyValue, DataType as PT, Field as PField, Float64Chunked, IntoSeries,
+    NewChunkedArray, PolarsResult, Series, StringChunked, StructChunked, UInt64Chunked,
 };
 use rayon::prelude::*;
 use std::cell::OnceCell;
@@ -131,8 +134,20 @@ pub(crate) fn timestamp_with_offset(unit: TimeUnit) -> AT {
 /// Dictionary key widths for cardinality `c`: (Arrow, Polars). Arrow indexes
 /// 0..=255 with UInt8; Polars reserves one code (an Enum of 256 categories is UInt16).
 pub(crate) fn dictionary_keys(c: f64) -> (AT, AT) {
-    let arrow = if c <= 256.0 { AT::UInt8 } else if c <= 65_536.0 { AT::UInt16 } else { AT::UInt32 };
-    let polars = if c <= 255.0 { AT::UInt8 } else if c <= 65_535.0 { AT::UInt16 } else { AT::UInt32 };
+    let arrow = if c <= 256.0 {
+        AT::UInt8
+    } else if c <= 65_536.0 {
+        AT::UInt16
+    } else {
+        AT::UInt32
+    };
+    let polars = if c <= 255.0 {
+        AT::UInt8
+    } else if c <= 65_535.0 {
+        AT::UInt16
+    } else {
+        AT::UInt32
+    };
     (arrow, polars)
 }
 
@@ -179,12 +194,25 @@ pub(crate) fn pa_name(t: &AT) -> String {
         AT::BinaryView => "binary_view".into(),
         AT::List(f) => format!("list<{}: {}>", f.name(), pa_name(f.data_type())),
         AT::LargeList(f) => format!("large_list<{}: {}>", f.name(), pa_name(f.data_type())),
-        AT::FixedSizeList(f, w) => format!("fixed_size_list<{}: {}>[{w}]", f.name(), pa_name(f.data_type())),
-        AT::Dictionary(k, v) => format!("dictionary<values={}, indices={}, ordered=0>", pa_name(v), pa_name(k)),
+        AT::FixedSizeList(f, w) => format!(
+            "fixed_size_list<{}: {}>[{w}]",
+            f.name(),
+            pa_name(f.data_type())
+        ),
+        AT::Dictionary(k, v) => format!(
+            "dictionary<values={}, indices={}, ordered=0>",
+            pa_name(v),
+            pa_name(k)
+        ),
         AT::Struct(fs) => format!(
             "struct<{}>",
             fs.iter()
-                .map(|f| format!("{}: {}{}", f.name(), pa_name(f.data_type()), if f.is_nullable() { "" } else { " not null" }))
+                .map(|f| format!(
+                    "{}: {}{}",
+                    f.name(),
+                    pa_name(f.data_type()),
+                    if f.is_nullable() { "" } else { " not null" }
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -197,7 +225,11 @@ pub(crate) fn pa_name(t: &AT) -> String {
 /// else single-quoted with `'` escaped; `\`, `\n`, `\r`, `\t` get their short escapes,
 /// other control characters (`< 0x20` or `0x7f`) become `\xNN`.
 fn py_str(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::with_capacity(s.len() + 2);
     out.push(quote);
     for c in s.chars() {
@@ -210,7 +242,9 @@ fn py_str(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -254,14 +288,23 @@ pub(crate) fn pl_name(t: &AT, column: &str, enum_values: Option<&[String]>, key:
         AT::Utf8 | AT::LargeUtf8 | AT::Utf8View => "String".into(),
         AT::Binary | AT::LargeBinary | AT::BinaryView => "Binary".into(),
         AT::Dictionary(..) => match enum_values {
-            Some(v) => format!("Enum(categories=[{}])", v.iter().map(|s| py_str(s)).collect::<Vec<_>>().join(", ")),
-            None => format!("Categorical(Categories(name=\"{column}\", namespace=\"\", physical=pl.{}))", inner(key)),
+            Some(v) => format!(
+                "Enum(categories=[{}])",
+                v.iter().map(|s| py_str(s)).collect::<Vec<_>>().join(", ")
+            ),
+            None => format!(
+                "Categorical(Categories(name=\"{column}\", namespace=\"\", physical=pl.{}))",
+                inner(key)
+            ),
         },
         AT::List(f) | AT::LargeList(f) => format!("List({})", inner(f.data_type())),
         AT::FixedSizeList(f, w) => format!("Array({}, shape=({w},))", inner(f.data_type())),
         AT::Struct(fs) => format!(
             "Struct({{{}}})",
-            fs.iter().map(|f| format!("'{}': {}", f.name(), inner(f.data_type()))).collect::<Vec<_>>().join(", ")
+            fs.iter()
+                .map(|f| format!("'{}': {}", f.name(), inner(f.data_type())))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         other => format!("{other}"),
     }
@@ -270,7 +313,13 @@ pub(crate) fn pl_name(t: &AT, column: &str, enum_values: Option<&[String]>, key:
 /// The Arrow type Polars exports (CompatLevel::newest) for a column Polars holds as
 /// the type recommended by `t` (Spec B §5.5); `key` is a dictionary's Polars key.
 pub(crate) fn polars_layout(t: &AT, key: &AT) -> AT {
-    let field = |f: &Arc<AField>| Arc::new(AField::new(f.name(), polars_layout(f.data_type(), key), f.is_nullable()));
+    let field = |f: &Arc<AField>| {
+        Arc::new(AField::new(
+            f.name(),
+            polars_layout(f.data_type(), key),
+            f.is_nullable(),
+        ))
+    };
     match t {
         AT::Decimal32(p, s) | AT::Decimal64(p, s) => AT::Decimal128(*p, *s),
         AT::Timestamp(TimeUnit::Second, tz) => AT::Timestamp(TimeUnit::Millisecond, tz.clone()),
@@ -302,8 +351,18 @@ impl Shape {
     /// The population the frame samples: row-proportional terms scale by `r`; a
     /// dictionary holds `c` values of the observed mean length.
     pub(crate) fn project(&self, r: f64, c: f64) -> Shape {
-        let per_value = if self.d > 0.0 { self.sum_len_unique / self.d } else { 0.0 };
-        Shape { n: self.n * r, nulls: self.nulls * r, sum_len: self.sum_len * r, d: c, sum_len_unique: per_value * c }
+        let per_value = if self.d > 0.0 {
+            self.sum_len_unique / self.d
+        } else {
+            0.0
+        };
+        Shape {
+            n: self.n * r,
+            nulls: self.nulls * r,
+            sum_len: self.sum_len * r,
+            d: c,
+            sum_len_unique: per_value * c,
+        }
     }
 }
 
@@ -312,7 +371,11 @@ pub(crate) fn pad(x: f64) -> f64 {
 }
 
 pub(crate) fn validity(n: f64, nulls: f64) -> f64 {
-    if nulls > 0.0 { pad((n / 8.0).ceil()) } else { 0.0 }
+    if nulls > 0.0 {
+        pad((n / 8.0).ceil())
+    } else {
+        0.0
+    }
 }
 
 /// Uncompressed Arrow IPC body bytes of a scalar type `t` holding values shaped
@@ -320,13 +383,18 @@ pub(crate) fn validity(n: f64, nulls: f64) -> f64 {
 /// with no analytic size is an error (its candidate fails), never a wrong size.
 pub(crate) fn body_size(t: &AT, s: &Shape) -> Result<f64, String> {
     let v = validity(s.n, s.nulls);
-    let width = |t: &AT| t.primitive_width().ok_or_else(|| format!("no predicted size for {}", pa_name(t)));
+    let width = |t: &AT| {
+        t.primitive_width()
+            .ok_or_else(|| format!("no predicted size for {}", pa_name(t)))
+    };
     Ok(match t {
         AT::Null => 0.0,
         AT::Boolean => v + pad((s.n / 8.0).ceil()),
         AT::Utf8 | AT::Binary => v + pad(4.0 * (s.n + 1.0)) + pad(s.sum_len),
         AT::LargeUtf8 | AT::LargeBinary => v + pad(8.0 * (s.n + 1.0)) + pad(s.sum_len),
-        AT::Dictionary(k, values) if **values == AT::Utf8 => v + pad(s.n * width(k)? as f64) + pad(4.0 * (s.d + 1.0)) + pad(s.sum_len_unique),
+        AT::Dictionary(k, values) if **values == AT::Utf8 => {
+            v + pad(s.n * width(k)? as f64) + pad(4.0 * (s.d + 1.0)) + pad(s.sum_len_unique)
+        }
         AT::Struct(f) if matches!(f.first().map(|x| x.data_type()), Some(AT::Timestamp(u, _)) if *t == timestamp_with_offset(*u)) => {
             v + pad(8.0 * s.n) + pad(2.0 * s.n)
         }
@@ -337,14 +405,23 @@ pub(crate) fn body_size(t: &AT, s: &Shape) -> Result<f64, String> {
 // ── numbers and units ────────────────────────────────────────────────────────
 
 pub(crate) fn digits(v: u128) -> u8 {
-    if v == 0 { 1 } else { (v.ilog10() + 1) as u8 }
+    if v == 0 {
+        1
+    } else {
+        (v.ilog10() + 1) as u8
+    }
 }
 
 pub(crate) fn narrowest_uint(hi: i128) -> Option<AT> {
-    [(u8::MAX as i128, AT::UInt8), (u16::MAX as i128, AT::UInt16), (u32::MAX as i128, AT::UInt32), (u64::MAX as i128, AT::UInt64)]
-        .into_iter()
-        .find(|(max, _)| hi <= *max)
-        .map(|(_, t)| t)
+    [
+        (u8::MAX as i128, AT::UInt8),
+        (u16::MAX as i128, AT::UInt16),
+        (u32::MAX as i128, AT::UInt32),
+        (u64::MAX as i128, AT::UInt64),
+    ]
+    .into_iter()
+    .find(|(max, _)| hi <= *max)
+    .map(|(_, t)| t)
 }
 
 pub(crate) fn narrowest_int(lo: i128, hi: i128) -> Option<AT> {
@@ -445,17 +522,23 @@ impl Canon<'_> {
 
 impl PartialEq for Canon<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.neg == other.neg && self.point == other.point && self.n_digits() == other.n_digits() && self.digits().eq(other.digits())
+        self.neg == other.neg
+            && self.point == other.point
+            && self.n_digits() == other.n_digits()
+            && self.digits().eq(other.digits())
     }
 }
 
 pub(crate) fn canon(s: &str) -> Canon<'_> {
     let (neg, s) = s.strip_prefix('-').map_or((false, s), |r| (true, r));
-    let (mantissa, exp) = s.split_once(['e', 'E']).map_or((s, 0), |(m, e)| (m, e.parse::<i32>().unwrap_or(0)));
+    let (mantissa, exp) = s
+        .split_once(['e', 'E'])
+        .map_or((s, 0), |(m, e)| (m, e.parse::<i32>().unwrap_or(0)));
     let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     let (int, frac) = (int.as_bytes(), frac.as_bytes());
     let zeros = |b: &[u8]| b.iter().take_while(|&&c| c == b'0').count();
-    let trim_end = |b: &'_ [u8]| -> usize { b.len() - b.iter().rev().take_while(|&&c| c == b'0').count() };
+    let trim_end =
+        |b: &'_ [u8]| -> usize { b.len() - b.iter().rev().take_while(|&&c| c == b'0').count() };
     let lead_int = zeros(int);
     let (head, tail, lead) = if lead_int == int.len() {
         // No significant integer digit: the digits start inside the fraction.
@@ -465,12 +548,26 @@ pub(crate) fn canon(s: &str) -> Canon<'_> {
     } else {
         let head = &int[lead_int..];
         let t = trim_end(frac);
-        if t > 0 { (head, &frac[..t], lead_int) } else { (&head[..trim_end(head)], &frac[..0], lead_int) }
+        if t > 0 {
+            (head, &frac[..t], lead_int)
+        } else {
+            (&head[..trim_end(head)], &frac[..0], lead_int)
+        }
     };
     if head.is_empty() && tail.is_empty() {
-        return Canon { neg: false, head, tail, point: 0 };
+        return Canon {
+            neg: false,
+            head,
+            tail,
+            point: 0,
+        };
     }
-    Canon { neg, head, tail, point: int.len() as i32 + exp - lead as i32 }
+    Canon {
+        neg,
+        head,
+        tail,
+        point: int.len() as i32 + exp - lead as i32,
+    }
 }
 
 /// Exact unscaled value of a decimal/exponent string at `scale`; None when it needs
@@ -498,7 +595,6 @@ pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
 }
 
 // ── candidates (Spec B §4, §5.2) ────────────────────────────────────────────
-
 
 /// Recommend's constructor keywords.
 #[derive(Clone, Debug)]
@@ -564,7 +660,10 @@ pub(crate) struct Level<'a> {
 impl Level<'_> {
     /// The values as text (LargeUtf8), computed on first use.
     fn text(&self) -> Result<&LargeStringArray, String> {
-        self.text.get_or_init(|| text_of(&self.values)).as_ref().map_err(|e| e.clone())
+        self.text
+            .get_or_init(|| text_of(&self.values))
+            .as_ref()
+            .map_err(|e| e.clone())
     }
 
     fn n_rows(&self) -> u64 {
@@ -602,12 +701,27 @@ impl Level<'_> {
 }
 
 pub(crate) fn level_estimate(p: &Profile, n: u64, q: Option<f64>) -> Estimate {
-    estimate(p.freq.n_unique, n, p.freq.f1, p.freq.f2, &p.freq.capture_history, q)
+    estimate(
+        p.freq.n_unique,
+        n,
+        p.freq.f1,
+        p.freq.f2,
+        &p.freq.capture_history,
+        q,
+    )
 }
 
 /// arrow-cast with `safe: false`: a value that does not fit is an error, not a null.
 pub(crate) fn arrow_cast(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
-    cast_with_options(a, to, &CastOptions { safe: false, ..Default::default() }).map_err(|e| e.to_string())
+    cast_with_options(
+        a,
+        to,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub(crate) fn is_text(dt: &PT) -> bool {
@@ -619,7 +733,9 @@ pub(crate) fn is_float(dt: &PT) -> bool {
 }
 
 pub(crate) fn text_of(values: &ArrayRef) -> Result<LargeStringArray, String> {
-    Ok(arrow_cast(values.as_ref(), &AT::LargeUtf8)?.as_string::<i64>().clone())
+    Ok(arrow_cast(values.as_ref(), &AT::LargeUtf8)?
+        .as_string::<i64>()
+        .clone())
 }
 
 /// Row `i` as an exact integer (integer columns).
@@ -630,7 +746,8 @@ fn int_at(a: &ArrayRef, i: u64) -> Option<i128> {
 }
 
 fn f64_at(a: &ArrayRef, i: u64) -> f64 {
-    arrow_cast(a.slice(i as usize, 1).as_ref(), &AT::Float64).map_or(f64::NAN, |v| v.as_primitive::<Float64Type>().value(0))
+    arrow_cast(a.slice(i as usize, 1).as_ref(), &AT::Float64)
+        .map_or(f64::NAN, |v| v.as_primitive::<Float64Type>().value(0))
 }
 
 struct Rules<'l, 'a> {
@@ -643,37 +760,74 @@ impl Rules<'_, '_> {
     fn push(&mut self, target: Target, rank: Rank, rule: &str, evidence: String) {
         let t = target.arrow_type();
         let (c, _) = self.lvl.cardinality();
-        let sizes = body_size(&t, &self.shape).and_then(|p| Ok((p, body_size(&t, &self.shape.project(self.lvl.r, c))?)));
-        self.out.push(candidate(target, rank, &format!("{}{rule}", self.lvl.prefix), evidence, sizes));
+        let sizes = body_size(&t, &self.shape)
+            .and_then(|p| Ok((p, body_size(&t, &self.shape.project(self.lvl.r, c))?)));
+        self.out.push(candidate(
+            target,
+            rank,
+            &format!("{}{rule}", self.lvl.prefix),
+            evidence,
+            sizes,
+        ));
     }
 
     fn integers(&mut self, lo: i128, hi: i128, from: &str, evidence: &str) {
         let ev = format!("{evidence}min={lo} max={hi}");
         if lo >= 0 && hi <= 1 {
-            self.push(Target::Boolean, Rank::Boolean, &format!("{from}→boolean"), ev.clone());
+            self.push(
+                Target::Boolean,
+                Rank::Boolean,
+                &format!("{from}→boolean"),
+                ev.clone(),
+            );
         }
         let uint = if lo >= 0 { narrowest_uint(hi) } else { None };
         let int = narrowest_int(lo, hi);
         if let Some(t) = uint.clone() {
-            self.push(Target::Fixed(t), Rank::UInt, &format!("{from}→uint"), ev.clone());
+            self.push(
+                Target::Fixed(t),
+                Rank::UInt,
+                &format!("{from}→uint"),
+                ev.clone(),
+            );
         }
         if let Some(t) = int.clone() {
-            self.push(Target::Fixed(t), Rank::Int, &format!("{from}→int"), ev.clone());
+            self.push(
+                Target::Fixed(t),
+                Rank::Int,
+                &format!("{from}→int"),
+                ev.clone(),
+            );
         }
         if uint.is_none() && int.is_none() {
             let p = digits(lo.unsigned_abs().max(hi.unsigned_abs()));
             if p <= 38 {
-                self.push(Target::Fixed(AT::Decimal128(p, 0)), Rank::Decimal, &format!("{from}→decimal128"), format!("{ev} → p={p}"));
+                self.push(
+                    Target::Fixed(AT::Decimal128(p, 0)),
+                    Rank::Decimal,
+                    &format!("{from}→decimal128"),
+                    format!("{ev} → p={p}"),
+                );
             }
         }
     }
 
     fn decimal(&mut self, scale: usize) {
         let (p, v) = (self.lvl.p, &self.lvl.values);
-        let (Some(lo), Some(hi), Some(d)) = (p.range.argmin, p.range.argmax, v.as_primitive_opt::<Decimal128Type>()) else { return };
+        let (Some(lo), Some(hi), Some(d)) = (
+            p.range.argmin,
+            p.range.argmax,
+            v.as_primitive_opt::<Decimal128Type>(),
+        ) else {
+            return;
+        };
         let unscaled = |i: u64| d.value(i as usize);
         let g = p.gcd.unwrap_or(1);
-        let k = if g == 0 { scale } else { trailing_zeros10(g).min(scale) };
+        let k = if g == 0 {
+            scale
+        } else {
+            trailing_zeros10(g).min(scale)
+        };
         let f = 10i128.pow(k as u32);
         let (lo, hi, s) = (unscaled(lo) / f, unscaled(hi) / f, scale - k);
         let ev = format!("gcd={g} → {k} trailing zeros, scale {scale}→{s}; ");
@@ -682,14 +836,22 @@ impl Rules<'_, '_> {
         }
         let prec = digits(lo.unsigned_abs().max(hi.unsigned_abs())).max(s as u8);
         if prec <= 38 {
-            self.push(Target::Fixed(decimal_type(prec, s as i8)), Rank::Decimal, "decimal→decimal", format!("{ev}min={lo} max={hi} → p={prec} s={s}"));
+            self.push(
+                Target::Fixed(decimal_type(prec, s as i8)),
+                Rank::Decimal,
+                "decimal→decimal",
+                format!("{ev}min={lo} max={hi} → p={prec} s={s}"),
+            );
         }
     }
 
     fn float(&mut self) {
         let (p, v) = (self.lvl.p, &self.lvl.values);
         let Some(f) = p.floats else { return }; // Describe profiles every float column: never None
-        let ev = format!("n_nan={} n_inf={} n_fractional={} ", f.n_nan, f.n_inf, f.n_fractional);
+        let ev = format!(
+            "n_nan={} n_inf={} n_fractional={} ",
+            f.n_nan, f.n_inf, f.n_fractional
+        );
         if let (0, 0, Some(lo), Some(hi)) = (f.n_nan, f.n_inf, p.range.argmin, p.range.argmax) {
             let (lo, hi) = (f64_at(v, lo), f64_at(v, hi));
             let top = lo.abs().max(hi.abs());
@@ -698,7 +860,11 @@ impl Rules<'_, '_> {
                     self.integers(lo as i128, hi as i128, "float", &ev);
                 }
             } else if let Some(s) = f.max_frac_digits {
-                let int_digits = if top < 1.0 { 0 } else { digits(top.floor() as u128) as u32 };
+                let int_digits = if top < 1.0 {
+                    0
+                } else {
+                    digits(top.floor() as u128) as u32
+                };
                 let prec = int_digits + s;
                 if prec <= 38 {
                     self.push(
@@ -711,7 +877,12 @@ impl Rules<'_, '_> {
             }
         }
         if self.lvl.dtype == &PT::Float64 && f.n_f32_inexact == 0 {
-            self.push(Target::Fixed(AT::Float32), Rank::Float, "float64→float32", "n_f32_inexact=0".into());
+            self.push(
+                Target::Fixed(AT::Float32),
+                Rank::Float,
+                "float64→float32",
+                "n_f32_inexact=0".into(),
+            );
         }
     }
 
@@ -728,14 +899,34 @@ impl Rules<'_, '_> {
         match lvl.dtype {
             PT::Datetime(_, zone) => {
                 if zone.is_none() && lvl.n_midnight == Some(lvl.n()) {
-                    self.push(Target::Fixed(AT::Date32), Rank::Date, "datetime→date32", format!("n_midnight={}", lvl.n()));
+                    self.push(
+                        Target::Fixed(AT::Date32),
+                        Rank::Date,
+                        "datetime→date32",
+                        format!("n_midnight={}", lvl.n()),
+                    );
                 }
                 if coarse != unit {
-                    self.push(Target::Fixed(AT::Timestamp(coarse, tz)), Rank::Timestamp, "datetime→timestamp", ev);
+                    self.push(
+                        Target::Fixed(AT::Timestamp(coarse, tz)),
+                        Rank::Timestamp,
+                        "datetime→timestamp",
+                        ev,
+                    );
                 }
             }
-            PT::Duration(_) if coarse != unit => self.push(Target::Fixed(AT::Duration(coarse)), Rank::Duration, "duration→duration", ev),
-            PT::Time if coarse != unit => self.push(Target::Fixed(time_type(coarse)), Rank::Time, "time→time", ev),
+            PT::Duration(_) if coarse != unit => self.push(
+                Target::Fixed(AT::Duration(coarse)),
+                Rank::Duration,
+                "duration→duration",
+                ev,
+            ),
+            PT::Time if coarse != unit => self.push(
+                Target::Fixed(time_type(coarse)),
+                Rank::Time,
+                "time→time",
+                ev,
+            ),
             _ => {}
         }
     }
@@ -750,7 +941,9 @@ impl Rules<'_, '_> {
                 .freq
                 .top5_idx
                 .iter()
-                .map(|&i| text_of(&lvl.values.slice(i as usize, 1)).map(|t| t.value(0).to_lowercase()))
+                .map(|&i| {
+                    text_of(&lvl.values.slice(i as usize, 1)).map(|t| t.value(0).to_lowercase())
+                })
                 .collect::<Result<_, _>>()?
         } else {
             Vec::new()
@@ -768,36 +961,86 @@ impl Rules<'_, '_> {
         };
         let sig = st.iso_max_sig_frac_digits.unwrap_or(0);
         if let Some((t, f)) = pair {
-            self.push(Target::BoolPair(t.clone(), f.clone()), Rank::Boolean, "string→boolean", format!("distinct={distinct:?} pair=({t:?}, {f:?})"));
-        } else if let (true, Some(lo), Some(hi)) = (st.n_numeric_int == n && st.n_leading_zero == 0 && !st.int_overflow, st.int_min, st.int_max) {
-            self.integers(lo, hi, "string", &format!("n_numeric_int={n} n_leading_zero=0 "));
+            self.push(
+                Target::BoolPair(t.clone(), f.clone()),
+                Rank::Boolean,
+                "string→boolean",
+                format!("distinct={distinct:?} pair=({t:?}, {f:?})"),
+            );
+        } else if let (true, Some(lo), Some(hi)) = (
+            st.n_numeric_int == n && st.n_leading_zero == 0 && !st.int_overflow,
+            st.int_min,
+            st.int_max,
+        ) {
+            self.integers(
+                lo,
+                hi,
+                "string",
+                &format!("n_numeric_int={n} n_leading_zero=0 "),
+            );
         } else if st.n_numeric == n && st.n_leading_zero == 0 {
-            let (i, f) = (st.max_int_digits.unwrap_or(0), st.max_frac_digits.unwrap_or(0));
-            let (min_f, sig_d) = (st.min_frac_digits.unwrap_or(0), st.max_sig_digits.unwrap_or(0));
+            let (i, f) = (
+                st.max_int_digits.unwrap_or(0),
+                st.max_frac_digits.unwrap_or(0),
+            );
+            let (min_f, sig_d) = (
+                st.min_frac_digits.unwrap_or(0),
+                st.max_sig_digits.unwrap_or(0),
+            );
             let prec = (i + f).max(1);
             let ev = format!(
                 "n_numeric={n} n_leading_zero=0 numeric_max_int_digits={i} numeric_max_frac_digits={f} \
                  numeric_min_frac_digits={min_f} numeric_max_sig_digits={sig_d}"
             );
             if prec <= 38 {
-                self.push(Target::Fixed(decimal_type(prec as u8, f as i8)), Rank::Decimal, "string→decimal", format!("{ev} → p={prec} s={f}"));
+                self.push(
+                    Target::Fixed(decimal_type(prec as u8, f as i8)),
+                    Rank::Decimal,
+                    "string→decimal",
+                    format!("{ev} → p={prec} s={f}"),
+                );
             }
             if min_f < f && prec > 18 {
                 let why = format!("{ev} → varying places, p={prec} > 18");
                 if sig_d <= 6 {
-                    self.push(Target::Fixed(AT::Float32), Rank::Float, "string→float32", why.clone());
+                    self.push(
+                        Target::Fixed(AT::Float32),
+                        Rank::Float,
+                        "string→float32",
+                        why.clone(),
+                    );
                 }
                 if sig_d <= 15 {
-                    self.push(Target::Fixed(AT::Float64), Rank::Float, "string→float64", why);
+                    self.push(
+                        Target::Fixed(AT::Float64),
+                        Rank::Float,
+                        "string→float64",
+                        why,
+                    );
                 }
             }
         } else if st.n_iso_date == n {
-            self.push(Target::Fixed(AT::Date32), Rank::Date, "string→date32", format!("n_iso_date={n}"));
+            self.push(
+                Target::Fixed(AT::Date32),
+                Rank::Date,
+                "string→date32",
+                format!("n_iso_date={n}"),
+            );
         } else if st.n_iso_time == n {
-            self.push(Target::Fixed(time_type(iso_unit(sig))), Rank::Time, "string→time", format!("n_iso_time={n} iso_max_sig_frac_digits={sig}"));
+            self.push(
+                Target::Fixed(time_type(iso_unit(sig))),
+                Rank::Time,
+                "string→time",
+                format!("n_iso_time={n} iso_max_sig_frac_digits={sig}"),
+            );
         } else if st.n_iso_datetime == n {
             if st.iso_n_midnight == n {
-                self.push(Target::Fixed(AT::Date32), Rank::Date, "string→date32", format!("n_iso_datetime={n} iso_n_midnight={n}"));
+                self.push(
+                    Target::Fixed(AT::Date32),
+                    Rank::Date,
+                    "string→date32",
+                    format!("n_iso_datetime={n} iso_n_midnight={n}"),
+                );
             } else {
                 self.push(
                     Target::Fixed(AT::Timestamp(iso_unit(sig), None)),
@@ -807,11 +1050,17 @@ impl Rules<'_, '_> {
                 );
             }
         } else if st.n_iso_datetime_tz == n {
-            let ev = format!("n_iso_datetime_tz={n} iso_n_offsets={} iso_max_sig_frac_digits={sig}", st.offsets.len());
+            let ev = format!(
+                "n_iso_datetime_tz={n} iso_n_offsets={} iso_max_sig_frac_digits={sig}",
+                st.offsets.len()
+            );
             match st.offsets.iter().next() {
-                Some(&m) if st.offsets.len() == 1 => {
-                    self.push(Target::Fixed(AT::Timestamp(iso_unit(sig), Some(offset_tz(m).into()))), Rank::Timestamp, "string→timestamp", ev)
-                }
+                Some(&m) if st.offsets.len() == 1 => self.push(
+                    Target::Fixed(AT::Timestamp(iso_unit(sig), Some(offset_tz(m).into()))),
+                    Rank::Timestamp,
+                    "string→timestamp",
+                    ev,
+                ),
                 _ => self.push(
                     Target::TimestampWithOffset(iso_unit(sig)),
                     Rank::TimestampWithOffset,
@@ -828,7 +1077,12 @@ impl Rules<'_, '_> {
     fn plain_and_dictionary(&mut self, params: &Params) {
         let sum_len = self.lvl.p.sum_len.unwrap_or(0);
         if sum_len < 1 << 31 {
-            self.push(Target::Plain(AT::Utf8), Rank::Plain, "string→utf8", format!("sum_len={sum_len}"));
+            self.push(
+                Target::Plain(AT::Utf8),
+                Rank::Plain,
+                "string→utf8",
+                format!("sum_len={sum_len}"),
+            );
         }
         self.dictionary(params);
     }
@@ -838,13 +1092,20 @@ impl Rules<'_, '_> {
         let (key, polars_key) = dictionary_keys(c);
         let threshold = params.categorical_threshold;
         let est = &self.lvl.est;
-        let low = est.est_low.map_or(String::new(), |l| format!(" est_low={l:?}"));
+        let low = est
+            .est_low
+            .map_or(String::new(), |l| format!(" est_low={l:?}"));
         let ev = format!(
             "c={c:?} from {source} method={}{low} n_unique={} categorical_threshold={threshold}",
             est.method.name(),
             self.lvl.p.freq.n_unique
         );
-        self.push(Target::Dictionary(key, polars_key), Rank::Dictionary, "string→dictionary", ev);
+        self.push(
+            Target::Dictionary(key, polars_key),
+            Rank::Dictionary,
+            "string→dictionary",
+            ev,
+        );
         if c > threshold as f64 {
             let last = self.out.last_mut().unwrap();
             last.outcome = Outcome::Rejected;
@@ -855,7 +1116,12 @@ impl Rules<'_, '_> {
     fn binary(&mut self) {
         let sum_len = self.lvl.p.sum_len.unwrap_or(0);
         if sum_len < 1 << 31 {
-            self.push(Target::Plain(AT::Binary), Rank::Plain, "binary→binary", format!("sum_len={sum_len}"));
+            self.push(
+                Target::Plain(AT::Binary),
+                Rank::Plain,
+                "binary→binary",
+                format!("sum_len={sum_len}"),
+            );
         }
     }
 
@@ -877,12 +1143,28 @@ impl Rules<'_, '_> {
 /// Every candidate for one level, in rule order (Spec B §4.2–4.3, §5.2); the
 /// original type last.
 pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>, String> {
-    let mut r = Rules { lvl, shape: lvl.shape(), out: Vec::new() };
+    let mut r = Rules {
+        lvl,
+        shape: lvl.shape(),
+        out: Vec::new(),
+    };
     if lvl.n_rows() > 0 && lvl.n() == 0 {
-        r.push(Target::Null, Rank::Null, "all-null→null", format!("n_null={} n_rows={}", lvl.n_null(), lvl.n_rows()));
+        r.push(
+            Target::Null,
+            Rank::Null,
+            "all-null→null",
+            format!("n_null={} n_rows={}", lvl.n_null(), lvl.n_rows()),
+        );
     } else if lvl.n() > 0 {
         match lvl.dtype {
-            PT::Int8 | PT::Int16 | PT::Int32 | PT::Int64 | PT::UInt8 | PT::UInt16 | PT::UInt32 | PT::UInt64 => {
+            PT::Int8
+            | PT::Int16
+            | PT::Int32
+            | PT::Int64
+            | PT::UInt8
+            | PT::UInt16
+            | PT::UInt32
+            | PT::UInt64 => {
                 if let (Some(a), Some(b)) = (lvl.p.range.argmin, lvl.p.range.argmax) {
                     if let (Some(lo), Some(hi)) = (int_at(&lvl.values, a), int_at(&lvl.values, b)) {
                         r.integers(lo, hi, "integer", "");
@@ -903,10 +1185,11 @@ pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>,
 
 // ── cast and verify (Spec B §5.4) ───────────────────────────────────────────
 
-
 fn exact_div(ns: i128, u: &TimeUnit) -> Option<i64> {
     let f = unit_ns(u);
-    (ns % f == 0).then(|| ns / f).and_then(|v| i64::try_from(v).ok())
+    (ns % f == 0)
+        .then(|| ns / f)
+        .and_then(|v| i64::try_from(v).ok())
 }
 
 fn time_array(u: TimeUnit, v: Vec<Option<i64>>) -> ArrayRef {
@@ -929,20 +1212,33 @@ fn timestamp_array(u: TimeUnit, v: Vec<Option<i64>>, tz: Option<Arc<str>>) -> Ar
 }
 
 fn decimal_array(v: Vec<Option<i128>>, scale: i8) -> Result<ArrayRef, String> {
-    Decimal128Array::from(v).with_precision_and_scale(38, scale).map(|a| Arc::new(a) as ArrayRef).map_err(|e| e.to_string())
+    Decimal128Array::from(v)
+        .with_precision_and_scale(38, scale)
+        .map(|a| Arc::new(a) as ArrayRef)
+        .map_err(|e| e.to_string())
 }
 
 /// `s.to_lowercase() == lower` for an already lower-cased `lower`, allocating only for
 /// non-ASCII `s` (whose Unicode lower case can map onto ASCII, e.g. the Kelvin sign).
 fn lower_eq(s: &str, lower: &str) -> bool {
-    if s.is_ascii() { s.eq_ignore_ascii_case(lower) } else { s.to_lowercase() == lower }
+    if s.is_ascii() {
+        s.eq_ignore_ascii_case(lower)
+    } else {
+        s.to_lowercase() == lower
+    }
 }
 
 /// `f` over every non-null text value; the first value it rejects fails the cast.
-fn parsed<T>(text: &LargeStringArray, f: impl Fn(&str) -> Option<T>) -> Result<Vec<Option<T>>, String> {
+fn parsed<T>(
+    text: &LargeStringArray,
+    f: impl Fn(&str) -> Option<T>,
+) -> Result<Vec<Option<T>>, String> {
     text.iter()
         .enumerate()
-        .map(|(i, v)| v.map(|s| f(s).ok_or_else(|| format!("row {i}: {s:?} does not convert"))).transpose())
+        .map(|(i, v)| {
+            v.map(|s| f(s).ok_or_else(|| format!("row {i}: {s:?} does not convert")))
+                .transpose()
+        })
         .collect()
 }
 
@@ -955,52 +1251,105 @@ pub(crate) fn from_text(t: &Target, text: &LargeStringArray) -> Result<ArrayRef,
                 _ => ("1", "0"),
             };
             let v = parsed(text, |s| {
-                if lower_eq(s, tt) { Some(true) } else if lower_eq(s, ff) { Some(false) } else { None }
+                if lower_eq(s, tt) {
+                    Some(true)
+                } else if lower_eq(s, ff) {
+                    Some(false)
+                } else {
+                    None
+                }
             })?;
             Ok(Arc::new(BooleanArray::from(v)))
         }
         Target::Fixed(to) => match to {
-            AT::Int8 | AT::Int16 | AT::Int32 | AT::Int64 | AT::UInt8 | AT::UInt16 | AT::UInt32 | AT::UInt64 => {
-                arrow_cast(decimal_array(parsed(text, |s| parse_decimal(s.as_bytes(), 0))?, 0)?.as_ref(), to)
-            }
-            AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s) => {
-                arrow_cast(decimal_array(parsed(text, |x| parse_decimal(x.as_bytes(), *s as u32))?, *s)?.as_ref(), to)
-            }
-            AT::Float32 => Ok(Arc::new(Float32Array::from(parsed(text, |s| s.parse::<f32>().ok())?))),
-            AT::Float64 => Ok(Arc::new(Float64Array::from(parsed(text, |s| s.parse::<f64>().ok())?))),
+            AT::Int8
+            | AT::Int16
+            | AT::Int32
+            | AT::Int64
+            | AT::UInt8
+            | AT::UInt16
+            | AT::UInt32
+            | AT::UInt64 => arrow_cast(
+                decimal_array(parsed(text, |s| parse_decimal(s.as_bytes(), 0))?, 0)?.as_ref(),
+                to,
+            ),
+            AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s) => arrow_cast(
+                decimal_array(
+                    parsed(text, |x| parse_decimal(x.as_bytes(), *s as u32))?,
+                    *s,
+                )?
+                .as_ref(),
+                to,
+            ),
+            AT::Float32 => Ok(Arc::new(Float32Array::from(parsed(text, |s| {
+                s.parse::<f32>().ok()
+            })?))),
+            AT::Float64 => Ok(Arc::new(Float64Array::from(parsed(text, |s| {
+                s.parse::<f64>().ok()
+            })?))),
             AT::Date32 => Ok(Arc::new(Date32Array::from(parsed(text, |s| {
                 let v = parse_iso(s.as_bytes())?;
                 (v.nanos == 0 && v.offset_minutes.is_none()).then_some(())?;
                 i32::try_from(v.days?).ok()
             })?))),
-            AT::Time32(u) | AT::Time64(u) => Ok(time_array(*u, parsed(text, |s| {
-                let v = parse_iso(s.as_bytes())?;
-                v.days.is_none().then_some(())?;
-                exact_div(v.nanos as i128, u)
-            })?)),
-            AT::Timestamp(u, tz) => Ok(timestamp_array(*u, parsed(text, |s| exact_div(parse_iso(s.as_bytes())?.epoch_ns(), u))?, tz.clone())),
+            AT::Time32(u) | AT::Time64(u) => Ok(time_array(
+                *u,
+                parsed(text, |s| {
+                    let v = parse_iso(s.as_bytes())?;
+                    v.days.is_none().then_some(())?;
+                    exact_div(v.nanos as i128, u)
+                })?,
+            )),
+            AT::Timestamp(u, tz) => Ok(timestamp_array(
+                *u,
+                parsed(text, |s| exact_div(parse_iso(s.as_bytes())?.epoch_ns(), u))?,
+                tz.clone(),
+            )),
             t => Err(format!("no string conversion to {}", pa_name(t))),
         },
         Target::TimestampWithOffset(u) => {
             let parts = parsed(text, |s| {
                 let v = parse_iso(s.as_bytes())?;
-                Some((exact_div(v.epoch_ns(), u)?, i16::try_from(v.offset_minutes?).ok()?))
+                Some((
+                    exact_div(v.epoch_ns(), u)?,
+                    i16::try_from(v.offset_minutes?).ok()?,
+                ))
             })?;
-            let ts = timestamp_array(*u, parts.iter().map(|p| Some(p.map_or(0, |p| p.0))).collect(), Some("UTC".into()));
-            let off: ArrayRef = Arc::new(Int16Array::from(parts.iter().map(|p| p.map_or(0, |p| p.1)).collect::<Vec<i16>>()));
-            let AT::Struct(fields) = timestamp_with_offset(*u) else { unreachable!() };
-            StructArray::try_new(fields, vec![ts, off], text.logical_nulls()).map(|a| Arc::new(a) as ArrayRef).map_err(|e| e.to_string())
+            let ts = timestamp_array(
+                *u,
+                parts.iter().map(|p| Some(p.map_or(0, |p| p.0))).collect(),
+                Some("UTC".into()),
+            );
+            let off: ArrayRef = Arc::new(Int16Array::from(
+                parts
+                    .iter()
+                    .map(|p| p.map_or(0, |p| p.1))
+                    .collect::<Vec<i16>>(),
+            ));
+            let AT::Struct(fields) = timestamp_with_offset(*u) else {
+                unreachable!()
+            };
+            StructArray::try_new(fields, vec![ts, off], text.logical_nulls())
+                .map(|a| Arc::new(a) as ArrayRef)
+                .map_err(|e| e.to_string())
         }
-        Target::Dictionary(..) => arrow_cast(arrow_cast(text, &AT::Utf8)?.as_ref(), &t.arrow_type()),
+        Target::Dictionary(..) => {
+            arrow_cast(arrow_cast(text, &AT::Utf8)?.as_ref(), &t.arrow_type())
+        }
         Target::Plain(to) => arrow_cast(text, to),
-        t => Err(format!("no string conversion to {}", pa_name(&t.arrow_type()))),
+        t => Err(format!(
+            "no string conversion to {}",
+            pa_name(&t.arrow_type())
+        )),
     }
 }
 
 /// Float → Decimal through the exact digits of each value's shortest round-trip
 /// representation (ryu), never multiply-and-round.
 pub(crate) fn float_to_decimal(src: &ArrayRef, to: &AT) -> Result<ArrayRef, String> {
-    let (AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s)) = to else { return Err("not a decimal".into()) };
+    let (AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s)) = to else {
+        return Err("not a decimal".into());
+    };
     let f32_src = src.data_type() == &AT::Float32;
     let values = arrow_cast(src.as_ref(), &AT::Float64)?;
     let mut buf = ryu::Buffer::new();
@@ -1013,8 +1362,13 @@ pub(crate) fn float_to_decimal(src: &ArrayRef, to: &AT) -> Result<ArrayRef, Stri
                 if !x.is_finite() {
                     return Err(format!("row {i}: {x} is not finite"));
                 }
-                let repr = if f32_src { buf.format_finite(x as f32).to_string() } else { buf.format_finite(x).to_string() };
-                decimal_from_repr(&repr, *s as u32).ok_or_else(|| format!("row {i}: {repr} does not fit scale {s}"))
+                let repr = if f32_src {
+                    buf.format_finite(x as f32).to_string()
+                } else {
+                    buf.format_finite(x).to_string()
+                };
+                decimal_from_repr(&repr, *s as u32)
+                    .ok_or_else(|| format!("row {i}: {repr} does not fit scale {s}"))
             })
             .transpose()
         })
@@ -1029,8 +1383,14 @@ pub(crate) fn cast_to(t: &Target, lvl: &Level) -> Result<ArrayRef, String> {
         Target::Original(_) => Ok(src.clone()),
         Target::Null => Ok(arrow_array::new_null_array(&AT::Null, src.len())),
         _ if is_text(lvl.dtype) => from_text(t, lvl.text()?),
-        Target::Fixed(to @ (AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..))) if is_float(lvl.dtype) => float_to_decimal(src, to),
-        Target::Boolean | Target::Fixed(_) | Target::Plain(_) => arrow_cast(src.as_ref(), &t.arrow_type()),
+        Target::Fixed(to @ (AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..)))
+            if is_float(lvl.dtype) =>
+        {
+            float_to_decimal(src, to)
+        }
+        Target::Boolean | Target::Fixed(_) | Target::Plain(_) => {
+            arrow_cast(src.as_ref(), &t.arrow_type())
+        }
         t => Err(format!("no cast to {}", pa_name(&t.arrow_type()))),
     }
 }
@@ -1056,46 +1416,81 @@ pub(crate) fn first_mismatch(a: &ArrayRef, b: &ArrayRef) -> Result<(), String> {
     if a.len() != b.len() {
         return Err(format!("length {} ≠ {}", b.len(), a.len()));
     }
-    let same = |start: usize, len: usize| a.slice(start, len).to_data() == b.slice(start, len).to_data();
-    let Some(start) = (0..a.len()).step_by(MISMATCH_CHUNK).find(|&s| !same(s, MISMATCH_CHUNK.min(a.len() - s))) else {
+    let same =
+        |start: usize, len: usize| a.slice(start, len).to_data() == b.slice(start, len).to_data();
+    let Some(start) = (0..a.len())
+        .step_by(MISMATCH_CHUNK)
+        .find(|&s| !same(s, MISMATCH_CHUNK.min(a.len() - s)))
+    else {
         return Ok(());
     };
     // Invariant: rows start..start+lo are equal; start..start+hi differ somewhere.
     let (mut lo, mut hi) = (0, MISMATCH_CHUNK.min(a.len() - start));
     while hi - lo > 1 {
         let mid = (lo + hi) / 2;
-        if same(start, mid) { lo = mid } else { hi = mid }
+        if same(start, mid) {
+            lo = mid
+        } else {
+            hi = mid
+        }
     }
     let i = start + lo;
-    Err(format!("row {i}: {} round-trips to {}", render(a, i), render(b, i)))
+    Err(format!(
+        "row {i}: {} round-trips to {}",
+        render(a, i),
+        render(b, i)
+    ))
 }
 
 /// A decimal's rendered text parsed back as a float; a failure to parse is an error,
 /// never silently folded into NaN (NaN is only ever a *value*, from a genuine decimal
 /// text like "nan" — which cannot occur here since decimals never render one).
 fn parse_back(s: &str, f32_src: bool) -> Result<f64, String> {
-    if f32_src { s.parse::<f32>().map(f64::from) } else { s.parse::<f64>() }.map_err(|_| format!("{s:?} does not parse as a float"))
+    if f32_src {
+        s.parse::<f32>().map(f64::from)
+    } else {
+        s.parse::<f64>()
+    }
+    .map_err(|_| format!("{s:?} does not parse as a float"))
 }
 
 /// Float sources: every recast value converts back to the original float (NaN = NaN,
 /// -0.0 = 0.0). Decimals come back through their text (correctly rounded parse).
 pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), String> {
     let f32_src = src.data_type() == &AT::Float32;
-    let decimal = matches!(recast.data_type(), AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..));
+    let decimal = matches!(
+        recast.data_type(),
+        AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..)
+    );
     let back: Vec<Option<f64>> = if decimal {
         let t = arrow_cast(recast.as_ref(), &AT::Utf8)?;
         t.as_string::<i32>()
             .iter()
             .enumerate()
-            .map(|(i, v)| v.map(|s| parse_back(s, f32_src).map_err(|e| format!("row {i}: {e}"))).transpose())
+            .map(|(i, v)| {
+                v.map(|s| parse_back(s, f32_src).map_err(|e| format!("row {i}: {e}")))
+                    .transpose()
+            })
             .collect::<Result<_, _>>()?
     } else if f32_src {
-        arrow_cast(recast.as_ref(), &AT::Float32)?.as_primitive::<Float32Type>().iter().map(|v| v.map(f64::from)).collect()
+        arrow_cast(recast.as_ref(), &AT::Float32)?
+            .as_primitive::<Float32Type>()
+            .iter()
+            .map(|v| v.map(f64::from))
+            .collect()
     } else {
-        arrow_cast(recast.as_ref(), &AT::Float64)?.as_primitive::<Float64Type>().iter().collect()
+        arrow_cast(recast.as_ref(), &AT::Float64)?
+            .as_primitive::<Float64Type>()
+            .iter()
+            .collect()
     };
     let orig = arrow_cast(src.as_ref(), &AT::Float64)?;
-    for (i, (a, b)) in orig.as_primitive::<Float64Type>().iter().zip(back).enumerate() {
+    for (i, (a, b)) in orig
+        .as_primitive::<Float64Type>()
+        .iter()
+        .zip(back)
+        .enumerate()
+    {
         if let (Some(a), Some(b)) = (a, b) {
             if !(a == b || (a.is_nan() && b.is_nan())) {
                 return Err(format!("row {i}: {a} round-trips to {b}"));
@@ -1108,13 +1503,24 @@ pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), Stri
 /// String sources: the recast values, rendered to text by arrow-cast, equal the
 /// original text by value (canonical digits; parse_iso components). Returns the
 /// LargeUtf8 rendering when it made one, so `lossy` need not render again.
-pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef) -> Result<Option<ArrayRef>, String> {
-    let bad = |i: usize, got: &str| Err(format!("row {i}: {:?} round-trips to {got:?}", text.value(i)));
+pub(crate) fn verify_text(
+    t: &Target,
+    text: &LargeStringArray,
+    recast: &ArrayRef,
+) -> Result<Option<ArrayRef>, String> {
+    let bad = |i: usize, got: &str| {
+        Err(format!(
+            "row {i}: {:?} round-trips to {got:?}",
+            text.value(i)
+        ))
+    };
     let iso = |s: &str| parse_iso(s.as_bytes());
     match t {
-        Target::Dictionary(..) | Target::Plain(_) => {
-            first_mismatch(&(Arc::new(text.clone()) as ArrayRef), &arrow_cast(recast.as_ref(), &AT::LargeUtf8)?).map(|_| None)
-        }
+        Target::Dictionary(..) | Target::Plain(_) => first_mismatch(
+            &(Arc::new(text.clone()) as ArrayRef),
+            &arrow_cast(recast.as_ref(), &AT::LargeUtf8)?,
+        )
+        .map(|_| None),
         Target::Boolean | Target::BoolPair(..) => {
             let (tt, ff) = match t {
                 Target::BoolPair(a, b) => (a.as_str(), b.as_str()),
@@ -1132,7 +1538,10 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
         Target::TimestampWithOffset(_) => {
             let s = recast.as_struct_opt().ok_or("recast is not a struct")?;
             let back = arrow_cast(s.column(0).as_ref(), &AT::Utf8)?;
-            let (back, off) = (back.as_string::<i32>(), s.column(1).as_primitive::<Int16Type>());
+            let (back, off) = (
+                back.as_string::<i32>(),
+                s.column(1).as_primitive::<Int16Type>(),
+            );
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
                 let (a, b) = (iso(text.value(i)), iso(back.value(i)));
                 let same = matches!((a, b), (Some(a), Some(b)) if a.epoch_ns() == b.epoch_ns() && a.offset_minutes == Some(off.value(i) as i32));
@@ -1148,19 +1557,25 @@ pub(crate) fn verify_text(t: &Target, text: &LargeStringArray, recast: &ArrayRef
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
                 let (a, b) = (text.value(i), back.value(i));
                 let same = match to {
-                    AT::Date32 => matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns()),
+                    AT::Date32 => {
+                        matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns())
+                    }
                     // A fixed-offset target renders the same offset as the text only when
                     // every value actually had one; a naive target renders no offset at all
                     // ("Z" and "UTC" both parse back to offset_minutes = Some(0), so this
                     // must compare the *parsed* offsets, not the rendered strings).
                     AT::Timestamp(_, tz) => match (iso(a), iso(b)) {
                         (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns() => match tz {
-                            Some(_) => x.offset_minutes.is_some() && x.offset_minutes == y.offset_minutes,
+                            Some(_) => {
+                                x.offset_minutes.is_some() && x.offset_minutes == y.offset_minutes
+                            }
                             None => x.offset_minutes.is_none(),
                         },
                         _ => false,
                     },
-                    AT::Time32(_) | AT::Time64(_) => matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.nanos == y.nanos),
+                    AT::Time32(_) | AT::Time64(_) => {
+                        matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.nanos == y.nanos)
+                    }
                     _ => canon(a) == canon(b),
                 };
                 if !same {
@@ -1186,7 +1601,11 @@ fn logical_is_null(nulls: Option<&NullBuffer>, i: usize) -> bool {
 
 /// Row-by-row check that `recast` holds the original values (Spec B §5.4 step 3).
 /// Text sources: returns the recast values' LargeUtf8 rendering when verification made one.
-pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<Option<ArrayRef>, String> {
+pub(crate) fn verify(
+    t: &Target,
+    lvl: &Level,
+    recast: &ArrayRef,
+) -> Result<Option<ArrayRef>, String> {
     if matches!(t, Target::Original(_)) {
         return Ok(None);
     }
@@ -1199,12 +1618,16 @@ pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<Optio
         // always false for it — so the only real check is that every source value was
         // actually null (via the source's own *logical* nulls).
         let non_null = src.len() - src.logical_null_count();
-        return (non_null == 0).then_some(None).ok_or_else(|| format!("{non_null} non-null source value(s)"));
+        return (non_null == 0)
+            .then_some(None)
+            .ok_or_else(|| format!("{non_null} non-null source value(s)"));
     }
     let (recast_nulls, src_nulls) = (recast.logical_nulls(), src.logical_nulls());
     let null_count = |n: &Option<NullBuffer>| n.as_ref().map_or(0, |n| n.null_count());
     if recast_nulls != src_nulls || null_count(&recast_nulls) != null_count(&src_nulls) {
-        if let Some(i) = (0..src.len()).find(|&i| logical_is_null(recast_nulls.as_ref(), i) != logical_is_null(src_nulls.as_ref(), i)) {
+        if let Some(i) = (0..src.len()).find(|&i| {
+            logical_is_null(recast_nulls.as_ref(), i) != logical_is_null(src_nulls.as_ref(), i)
+        }) {
             return Err(format!("row {i}: null mismatch"));
         }
     }
@@ -1216,7 +1639,9 @@ pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<Optio
             // (tz included), which would silently paper over a timezone that changed
             // along the way — Timestamp's physical storage (epoch units) doesn't depend
             // on tz, so the value comparison alone can't catch it.
-            if let (AT::Timestamp(_, a), AT::Timestamp(_, b)) = (src.data_type(), recast.data_type()) {
+            if let (AT::Timestamp(_, a), AT::Timestamp(_, b)) =
+                (src.data_type(), recast.data_type())
+            {
                 if a != b {
                     return Err(format!("timezone changed: {a:?} → {b:?}"));
                 }
@@ -1228,23 +1653,38 @@ pub(crate) fn verify(t: &Target, lvl: &Level, recast: &ArrayRef) -> Result<Optio
 
 /// Some value's text changed although its value did not (Spec B §5.4). `rendered`:
 /// `recast` as LargeUtf8 if `verify` already made it.
-pub(crate) fn lossy(t: &Target, lvl: &Level, recast: &ArrayRef, rendered: Option<ArrayRef>) -> bool {
+pub(crate) fn lossy(
+    t: &Target,
+    lvl: &Level,
+    recast: &ArrayRef,
+    rendered: Option<ArrayRef>,
+) -> bool {
     match t {
         Target::Original(_) | Target::Null | Target::Dictionary(..) | Target::Plain(_) => false,
-        _ if is_text(lvl.dtype) => match (lvl.text(), rendered.map_or_else(|| arrow_cast(recast.as_ref(), &AT::LargeUtf8), Ok)) {
-            (Ok(a), Ok(b)) => a.iter().zip(b.as_string::<i64>().iter()).any(|(x, y)| x != y),
+        _ if is_text(lvl.dtype) => match (
+            lvl.text(),
+            rendered.map_or_else(|| arrow_cast(recast.as_ref(), &AT::LargeUtf8), Ok),
+        ) {
+            (Ok(a), Ok(b)) => a
+                .iter()
+                .zip(b.as_string::<i64>().iter())
+                .any(|(x, y)| x != y),
             _ => true, // no text rendering (timestamp_with_offset): the format necessarily changes
         },
         Target::Fixed(AT::Float32 | AT::Float64) => false,
         _ if is_float(lvl.dtype) => arrow_cast(lvl.values.as_ref(), &AT::Float64)
-            .map(|f| f.as_primitive::<Float64Type>().iter().flatten().any(|x| x == 0.0 && x.is_sign_negative()))
+            .map(|f| {
+                f.as_primitive::<Float64Type>()
+                    .iter()
+                    .flatten()
+                    .any(|x| x == 0.0 && x.is_sign_negative())
+            })
             .unwrap_or(false),
         _ => false,
     }
 }
 
 // ── choosing (Spec B §4.1, §4.4, §5.4) ──────────────────────────────────────
-
 
 pub(crate) struct Chosen {
     pub target: Target,
@@ -1269,7 +1709,10 @@ fn order(c: &mut [Candidate]) {
 /// Tries the candidates in order; the first success is chosen, failures keep their
 /// reason. Only `not_tried` candidates are attempted (rejected ones, and ones that
 /// could not be sized, already carry their outcome).
-fn first_success<T>(mut cands: Vec<Candidate>, mut attempt: impl FnMut(&Target) -> Result<T, String>) -> (usize, T, Vec<Candidate>) {
+fn first_success<T>(
+    mut cands: Vec<Candidate>,
+    mut attempt: impl FnMut(&Target) -> Result<T, String>,
+) -> (usize, T, Vec<Candidate>) {
     order(&mut cands);
     for i in 0..cands.len() {
         if cands[i].outcome != Outcome::NotTried {
@@ -1291,7 +1734,15 @@ fn first_success<T>(mut cands: Vec<Candidate>, mut attempt: impl FnMut(&Target) 
 
 fn chosen_from(i: usize, array: ArrayRef, cands: Vec<Candidate>, lossy: bool) -> Chosen {
     let c = &cands[i];
-    Chosen { target: c.target.clone(), rank: c.rank, lossy, predicted: c.predicted, projected: c.projected, array, candidates: cands }
+    Chosen {
+        target: c.target.clone(),
+        rank: c.rank,
+        lossy,
+        predicted: c.predicted,
+        projected: c.projected,
+        array,
+        candidates: cands,
+    }
 }
 
 pub(crate) fn choose(lvl: &Level, params: &Params) -> Result<Chosen, String> {
@@ -1306,7 +1757,11 @@ pub(crate) fn choose(lvl: &Level, params: &Params) -> Result<Chosen, String> {
 
 /// The original type only; `why` explains, in its evidence, why nothing else was tried.
 fn choose_original(lvl: &Level, why: &str) -> Chosen {
-    let mut r = Rules { lvl, shape: lvl.shape(), out: Vec::new() };
+    let mut r = Rules {
+        lvl,
+        shape: lvl.shape(),
+        out: Vec::new(),
+    };
     r.original();
     r.out[0].evidence = format!("{}; {why}", r.out[0].evidence);
     let (i, array, cands) = first_success(r.out, |_| Ok(lvl.values.clone()));
@@ -1320,24 +1775,44 @@ fn choose_original(lvl: &Level, why: &str) -> Chosen {
 /// row k−1 ends. A null row can still span values (a List's offsets after
 /// `pl.when(mask).then(list).otherwise(None)`; an Array's w slots); those are dropped
 /// with a `take`, and `wrap` rebuilds the offsets from row lengths (a null row → empty).
-fn list_parts(values: &ArrayRef) -> Result<(Vec<Option<(usize, usize)>>, ArrayRef, Option<i32>), String> {
+/// (row spans, compacted values, fixed width).
+type ListParts = (Vec<Option<(usize, usize)>>, ArrayRef, Option<i32>);
+
+fn list_parts(values: &ArrayRef) -> Result<ListParts, String> {
     // (physical start, len) of every row, then the compacted rows.
-    let (spans, child, width): (Vec<(usize, usize, bool)>, ArrayRef, Option<i32>) = match values.data_type() {
-        AT::LargeList(_) => {
-            let l = values.as_list::<i64>();
-            let o = l.value_offsets();
-            let first = o[0] as usize;
-            let spans = (0..l.len()).map(|i| (o[i] as usize - first, (o[i + 1] - o[i]) as usize, l.is_valid(i))).collect();
-            (spans, l.values().slice(first, o[l.len()] as usize - first), None)
-        }
-        AT::FixedSizeList(_, width) => {
-            let f = values.as_fixed_size_list();
-            let w = *width as usize;
-            let child = f.values().slice(f.value_offset(0) as usize, f.len() * w); // offset non-zero for a slice
-            ((0..f.len()).map(|i| (i * w, w, f.is_valid(i))).collect(), child, Some(*width))
-        }
-        t => return Err(format!("not a list type: {}", pa_name(t))),
-    };
+    let (spans, child, width): (Vec<(usize, usize, bool)>, ArrayRef, Option<i32>) =
+        match values.data_type() {
+            AT::LargeList(_) => {
+                let l = values.as_list::<i64>();
+                let o = l.value_offsets();
+                let first = o[0] as usize;
+                let spans = (0..l.len())
+                    .map(|i| {
+                        (
+                            o[i] as usize - first,
+                            (o[i + 1] - o[i]) as usize,
+                            l.is_valid(i),
+                        )
+                    })
+                    .collect();
+                (
+                    spans,
+                    l.values().slice(first, o[l.len()] as usize - first),
+                    None,
+                )
+            }
+            AT::FixedSizeList(_, width) => {
+                let f = values.as_fixed_size_list();
+                let w = *width as usize;
+                let child = f.values().slice(f.value_offset(0) as usize, f.len() * w); // offset non-zero for a slice
+                (
+                    (0..f.len()).map(|i| (i * w, w, f.is_valid(i))).collect(),
+                    child,
+                    Some(*width),
+                )
+            }
+            t => return Err(format!("not a list type: {}", pa_name(t))),
+        };
     let mut k = 0;
     let rows = spans
         .iter()
@@ -1351,8 +1826,14 @@ fn list_parts(values: &ArrayRef) -> Result<(Vec<Option<(usize, usize)>>, ArrayRe
     if !spans.iter().any(|&(_, len, valid)| !valid && len > 0) {
         return Ok((rows, child, width)); // no null row spans values: the child is already compact
     }
-    let idx = UInt64Array::from_iter_values(spans.iter().filter(|s| s.2).flat_map(|&(start, len, _)| (start..start + len).map(|j| j as u64)));
-    let compact = arrow_select::take::take(child.as_ref(), &idx, None).map_err(|e| e.to_string())?;
+    let idx = UInt64Array::from_iter_values(
+        spans
+            .iter()
+            .filter(|s| s.2)
+            .flat_map(|&(start, len, _)| (start..start + len).map(|j| j as u64)),
+    );
+    let compact =
+        arrow_select::take::take(child.as_ref(), &idx, None).map_err(|e| e.to_string())?;
     Ok((rows, compact, width))
 }
 
@@ -1365,31 +1846,58 @@ fn take_rows(a: &ArrayRef, idx: &UInt64Array) -> Result<ArrayRef, String> {
         AT::Struct(fields) if !a.is_empty() => {
             let s = a.as_struct();
             let dense = UInt64Array::from_iter_values(idx.iter().map(|i| i.unwrap_or(0)));
-            let cols = s.columns().iter().map(|c| arrow_select::take::take(c.as_ref(), &dense, None)).collect::<Result<Vec<_>, _>>().map_err(e)?;
-            let valid: Vec<bool> = idx.iter().map(|i| i.is_some_and(|i| s.is_valid(i as usize))).collect();
+            let cols = s
+                .columns()
+                .iter()
+                .map(|c| arrow_select::take::take(c.as_ref(), &dense, None))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(e)?;
+            let valid: Vec<bool> = idx
+                .iter()
+                .map(|i| i.is_some_and(|i| s.is_valid(i as usize)))
+                .collect();
             let nulls = valid.iter().any(|v| !v).then(|| NullBuffer::from(valid));
-            StructArray::try_new(fields.clone(), cols, nulls).map(|x| Arc::new(x) as ArrayRef).map_err(e)
+            StructArray::try_new(fields.clone(), cols, nulls)
+                .map(|x| Arc::new(x) as ArrayRef)
+                .map_err(e)
         }
         _ => arrow_select::take::take(a.as_ref(), idx, None).map_err(e),
     }
 }
 
 /// A list column rebuilt around its recast inner values (`rows` from `list_parts`).
-fn wrap(t: &Target, values: &ArrayRef, rows: &[Option<(usize, usize)>], inner: &ArrayRef) -> Result<ArrayRef, String> {
+fn wrap(
+    t: &Target,
+    values: &ArrayRef,
+    rows: &[Option<(usize, usize)>],
+    inner: &ArrayRef,
+) -> Result<ArrayRef, String> {
     let field = |c: &ArrayRef| Arc::new(AField::new("item", c.data_type().clone(), true));
     let nulls = values.logical_nulls();
     match t {
         Target::Original(_) => Ok(values.clone()),
-        Target::Scalar(_) => take_rows(inner, &UInt64Array::from(rows.iter().map(|r| r.map(|(start, _)| start as u64)).collect::<Vec<_>>())),
+        Target::Scalar(_) => take_rows(
+            inner,
+            &UInt64Array::from(
+                rows.iter()
+                    .map(|r| r.map(|(start, _)| start as u64))
+                    .collect::<Vec<_>>(),
+            ),
+        ),
         Target::List(_) => {
             let mut offsets = vec![0i32];
             for r in rows {
                 let len = i32::try_from(r.map_or(0, |(_, len)| len)).map_err(|e| e.to_string())?;
                 offsets.push(offsets.last().unwrap() + len);
             }
-            ListArray::try_new(field(inner), OffsetBuffer::new(ScalarBuffer::from(offsets)), inner.clone(), nulls)
-                .map(|a| Arc::new(a) as ArrayRef)
-                .map_err(|e| e.to_string())
+            ListArray::try_new(
+                field(inner),
+                OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                inner.clone(),
+                nulls,
+            )
+            .map(|a| Arc::new(a) as ArrayRef)
+            .map_err(|e| e.to_string())
         }
         Target::FixedList(_, w) => {
             // Re-expand the compacted inner values: a null row gets w null slots.
@@ -1397,10 +1905,15 @@ fn wrap(t: &Target, values: &ArrayRef, rows: &[Option<(usize, usize)>], inner: &
                 inner.clone()
             } else {
                 let w = *w as usize;
-                let idx: Vec<Option<u64>> = rows.iter().flat_map(|r| (0..w).map(move |j| r.map(|(start, _)| (start + j) as u64))).collect();
+                let idx: Vec<Option<u64>> = rows
+                    .iter()
+                    .flat_map(|r| (0..w).map(move |j| r.map(|(start, _)| (start + j) as u64)))
+                    .collect();
                 take_rows(inner, &UInt64Array::from(idx))?
             };
-            FixedSizeListArray::try_new(field(&child), *w, child, nulls).map(|a| Arc::new(a) as ArrayRef).map_err(|e| e.to_string())
+            FixedSizeListArray::try_new(field(&child), *w, child, nulls)
+                .map(|a| Arc::new(a) as ArrayRef)
+                .map_err(|e| e.to_string())
         }
         t => Err(format!("not a list target: {t:?}")),
     }
@@ -1408,12 +1921,27 @@ fn wrap(t: &Target, values: &ArrayRef, rows: &[Option<(usize, usize)>], inner: &
 
 /// A candidate with its (predicted, projected) sizes; one that cannot be sized is
 /// listed as failed with the reason, and never tried.
-fn candidate(target: Target, rank: Rank, rule: &str, evidence: String, sizes: Result<(f64, f64), String>) -> Candidate {
+fn candidate(
+    target: Target,
+    rank: Rank,
+    rule: &str,
+    evidence: String,
+    sizes: Result<(f64, f64), String>,
+) -> Candidate {
     let (predicted, projected, outcome, reason) = match sizes {
         Ok((p, q)) => (p as u64, q, Outcome::NotTried, None),
         Err(e) => (0, f64::INFINITY, Outcome::Failed, Some(e)),
     };
-    Candidate { target, rank, rule: rule.into(), evidence, predicted, projected, outcome, reason }
+    Candidate {
+        target,
+        rank,
+        rule: rule.into(),
+        evidence,
+        predicted,
+        projected,
+        outcome,
+        reason,
+    }
 }
 
 /// Lists: choose the inner type first, then wrap it — as a scalar when every list
@@ -1422,7 +1950,13 @@ fn candidate(target: Target, rank: Rank, rule: &str, evidence: String, sizes: Re
 /// The reported candidates are the outer level's (scalar / list / array / original,
 /// in the order tried) followed by the inner level's (rules prefixed "inner: "), so
 /// a list column shows two `chosen` entries: the outer choice and the inner choice.
-fn choose_list(lvl: &Level, inner: &Level, rows: &[Option<(usize, usize)>], width: Option<i32>, params: &Params) -> Result<Chosen, String> {
+fn choose_list(
+    lvl: &Level,
+    inner: &Level,
+    rows: &[Option<(usize, usize)>],
+    width: Option<i32>,
+    params: &Params,
+) -> Result<Chosen, String> {
     let ic = choose(inner, params)?;
     let (n, nulls, r) = (lvl.n_rows() as f64, lvl.n_null() as f64, lvl.r);
     let inner_t = ic.target.clone();
@@ -1432,13 +1966,21 @@ fn choose_list(lvl: &Level, inner: &Level, rows: &[Option<(usize, usize)>], widt
     let nested = kept && matches!(inner.dtype, PT::List(_) | PT::Array(..) | PT::Struct(_));
     let single = lvl.p.range.min_len == Some(1) && lvl.p.range.max_len == Some(1);
     if single && !(lvl.n_null() > 0 && inner.n_null() > 0) && !nested {
-        let shape = Shape { n, nulls: nulls + inner.n_null() as f64, ..inner.shape() };
+        let shape = Shape {
+            n,
+            nulls: nulls + inner.n_null() as f64,
+            ..inner.shape()
+        };
         let t = inner_t.arrow_type();
         outer.push(candidate(
             Target::Scalar(Box::new(inner_t.clone())),
             ic.rank,
             "list→scalar",
-            format!("min_len=1 max_len=1 n_null={} inner_n_null={}", lvl.n_null(), inner.n_null()),
+            format!(
+                "min_len=1 max_len=1 n_null={} inner_n_null={}",
+                lvl.n_null(),
+                inner.n_null()
+            ),
             body_size(&t, &shape).and_then(|p| Ok((p, body_size(&t, &shape.project(r, c))?))),
         ));
     }
@@ -1457,19 +1999,32 @@ fn choose_list(lvl: &Level, inner: &Level, rows: &[Option<(usize, usize)>], widt
         Some(w) if !kept => {
             // The child holds w slots per row; a null row's slots are null.
             let wf = w as f64;
-            let shape = Shape { n: n * wf, nulls: inner.n_null() as f64 + nulls * wf, ..inner.shape() };
+            let shape = Shape {
+                n: n * wf,
+                nulls: inner.n_null() as f64 + nulls * wf,
+                ..inner.shape()
+            };
             let t = inner_t.arrow_type();
             outer.push(candidate(
                 Target::FixedList(Box::new(inner_t.clone()), w),
                 Rank::List,
                 "array→array",
                 format!("width={w}"),
-                body_size(&t, &shape).and_then(|p| Ok((validity(n, nulls) + p, validity(n * r, nulls * r) + body_size(&t, &shape.project(r, c))?))),
+                body_size(&t, &shape).and_then(|p| {
+                    Ok((
+                        validity(n, nulls) + p,
+                        validity(n * r, nulls * r) + body_size(&t, &shape.project(r, c))?,
+                    ))
+                }),
             ));
         }
         _ => {}
     }
-    let mut rules = Rules { lvl, shape: lvl.shape(), out: outer };
+    let mut rules = Rules {
+        lvl,
+        shape: lvl.shape(),
+        out: outer,
+    };
     rules.original();
     let (i, array, cands) = first_success(rules.out, |t| wrap(t, &lvl.values, rows, &ic.array));
     let lossy = !matches!(cands[i].target, Target::Original(_)) && ic.lossy;
@@ -1486,7 +2041,10 @@ fn to_polars_layout(a: &ArrayRef, key: &AT) -> Result<ArrayRef, String> {
     let item = |c: &ArrayRef| Arc::new(AField::new("item", c.data_type().clone(), true));
     match a.data_type() {
         AT::Dictionary(..) => {
-            let keyed = arrow_cast(a.as_ref(), &AT::Dictionary(Box::new(key.clone()), Box::new(AT::Utf8)))?;
+            let keyed = arrow_cast(
+                a.as_ref(),
+                &AT::Dictionary(Box::new(key.clone()), Box::new(AT::Utf8)),
+            )?;
             let d = keyed.as_any_dictionary();
             Ok(d.with_values(polars_views(d.values().as_ref(), &AT::Utf8View)?))
         }
@@ -1501,13 +2059,31 @@ fn to_polars_layout(a: &ArrayRef, key: &AT) -> Result<ArrayRef, String> {
         AT::FixedSizeList(_, w) => {
             let f = a.as_fixed_size_list();
             let child = to_polars_layout(f.values(), key)?;
-            FixedSizeListArray::try_new(item(&child), *w, child, f.nulls().cloned()).map(|x| Arc::new(x) as ArrayRef).map_err(|e| e.to_string())
+            FixedSizeListArray::try_new(item(&child), *w, child, f.nulls().cloned())
+                .map(|x| Arc::new(x) as ArrayRef)
+                .map_err(|e| e.to_string())
         }
         AT::Struct(fields) => {
             let s = a.as_struct();
-            let cols = s.columns().iter().map(|c| to_polars_layout(c, key)).collect::<Result<Vec<_>, _>>()?;
-            let fields: Fields = fields.iter().zip(&cols).map(|(f, c)| Arc::new(AField::new(f.name(), c.data_type().clone(), f.is_nullable()))).collect();
-            StructArray::try_new(fields, cols, s.nulls().cloned()).map(|x| Arc::new(x) as ArrayRef).map_err(|e| e.to_string())
+            let cols = s
+                .columns()
+                .iter()
+                .map(|c| to_polars_layout(c, key))
+                .collect::<Result<Vec<_>, _>>()?;
+            let fields: Fields = fields
+                .iter()
+                .zip(&cols)
+                .map(|(f, c)| {
+                    Arc::new(AField::new(
+                        f.name(),
+                        c.data_type().clone(),
+                        f.is_nullable(),
+                    ))
+                })
+                .collect();
+            StructArray::try_new(fields, cols, s.nulls().cloned())
+                .map(|x| Arc::new(x) as ArrayRef)
+                .map_err(|e| e.to_string())
         }
         AT::Utf8 | AT::LargeUtf8 => polars_views(a.as_ref(), &AT::Utf8View),
         AT::Binary | AT::LargeBinary => polars_views(a.as_ref(), &AT::BinaryView),
@@ -1542,7 +2118,9 @@ fn polars_views(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
             if !current.is_empty() {
                 blocks.push(Buffer::from_vec(std::mem::take(&mut current)));
             }
-            capacity = (capacity * 2).clamp(VIEW_BLOCK, VIEW_MAX_BLOCK).max(v.len());
+            capacity = (capacity * 2)
+                .clamp(VIEW_BLOCK, VIEW_MAX_BLOCK)
+                .max(v.len());
         }
         views.push(make_view(v, blocks.len() as u32, current.len() as u32));
         current.extend_from_slice(v);
@@ -1553,8 +2131,12 @@ fn polars_views(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
     let (views, nulls) = (ScalarBuffer::from(views), bytes.nulls().cloned());
     let e = |e: arrow_schema::ArrowError| e.to_string();
     match to {
-        AT::Utf8View => StringViewArray::try_new(views, blocks, nulls).map(|x| Arc::new(x) as ArrayRef).map_err(e),
-        _ => BinaryViewArray::try_new(views, blocks, nulls).map(|x| Arc::new(x) as ArrayRef).map_err(e),
+        AT::Utf8View => StringViewArray::try_new(views, blocks, nulls)
+            .map(|x| Arc::new(x) as ArrayRef)
+            .map_err(e),
+        _ => BinaryViewArray::try_new(views, blocks, nulls)
+            .map(|x| Arc::new(x) as ArrayRef)
+            .map_err(e),
     }
 }
 
@@ -1563,7 +2145,12 @@ fn dictionary_values(a: &ArrayRef) -> Option<Vec<String>> {
     match a.data_type() {
         AT::Dictionary(..) => {
             let v = arrow_cast(a.as_any_dictionary().values().as_ref(), &AT::Utf8).ok()?;
-            Some(v.as_string::<i32>().iter().map(|x| x.unwrap_or_default().to_string()).collect())
+            Some(
+                v.as_string::<i32>()
+                    .iter()
+                    .map(|x| x.unwrap_or_default().to_string())
+                    .collect(),
+            )
         }
         AT::List(_) => dictionary_values(a.as_list::<i32>().values()),
         AT::FixedSizeList(..) => dictionary_values(a.as_fixed_size_list().values()),
@@ -1589,32 +2176,65 @@ pub(crate) struct Rec {
 
 /// The recommendation for one column.
 /// `values` is `s` in the classic layout (sizes.rs's `classic_layout`).
-pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes, params: &Params) -> PolarsResult<Rec> {
+pub(crate) fn recommend(
+    s: &Series,
+    values: &ArrayRef,
+    d: &Described,
+    sz: &Sizes,
+    params: &Params,
+) -> PolarsResult<Rec> {
     let [size_bytes, _, polars_bytes, polars_zstd] = *sz;
     let name = s.name().as_str();
     let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
-    let q = params.population_rows.map(|p| if p == d.n_rows { 1.0 } else { d.n_rows as f64 / p as f64 });
+    let q = params.population_rows.map(|p| {
+        if p == d.n_rows {
+            1.0
+        } else {
+            d.n_rows as f64 / p as f64
+        }
+    });
     let r = match params.population_rows {
         Some(p) if d.n_rows > 0 => p as f64 / d.n_rows as f64,
         _ => 1.0,
     };
     let outer = Level {
-        dtype: s.dtype(), values: values.clone(), p: &d.outer, n_midnight: d.n_midnight, size_bytes,
-        est: level_estimate(&d.outer, d.n_rows - d.n_null, q), r, prefix: "", text: Default::default(),
+        dtype: s.dtype(),
+        values: values.clone(),
+        p: &d.outer,
+        n_midnight: d.n_midnight,
+        size_bytes,
+        est: level_estimate(&d.outer, d.n_rows - d.n_null, q),
+        r,
+        prefix: "",
+        text: Default::default(),
     };
     let chosen = match &d.inner {
         Some(inner) if matches!(s.dtype(), PT::List(_) | PT::Array(..)) => {
             let (rows, child, width) = list_parts(values).map_err(err)?;
             if child.len() == inner.values.len() {
                 let inner_lvl = Level {
-                    dtype: inner.values.dtype(), size_bytes: ipc_body_bytes(child.as_ref(), None)?, values: child,
-                    p: &inner.profile, n_midnight: None,
-                    est: level_estimate(&inner.profile, (inner.values.len() - inner.values.null_count()) as u64, q), r, prefix: "inner: ", text: Default::default(),
+                    dtype: inner.values.dtype(),
+                    size_bytes: ipc_body_bytes(child.as_ref(), None)?,
+                    values: child,
+                    p: &inner.profile,
+                    n_midnight: None,
+                    est: level_estimate(
+                        &inner.profile,
+                        (inner.values.len() - inner.values.null_count()) as u64,
+                        q,
+                    ),
+                    r,
+                    prefix: "inner: ",
+                    text: Default::default(),
                 };
                 choose_list(&outer, &inner_lvl, &rows, width, params).map_err(err)?
             } else {
                 // Defensive: list_parts builds Describe's flatten, so the lengths agree.
-                let why = format!("inner values {} ≠ Describe's inner_n_values {}: inner type kept", child.len(), inner.values.len());
+                let why = format!(
+                    "inner values {} ≠ Describe's inner_n_values {}: inner type kept",
+                    child.len(),
+                    inner.values.len()
+                );
                 choose_original(&outer, &why)
             }
         }
@@ -1627,8 +2247,16 @@ pub(crate) fn recommend(s: &Series, values: &ArrayRef, d: &Described, sz: &Sizes
         let key = chosen.target.polars_key().unwrap_or(AT::UInt32);
         let layout = to_polars_layout(&chosen.array, &key).map_err(err)?;
         // Spec B §5.4 step 6: the Polars layout only widens, so it must cast back exactly.
-        first_mismatch(&chosen.array, &arrow_cast(layout.as_ref(), &t).map_err(err)?).map_err(|e| err(format!("Polars layout: {e}")))?;
-        let enum_values = if q == Some(1.0) { dictionary_values(&chosen.array) } else { None };
+        first_mismatch(
+            &chosen.array,
+            &arrow_cast(layout.as_ref(), &t).map_err(err)?,
+        )
+        .map_err(|e| err(format!("Polars layout: {e}")))?;
+        let enum_values = if q == Some(1.0) {
+            dictionary_values(&chosen.array)
+        } else {
+            None
+        };
         (
             Some(pl_name(&t, name, enum_values.as_deref(), &key)),
             ipc_body_bytes(layout.as_ref(), None)?,
@@ -1687,17 +2315,39 @@ fn output_fields() -> Vec<(String, PT)> {
 }
 
 fn candidates_series(c: &[Candidate]) -> Series {
-    let text = |name: &str, v: Vec<Option<String>>| StringChunked::from_iter_options(name.into(), v.into_iter()).into_series();
+    let text = |name: &str, v: Vec<Option<String>>| {
+        StringChunked::from_iter_options(name.into(), v.into_iter()).into_series()
+    };
     let cols = [
-        text("arrow_type", c.iter().map(|x| Some(pa_name(&x.target.arrow_type()))).collect()),
+        text(
+            "arrow_type",
+            c.iter()
+                .map(|x| Some(pa_name(&x.target.arrow_type())))
+                .collect(),
+        ),
         text("rule", c.iter().map(|x| Some(x.rule.clone())).collect()),
-        text("evidence", c.iter().map(|x| Some(x.evidence.clone())).collect()),
-        UInt64Chunked::from_iter_values("predicted_bytes".into(), c.iter().map(|x| x.predicted)).into_series(),
-        Float64Chunked::from_iter_values("projected_population_bytes".into(), c.iter().map(|x| x.projected)).into_series(),
-        text("outcome", c.iter().map(|x| Some(x.outcome.name().to_string())).collect()),
+        text(
+            "evidence",
+            c.iter().map(|x| Some(x.evidence.clone())).collect(),
+        ),
+        UInt64Chunked::from_iter_values("predicted_bytes".into(), c.iter().map(|x| x.predicted))
+            .into_series(),
+        Float64Chunked::from_iter_values(
+            "projected_population_bytes".into(),
+            c.iter().map(|x| x.projected),
+        )
+        .into_series(),
+        text(
+            "outcome",
+            c.iter()
+                .map(|x| Some(x.outcome.name().to_string()))
+                .collect(),
+        ),
         text("reason", c.iter().map(|x| x.reason.clone()).collect()),
     ];
-    StructChunked::from_series("candidate".into(), c.len(), cols.iter()).expect("equal-length fields").into_series()
+    StructChunked::from_series("candidate".into(), c.len(), cols.iter())
+        .expect("equal-length fields")
+        .into_series()
 }
 
 fn rec_row(r: &Rec) -> Row {
@@ -1715,7 +2365,10 @@ fn rec_row(r: &Rec) -> Row {
     ]
 }
 
-pub(crate) fn describe_and_recommend_impl(inputs: &[Series], params: &Params) -> PolarsResult<Series> {
+pub(crate) fn describe_and_recommend_impl(
+    inputs: &[Series],
+    params: &Params,
+) -> PolarsResult<Series> {
     let rows: Vec<Row> = inputs
         .par_iter()
         .map(|s| {
@@ -1736,28 +2389,57 @@ pub(crate) fn describe_and_recommend_impl(inputs: &[Series], params: &Params) ->
 mod tests {
     use super::*;
     use crate::sizes::ipc_body_bytes;
-    use arrow_array::{builder::StringDictionaryBuilder, types::UInt8Type, DictionaryArray, StringArray};
+    use arrow_array::{
+        builder::StringDictionaryBuilder, types::UInt8Type, DictionaryArray, StringArray,
+    };
 
     #[test]
     fn pyarrow_type_names() {
         assert_eq!(pa_name(&AT::Float32), "float");
         assert_eq!(pa_name(&decimal_type(6, 2)), "decimal32(6, 2)");
         assert_eq!(pa_name(&decimal_type(10, 3)), "decimal64(10, 3)");
-        assert_eq!(pa_name(&AT::Timestamp(TimeUnit::Millisecond, Some("+05:00".into()))), "timestamp[ms, tz=+05:00]");
-        assert_eq!(pa_name(&Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type()), "dictionary<values=string, indices=uint8, ordered=0>");
-        assert_eq!(pa_name(&Target::List(Box::new(Target::Fixed(AT::UInt8))).arrow_type()), "list<item: uint8>");
-        assert_eq!(pa_name(&timestamp_with_offset(TimeUnit::Second)), "struct<timestamp: timestamp[s, tz=UTC] not null, offset_minutes: int16 not null>");
+        assert_eq!(
+            pa_name(&AT::Timestamp(TimeUnit::Millisecond, Some("+05:00".into()))),
+            "timestamp[ms, tz=+05:00]"
+        );
+        assert_eq!(
+            pa_name(&Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type()),
+            "dictionary<values=string, indices=uint8, ordered=0>"
+        );
+        assert_eq!(
+            pa_name(&Target::List(Box::new(Target::Fixed(AT::UInt8))).arrow_type()),
+            "list<item: uint8>"
+        );
+        assert_eq!(
+            pa_name(&timestamp_with_offset(TimeUnit::Second)),
+            "struct<timestamp: timestamp[s, tz=UTC] not null, offset_minutes: int16 not null>"
+        );
     }
 
     #[test]
     fn polars_type_names() {
         let k = AT::UInt8;
-        assert_eq!(pl_name(&decimal_type(6, 2), "x", None, &k), "Decimal(precision=6, scale=2)");
-        assert_eq!(pl_name(&AT::Timestamp(TimeUnit::Second, None), "x", None, &k), "Datetime(time_unit='ms', time_zone=None)");
-        assert_eq!(pl_name(&AT::Duration(TimeUnit::Second), "x", None, &k), "Duration(time_unit='ms')");
+        assert_eq!(
+            pl_name(&decimal_type(6, 2), "x", None, &k),
+            "Decimal(precision=6, scale=2)"
+        );
+        assert_eq!(
+            pl_name(&AT::Timestamp(TimeUnit::Second, None), "x", None, &k),
+            "Datetime(time_unit='ms', time_zone=None)"
+        );
+        assert_eq!(
+            pl_name(&AT::Duration(TimeUnit::Second), "x", None, &k),
+            "Duration(time_unit='ms')"
+        );
         let dict = Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type();
-        assert_eq!(pl_name(&dict, "x", Some(&["a".into(), "b".into()]), &k), "Enum(categories=['a', 'b'])");
-        assert_eq!(pl_name(&dict, "x", None, &k), "Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8))");
+        assert_eq!(
+            pl_name(&dict, "x", Some(&["a".into(), "b".into()]), &k),
+            "Enum(categories=['a', 'b'])"
+        );
+        assert_eq!(
+            pl_name(&dict, "x", None, &k),
+            "Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8))"
+        );
         assert_eq!(
             pl_name(&timestamp_with_offset(TimeUnit::Second), "x", None, &k),
             "Struct({'timestamp': Datetime(time_unit='ms', time_zone='UTC'), 'offset_minutes': Int16})"
@@ -1769,14 +2451,28 @@ mod tests {
         // Verified against: python -c "import polars as pl; print(str(pl.Enum([...])))"
         let k = AT::UInt8;
         let dict = Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type();
-        let values = ["it's".to_string(), "a\"b".to_string(), "x\\y".to_string(), "n\nl".to_string()];
-        assert_eq!(pl_name(&dict, "x", Some(&values), &k), "Enum(categories=[\"it's\", 'a\"b', 'x\\\\y', 'n\\nl'])");
+        let values = [
+            "it's".to_string(),
+            "a\"b".to_string(),
+            "x\\y".to_string(),
+            "n\nl".to_string(),
+        ];
+        assert_eq!(
+            pl_name(&dict, "x", Some(&values), &k),
+            "Enum(categories=[\"it's\", 'a\"b', 'x\\\\y', 'n\\nl'])"
+        );
     }
 
     #[test]
     fn polars_layouts_and_key_widths() {
-        assert_eq!(polars_layout(&AT::Time32(TimeUnit::Second), &AT::UInt8), AT::Time64(TimeUnit::Nanosecond));
-        assert_eq!(polars_layout(&decimal_type(6, 2), &AT::UInt8), AT::Decimal128(6, 2));
+        assert_eq!(
+            polars_layout(&AT::Time32(TimeUnit::Second), &AT::UInt8),
+            AT::Time64(TimeUnit::Nanosecond)
+        );
+        assert_eq!(
+            polars_layout(&decimal_type(6, 2), &AT::UInt8),
+            AT::Decimal128(6, 2)
+        );
         assert_eq!(dictionary_keys(256.0), (AT::UInt8, AT::UInt16));
         assert_eq!(dictionary_keys(255.0), (AT::UInt8, AT::UInt8));
         assert_eq!(dictionary_keys(65_537.0).0, AT::UInt32);
@@ -1785,15 +2481,36 @@ mod tests {
     #[test]
     fn predicted_sizes_match_sizes_rs() {
         let s = StringArray::from(vec![Some("ab"), None]);
-        let shape = Shape { n: 2.0, nulls: 1.0, sum_len: 2.0, d: 1.0, sum_len_unique: 2.0 };
-        assert_eq!(body_size(&AT::Utf8, &shape), Ok(ipc_body_bytes(&s, None).unwrap() as f64));
+        let shape = Shape {
+            n: 2.0,
+            nulls: 1.0,
+            sum_len: 2.0,
+            d: 1.0,
+            sum_len_unique: 2.0,
+        };
+        assert_eq!(
+            body_size(&AT::Utf8, &shape),
+            Ok(ipc_body_bytes(&s, None).unwrap() as f64)
+        );
         let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
         for v in ["a", "b", "a"] {
             builder.append_value(v);
         }
         let d: DictionaryArray<UInt8Type> = builder.finish();
-        let shape = Shape { n: 3.0, nulls: 0.0, sum_len: 3.0, d: 2.0, sum_len_unique: 2.0 };
-        assert_eq!(body_size(&Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type(), &shape), Ok(ipc_body_bytes(&d, None).unwrap() as f64));
+        let shape = Shape {
+            n: 3.0,
+            nulls: 0.0,
+            sum_len: 3.0,
+            d: 2.0,
+            sum_len_unique: 2.0,
+        };
+        assert_eq!(
+            body_size(
+                &Target::Dictionary(AT::UInt8, AT::UInt8).arrow_type(),
+                &shape
+            ),
+            Ok(ipc_body_bytes(&d, None).unwrap() as f64)
+        );
     }
 
     #[test]
@@ -1805,14 +2522,41 @@ mod tests {
 
     #[test]
     fn unsized_types_are_errors_not_panics() {
-        let shape = Shape { n: 3.0, ..Default::default() };
+        let shape = Shape {
+            n: 3.0,
+            ..Default::default()
+        };
         assert!(body_size(&AT::Utf8View, &shape).is_err());
-        assert!(body_size(&Target::List(Box::new(Target::Fixed(AT::UInt8))).arrow_type(), &shape).is_err());
-        assert!(body_size(&AT::Struct(Fields::from(vec![AField::new("a", AT::Int8, true)])), &shape).is_err());
-        assert!(body_size(&AT::Dictionary(Box::new(AT::Utf8), Box::new(AT::Utf8)), &shape).is_err());
-        assert_eq!(body_size(&timestamp_with_offset(TimeUnit::Millisecond), &shape), Ok(24.0 + 8.0));
-        let c = candidate(Target::Fixed(AT::Utf8View), Rank::Plain, "r", String::new(), Err("no size".into()));
-        assert_eq!((c.outcome, c.reason.as_deref()), (Outcome::Failed, Some("no size")));
+        assert!(body_size(
+            &Target::List(Box::new(Target::Fixed(AT::UInt8))).arrow_type(),
+            &shape
+        )
+        .is_err());
+        assert!(body_size(
+            &AT::Struct(Fields::from(vec![AField::new("a", AT::Int8, true)])),
+            &shape
+        )
+        .is_err());
+        assert!(body_size(
+            &AT::Dictionary(Box::new(AT::Utf8), Box::new(AT::Utf8)),
+            &shape
+        )
+        .is_err());
+        assert_eq!(
+            body_size(&timestamp_with_offset(TimeUnit::Millisecond), &shape),
+            Ok(24.0 + 8.0)
+        );
+        let c = candidate(
+            Target::Fixed(AT::Utf8View),
+            Rank::Plain,
+            "r",
+            String::new(),
+            Err("no size".into()),
+        );
+        assert_eq!(
+            (c.outcome, c.reason.as_deref()),
+            (Outcome::Failed, Some("no size"))
+        );
         let a: ArrayRef = Arc::new(arrow_array::Int64Array::from(vec![1]));
         assert!(list_parts(&a).is_err());
     }
@@ -1830,7 +2574,10 @@ mod tests {
         assert_ne!(canon("-1.5"), canon("1.5"));
         assert_eq!(canon("0"), canon("-0.000"));
         assert_eq!(decimal_from_repr("1e-7", 7), Some(1));
-        assert_eq!(decimal_from_repr("1.5e20", 0), Some(150_000_000_000_000_000_000));
+        assert_eq!(
+            decimal_from_repr("1.5e20", 0),
+            Some(150_000_000_000_000_000_000)
+        );
         assert_eq!(decimal_from_repr("123.45", 1), None);
         assert_eq!(decimal_from_repr("-0.5", 2), Some(-50));
     }
@@ -1846,21 +2593,41 @@ mod tests {
         assert_eq!(offset_tz(-210), "-03:30");
     }
 
-    use crate::describe::describe_one;
     use crate::arrow_io::export_series;
-    use polars::prelude::{CompatLevel, DataType as PT, IntoSeries, NamedFrom, NewChunkedArray, Series, TimeUnit as PTimeUnit};
+    use crate::describe::describe_one;
+    use polars::prelude::{
+        CompatLevel, DataType as PT, IntoSeries, NamedFrom, NewChunkedArray, Series,
+        TimeUnit as PTimeUnit,
+    };
 
     pub(super) fn params() -> Params {
-        Params { seed: 0, zstd_level: 1, population_rows: None, categorical_threshold: 10_000, boolean_pairs: vec![("true".into(), "false".into())] }
+        Params {
+            seed: 0,
+            zstd_level: 1,
+            population_rows: None,
+            categorical_threshold: 10_000,
+            boolean_pairs: vec![("true".into(), "false".into())],
+        }
     }
 
     fn types(s: Series, p: &Params) -> Vec<(String, Outcome)> {
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
-            dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
-            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, d.n_rows - d.n_null, None), r: 1.0, prefix: "", text: Default::default(),
+            dtype: s.dtype(),
+            values: export_series(&s, CompatLevel::oldest()).unwrap(),
+            p: &d.outer,
+            n_midnight: d.n_midnight,
+            size_bytes: 0,
+            est: level_estimate(&d.outer, d.n_rows - d.n_null, None),
+            r: 1.0,
+            prefix: "",
+            text: Default::default(),
         };
-        candidates(&lvl, p).unwrap().iter().map(|c| (pa_name(&c.target.arrow_type()), c.outcome)).collect()
+        candidates(&lvl, p)
+            .unwrap()
+            .iter()
+            .map(|c| (pa_name(&c.target.arrow_type()), c.outcome))
+            .collect()
     }
 
     fn names(s: Series) -> Vec<String> {
@@ -1869,40 +2636,80 @@ mod tests {
 
     #[test]
     fn integer_rules() {
-        assert_eq!(names(Series::new("x".into(), &[0i64, 1])), ["bool", "uint8", "int8", "int64"]);
-        assert_eq!(names(Series::new("x".into(), &[-200i64, 5])), ["int16", "int64"]);
+        assert_eq!(
+            names(Series::new("x".into(), &[0i64, 1])),
+            ["bool", "uint8", "int8", "int64"]
+        );
+        assert_eq!(
+            names(Series::new("x".into(), &[-200i64, 5])),
+            ["int16", "int64"]
+        );
     }
 
     #[test]
     fn decimal_scale_reduced_by_gcd() {
-        let dec = polars::prelude::Int128Chunked::from_slice("x".into(), &[120, 340]).into_decimal_unchecked(Some(10), 2).into_series();
+        let dec = polars::prelude::Int128Chunked::from_slice("x".into(), &[120, 340])
+            .into_decimal_unchecked(Some(10), 2)
+            .into_series();
         assert_eq!(names(dec), ["decimal32(2, 1)", "decimal128(10, 2)"]);
     }
 
     #[test]
     fn float_rules() {
-        assert_eq!(names(Series::new("x".into(), &[123.45f64, 99.99])), ["decimal32(5, 2)", "double"]);
-        assert_eq!(names(Series::new("x".into(), &[0.5f64, 0.25])), ["decimal32(2, 2)", "float", "double"]);
-        assert_eq!(names(Series::new("x".into(), &[0.1f64, f64::NAN])), ["double"]);
+        assert_eq!(
+            names(Series::new("x".into(), &[123.45f64, 99.99])),
+            ["decimal32(5, 2)", "double"]
+        );
+        assert_eq!(
+            names(Series::new("x".into(), &[0.5f64, 0.25])),
+            ["decimal32(2, 2)", "float", "double"]
+        );
+        assert_eq!(
+            names(Series::new("x".into(), &[0.1f64, f64::NAN])),
+            ["double"]
+        );
     }
 
     #[test]
     fn string_rules() {
         let dict = "dictionary<values=string, indices=uint8, ordered=0>";
-        assert_eq!(names(Series::new("x".into(), &["007", "12"])), ["string", dict, "large_string"]);
+        assert_eq!(
+            names(Series::new("x".into(), &["007", "12"])),
+            ["string", dict, "large_string"]
+        );
         assert_eq!(
             names(Series::new("x".into(), &["1234567890.1", "0.00000012345"])),
-            ["decimal128(21, 11)", "double", "string", dict, "large_string"]
+            [
+                "decimal128(21, 11)",
+                "double",
+                "string",
+                dict,
+                "large_string"
+            ]
         );
-        let offsets = names(Series::new("x".into(), &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"]));
-        assert_eq!(offsets[0], "struct<timestamp: timestamp[s, tz=UTC] not null, offset_minutes: int16 not null>");
-        assert_eq!(names(Series::new("x".into(), &["True", "false"]))[0], "bool");
+        let offsets = names(Series::new(
+            "x".into(),
+            &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"],
+        ));
+        assert_eq!(
+            offsets[0],
+            "struct<timestamp: timestamp[s, tz=UTC] not null, offset_minutes: int16 not null>"
+        );
+        assert_eq!(
+            names(Series::new("x".into(), &["True", "false"]))[0],
+            "bool"
+        );
     }
 
     #[test]
     fn temporal_rules() {
-        let days = Series::new("x".into(), &[0i64, 86_400_000_000]).cast(&PT::Datetime(PTimeUnit::Microseconds, None)).unwrap();
-        assert_eq!(names(days), ["date32[day]", "timestamp[s]", "timestamp[us]"]);
+        let days = Series::new("x".into(), &[0i64, 86_400_000_000])
+            .cast(&PT::Datetime(PTimeUnit::Microseconds, None))
+            .unwrap();
+        assert_eq!(
+            names(days),
+            ["date32[day]", "timestamp[s]", "timestamp[us]"]
+        );
     }
 
     #[test]
@@ -1914,11 +2721,26 @@ mod tests {
         let values = export_series(&ints, CompatLevel::oldest()).unwrap();
         for dtype in [PT::Float64, PT::Decimal(Some(10), Some(2)), PT::String] {
             let lvl = Level {
-                dtype: &dtype, values: values.clone(), p: &d.outer, n_midnight: None, size_bytes: 0,
-                est: level_estimate(&d.outer, 2, None), r: 1.0, prefix: "", text: Default::default(),
+                dtype: &dtype,
+                values: values.clone(),
+                p: &d.outer,
+                n_midnight: None,
+                size_bytes: 0,
+                est: level_estimate(&d.outer, 2, None),
+                r: 1.0,
+                prefix: "",
+                text: Default::default(),
             };
-            let got: Vec<String> = candidates(&lvl, &params()).unwrap().iter().map(|c| c.rule.clone()).collect();
-            let expected: &[&str] = if dtype == PT::String { &["string→utf8", "string→dictionary", "original"] } else { &["original"] };
+            let got: Vec<String> = candidates(&lvl, &params())
+                .unwrap()
+                .iter()
+                .map(|c| c.rule.clone())
+                .collect();
+            let expected: &[&str] = if dtype == PT::String {
+                &["string→utf8", "string→dictionary", "original"]
+            } else {
+                &["original"]
+            };
             assert_eq!(got, expected, "{dtype}");
         }
     }
@@ -1929,23 +2751,43 @@ mod tests {
         let d = describe_one(&s, 0).unwrap();
         let evidence = |q: Option<f64>| {
             let lvl = Level {
-                dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer, n_midnight: None, size_bytes: 0,
-                est: level_estimate(&d.outer, 5, q), r: 1.0, prefix: "", text: Default::default(),
+                dtype: s.dtype(),
+                values: export_series(&s, CompatLevel::oldest()).unwrap(),
+                p: &d.outer,
+                n_midnight: None,
+                size_bytes: 0,
+                est: level_estimate(&d.outer, 5, q),
+                r: 1.0,
+                prefix: "",
+                text: Default::default(),
             };
-            candidates(&lvl, &params()).unwrap().into_iter().find(|c| c.rule == "string→dictionary").unwrap().evidence
+            candidates(&lvl, &params())
+                .unwrap()
+                .into_iter()
+                .find(|c| c.rule == "string→dictionary")
+                .unwrap()
+                .evidence
         };
         let chao = evidence(None);
         assert!(chao.contains("method=chao1 est_low="), "{chao}");
         let duj = evidence(Some(0.5));
-        assert!(duj.contains("method=duj1") && !duj.contains("est_low"), "{duj}");
+        assert!(
+            duj.contains("method=duj1") && !duj.contains("est_low"),
+            "{duj}"
+        );
         assert!(evidence(Some(1.0)).contains("c=3.0 from est_high method=exact est_low=3.0"));
     }
 
     #[test]
     fn dictionary_gate_rejects() {
-        let p = Params { categorical_threshold: 1, ..params() };
+        let p = Params {
+            categorical_threshold: 1,
+            ..params()
+        };
         let got = types(Series::new("x".into(), &["a", "b", "a", "b"]), &p);
-        assert!(got.iter().any(|(t, o)| t.starts_with("dictionary") && *o == Outcome::Rejected));
+        assert!(got
+            .iter()
+            .any(|(t, o)| t.starts_with("dictionary") && *o == Outcome::Rejected));
     }
 
     #[test]
@@ -1956,15 +2798,20 @@ mod tests {
         let d = describe_one(&s, 0).unwrap();
         assert_eq!(d.outer.freq.n_unique, 3);
         let lvl = Level {
-            dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
-            n_midnight: d.n_midnight, size_bytes: 0,
+            dtype: s.dtype(),
+            values: export_series(&s, CompatLevel::oldest()).unwrap(),
+            p: &d.outer,
+            n_midnight: d.n_midnight,
+            size_bytes: 0,
             est: Estimate {
                 est_cardinality: 1.0,
                 est_low: Some(1.0),
                 est_high: Some(1.0),
                 method: crate::cardinality_estimators::Method::Chao1,
             },
-            r: 1.0, prefix: "", text: Default::default(),
+            r: 1.0,
+            prefix: "",
+            text: Default::default(),
         };
         assert_eq!(lvl.cardinality(), (3.0, "est_high"));
     }
@@ -1986,8 +2833,18 @@ mod tests {
         let text = LargeStringArray::from(vec![Some("2024-01-05T10:00+05:00"), None]);
         let a = from_text(&Target::TimestampWithOffset(TimeUnit::Second), &text).unwrap();
         let s = a.as_struct();
-        let ts = s.column(0).as_primitive::<arrow_array::types::TimestampSecondType>();
-        assert_eq!((ts.value(0), s.column(1).as_primitive::<arrow_array::types::Int16Type>().value(0)), (1_704_430_800, 300));
+        let ts = s
+            .column(0)
+            .as_primitive::<arrow_array::types::TimestampSecondType>();
+        assert_eq!(
+            (
+                ts.value(0),
+                s.column(1)
+                    .as_primitive::<arrow_array::types::Int16Type>()
+                    .value(0)
+            ),
+            (1_704_430_800, 300)
+        );
         assert!(a.is_null(1));
         assert!(verify_text(&Target::TimestampWithOffset(TimeUnit::Second), &text, &a).is_ok());
     }
@@ -2004,7 +2861,13 @@ mod tests {
         let n = 3 * MISMATCH_CHUNK + 7;
         let base: Vec<Option<i64>> = (0..n as i64).map(Some).collect();
         let a: ArrayRef = Arc::new(Int64Array::from(base.clone()));
-        for i in [0, MISMATCH_CHUNK - 1, MISMATCH_CHUNK, 2 * MISMATCH_CHUNK + 1, n - 1] {
+        for i in [
+            0,
+            MISMATCH_CHUNK - 1,
+            MISMATCH_CHUNK,
+            2 * MISMATCH_CHUNK + 1,
+            n - 1,
+        ] {
             for v in [Some(-1), None] {
                 let mut other = base.clone();
                 other[i] = v;
@@ -2015,18 +2878,33 @@ mod tests {
             }
         }
         let text = LargeStringArray::from(vec!["2300-01-01T00:00:00.123456789"]);
-        assert!(from_text(&Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, None)), &text).is_err()); // beyond i64 ns
+        assert!(from_text(
+            &Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, None)),
+            &text
+        )
+        .is_err()); // beyond i64 ns
     }
 
     #[test]
     fn timestamp_with_offset_struct_children_have_no_nulls() {
-        let text = LargeStringArray::from(vec![Some("2024-01-05T10:00+05:00"), None, Some("2024-01-06T00:00Z")]);
+        let text = LargeStringArray::from(vec![
+            Some("2024-01-05T10:00+05:00"),
+            None,
+            Some("2024-01-06T00:00Z"),
+        ]);
         let a = from_text(&Target::TimestampWithOffset(TimeUnit::Second), &text).unwrap();
         let s = a.as_struct();
         assert_eq!(s.column(0).null_count(), 0);
         assert_eq!(s.column(1).null_count(), 0);
-        let shape = Shape { n: 3.0, nulls: 1.0, ..Default::default() };
-        assert_eq!(Ok(ipc_body_bytes(a.as_ref(), None).unwrap() as f64), body_size(&timestamp_with_offset(TimeUnit::Second), &shape));
+        let shape = Shape {
+            n: 3.0,
+            nulls: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            Ok(ipc_body_bytes(a.as_ref(), None).unwrap() as f64),
+            body_size(&timestamp_with_offset(TimeUnit::Second), &shape)
+        );
     }
 
     #[test]
@@ -2034,11 +2912,21 @@ mod tests {
         // NullArray (Target::Null's recast) has no physical null buffer at all, so a
         // naive `is_null` per-row check against it is always false — verify() must
         // special-case Target::Null and check the *source*'s logical nulls instead.
-        for s in [Series::new("x".into(), &[None::<i64>, None]), Series::new("x".into(), &[None::<&str>, None])] {
+        for s in [
+            Series::new("x".into(), &[None::<i64>, None]),
+            Series::new("x".into(), &[None::<&str>, None]),
+        ] {
             let d = describe_one(&s, 0).unwrap();
             let lvl = Level {
-                dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
-                n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 0, None), r: 1.0, prefix: "", text: Default::default(),
+                dtype: s.dtype(),
+                values: export_series(&s, CompatLevel::oldest()).unwrap(),
+                p: &d.outer,
+                n_midnight: d.n_midnight,
+                size_bytes: 0,
+                est: level_estimate(&d.outer, 0, None),
+                r: 1.0,
+                prefix: "",
+                text: Default::default(),
             };
             let recast = cast_to(&Target::Null, &lvl).unwrap();
             assert!(verify(&Target::Null, &lvl, &recast).is_ok());
@@ -2047,8 +2935,15 @@ mod tests {
         let s = Series::new("x".into(), &[Some(1i64), None]);
         let d = describe_one(&s, 0).unwrap();
         let lvl = Level {
-            dtype: s.dtype(), values: export_series(&s, CompatLevel::oldest()).unwrap(), p: &d.outer,
-            n_midnight: d.n_midnight, size_bytes: 0, est: level_estimate(&d.outer, 1, None), r: 1.0, prefix: "", text: Default::default(),
+            dtype: s.dtype(),
+            values: export_series(&s, CompatLevel::oldest()).unwrap(),
+            p: &d.outer,
+            n_midnight: d.n_midnight,
+            size_bytes: 0,
+            est: level_estimate(&d.outer, 1, None),
+            r: 1.0,
+            prefix: "",
+            text: Default::default(),
         };
         let recast = cast_to(&Target::Null, &lvl).unwrap();
         assert!(verify(&Target::Null, &lvl, &recast).is_err());
@@ -2087,7 +2982,11 @@ mod tests {
 
     #[test]
     fn float_to_decimal_rejects_non_finite() {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![Some(f64::INFINITY), Some(f64::NAN), None]));
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(f64::INFINITY),
+            Some(f64::NAN),
+            None,
+        ]));
         let err = float_to_decimal(&a, &decimal_type(5, 2)).unwrap_err();
         assert!(err.contains("not finite"), "{err}");
     }
@@ -2104,14 +3003,29 @@ mod tests {
         // `recast` up to `src`'s exact data type (tz included) makes their values equal
         // (Timestamp storage doesn't depend on tz), so only an explicit tz check catches
         // the mismatch — first_mismatch alone cannot.
-        let src = timestamp_array(TimeUnit::Microsecond, vec![Some(0), Some(3_600_000_000)], Some("+05:00".into()));
-        let recast = timestamp_array(TimeUnit::Microsecond, vec![Some(0), Some(3_600_000_000)], Some("+00:00".into()));
+        let src = timestamp_array(
+            TimeUnit::Microsecond,
+            vec![Some(0), Some(3_600_000_000)],
+            Some("+05:00".into()),
+        );
+        let recast = timestamp_array(
+            TimeUnit::Microsecond,
+            vec![Some(0), Some(3_600_000_000)],
+            Some("+00:00".into()),
+        );
         let dummy = Series::new("x".into(), &[0i64, 1]);
         let d = describe_one(&dummy, 0).unwrap();
         let dtype = PT::Datetime(PTimeUnit::Microseconds, None);
         let lvl = Level {
-            dtype: &dtype, values: src, p: &d.outer,
-            n_midnight: None, size_bytes: 0, est: level_estimate(&d.outer, 2, None), r: 1.0, prefix: "", text: Default::default(),
+            dtype: &dtype,
+            values: src,
+            p: &d.outer,
+            n_midnight: None,
+            size_bytes: 0,
+            est: level_estimate(&d.outer, 2, None),
+            r: 1.0,
+            prefix: "",
+            text: Default::default(),
         };
         let target = Target::Fixed(AT::Timestamp(TimeUnit::Microsecond, Some("+05:00".into())));
         assert!(verify(&target, &lvl, &recast).is_err());
@@ -2126,42 +3040,96 @@ mod tests {
     }
 
     fn chosen(r: &Rec) -> &Candidate {
-        r.candidates.iter().find(|c| c.outcome == Outcome::Chosen).unwrap()
+        r.candidates
+            .iter()
+            .find(|c| c.outcome == Outcome::Chosen)
+            .unwrap()
     }
 
     #[test]
     fn end_to_end_choices() {
-        assert_eq!(rec(Series::new("x".into(), &[0i64, 5, 127])).arrow_type, "uint8");
+        assert_eq!(
+            rec(Series::new("x".into(), &[0i64, 5, 127])).arrow_type,
+            "uint8"
+        );
         let price = rec(Series::new("x".into(), &[123.45f64, 99.99]));
-        assert_eq!((price.arrow_type.as_str(), price.polars_type.as_deref()), ("decimal32(5, 2)", Some("Decimal(precision=5, scale=2)")));
-        assert_eq!(rec(Series::new("x".into(), &["2024-01-05 10:00:00.120", "2024-01-06T11:00:00"])).arrow_type, "timestamp[ms]");
+        assert_eq!(
+            (price.arrow_type.as_str(), price.polars_type.as_deref()),
+            ("decimal32(5, 2)", Some("Decimal(precision=5, scale=2)"))
+        );
+        assert_eq!(
+            rec(Series::new(
+                "x".into(),
+                &["2024-01-05 10:00:00.120", "2024-01-06T11:00:00"]
+            ))
+            .arrow_type,
+            "timestamp[ms]"
+        );
         let kept = rec(Series::new("x".into(), &[0.1f64, f64::NAN]));
-        assert_eq!((kept.arrow_type.as_str(), kept.polars_type.clone()), ("double", None));
+        assert_eq!(
+            (kept.arrow_type.as_str(), kept.polars_type.clone()),
+            ("double", None)
+        );
     }
 
     #[test]
     fn failed_cast_falls_back() {
-        let r = rec(Series::new("x".into(), &["2300-01-01T00:00:00.123456789", "2024-01-05T10:00:00"]));
+        let r = rec(Series::new(
+            "x".into(),
+            &["2300-01-01T00:00:00.123456789", "2024-01-05T10:00:00"],
+        ));
         assert_eq!(r.arrow_type, "string");
-        assert!(r.candidates.iter().any(|c| c.outcome == Outcome::Failed && pa_name(&c.target.arrow_type()) == "timestamp[ns]"));
+        assert!(r
+            .candidates
+            .iter()
+            .any(|c| c.outcome == Outcome::Failed
+                && pa_name(&c.target.arrow_type()) == "timestamp[ns]"));
     }
 
     #[test]
     fn single_item_lists_become_scalars() {
-        let s = Series::new("x".into(), [Some(Series::new("".into(), &[1i64])), Some(Series::new("".into(), &[2i64])), None]);
+        let s = Series::new(
+            "x".into(),
+            [
+                Some(Series::new("".into(), &[1i64])),
+                Some(Series::new("".into(), &[2i64])),
+                None,
+            ],
+        );
         assert_eq!(rec(s).arrow_type, "uint8");
         // Null lists and null items both occur: the column stays a list (Spec B §4.4).
-        let both = Series::new("x".into(), [Some(Series::new("".into(), &[Some(2i64)])), Some(Series::new("".into(), &[None::<i64>])), None]);
+        let both = Series::new(
+            "x".into(),
+            [
+                Some(Series::new("".into(), &[Some(2i64)])),
+                Some(Series::new("".into(), &[None::<i64>])),
+                None,
+            ],
+        );
         assert_eq!(rec(both).arrow_type, "list<item: uint8>");
         // Inner values {1}: 0 ≤ min, max ≤ 1 → Boolean ties UInt8 in size and wins on rank (§4.1, §4.2).
-        let ones = Series::new("x".into(), [Some(Series::new("".into(), &[Some(1i64)])), Some(Series::new("".into(), &[None::<i64>])), None]);
+        let ones = Series::new(
+            "x".into(),
+            [
+                Some(Series::new("".into(), &[Some(1i64)])),
+                Some(Series::new("".into(), &[None::<i64>])),
+                None,
+            ],
+        );
         assert_eq!(rec(ones).arrow_type, "list<item: bool>");
     }
 
     #[test]
     fn nullable_means_the_recommended_array_has_nulls() {
         // [null] items become null scalars: the recast column has a null although the source has none.
-        let s = Series::new("x".into(), [Some(Series::new("".into(), &[Some(1i64)])), Some(Series::new("".into(), &[None::<i64>])), Some(Series::new("".into(), &[Some(2i64)]))]);
+        let s = Series::new(
+            "x".into(),
+            [
+                Some(Series::new("".into(), &[Some(1i64)])),
+                Some(Series::new("".into(), &[None::<i64>])),
+                Some(Series::new("".into(), &[Some(2i64)])),
+            ],
+        );
         let r = rec(s);
         assert_eq!((r.arrow_type.as_str(), r.nullable), ("uint8", true));
         assert!(!rec(Series::new("x".into(), &[1i64, 2])).nullable);
@@ -2190,9 +3158,16 @@ mod tests {
         let s = null_list_holding_values(vec![1, 2, 3, 4, 5], vec![0, 2, 4, 5], 1);
         assert_eq!(describe_one(&s, 0).unwrap().inner.unwrap().values.len(), 3); // Describe's flatten skips the null row
         let r = rec(s);
-        assert_eq!((r.arrow_type.as_str(), r.nullable), ("list<item: uint8>", true));
+        assert_eq!(
+            (r.arrow_type.as_str(), r.nullable),
+            ("list<item: uint8>", true)
+        );
         assert_eq!(chosen(&r).predicted, r.arrow_size);
-        let inner = r.candidates.iter().find(|c| c.outcome == Outcome::Chosen && c.rule.starts_with("inner: ")).unwrap();
+        let inner = r
+            .candidates
+            .iter()
+            .find(|c| c.outcome == Outcome::Chosen && c.rule.starts_with("inner: "))
+            .unwrap();
         assert_eq!(pa_name(&inner.target.arrow_type()), "uint8");
         // Single-item rows: the null row (holding [9]) becomes a null scalar.
         let r = rec(null_list_holding_values(vec![1, 9, 3], vec![0, 1, 2, 3], 1));
@@ -2206,12 +3181,19 @@ mod tests {
             Series::new("x".into(), &[Some(0i64), Some(5), None]),
             Series::new("x".into(), &[123.45f64, 99.99]),
             Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]),
-            Series::new("x".into(), &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"]),
+            Series::new(
+                "x".into(),
+                &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"],
+            ),
             Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None]),
             // list→scalar timestamp_with_offset: a null list is a null struct row, children null-free
             Series::new(
                 "x".into(),
-                [Some(Series::new("".into(), &["2024-01-05T10:00+05:00"])), None, Some(Series::new("".into(), &["2024-01-05T10:00-03:30"]))],
+                [
+                    Some(Series::new("".into(), &["2024-01-05T10:00+05:00"])),
+                    None,
+                    Some(Series::new("".into(), &["2024-01-05T10:00-03:30"])),
+                ],
             ),
         ];
         for s in cases {
@@ -2226,32 +3208,94 @@ mod tests {
         let inner = d.inner.as_ref().unwrap();
         let (_, child, _) = list_parts(&classic_layout(s).unwrap()).unwrap();
         let lvl = Level {
-            dtype: inner.values.dtype(), size_bytes: ipc_body_bytes(child.as_ref(), None).unwrap(), values: child,
-            p: &inner.profile, n_midnight: None,
-            est: level_estimate(&inner.profile, (inner.values.len() - inner.values.null_count()) as u64, None), r: 1.0,
-            prefix: "inner: ", text: Default::default(),
+            dtype: inner.values.dtype(),
+            size_bytes: ipc_body_bytes(child.as_ref(), None).unwrap(),
+            values: child,
+            p: &inner.profile,
+            n_midnight: None,
+            est: level_estimate(
+                &inner.profile,
+                (inner.values.len() - inner.values.null_count()) as u64,
+                None,
+            ),
+            r: 1.0,
+            prefix: "inner: ",
+            text: Default::default(),
         };
         choose(&lvl, &params()).unwrap()
     }
 
     #[test]
     fn inner_predicted_equals_measured() {
-        let many: Vec<&str> = (0..200).map(|i| if i % 3 == 0 { "alpha" } else { "beta" }).collect();
+        let many: Vec<&str> = (0..200)
+            .map(|i| if i % 3 == 0 { "alpha" } else { "beta" })
+            .collect();
         let cases = [
-            Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None, Some(Series::new("".into(), &[300i64]))]),
-            Series::new("x".into(), [Some(Series::new("".into(), &[Some(1.5f64), None])), Some(Series::new("".into(), &[2.25f64]))]),
-            Series::new("x".into(), [Some(Series::new("".into(), &many)), None, Some(Series::new("".into(), &["gamma"]))]),
-            Series::new("x".into(), [Some(Series::new("".into(), &["1.50", "2.2"])), Some(Series::new("".into(), &["3"]))]),
-            Series::new("x".into(), [Some(Series::new("".into(), &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"])), None]),
-            Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None, Some(Series::new("".into(), &[5i64, 6]))])
-                .cast(&PT::Array(Box::new(PT::Int64), 2))
-                .unwrap(),
+            Series::new(
+                "x".into(),
+                [
+                    Some(Series::new("".into(), &[1i64, 2])),
+                    None,
+                    Some(Series::new("".into(), &[300i64])),
+                ],
+            ),
+            Series::new(
+                "x".into(),
+                [
+                    Some(Series::new("".into(), &[Some(1.5f64), None])),
+                    Some(Series::new("".into(), &[2.25f64])),
+                ],
+            ),
+            Series::new(
+                "x".into(),
+                [
+                    Some(Series::new("".into(), &many)),
+                    None,
+                    Some(Series::new("".into(), &["gamma"])),
+                ],
+            ),
+            Series::new(
+                "x".into(),
+                [
+                    Some(Series::new("".into(), &["1.50", "2.2"])),
+                    Some(Series::new("".into(), &["3"])),
+                ],
+            ),
+            Series::new(
+                "x".into(),
+                [
+                    Some(Series::new(
+                        "".into(),
+                        &["2024-01-05T10:00+05:00", "2024-01-05T10:00-03:30"],
+                    )),
+                    None,
+                ],
+            ),
+            Series::new(
+                "x".into(),
+                [
+                    Some(Series::new("".into(), &[1i64, 2])),
+                    None,
+                    Some(Series::new("".into(), &[5i64, 6])),
+                ],
+            )
+            .cast(&PT::Array(Box::new(PT::Int64), 2))
+            .unwrap(),
             null_list_holding_values(vec![1, 2, 3, 4, 5], vec![0, 2, 4, 5], 1),
         ];
         for s in cases {
             let c = inner_chosen(&s);
-            assert!(!matches!(c.target, Target::Original(_)), "{}", pa_name(c.array.data_type())); // a recast, not the measured original
-            assert_eq!(c.predicted, ipc_body_bytes(c.array.as_ref(), None).unwrap(), "{}", pa_name(c.array.data_type()));
+            assert!(
+                !matches!(c.target, Target::Original(_)),
+                "{}",
+                pa_name(c.array.data_type())
+            ); // a recast, not the measured original
+            assert_eq!(
+                c.predicted,
+                ipc_body_bytes(c.array.as_ref(), None).unwrap(),
+                "{}",
+                pa_name(c.array.data_type())
+            );
         }
     }
 
@@ -2259,22 +3303,46 @@ mod tests {
     fn polars_types_of_results() {
         let s = Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]);
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
-        let exact = Params { population_rows: Some(6), ..params() };
+        let exact = Params {
+            population_rows: Some(6),
+            ..params()
+        };
         let r = recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &exact).unwrap();
-        assert_eq!(r.polars_type.as_deref(), Some("Enum(categories=['a', 'b'])"));
-        let many: Vec<&str> = (0..200).map(|i| if i % 2 == 0 { "alpha" } else { "beta" }).collect();
+        assert_eq!(
+            r.polars_type.as_deref(),
+            Some("Enum(categories=['a', 'b'])")
+        );
+        let many: Vec<&str> = (0..200)
+            .map(|i| if i % 2 == 0 { "alpha" } else { "beta" })
+            .collect();
         let r = rec(Series::new("x".into(), &many));
-        assert_eq!(r.polars_type.as_deref(), Some("Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8))"));
+        assert_eq!(
+            r.polars_type.as_deref(),
+            Some("Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8))")
+        );
         // List of dictionary strings: Polars layout is large_list<dictionary<string_view>>, sized without error.
         let words = Series::new("x".into(), [Some(Series::new("".into(), &many)), None]);
         let r = rec(words);
-        assert_eq!(r.polars_type.as_deref(), Some("List(Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8)))"));
+        assert_eq!(
+            r.polars_type.as_deref(),
+            Some("List(Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8)))")
+        );
         assert!(r.polars_size > 0);
     }
 
     fn rec_with(s: Series, population_rows: Option<u64>) -> Rec {
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
-        recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &Params { population_rows, ..params() }).unwrap()
+        recommend(
+            &s,
+            &classic_layout(&s).unwrap(),
+            &d,
+            &sz,
+            &Params {
+                population_rows,
+                ..params()
+            },
+        )
+        .unwrap()
     }
 
     #[test]
@@ -2283,34 +3351,102 @@ mod tests {
         // (size_polars_bytes). Views inline ≤ 12 bytes; longer values fill 8 KiB, 16 KiB, … blocks.
         let long = |i: usize| format!("long string number {i:06}");
         let cases: Vec<(Series, Option<u64>, &str, u64)> = vec![
-            (Series::new("x".into(), &[Some("x"), Some("y"), Some("x"), None]), Some(4), "Enum(categories=['x', 'y'])", 48),
-            (Series::new("x".into(), ["a long category value 1", "b"].repeat(4)), Some(8), "Enum(categories=['a long category value 1', 'b'])", 64),
             (
-                Series::new("x".into(), [Some(Series::new("".into(), &["a", "bb"])), None, Some(Series::new("".into(), &["a"]))]),
+                Series::new("x".into(), &[Some("x"), Some("y"), Some("x"), None]),
+                Some(4),
+                "Enum(categories=['x', 'y'])",
+                48,
+            ),
+            (
+                Series::new("x".into(), ["a long category value 1", "b"].repeat(4)),
+                Some(8),
+                "Enum(categories=['a long category value 1', 'b'])",
+                64,
+            ),
+            (
+                Series::new(
+                    "x".into(),
+                    [
+                        Some(Series::new("".into(), &["a", "bb"])),
+                        None,
+                        Some(Series::new("".into(), &["a"])),
+                    ],
+                ),
                 None,
                 "List(String)",
                 88,
             ),
             (
-                Series::new("x".into(), [Some(Series::new("".into(), &["a", "this is a long string!"])), None, Some(Series::new("".into(), &["a"]))]),
+                Series::new(
+                    "x".into(),
+                    [
+                        Some(Series::new("".into(), &["a", "this is a long string!"])),
+                        None,
+                        Some(Series::new("".into(), &["a"])),
+                    ],
+                ),
                 None,
                 "List(String)",
                 112,
             ),
-            (Series::new("x".into(), (0..256).map(|i| format!("s{i}")).collect::<Vec<_>>()), None, "String", 4096),
-            (Series::new("x".into(), (0..1000).map(long).collect::<Vec<_>>()), None, "String", 41_008),
-            (Series::new("x".into(), (0..1000).map(|i| (i % 3 != 0).then(|| long(i))).collect::<Vec<_>>()), None, "String", 32_784),
-            (Series::new("x".into(), &[Some(&b"ab"[..]), Some(&b"0123456789abcdefg"[..]), None]), None, "Binary", 80),
+            (
+                Series::new(
+                    "x".into(),
+                    (0..256).map(|i| format!("s{i}")).collect::<Vec<_>>(),
+                ),
+                None,
+                "String",
+                4096,
+            ),
+            (
+                Series::new("x".into(), (0..1000).map(long).collect::<Vec<_>>()),
+                None,
+                "String",
+                41_008,
+            ),
+            (
+                Series::new(
+                    "x".into(),
+                    (0..1000)
+                        .map(|i| (i % 3 != 0).then(|| long(i)))
+                        .collect::<Vec<_>>(),
+                ),
+                None,
+                "String",
+                32_784,
+            ),
+            (
+                Series::new(
+                    "x".into(),
+                    &[Some(&b"ab"[..]), Some(&b"0123456789abcdefg"[..]), None],
+                ),
+                None,
+                "Binary",
+                80,
+            ),
         ];
         for (s, population_rows, polars_type, polars_size) in cases {
             let r = rec_with(s, population_rows);
-            assert_eq!((r.polars_type.as_deref(), r.polars_size), (Some(polars_type), polars_size), "{}", r.arrow_type);
+            assert_eq!(
+                (r.polars_type.as_deref(), r.polars_size),
+                (Some(polars_type), polars_size),
+                "{}",
+                r.arrow_type
+            );
         }
     }
 
     #[test]
     fn nullable_arrays_narrow() {
-        let lists = Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None, Some(Series::new("".into(), &[5i64, 6])), Some(Series::new("".into(), &[7i64, 8]))]);
+        let lists = Series::new(
+            "x".into(),
+            [
+                Some(Series::new("".into(), &[1i64, 2])),
+                None,
+                Some(Series::new("".into(), &[5i64, 6])),
+                Some(Series::new("".into(), &[7i64, 8])),
+            ],
+        );
         let s = lists.cast(&PT::Array(Box::new(PT::Int64), 2)).unwrap();
         let r = rec(s);
         assert_eq!(r.arrow_type, "fixed_size_list<item: uint8>[2]");
@@ -2320,15 +3456,37 @@ mod tests {
 
     #[test]
     fn output_matches_declared_schema() {
-        let nested = Series::new("n".into(), [Some(Series::new("".into(), &[1i64])), None, Some(Series::new("".into(), &[2i64]))]);
-        let inputs = [Series::new("a".into(), &[Some(0i64), Some(5), None]), Series::new("s".into(), &["x", "y", "x"]), nested];
+        let nested = Series::new(
+            "n".into(),
+            [
+                Some(Series::new("".into(), &[1i64])),
+                None,
+                Some(Series::new("".into(), &[2i64])),
+            ],
+        );
+        let inputs = [
+            Series::new("a".into(), &[Some(0i64), Some(5), None]),
+            Series::new("s".into(), &["x", "y", "x"]),
+            nested,
+        ];
         let out = describe_and_recommend_impl(&inputs, &params()).unwrap();
-        let declared = PT::Struct(output_fields().into_iter().map(|(n, d)| PField::new(n.into(), d)).collect());
+        let declared = PT::Struct(
+            output_fields()
+                .into_iter()
+                .map(|(n, d)| PField::new(n.into(), d))
+                .collect(),
+        );
         assert_eq!(out.dtype(), &declared);
         assert_eq!(out.len(), 3);
         let ca = out.struct_().unwrap();
         let fields = ca.fields_as_series();
-        let get = |n: &str| fields.iter().find(|f| f.name().as_str() == n).unwrap().clone();
+        let get = |n: &str| {
+            fields
+                .iter()
+                .find(|f| f.name().as_str() == n)
+                .unwrap()
+                .clone()
+        };
         let types = get("rec_arrow_type");
         assert_eq!(types.str().unwrap().get(0), Some("uint8"));
         assert_eq!(types.str().unwrap().get(2), Some("uint8"));

@@ -11,7 +11,15 @@ import pytest
 
 from analytics.pairwise_entropy import PairwiseEntropy
 from datagen import mixed_dtypes
-from harness import assert_agrees, assert_contract, implementation_params, load, reference, run, with_metrics
+from harness import (
+    assert_agrees,
+    assert_contract,
+    implementation_params,
+    load,
+    reference,
+    run,
+    with_metrics,
+)
 
 PKG = "analytics.pairwise_entropy"
 ALL = implementation_params(PKG)
@@ -43,16 +51,26 @@ def _row(impl, a, b):
 def test_independent_columns(impl):
     r = _row(impl, [0, 0, 1, 1], [0, 1, 0, 1])
     assert (r["h_a"], r["h_b"], r["h_ab"]) == pytest.approx((1.0, 1.0, 2.0))
-    assert r["mi"] == pytest.approx(0.0, abs=1e-12) and r["nmi"] == pytest.approx(0.0, abs=1e-12)
-    assert r["redundant"] is False and r["near_unique"] is True  # 4 rows, 4 distinct pairs
+    assert r["mi"] == pytest.approx(0.0, abs=1e-12) and r["nmi"] == pytest.approx(
+        0.0, abs=1e-12
+    )
+    assert (
+        r["redundant"] is False and r["near_unique"] is True
+    )  # 4 rows, 4 distinct pairs
     assert r["n_rows"] == 4
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_redundant_columns_and_null_category(impl):
-    r = _row(impl, [None, None, 1, 1], ["x", "x", "y", "y"])  # null is a category: a determines b
+    r = _row(
+        impl, [None, None, 1, 1], ["x", "x", "y", "y"]
+    )  # null is a category: a determines b
     assert (r["h_a"], r["h_b"], r["h_ab"]) == pytest.approx((1.0, 1.0, 1.0))
-    assert r["nmi"] == pytest.approx(1.0) and r["redundant"] is True and r["near_unique"] is False
+    assert (
+        r["nmi"] == pytest.approx(1.0)
+        and r["redundant"] is True
+        and r["near_unique"] is False
+    )
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -75,11 +93,21 @@ def test_conclusions_default_override_and_nan():
     df = pl.DataFrame({"a": [1], "b": [1], "c": [1]})
     out = Fixed().add({"t": df}).result()
     assert out["redundant"].to_list() == [True, True, False]
-    assert out["near_unique"].to_list() == [True, False, False]  # log2(4) - 0.1 = 1.9; n_rows 1 → False
-    assert Fixed(nmi_threshold=0.92).add({"t": df}).result()["redundant"].to_list() == [True, False, False]
+    assert out["near_unique"].to_list() == [
+        True,
+        False,
+        False,
+    ]  # log2(4) - 0.1 = 1.9; n_rows 1 → False
+    assert Fixed(nmi_threshold=0.92).add({"t": df}).result()["redundant"].to_list() == [
+        True,
+        False,
+        False,
+    ]
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_zero_row_frame_is_ineligible(impl):
-    df = pl.DataFrame({"a": pl.Series([], dtype=pl.Int64), "b": pl.Series([], dtype=pl.String)})
+    df = pl.DataFrame(
+        {"a": pl.Series([], dtype=pl.Int64), "b": pl.Series([], dtype=pl.String)}
+    )
     assert run(load(impl), {"t": df})["status"].to_list() == ["ineligible"]

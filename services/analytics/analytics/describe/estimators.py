@@ -33,7 +33,9 @@ def chao1(d: int, f1: int, f2: int) -> tuple[float, float, float]:
     return float(s), d + t / k, d + t * k
 
 
-def schnabel(history: Sequence[int], d: int, n: int) -> tuple[float, float, float] | None:
+def schnabel(
+    history: Sequence[int], d: int, n: int
+) -> tuple[float, float, float] | None:
     """Schnabel (multi-sample Lincoln–Petersen) over the three split subsets.
 
     history[k-1] = distinct values whose subset mask is k (bit i = seen in subset i).
@@ -43,7 +45,10 @@ def schnabel(history: Sequence[int], d: int, n: int) -> tuple[float, float, floa
     """
     if n == 0 or d / n >= 0.5:
         return None
-    h = lambda *masks: sum(history[m - 1] for m in masks)
+
+    def h(*masks):
+        return sum(history[m - 1] for m in masks)
+
     s1, s2, s3 = h(1, 3, 5, 7), h(2, 3, 6, 7), h(4, 5, 6, 7)
     union12 = h(1, 2, 3, 5, 6, 7)
     r = h(3, 7) + h(5, 6, 7)
@@ -60,9 +65,12 @@ def duj1(d: int, f1: int, n: int, q: float) -> float:
     return 0.0 if n == 0 else d / (1 - (1 - q) * f1 / n)
 
 
-def estimate(d: int, n: int, f1: int, f2: int, history: Sequence[int], q: float | None) -> dict:
+def estimate(
+    d: int, n: int, f1: int, f2: int, history: Sequence[int], q: float | None
+) -> dict:
     """Every estimate plus the one picked by rule: q == 1 → exact; q < 1 → Duj1;
-    Schnabel valid → Schnabel; else Chao1. q = frame rows / population rows (None: unknown)."""
+    Schnabel valid → Schnabel; else Chao1. q = frame rows / population rows (None: unknown).
+    """
     c, c_lo, c_hi = chao1(d, f1, f2)
     sch = schnabel(history, d, n)
     s, s_lo, s_hi = sch if sch else (None, None, None)
@@ -76,8 +84,15 @@ def estimate(d: int, n: int, f1: int, f2: int, history: Sequence[int], q: float 
         method, est, lo, hi = "chao1", c, c_lo, c_hi
     return {
         "unique": d == n and n > 0,
-        "chao1": c, "chao1_low": c_lo, "chao1_high": c_hi,
-        "schnabel": s, "schnabel_low": s_lo, "schnabel_high": s_hi,
-        "est_cardinality": est, "est_method": method, "est_low": lo, "est_high": hi,
+        "chao1": c,
+        "chao1_low": c_lo,
+        "chao1_high": c_hi,
+        "schnabel": s,
+        "schnabel_low": s_lo,
+        "schnabel_high": s_hi,
+        "est_cardinality": est,
+        "est_method": method,
+        "est_low": lo,
+        "est_high": hi,
         "estimates_agree": None if sch is None else (c_lo <= s_hi and s_lo <= c_hi),
     }

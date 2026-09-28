@@ -9,7 +9,9 @@ class ThreewayEntropyPolars(ThreewayEntropy):
         return self.metrics_frame(
             combos,
             {
-                "h_abc": [entropy_bits(frames[k[0][0]], [c for _, c in k]) for k in combos],
+                "h_abc": [
+                    entropy_bits(frames[k[0][0]], [c for _, c in k]) for k in combos
+                ],
                 "n_rows": [frames[k[0][0]].height for k in combos],
             },
         )

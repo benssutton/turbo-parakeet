@@ -45,12 +45,20 @@ class MinHashRust(Similarity):
         # cardinality differences. Measured on large_dataset.arrow: recall 0.62
         # (389/625), all 236 misses are containment pairs with Jaccard from 0.00002 to
         # 0.36 (median 0.10) that never became LSH candidates.
-        self.lsh_threshold = min(self.jaccard_threshold * 0.9, self.overlap_threshold * 0.45)
-        self.bands, self.rows_per_band = optimal_lsh_params(self.lsh_threshold, num_perm)
+        self.lsh_threshold = min(
+            self.jaccard_threshold * 0.9, self.overlap_threshold * 0.45
+        )
+        self.bands, self.rows_per_band = optimal_lsh_params(
+            self.lsh_threshold, num_perm
+        )
 
     def _compute(self, frames, combos):
         columns = columns_of(combos)
-        empty = {c for c in columns if frames[c[0]][c[1]].null_count() == frames[c[0]][c[1]].len()}
+        empty = {
+            c
+            for c in columns
+            if frames[c[0]][c[1]].null_count() == frames[c[0]][c[1]].len()
+        }
         names = list(frames)
         # Frame *index* prefixes the qualified name, so frame names containing "|"
         # are safe; split on the first "|" only, so column names may contain it.
@@ -63,14 +71,23 @@ class MinHashRust(Similarity):
         if signatures:
             sigs = pl.concat(signatures)
             if sigs.height > 1:
-                pairs = _plugin.lsh_candidates(sigs, num_bands=self.bands, rows_per_band=self.rows_per_band)
+                pairs = _plugin.lsh_candidates(
+                    sigs, num_bands=self.bands, rows_per_band=self.rows_per_band
+                )
 
                 def parse(qualified: str):
                     i, column = qualified.split("|", 1)
                     return names[int(i)], column
 
                 found = {frozenset((parse(a), parse(b))) for a, b in pairs.iter_rows()}
-        chosen = [k for k in combos if frozenset(k) in found or k[0] in empty or k[1] in empty]
+        chosen = [
+            k for k in combos if frozenset(k) in found or k[0] in empty or k[1] in empty
+        ]
         chosen_set = set(chosen)
         pruned = [k for k in combos if k not in chosen_set]
-        return pl.concat([self.metrics_frame(chosen, self.verify(chosen)), self.null_frame(pruned, "pruned")])
+        return pl.concat(
+            [
+                self.metrics_frame(chosen, self.verify(chosen)),
+                self.null_frame(pruned, "pruned"),
+            ]
+        )

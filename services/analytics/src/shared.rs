@@ -59,6 +59,7 @@ impl EncodedColumn {
 /// Canonicalise an `f64` before taking its bit pattern:
 ///   - `+0.0` and `-0.0` collapse to the same key (they compare equal),
 ///   - every NaN (regardless of sign/payload) collapses to one key.
+///
 /// This matches how Polars `value_counts` groups floats and keeps the Rust
 /// entropy/chi-squared consistent with a Polars reference on real float data.
 #[inline]
@@ -286,9 +287,7 @@ pub(crate) fn encode_series(series: &Series) -> PolarsResult<EncodedColumn> {
 /// Hash a single `Hash`-able value with the fixed-seed hasher.
 #[inline]
 fn hash_one<T: Hash>(build_hasher: &FoldHashFixed, value: T) -> u64 {
-    let mut hasher = build_hasher.build_hasher();
-    value.hash(&mut hasher);
-    hasher.finish()
+    build_hasher.hash_one(&value)
 }
 
 /// Hash the ordered element sequence of a nested (List/Array) inner series,
@@ -425,16 +424,19 @@ pub(crate) fn resolve_pairs(
         .map(|pair| {
             if pair.len() != 2 {
                 return Err(PolarsError::ComputeError(
-                    format!("Each pair must have exactly 2 column names, got {}", pair.len())
-                        .into(),
+                    format!(
+                        "Each pair must have exactly 2 column names, got {}",
+                        pair.len()
+                    )
+                    .into(),
                 ));
             }
-            let i = *name_map.get(&pair[0]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(pair[0].clone().into())
-            })?;
-            let j = *name_map.get(&pair[1]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(pair[1].clone().into())
-            })?;
+            let i = *name_map
+                .get(&pair[0])
+                .ok_or_else(|| PolarsError::ColumnNotFound(pair[0].clone().into()))?;
+            let j = *name_map
+                .get(&pair[1])
+                .ok_or_else(|| PolarsError::ColumnNotFound(pair[1].clone().into()))?;
             Ok((i, j))
         })
         .collect()
@@ -456,15 +458,15 @@ pub(crate) fn resolve_triplets(
                     .into(),
                 ));
             }
-            let i = *name_map.get(&triplet[0]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(triplet[0].clone().into())
-            })?;
-            let j = *name_map.get(&triplet[1]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(triplet[1].clone().into())
-            })?;
-            let k = *name_map.get(&triplet[2]).ok_or_else(|| {
-                PolarsError::ColumnNotFound(triplet[2].clone().into())
-            })?;
+            let i = *name_map
+                .get(&triplet[0])
+                .ok_or_else(|| PolarsError::ColumnNotFound(triplet[0].clone().into()))?;
+            let j = *name_map
+                .get(&triplet[1])
+                .ok_or_else(|| PolarsError::ColumnNotFound(triplet[1].clone().into()))?;
+            let k = *name_map
+                .get(&triplet[2])
+                .ok_or_else(|| PolarsError::ColumnNotFound(triplet[2].clone().into()))?;
             Ok((i, j, k))
         })
         .collect()
@@ -531,7 +533,12 @@ mod tests {
     fn binary_hashes_by_content() {
         let s = Series::new(
             "a".into(),
-            &[Some(b"ab".as_ref()), Some(b"ab".as_ref()), Some(b"cd".as_ref()), None],
+            &[
+                Some(b"ab".as_ref()),
+                Some(b"ab".as_ref()),
+                Some(b"cd".as_ref()),
+                None,
+            ],
         );
         let enc = encode_series(&s).unwrap();
         assert_eq!(enc.values[0], enc.values[1]);
@@ -627,7 +634,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
         assert_eq!(cache[0].card, 2); // processed
         assert_eq!(cache[2].card, 2); // processed
-        // index 1 untouched → placeholder
+                                      // index 1 untouched → placeholder
         assert_eq!(cache[1].card, 0);
         assert!(cache[1].ids.is_empty());
         assert_eq!(cache[1].null_id, None);
@@ -646,8 +653,13 @@ mod tests {
             .collect();
         let needed: HashSet<usize> = (0..32).collect();
         let cache = build_dense_cache_par(&cols, &needed).unwrap();
-        for i in 0..32 {
-            assert_eq!(cache[i].card as usize, i + 1, "column {i} should have cardinality {}", i + 1);
+        for (i, col) in cache.iter().enumerate().take(32) {
+            assert_eq!(
+                col.card as usize,
+                i + 1,
+                "column {i} should have cardinality {}",
+                i + 1
+            );
         }
     }
 
@@ -680,8 +692,13 @@ mod tests {
 
     #[test]
     fn resolve_pairs_maps_names_to_indices_preserving_order() {
-        let name_map: HashMap<String, usize> =
-            [("a".to_string(), 0), ("b".to_string(), 1), ("c".to_string(), 2)].into_iter().collect();
+        let name_map: HashMap<String, usize> = [
+            ("a".to_string(), 0),
+            ("b".to_string(), 1),
+            ("c".to_string(), 2),
+        ]
+        .into_iter()
+        .collect();
         let raw = vec![
             vec!["c".to_string(), "a".to_string()],
             vec!["b".to_string(), "b".to_string()],
@@ -707,8 +724,9 @@ mod tests {
 
     #[test]
     fn resolve_pairs_does_not_deduplicate() {
-        let name_map: HashMap<String, usize> =
-            [("a".to_string(), 0), ("b".to_string(), 1)].into_iter().collect();
+        let name_map: HashMap<String, usize> = [("a".to_string(), 0), ("b".to_string(), 1)]
+            .into_iter()
+            .collect();
         let raw = vec![
             vec!["a".to_string(), "b".to_string()],
             vec!["a".to_string(), "b".to_string()],
@@ -719,8 +737,13 @@ mod tests {
 
     #[test]
     fn resolve_triplets_maps_names_to_indices_preserving_order() {
-        let name_map: HashMap<String, usize> =
-            [("a".to_string(), 0), ("b".to_string(), 1), ("c".to_string(), 2)].into_iter().collect();
+        let name_map: HashMap<String, usize> = [
+            ("a".to_string(), 0),
+            ("b".to_string(), 1),
+            ("c".to_string(), 2),
+        ]
+        .into_iter()
+        .collect();
         let raw = vec![vec!["c".to_string(), "a".to_string(), "b".to_string()]];
         let triplets = resolve_triplets(&raw, &name_map).unwrap();
         assert_eq!(triplets, vec![(2, 0, 1)]);
@@ -728,16 +751,22 @@ mod tests {
 
     #[test]
     fn resolve_triplets_rejects_wrong_arity() {
-        let name_map: HashMap<String, usize> =
-            [("a".to_string(), 0), ("b".to_string(), 1)].into_iter().collect();
+        let name_map: HashMap<String, usize> = [("a".to_string(), 0), ("b".to_string(), 1)]
+            .into_iter()
+            .collect();
         let raw = vec![vec!["a".to_string(), "b".to_string()]];
         assert!(resolve_triplets(&raw, &name_map).is_err());
     }
 
     #[test]
     fn resolve_triplets_rejects_unknown_column_name() {
-        let name_map: HashMap<String, usize> =
-            [("a".to_string(), 0), ("b".to_string(), 1), ("c".to_string(), 2)].into_iter().collect();
+        let name_map: HashMap<String, usize> = [
+            ("a".to_string(), 0),
+            ("b".to_string(), 1),
+            ("c".to_string(), 2),
+        ]
+        .into_iter()
+        .collect();
         let raw = vec![vec!["a".to_string(), "b".to_string(), "nope".to_string()]];
         assert!(resolve_triplets(&raw, &name_map).is_err());
     }

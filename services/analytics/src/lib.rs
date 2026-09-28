@@ -1,18 +1,18 @@
-mod bloomfilter;
-mod minhash;
-mod shared;
-mod arrow_io;
 mod api;
-mod python;
-mod entropy;
+mod ari;
+mod arrow_io;
+mod bloomfilter;
+mod cardinality_estimators;
 mod chi_squared;
 mod contingency;
-mod ari;
-mod gcd;
 mod describe;
-mod sizes;
-mod cardinality_estimators;
+mod entropy;
+mod gcd;
+mod minhash;
+mod python;
 mod recommend;
+mod shared;
+mod sizes;
 
 use mimalloc::MiMalloc;
 

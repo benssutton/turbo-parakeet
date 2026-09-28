@@ -2,7 +2,16 @@
 
 import polars as pl
 
-INTEGERS_64 = (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64)
+INTEGERS_64 = (
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.Int64,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    pl.UInt64,
+)
 STRING_LIKE = (pl.String, pl.Categorical, pl.Enum)
 NESTED = (pl.List, pl.Array)
 
@@ -10,7 +19,9 @@ NESTED = (pl.List, pl.Array)
 # formats `_pli128` / `_plu128`, which the Rust extension's Arrow boundary (and every
 # non-Polars Arrow consumer) rejects, so columns holding them — at any nesting depth —
 # are ineligible in every technique. Cast to Decimal(38, 0) or Int64 to analyse them.
-WIDE_INTEGERS = tuple(t for t in (pl.Int128, getattr(pl, "UInt128", None)) if t is not None)
+WIDE_INTEGERS = tuple(
+    t for t in (pl.Int128, getattr(pl, "UInt128", None)) if t is not None
+)
 
 
 def holds_wide_integer(dtype: pl.DataType) -> bool:
@@ -26,8 +37,17 @@ def holds_wide_integer(dtype: pl.DataType) -> bool:
 # Dtypes the Rust encoder (src/shared.rs::encode_series) accepts. Anything else
 # (Struct, Binary, Null, Object, 128-bit integers) makes the extension raise.
 ENCODABLE = (
-    *INTEGERS_64, pl.Boolean, pl.Float32, pl.Float64,
-    pl.Date, pl.Datetime, pl.Duration, pl.Time, *STRING_LIKE, pl.Decimal, *NESTED,
+    *INTEGERS_64,
+    pl.Boolean,
+    pl.Float32,
+    pl.Float64,
+    pl.Date,
+    pl.Datetime,
+    pl.Duration,
+    pl.Time,
+    *STRING_LIKE,
+    pl.Decimal,
+    *NESTED,
 )
 
 

@@ -5,7 +5,6 @@ The toy's metric is the total length of the column names in a combination / 10,
 so every expected value below can be worked out by hand.
 """
 
-import math
 import weakref
 
 import polars as pl
@@ -42,7 +41,9 @@ class Toy(Technique):
         return series.dtype == pl.Int64
 
     def _compute(self, frames, combos):
-        return self.metrics_frame(combos, {"score": [sum(len(c) for _, c in k) / 10 for k in combos]})
+        return self.metrics_frame(
+            combos, {"score": [sum(len(c) for _, c in k) / 10 for k in combos]}
+        )
 
     def _conclude(self, out):
         return out.with_columns(high=computed(at_least("score", self.threshold)))
@@ -74,10 +75,17 @@ FRAMES = {
     "f": pl.DataFrame({"a": [1, 2], "bb": [3, 4], "s": ["x", "y"]}),
     "g": pl.DataFrame({"a": [5, 6], "ccc": [7, 8]}),
 }
-F_A, F_BB, F_S, G_A, G_CCC = ("f", "a"), ("f", "bb"), ("f", "s"), ("g", "a"), ("g", "ccc")
+F_A, F_BB, F_S, G_A, G_CCC = (
+    ("f", "a"),
+    ("f", "bb"),
+    ("f", "s"),
+    ("g", "a"),
+    ("g", "ccc"),
+)
 
 
 # ── enumeration ──────────────────────────────────────────────────────────────
+
 
 def test_enumerate_ordered_stays_within_each_frame():
     assert Toy.enumerate(FRAMES) == [(F_A, F_BB), (F_A, F_S), (F_BB, F_S), (G_A, G_CCC)]
@@ -107,10 +115,18 @@ def test_enumerate_unknown_scope_raises():
 
 def test_key_columns():
     assert PerColumnToy.key_columns() == ["df_a", "col_a"]
-    assert TripletToy.key_columns() == ["df_a", "col_a", "df_b", "col_b", "df_c", "col_c"]
+    assert TripletToy.key_columns() == [
+        "df_a",
+        "col_a",
+        "df_b",
+        "col_b",
+        "df_c",
+        "col_c",
+    ]
 
 
 # ── result() ─────────────────────────────────────────────────────────────────
+
 
 def test_result_columns_statuses_and_conclusions():
     out = Toy(threshold=0.35).add(FRAMES).result()
@@ -139,7 +155,7 @@ def test_add_is_chainable_and_accumulates():
 def test_compatible_hook_marks_pairs_ineligible():
     out = MultiSetToy().add(FRAMES).result()
     statuses = dict(zip(zip(out["col_a"], out["col_b"], out["df_b"]), out["status"]))
-    assert statuses[("a", "s", "f")] == "ineligible"   # Int64 vs String
+    assert statuses[("a", "s", "f")] == "ineligible"  # Int64 vs String
     assert statuses[("a", "a", "g")] == "computed"
 
 
@@ -175,10 +191,14 @@ def test_schema_is_hoisted_once_per_frame_not_per_combination():
     n_cols = 30
     frame = CountingFrame({f"c{i}": [1, 2] for i in range(n_cols)})
     combos = Wide.enumerate({"f": frame})
-    assert len(combos) == n_cols * (n_cols - 1) // 2  # 435 — old code touched schema ~2x per combo
+    assert (
+        len(combos) == n_cols * (n_cols - 1) // 2
+    )  # 435 — old code touched schema ~2x per combo
 
     Wide().add({"f": frame}).result()
-    assert CountingFrame.count <= 3, f"schema was rebuilt {CountingFrame.count} times for {len(combos)} combinations"
+    assert (
+        CountingFrame.count <= 3
+    ), f"schema was rebuilt {CountingFrame.count} times for {len(combos)} combinations"
 
 
 def test_compatible_receives_the_actual_column_dtypes():
@@ -189,7 +209,9 @@ def test_compatible_receives_the_actual_column_dtypes():
             seen.append(list(dtypes))
             return True
 
-    frame = pl.DataFrame({"a": pl.Series([1], dtype=pl.Int32), "b": pl.Series([1], dtype=pl.Int64)})
+    frame = pl.DataFrame(
+        {"a": pl.Series([1], dtype=pl.Int32), "b": pl.Series([1], dtype=pl.Int64)}
+    )
     RecordingCompatible().add({"f": frame}).result()
     assert seen == [[pl.Int32(), pl.Int64()]]
 
@@ -214,6 +236,7 @@ def test_collected_frames_are_available_during_compute():
 
 # ── errors ───────────────────────────────────────────────────────────────────
 
+
 def test_result_before_add_raises():
     with pytest.raises(ValueError, match="before add"):
         Toy().result()
@@ -232,7 +255,9 @@ def test_bad_frame_name_raises(name):
 
 
 def test_non_frame_raises():
-    with pytest.raises(TypeError, match="DataFrame or LazyFrame, or Arrow tabular data"):
+    with pytest.raises(
+        TypeError, match="DataFrame or LazyFrame, or Arrow tabular data"
+    ):
         Toy().add({"f": {"a": [1]}})
 
 
@@ -302,13 +327,16 @@ def test_instances_are_not_kept_alive():
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 def test_at_least_treats_nan_as_false():
     df = pl.DataFrame({"v": [0.2, 0.3, float("nan")]})
     assert df.select(at_least("v", 0.3)).to_series().to_list() == [False, True, False]
 
 
 def test_computed_nulls_non_computed_rows():
-    df = pl.DataFrame({"status": pl.Series(["computed", "pruned", "ineligible"], dtype=STATUS)})
+    df = pl.DataFrame(
+        {"status": pl.Series(["computed", "pruned", "ineligible"], dtype=STATUS)}
+    )
     assert df.select(computed(pl.lit(True))).to_series().to_list() == [True, None, None]
 
 
@@ -345,7 +373,9 @@ def test_same_value(got, want, rtol, atol, same):
 
 def test_metric_mismatches_reports_status_and_value_differences():
     a = Toy(threshold=0.35).add(FRAMES).result()
-    b = a.with_columns(score=pl.when(pl.col("col_b") == "ccc").then(0.5).otherwise(pl.col("score")))
+    b = a.with_columns(
+        score=pl.when(pl.col("col_b") == "ccc").then(0.5).otherwise(pl.col("score"))
+    )
     problems = metric_mismatches(b, a, Toy.key_columns(), ["score"], 0.0, 0.0)
     assert problems == ["g.a ~ g.ccc: score 0.5 != 0.4"]
     assert metric_mismatches(a.head(1), a, Toy.key_columns(), ["score"], 0, 0) == [
@@ -369,6 +399,7 @@ def test_lazy_attributes_imports_on_first_use():
 
 # ── dtype groupings ──────────────────────────────────────────────────────────
 
+
 def test_value_family():
     assert value_family(pl.Int32()) == value_family(pl.UInt64()) == "int"
     assert value_family(pl.String()) == value_family(pl.Categorical()) == "str"
@@ -379,5 +410,9 @@ def test_value_family():
 
 def test_encodable_and_nested():
     assert encodable(pl.List(pl.Int32)) and is_nested(pl.Array(pl.Int32, 2))
-    assert not encodable(pl.Struct({"a": pl.Int64})) and not encodable(pl.Binary()) and not encodable(pl.Null())
+    assert (
+        not encodable(pl.Struct({"a": pl.Int64}))
+        and not encodable(pl.Binary())
+        and not encodable(pl.Null())
+    )
     assert not is_nested(pl.Int64())

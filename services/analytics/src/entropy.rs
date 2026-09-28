@@ -1,9 +1,9 @@
 use foldhash::fast::RandomState as FoldHashFast;
-use rayon::prelude::*;
-use wide::f64x4;
 use polars::prelude::*;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use wide::f64x4;
 
 use crate::shared::*;
 
@@ -36,11 +36,7 @@ thread_local! {
 }
 
 /// Reduce per-key counts to entropy via the shared count-of-counts scratch map.
-fn entropy_from_counts_iter(
-    counts: impl Iterator<Item = u64>,
-    logr: f64,
-    r_f: f64,
-) -> f64 {
+fn entropy_from_counts_iter(counts: impl Iterator<Item = u64>, logr: f64, r_f: f64) -> f64 {
     COC.with(|coc_cell| {
         let mut coc_map = coc_cell.borrow_mut();
         coc_map.clear();
@@ -54,12 +50,7 @@ fn entropy_from_counts_iter(
 
 /// Count joint frequencies of pre-combined keys in the flat scratch array.
 /// Caller guarantees every key < `space` and `space` ≤ FLAT_MAX.
-fn entropy_flat(
-    keys: impl Iterator<Item = usize>,
-    space: usize,
-    logr: f64,
-    r_f: f64,
-) -> f64 {
+fn entropy_flat(keys: impl Iterator<Item = usize>, space: usize, logr: f64, r_f: f64) -> f64 {
     FLAT_COUNTS.with(|counts_cell| {
         TOUCHED.with(|touched_cell| {
             let mut counts = counts_cell.borrow_mut();
@@ -150,9 +141,8 @@ fn joint_entropy_triple(
             let mut freq = freq_cell.borrow_mut();
             freq.clear();
             for i in 0..r {
-                let key = ((a.ids[i] as u128) << 64)
-                    | ((b.ids[i] as u128) << 32)
-                    | (c.ids[i] as u128);
+                let key =
+                    ((a.ids[i] as u128) << 64) | ((b.ids[i] as u128) << 32) | (c.ids[i] as u128);
                 *freq.entry(key).or_insert(0) += 1;
             }
             entropy_from_counts_iter(freq.values().copied(), logr, r_f)
@@ -378,8 +368,7 @@ pub(crate) fn threeway_joint_entropy_impl(
         }
         None => (0..n_cols)
             .flat_map(|i| {
-                ((i + 1)..n_cols)
-                    .flat_map(move |j| ((j + 1)..n_cols).map(move |k| (i, j, k)))
+                ((i + 1)..n_cols).flat_map(move |j| ((j + 1)..n_cols).map(move |k| (i, j, k)))
             })
             .collect(),
     };
@@ -389,10 +378,7 @@ pub(crate) fn threeway_joint_entropy_impl(
     // Step 3: parallel dense cache (encode + dictionary-encode needed columns).
     // Nulls are folded in as their own dense id, so the per-triplet loop needs
     // no null mask; a null is still a distinct category from every real value.
-    let needed: HashSet<usize> = triplets
-        .iter()
-        .flat_map(|(i, j, k)| [*i, *j, *k])
-        .collect();
+    let needed: HashSet<usize> = triplets.iter().flat_map(|(i, j, k)| [*i, *j, *k]).collect();
     let cache = build_dense_cache_par(inputs, &needed)?;
 
     // Pre-collect column names to avoid per-thread allocations inside par_iter.
@@ -528,11 +514,9 @@ pub(crate) fn marginal_entropy_impl(inputs: &[Series]) -> PolarsResult<Series> {
     let col_name_s = StringChunked::from_iter(results.iter().map(|(name, _)| name.as_str()))
         .into_series()
         .with_name("col_name".into());
-    let entropy_s = Float64Chunked::from_vec(
-        "entropy".into(),
-        results.iter().map(|(_, e)| *e).collect(),
-    )
-    .into_series();
+    let entropy_s =
+        Float64Chunked::from_vec("entropy".into(), results.iter().map(|(_, e)| *e).collect())
+            .into_series();
 
     let struct_ca = StructChunked::from_series(
         "marginal_entropy".into(),
@@ -636,8 +620,17 @@ mod tests {
         ] {
             let dtype = s.dtype().clone();
             let enc = encode_series(&s).unwrap();
-            assert!(!enc.is_null[0], "-1 must not be treated as null ({:?})", dtype);
-            assert_eq!(enc.values[0], u64::MAX, "-1 sign-extends to u64::MAX ({:?})", dtype);
+            assert!(
+                !enc.is_null[0],
+                "-1 must not be treated as null ({:?})",
+                dtype
+            );
+            assert_eq!(
+                enc.values[0],
+                u64::MAX,
+                "-1 sign-extends to u64::MAX ({:?})",
+                dtype
+            );
             assert_ne!(enc.values[0], enc.values[1]);
         }
     }
@@ -674,7 +667,10 @@ mod tests {
         // +0.0 and -0.0 compare equal, so they must share one key.
         let s = Series::new("test".into(), &[Some(0.0f64), Some(-0.0f64)]);
         let enc = encode_series(&s).unwrap();
-        assert_eq!(enc.values[0], enc.values[1], "+0.0 and -0.0 must share a key");
+        assert_eq!(
+            enc.values[0], enc.values[1],
+            "+0.0 and -0.0 must share a key"
+        );
         assert_eq!(enc.values[0], 0);
     }
 
@@ -970,7 +966,12 @@ mod tests {
         let p1: f64 = 2.0 / 5.0;
         let p2: f64 = 1.0 / 5.0;
         let expected = -(2.0 * p1 * p1.log2() + p2 * p2.log2());
-        assert!((h - expected).abs() < 1e-10, "Expected {}, got {}", expected, h);
+        assert!(
+            (h - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            h
+        );
     }
 
     #[test]
@@ -993,7 +994,7 @@ mod tests {
         let result = marginal_entropy_impl(&[s]).unwrap();
         let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
-        assert!(h >= 0.0 && h <= 1.0);
+        assert!((0.0..=1.0).contains(&h));
     }
 
     #[test]
@@ -1033,9 +1034,12 @@ mod tests {
 
     #[test]
     fn test_time_to_u64() {
-        let s = Series::new("test".into(), &[Some(1_000_000i64), Some(2_000_000i64), None])
-            .cast(&DataType::Time)
-            .unwrap();
+        let s = Series::new(
+            "test".into(),
+            &[Some(1_000_000i64), Some(2_000_000i64), None],
+        )
+        .cast(&DataType::Time)
+        .unwrap();
         let enc = encode_series(&s).unwrap();
         assert_eq!(enc.values[0], 1_000_000u64);
         assert_eq!(enc.values[1], 2_000_000u64);
@@ -1136,7 +1140,12 @@ mod tests {
         let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         let expected = 2000f64.log2();
-        assert!((h - expected).abs() < 1e-10, "Expected {}, got {}", expected, h);
+        assert!(
+            (h - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            h
+        );
     }
 
     #[test]
@@ -1151,7 +1160,12 @@ mod tests {
         let df = result.into_frame().unnest(["threeway_entropy"]).unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         let expected = 200f64.log2();
-        assert!((h - expected).abs() < 1e-10, "Expected {}, got {}", expected, h);
+        assert!(
+            (h - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            h
+        );
     }
 
     #[test]
@@ -1192,6 +1206,6 @@ mod tests {
         assert_eq!(result.len(), 1);
         let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
-        assert!(h >= 0.0 && h <= 2.0);
+        assert!((0.0..=2.0).contains(&h));
     }
 }

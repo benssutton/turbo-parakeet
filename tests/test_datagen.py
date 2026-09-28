@@ -44,7 +44,9 @@ def test_related_frames_planted_relationships():
     assert set(f["orders"]["customer_id"].drop_nulls().to_list()) <= ids
     assert f["orders"]["customer_id"].null_count() > 0
     assert set(f["archive"]["id"].to_list()) == ids
-    assert set(f["orders"]["region"].to_list()) < set(f["customers"]["region"].to_list())
+    assert set(f["orders"]["region"].to_list()) < set(
+        f["customers"]["region"].to_list()
+    )
     shared = set(f["archive"]["name"].to_list()) & set(f["customers"]["name"].to_list())
     assert 0.9 < len(shared) / 1_000 < 0.95
 
@@ -52,7 +54,9 @@ def test_related_frames_planted_relationships():
 def test_similar_frames():
     f = similar_frames()
     assert set(f) == {"df0", "df1"}
-    a, b = set(f["df0"]["sim_00"].drop_nulls().to_list()), set(f["df1"]["sim_00"].drop_nulls().to_list())
+    a, b = set(f["df0"]["sim_00"].drop_nulls().to_list()), set(
+        f["df1"]["sim_00"].drop_nulls().to_list()
+    )
     assert len(a & b) / min(len(a), len(b)) > 0.9
 
 
@@ -66,10 +70,31 @@ def test_describe_mixed_is_seeded_and_covers_every_family():
     a, b = describe_mixed(300), describe_mixed(300)
     assert_frame_equal(a, b)
     kinds = {type(dt) for dt in a.dtypes}
-    for kind in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32,
-                 pl.UInt64, pl.Float32, pl.Float64, pl.Decimal, pl.Boolean, pl.Date, pl.Datetime,
-                 pl.Duration, pl.Time, pl.String, pl.Categorical, pl.Enum, pl.Binary, pl.List,
-                 pl.Array, pl.Struct):
+    for kind in (
+        pl.Int8,
+        pl.Int16,
+        pl.Int32,
+        pl.Int64,
+        pl.UInt8,
+        pl.UInt16,
+        pl.UInt32,
+        pl.UInt64,
+        pl.Float32,
+        pl.Float64,
+        pl.Decimal,
+        pl.Boolean,
+        pl.Date,
+        pl.Datetime,
+        pl.Duration,
+        pl.Time,
+        pl.String,
+        pl.Categorical,
+        pl.Enum,
+        pl.Binary,
+        pl.List,
+        pl.Array,
+        pl.Struct,
+    ):
         assert kind in kinds, kind
     assert a["all_null"].null_count() == 300
     assert a["dt_tz"].dtype.time_zone == "Europe/London"
@@ -78,15 +103,30 @@ def test_describe_mixed_is_seeded_and_covers_every_family():
 def test_stringified_casts_only_castable_columns():
     s = stringified(describe_mixed(100))
     assert all(dt == pl.String or dt == pl.List(pl.String) for dt in s.dtypes)
-    assert {"i32", "f64", "dec", "date", "dt_tz", "time", "bool", "list_i64"} <= set(s.columns)
-    assert not {"dur", "bin", "struct", "arr_i32", "str_int", "cat", "all_null"} & set(s.columns)
-
+    assert {"i32", "f64", "dec", "date", "dt_tz", "time", "bool", "list_i64"} <= set(
+        s.columns
+    )
+    assert not {"dur", "bin", "struct", "arr_i32", "str_int", "cat", "all_null"} & set(
+        s.columns
+    )
 
 
 def test_describe_benchmark_shapes():
     narrow = describe_narrow(1_000)
-    assert narrow.columns == ["int", "float", "num_str", "iso_str"] and narrow.height == 1_000
+    assert (
+        narrow.columns == ["int", "float", "num_str", "iso_str"]
+        and narrow.height == 1_000
+    )
     wide = describe_wide(100, 8)
-    assert wide.width == 8 and [str(dt) for dt in wide.dtypes[:4]] == ["Int64", "Float64", "String", "Date"]
+    assert wide.width == 8 and [str(dt) for dt in wide.dtypes[:4]] == [
+        "Int64",
+        "Float64",
+        "String",
+        "Date",
+    ]
     nested = describe_nested(500)
-    assert nested.schema == {"list_i64": pl.List(pl.Int64), "list_str": pl.List(pl.String), "struct": pl.Struct({"a": pl.Int64, "b": pl.String})}
+    assert nested.schema == {
+        "list_i64": pl.List(pl.Int64),
+        "list_str": pl.List(pl.String),
+        "struct": pl.Struct({"a": pl.Int64, "b": pl.String}),
+    }

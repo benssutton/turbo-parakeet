@@ -11,8 +11,8 @@
 // deletion, via the shared contingency builder) — a null row belongs to no
 // cluster, so it must not vote on partition agreement.
 
-use crate::contingency::{ContingencyTable, build_contingency};
-use crate::shared::{PairwiseKwargs, build_dense_cache_par, resolve_pairs};
+use crate::contingency::{build_contingency, ContingencyTable};
+use crate::shared::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
 use polars::prelude::*;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -204,7 +204,10 @@ mod tests {
 
     fn ari_of(s1: Series, s2: Series) -> (f64, u32) {
         let result = pairwise_adjusted_rand_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_adjusted_rand"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_adjusted_rand"])
+            .unwrap();
         let ari = df.column("ari").unwrap().f64().unwrap().get(0).unwrap();
         let n_valid = df.column("n_valid").unwrap().u32().unwrap().get(0).unwrap();
         (ari, n_valid)
@@ -217,7 +220,12 @@ mod tests {
         let s2 = Series::new("b".into(), &[0i32, 0, 1, 1]);
         let (ari, n_valid) = ari_of(s1, s2);
         let expected = 4.0 / 7.0;
-        assert!((ari - expected).abs() < 1e-12, "Expected {}, got {}", expected, ari);
+        assert!(
+            (ari - expected).abs() < 1e-12,
+            "Expected {}, got {}",
+            expected,
+            ari
+        );
         assert_eq!(n_valid, 4);
     }
 
@@ -244,10 +252,18 @@ mod tests {
     #[test]
     fn test_null_rows_dropped() {
         let s1 = Series::new("a".into(), &[Some(0i32), Some(0), Some(1), Some(2), None]);
-        let s2 = Series::new("b".into(), &[Some(0i32), Some(0), Some(1), Some(1), Some(9)]);
+        let s2 = Series::new(
+            "b".into(),
+            &[Some(0i32), Some(0), Some(1), Some(1), Some(9)],
+        );
         let (ari, n_valid) = ari_of(s1, s2);
         let expected = 4.0 / 7.0;
-        assert!((ari - expected).abs() < 1e-12, "Expected {}, got {}", expected, ari);
+        assert!(
+            (ari - expected).abs() < 1e-12,
+            "Expected {}, got {}",
+            expected,
+            ari
+        );
         assert_eq!(n_valid, 4);
     }
 
