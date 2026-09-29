@@ -64,7 +64,8 @@ turbo-parakeet/
 │   ├── src/                                # Rust extension — lib.rs, shared.rs, entropy.rs, chi_squared.rs,
 │   │                                       #   contingency.rs, ari.rs, gcd.rs, bloomfilter.rs, minhash.rs,
 │   │                                       #   describe.rs, sizes.rs, cardinality_estimators.rs, recommend.rs,
-│   │                                       #   api.rs, arrow_io.rs, python.rs
+│   │                                       #   api.rs, arrow_io.rs, python.rs, capi.rs
+│   ├── bindings/java/                      # Maven project: Panama FFM binding over capi.rs + JUnit tests
 │   └── analytics/
 │       ├── __init__.py                     # __version__ only
 │       ├── analytics.pyd                   # compiled extension (module analytics.analytics)
@@ -89,11 +90,18 @@ turbo-parakeet/
 
 # Rust Extension (analytics)
 Build: `maturin develop --release` from `services/analytics/`. Python changes need no rebuild (editable install).
+Cargo feature `python` (default) gates pyo3 + python.rs; the Java build is Python-free:
+`cargo build --release --no-default-features --target-dir target/capi` (own target dir — maturin writes the
+Python-linked library to `target/release`), then `./mvnw test` in `services/analytics/bindings/java/` (JDK 25).
 
-Three layers (spec: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design.md):
+Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design.md, 2026-09-28-java-binding-design.md):
 - `src/api.rs` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown or duplicate column names, a malformed Bloom array or zero Bloom/LSH parameters, wrong column counts, an unimportable Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/`ShapeMismatch` error — a column of the wrong type for the kernel) / `Compute`.
 - `src/arrow_io.rs` — RecordBatch ↔ Polars Series, zero-copy through the C Data Interface (Polars' `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` field metadata restores Categorical / Enum). Kernels still compute on Series; `sizes.rs` / `recommend.rs` measure layouts derived with `export_series`.
 - `src/python.rs` — pyo3 module `analytics.analytics`: reads any `__arrow_c_stream__` object into one batch, rejects Polars' private `_pli128` / `_plu128` (Int128 / UInt128) with ValueError naming the column, releases the GIL, returns `ArrowTable` (itself `__arrow_c_stream__`). InvalidInput → ValueError, Compute → RuntimeError, non-Arrow input → TypeError.
+- `src/capi.rs` — C ABI (`extern "C"`, no pyo3): `analytics_describe_and_recommend` (Arrow C Stream in, one-batch
+  stream out, plain C parameters; `population_rows < 0` = None) and `analytics_free_error`. Returns 0 / 1 InvalidInput /
+  2 Compute with a message in `*error`. Wrapped by `io.github.benssutton.analytics.Analytics` (Java 25 FFM + Arrow Java
+  `arrow-c-data`), which maps 1 → IllegalArgumentException, 2 → RuntimeException. Only describe_and_recommend is bound so far.
 
 Private — reached only through `analytics._plugin`, only by the `*Rust` classes:
 `column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
