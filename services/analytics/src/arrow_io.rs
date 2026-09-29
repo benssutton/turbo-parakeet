@@ -3,7 +3,8 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, RecordBatchReader};
 use arrow_schema::{Field, Schema};
 use polars::prelude::*;
 
@@ -122,6 +123,19 @@ pub(crate) fn export_struct(out: &Series) -> PolarsResult<RecordBatch> {
     let options = RecordBatchOptions::new().with_row_count(Some(out.len()));
     RecordBatch::try_new_with_options(Arc::new(schema), columns, &options)
         .map_err(|e| polars_err!(ComputeError: "result batch: {e}"))
+}
+
+/// A whole Arrow C stream as one RecordBatch (kernels expect one chunk per column).
+/// The stream is consumed: `*stream` is left released whatever the outcome.
+///
+/// SAFETY: `stream` points to a valid ArrowArrayStream struct (released or not).
+pub(crate) unsafe fn read_stream(
+    stream: *mut FFI_ArrowArrayStream,
+) -> std::result::Result<RecordBatch, arrow_schema::ArrowError> {
+    let reader = unsafe { ArrowArrayStreamReader::from_raw(stream) }?;
+    let schema = reader.schema();
+    let batches = reader.collect::<std::result::Result<Vec<_>, _>>()?;
+    arrow_select::concat::concat_batches(&schema, &batches)
 }
 
 #[cfg(test)]
@@ -435,5 +449,23 @@ mod tests {
         assert_eq!(batch.schema().field(0).name(), "col");
         assert_eq!(batch.schema().field(1).data_type(), &AT::Float64);
         assert!(import_batch(&batch).unwrap()[1].equals(&fields[1]));
+    }
+
+    #[test]
+    fn read_stream_concatenates_batches_and_consumes_the_stream() {
+        use arrow_array::ffi_stream::FFI_ArrowArrayStream;
+        use arrow_array::{Int64Array, RecordBatchIterator};
+
+        let batch = |v: Vec<i64>| {
+            RecordBatch::try_from_iter([("a", Arc::new(Int64Array::from(v)) as ArrayRef)]).unwrap()
+        };
+        let (b1, b2) = (batch(vec![1, 2]), batch(vec![3]));
+        let schema = b1.schema();
+        let mut stream =
+            FFI_ArrowArrayStream::new(Box::new(RecordBatchIterator::new([Ok(b1), Ok(b2)], schema)));
+        let out = unsafe { read_stream(&mut stream) }.unwrap();
+        assert_eq!(out.num_rows(), 3);
+        // The stream was moved out and left released, so a second read fails.
+        assert!(unsafe { read_stream(&mut stream) }.is_err());
     }
 }

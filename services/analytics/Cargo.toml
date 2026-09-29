@@ -8,11 +8,17 @@ edition = "2021"
 name = "analytics"
 crate-type = ["cdylib"] # dynamic system library with a C-compatible Foreign Function Interface
 
+[features]
+default = ["python"]
+# The pyo3 binding (python.rs). Off for the C ABI build used by Java:
+# cargo build --release --no-default-features --target-dir target/capi
+python = ["dep:pyo3"]
+
 [dependencies]
 #Polars (kernels) and pyo3 (python.rs)
 polars = { version = "0.51.0", features = ["lazy", "performant", "dtype-decimal", "dtype-struct", "dtype-array", "dtype-categorical", "timezones"] }
 polars-arrow = { version = "0.51.0", default-features = false }
-pyo3 = { version = "0.25.0", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.25.0", features = ["extension-module", "abi3-py39"], optional = true }
 
 #Concurrent hashmaps & hashing functions
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

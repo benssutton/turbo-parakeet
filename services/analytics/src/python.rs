@@ -5,14 +5,15 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr};
 
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+use arrow_array::ffi_stream::FFI_ArrowArrayStream;
+use arrow_array::{RecordBatch, RecordBatchIterator};
 use arrow_schema::ffi::FFI_ArrowSchema;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule};
 
 use crate::api;
+use crate::arrow_io::read_stream;
 
 /// The C Stream Interface struct, field for field. arrow-rs keeps its copy's
 /// callbacks private; this mirror lets `reject_wide_integers` call `get_schema`
@@ -50,10 +51,7 @@ fn read_batch(data: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
     // ArrowArrayStream (Arrow PyCapsule interface). `from_raw` moves it out and leaves
     // a released stream behind, so the capsule's destructor releases nothing twice.
     unsafe { reject_wide_integers(stream.cast())? };
-    let reader = unsafe { ArrowArrayStreamReader::from_raw(stream) }.map_err(value_error)?;
-    let schema = reader.schema();
-    let batches = reader.collect::<Result<Vec<_>, _>>().map_err(value_error)?;
-    arrow_select::concat::concat_batches(&schema, &batches).map_err(value_error)
+    unsafe { read_stream(stream) }.map_err(value_error)
 }
 
 /// Arrow has no 128-bit integer type. Polars exports Int128 / UInt128 in its private
