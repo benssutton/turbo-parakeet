@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, RecordBatch};
-use arrow_schema::DataType as AT;
+use arrow_schema::{DataType as AT, Field};
 use polars::prelude::{AnyValue, DataType as PT, PolarsResult, Series};
 use rayon::prelude::*;
 
@@ -124,13 +124,76 @@ fn level<'a>(
     }
 }
 
-/// The original type's uncompressed size: analytic where `body_size` covers the
-/// classic type (predicted = measured), else the per-batch measured sum.
-fn original_size(classic: &AT, shape: &Shape, st: &LevelStats) -> (u64, &'static str) {
-    match body_size(classic, shape) {
+/// The classic layout's IPC body (spec §5.3): `body_size`, plus LargeList and
+/// FixedSizeList over an analytic inner type (`inner`: the inner level's shape, which
+/// excludes a null row's slots). Dictionaries (Categorical / Enum mappings) and
+/// structs have no analytic form.
+fn classic_body(
+    classic: &AT,
+    s: &Shape,
+    inner: Option<&Shape>,
+) -> std::result::Result<f64, String> {
+    let inner = || inner.copied().ok_or_else(|| "no inner level".to_string());
+    match classic {
+        AT::LargeList(f) => Ok(validity(s.n, s.nulls)
+            + pad(8.0 * (s.n + 1.0))
+            + body_size(f.data_type(), &inner()?)?),
+        AT::FixedSizeList(f, w) => {
+            // The child holds w slots per row; a null row's slots count as null.
+            let (i, w) = (inner()?, *w as f64);
+            let shape = Shape {
+                n: s.n * w,
+                nulls: i.nulls + s.nulls * w,
+                ..i
+            };
+            Ok(validity(s.n, s.nulls) + body_size(f.data_type(), &shape)?)
+        }
+        AT::Dictionary(..) | AT::Struct(_) => Err("no analytic size".into()),
+        t => body_size(t, s),
+    }
+}
+
+/// The original type's uncompressed size: analytic where the classic layout has a
+/// closed form (predicted = measured), else the per-batch measured sum.
+fn original_size(
+    classic: &AT,
+    shape: &Shape,
+    inner: Option<&Shape>,
+    st: &LevelStats,
+) -> (u64, &'static str) {
+    match classic_body(classic, shape, inner) {
         Ok(b) => (b as u64, "analytic"),
         Err(_) => (st.size_bytes, "per-batch sum of"),
     }
+}
+
+/// The original type's IPC body in Polars' layout, as one-shot measures the Series
+/// Polars imports: None where there is no analytic form (dictionaries, structs, nested
+/// lists). Polars converts Utf8/Binary to views zero-copy (polars-compute
+/// `binary_to_binview`): when any value is over 12 bytes (Polars' view blocks hold
+/// bytes) the whole values buffer becomes one data buffer, else there is none.
+fn original_polars(classic: &AT, o: &ViewShape, inner: Option<&ViewShape>) -> Option<f64> {
+    let s = &o.shape;
+    let v = validity(s.n, s.nulls);
+    Some(match classic {
+        AT::Utf8 | AT::LargeUtf8 | AT::Binary | AT::LargeBinary => {
+            v + pad(16.0 * s.n) + if o.all > 0 { pad(s.sum_len) } else { 0.0 }
+        }
+        AT::LargeList(f) => {
+            v + pad(8.0 * (s.n + 1.0)) + original_polars(f.data_type(), inner?, None)?
+        }
+        AT::FixedSizeList(f, w) => {
+            let (i, w) = (inner?, *w as f64);
+            let shape = Shape {
+                n: s.n * w,
+                nulls: i.shape.nulls + s.nulls * w,
+                ..i.shape
+            };
+            v + original_polars(f.data_type(), &ViewShape { shape, ..*i }, None)?
+        }
+        AT::Dictionary(..) | AT::Struct(_) | AT::List(_) => return None,
+        t => body_size(&polars_layout(t, &AT::UInt32), s).ok()?,
+    })
 }
 
 /// A level's analytic Polars-layout inputs: its shape and Polars' view blocks over all
@@ -211,17 +274,43 @@ fn render(e: &Option<Ext>) -> AnyValue<'static> {
         .unwrap_or(AnyValue::Null)
 }
 
-/// Column `name`'s rows in block `b` as one Series of `dtype` (absent pieces: nulls).
+/// An Enum's categories, found through lists and arrays.
+fn enum_categories(dtype: &PT) -> Option<Vec<String>> {
+    match dtype {
+        PT::Enum(fc, _) => Some(fc.categories().values_iter().map(str::to_owned).collect()),
+        PT::List(it) | PT::Array(it, _) => enum_categories(it),
+        _ => None,
+    }
+}
+
+/// Column `name`'s rows in block `b` as one Series of `dtype` (absent pieces: nulls),
+/// with compact buffers: appending keeps each piece's view buffers, so the block is
+/// rebuilt through its classic layout, as one-shot's Series is built from its input.
 fn block_series(b: &Block, name: &str, dtype: &PT) -> PolarsResult<Series> {
     let mut out = Series::new_empty(name.into(), dtype);
     for piece in &b.pieces {
         let s = match piece.cols.iter().find(|(f, _)| f.name() == name) {
-            Some((f, a)) => import_array(f, a)?.cast(dtype)?,
+            Some((f, a)) => {
+                let s = import_array(f, a)?;
+                // An Array's cast gives null rows' slots a validity buffer: cast only
+                // when the type differs (a Categorical's mapping, say).
+                if s.dtype() == dtype {
+                    s
+                } else {
+                    s.cast(dtype)?
+                }
+            }
             None => Series::full_null(name.into(), piece.rows as usize, dtype),
         };
         out.append(&s)?;
     }
-    Ok(out.rechunk())
+    let c = classic_layout(&out)?;
+    let s = import_array(&Field::new(name, c.data_type().clone(), true), &c)?;
+    if s.dtype() == dtype {
+        Ok(s)
+    } else {
+        s.cast(dtype)
+    }
 }
 
 /// The block cast to the pick and verified against itself: the cross-check (spec §5.1
@@ -476,7 +565,6 @@ impl Streaming {
             .clone()
             .ok_or("a typed column has absorbed no batch")?;
         let mut lvl = level(dtype, &classic, &p, o, est.unwrap_or_else(fallback), "");
-        (lvl.size_bytes, lvl.size_note) = original_size(&classic, &lvl.shape(), o);
         let inner = match (&c.inner, dtype) {
             (Some(i), PT::List(it) | PT::Array(it, _)) => Some((i, &**it)),
             _ => None,
@@ -496,11 +584,21 @@ impl Streaming {
                     i.estimate(t).unwrap_or_else(fallback),
                     "inner: ",
                 );
-                (l.size_bytes, l.size_note) = original_size(&iclassic, &l.shape(), i);
+                (l.size_bytes, l.size_note) = original_size(&iclassic, &l.shape(), None, i);
                 Some(l)
             }
             _ => None,
         };
+        let ishape = ilvl.as_ref().map(Level::shape);
+        (lvl.size_bytes, lvl.size_note) = original_size(&classic, &lvl.shape(), ishape.as_ref(), o);
+        let iv = match (&ilvl, inner) {
+            (Some(il), Some((i, _))) => Some(view_shape(il, i)),
+            _ => None,
+        };
+        let ov = view_shape(&lvl, o);
+        // The original's Polars-layout size: analytic where it has a closed form.
+        let original_polars =
+            original_polars(&classic, &ov, iv.as_ref()).map_or(o.polars_bytes, |b| b as u64);
 
         // The choice, proven by statistics.
         let pick = match &ilvl {
@@ -514,17 +612,13 @@ impl Streaming {
             None => pick_by_stats(&lvl, &self.params)?,
         };
 
-        // Uncompressed sizes: analytic (the original: as measured per batch).
+        // Uncompressed sizes: analytic (the original's where it has a closed form).
         let key = pick.target.polars_key().unwrap_or(AT::UInt32);
         let original = matches!(pick.target, Target::Original(_));
         let (rec_size, rec_polars) = if original {
-            (lvl.size_bytes, o.polars_bytes)
+            (lvl.size_bytes, original_polars)
         } else {
-            let iv = match (&ilvl, inner) {
-                (Some(il), Some((i, _))) => Some(view_shape(il, i)),
-                _ => None,
-            };
-            let polars = polars_body(&pick.target, &view_shape(&lvl, o), iv.as_ref(), &key)?;
+            let polars = polars_body(&pick.target, &ov, iv.as_ref(), &key)?;
             (pick.predicted, polars as u64)
         };
 
@@ -564,12 +658,19 @@ impl Streaming {
         };
 
         let rec_t = pick.target.arrow_type();
+        // A kept Enum (at any depth) is named with its categories.
+        let enum_values = enum_categories(dtype);
         let rec = Rec {
             nullable: nullable(&pick.target, o, inner.map(|(i, _)| i)),
             arrow_type: pa_name(&rec_t),
             arrow_size: rec_size,
             arrow_zstd: scale(z[2]),
-            polars_type: Some(pl_name(&rec_t, &c.name, None, &key)),
+            polars_type: Some(pl_name(
+                &rec_t,
+                &c.name,
+                enum_values.as_deref().filter(|_| original),
+                &key,
+            )),
             polars_size: rec_polars,
             polars_zstd: scale(z[3]),
             lossy: pick.lossy,
@@ -591,7 +692,7 @@ impl Streaming {
             est.map_or(AnyValue::Null, |e| text(e.method.name())),
             AnyValue::UInt64(lvl.size_bytes),
             u(scale(z[0])),
-            AnyValue::UInt64(o.polars_bytes),
+            AnyValue::UInt64(original_polars),
             u(scale(z[1])),
         ]);
         row.extend(rec_row(&rec));
@@ -607,10 +708,15 @@ impl Streaming {
 pub(crate) mod tests {
     use std::sync::Arc;
 
+    use arrow_array::builder::{FixedSizeListBuilder, Int64Builder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int64Type;
-    use arrow_array::{ArrayRef, Float64Array, Int64Array, ListArray, NullArray, StringArray};
+    use arrow_array::{
+        new_null_array, ArrayRef, FixedSizeListArray, Float64Array, Int64Array, ListArray,
+        NullArray, StringArray,
+    };
     use arrow_schema::DataType as AT;
+    use arrow_select::concat::concat;
 
     use crate::arrow_io::export_struct;
     use crate::recommend::{arrow_cast, describe_and_recommend_impl};
@@ -798,10 +904,47 @@ pub(crate) mod tests {
                 ])) as ArrayRef,
             ),
             ("l", Arc::new(list) as ArrayRef),
+            // Kept in its original type: i/7 needs every float64 digit.
+            (
+                "f_orig",
+                Arc::new(Float64Array::from(
+                    (0..6)
+                        .map(|i| (i % 3 != 1).then(|| (i + 1) as f64 / 7.0))
+                        .collect::<Vec<_>>(),
+                )) as ArrayRef,
+            ),
+            // Values over 12 bytes: Polars packs them into view blocks.
+            (
+                "free",
+                strs(&[
+                    Some("free text value number one xx"),
+                    None,
+                    Some("free text value number three xx"),
+                    Some("free text value number four xx"),
+                    Some("free text value number five xx"),
+                    Some("free text value number six xx"),
+                ]),
+            ),
+            ("arr", Arc::new(fixed_list()) as ArrayRef),
         ])
     }
 
-    const REC: [&str; 8] = [
+    /// Array[Int64, 2] with a null row (its slots hold values) and a null item.
+    fn fixed_list() -> FixedSizeListArray {
+        let mut b = FixedSizeListBuilder::new(Int64Builder::new(), 2);
+        for i in 0..6i64 {
+            b.values().append_value(i * 1_000_000_007);
+            if i == 4 {
+                b.values().append_null();
+            } else {
+                b.values().append_value(i);
+            }
+            b.append(i != 2);
+        }
+        b.finish()
+    }
+
+    const REC: [&str; 12] = [
         "rec_arrow_type",
         "rec_nullable",
         "rec_lossy_formatting",
@@ -810,32 +953,78 @@ pub(crate) mod tests {
         "rec_arrow_size_zstd_bytes",
         "rec_polars_size_zstd_bytes",
         "rec_polars_type",
+        "size_bytes",
+        "size_polars_bytes",
+        "size_zstd_bytes",
+        "size_polars_zstd_bytes",
     ];
+
+    /// `batches` streamed recommend and size like `whole` in one shot.
+    fn assert_like_one_shot(batches: &[RecordBatch], whole: &RecordBatch, label: &str) {
+        let reference = one_shot(whole);
+        let mut s = streaming();
+        batches.iter().for_each(|b| s.add(b).unwrap());
+        let out = s.finish().unwrap();
+        let columns = texts(&out, "column");
+        assert_eq!(columns, texts(&reference, "column"), "{label}");
+        for name in REC {
+            let (got, want) = (texts(&out, name), texts(&reference, name));
+            for (row, (g, w)) in got.iter().zip(&want).enumerate() {
+                // One-shot leaves rec_polars_type null when the original is kept.
+                if name == "rec_polars_type" && w.is_none() {
+                    continue;
+                }
+                assert_eq!(g, w, "{label} {:?} {name}", columns[row]);
+            }
+        }
+        let rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
+        assert_eq!(
+            texts(&out, "n_sampled_rows")[0],
+            Some(rows.to_string()),
+            "{label}"
+        );
+    }
 
     #[test]
     fn streamed_batches_recommend_like_one_shot() {
         let whole = mixed();
-        let reference = one_shot(&whole);
         for k in [1, 2, 6] {
-            let mut s = streaming();
-            for off in (0..whole.num_rows()).step_by(k) {
-                s.add(&whole.slice(off, k.min(whole.num_rows() - off)))
-                    .unwrap();
-            }
-            let out = s.finish().unwrap();
-            let columns = texts(&out, "column");
-            for name in REC {
-                let (got, want) = (texts(&out, name), texts(&reference, name));
-                for (row, (g, w)) in got.iter().zip(&want).enumerate() {
-                    // One-shot leaves rec_polars_type null when the original is kept.
-                    if name == "rec_polars_type" && w.is_none() {
-                        continue;
-                    }
-                    assert_eq!(g, w, "k={k} {:?} {name}", columns[row]);
-                }
-            }
-            assert_eq!(texts(&out, "n_sampled_rows")[0].as_deref(), Some("6"));
+            let batches: Vec<_> = (0..whole.num_rows())
+                .step_by(k)
+                .map(|off| whole.slice(off, k.min(whole.num_rows() - off)))
+                .collect();
+            assert_like_one_shot(&batches, &whole, &format!("k={k}"));
         }
+    }
+
+    #[test]
+    fn a_column_absent_from_the_first_batches_sizes_like_its_nulls() {
+        // "i" in every batch; the rest only from row 3 on.
+        let full = mixed();
+        let b = full.slice(3, 3);
+        let first = batch(vec![("i", full.slice(0, 3).column(0).clone())]);
+        let cols: Vec<(String, ArrayRef)> = full
+            .schema()
+            .fields()
+            .iter()
+            .zip(full.columns())
+            .map(|(f, c)| {
+                let col = if f.name() == "i" {
+                    c.clone()
+                } else {
+                    let nulls = new_null_array(c.data_type(), 3);
+                    concat(&[nulls.as_ref(), c.slice(3, 3).as_ref()]).unwrap()
+                };
+                (f.name().clone(), col)
+            })
+            .collect();
+        let whole = batch(cols.iter().map(|(n, c)| (n.as_str(), c.clone())).collect());
+        assert_like_one_shot(&[first.clone(), b.clone()], &whole, "absent");
+        assert_like_one_shot(
+            &[first, b.slice(0, 1), b.slice(1, 2)],
+            &whole,
+            "absent, split",
+        );
     }
 
     #[test]
@@ -907,5 +1096,20 @@ pub(crate) mod tests {
         assert_eq!(texts(&out, "dtype")[0].as_deref(), Some("Int128"));
         assert_eq!(texts(&out, "n_null")[0], None);
         assert_eq!(texts(&out, "n_rows")[0].as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn an_enum_is_named_by_its_categories() {
+        use polars::prelude::FrozenCategories;
+        let e = PT::from_frozen_categories(FrozenCategories::new(["b", "a"]).unwrap());
+        let want = Some(vec!["b".to_string(), "a".to_string()]);
+        assert_eq!(enum_categories(&e), want);
+        assert_eq!(enum_categories(&PT::List(Box::new(e.clone()))), want);
+        assert_eq!(enum_categories(&PT::String), None);
+        let t = AT::Dictionary(Box::new(AT::UInt8), Box::new(AT::Utf8));
+        assert_eq!(
+            pl_name(&t, "x", enum_categories(&e).as_deref(), &AT::UInt8),
+            "Enum(categories=['b', 'a'])"
+        );
     }
 }
