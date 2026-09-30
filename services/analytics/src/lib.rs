@@ -18,6 +18,7 @@ mod partial;
 #[cfg(feature = "python")]
 mod python;
 mod recommend;
+mod reservoir;
 mod shared;
 mod sizes;
 
