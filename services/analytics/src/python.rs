@@ -190,7 +190,9 @@ impl StreamingRecommender {
     }
 
     /// Adds every batch of `data`, in order. `ineligible`: (name, dtype) of columns the
-    /// caller dropped (Int128 / UInt128, Object); they are marked first.
+    /// caller dropped (Int128 / UInt128, Object); they are marked first. Each batch is
+    /// atomic, but the call is not: if a later batch (or the producer) fails, the
+    /// earlier batches and the ineligible marks stay applied.
     #[pyo3(signature = (data, ineligible=Vec::new()))]
     fn add(
         &self,

@@ -45,19 +45,28 @@ class StreamingRecommender:
         )
 
     def add(self, frame) -> StreamingRecommender:
+        """Adds every batch of `frame`, in order.
+
+        Each Arrow batch is atomic (on error the state is as before that batch), but
+        one `add` over a multi-batch stream is not: if a later batch or the producer
+        fails, the earlier batches and the ineligible marks stay applied.
+        """
         if isinstance(frame, pl.LazyFrame):
             raise TypeError(
                 "a LazyFrame is not supported: collect it, or add its batches"
             )
         ineligible: list[tuple[str, str]] = []
         if isinstance(frame, pl.DataFrame):
-            bad = [
-                name
+            ineligible = [
+                (name, str(dtype))
                 for name, dtype in frame.schema.items()
                 if holds_wide_integer(dtype) or isinstance(dtype, pl.Object)
             ]
-            ineligible = [(name, str(frame.schema[name])) for name in bad]
-            frame = frame.drop(bad)
+            if len(ineligible) == frame.width:
+                # Dropping every column would lose the height; the rows still count.
+                frame = pl.DataFrame(height=frame.height)
+            else:
+                frame = frame.drop([name for name, _ in ineligible])
         self._rs.add(frame, ineligible)
         return self
 
