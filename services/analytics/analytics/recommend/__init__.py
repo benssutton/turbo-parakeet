@@ -2,8 +2,9 @@
 
 from analytics.recommend.base import Recommend
 from analytics.recommend.rust import RecommendRust
+from analytics.recommend.streaming import StreamingRecommender
 
 REFERENCE = "RecommendRust"
 IMPLEMENTATIONS = ("RecommendRust",)
 
-__all__ = ["Recommend", "RecommendRust", "REFERENCE", "IMPLEMENTATIONS"]
+__all__ = ["Recommend", "RecommendRust", "StreamingRecommender", "REFERENCE", "IMPLEMENTATIONS"]

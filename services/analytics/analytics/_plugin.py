@@ -121,3 +121,23 @@ def describe_and_recommend(
             boolean_pairs=[tuple(p) for p in boolean_pairs],
         )
     )
+
+
+def streaming_recommender(
+    *,
+    reservoir_rows: int,
+    block_rows: int,
+    categorical_threshold: int,
+    zstd_level: int,
+    seed: int,
+    boolean_pairs: tuple[tuple[str, str], ...],
+):
+    """The Rust streaming recommender (src/streaming.rs): .add(data, ineligible), .finish()."""
+    return _rs.StreamingRecommender(
+        reservoir_rows=reservoir_rows,
+        block_rows=block_rows,
+        categorical_threshold=categorical_threshold,
+        zstd_level=zstd_level,
+        seed=seed,
+        boolean_pairs=[tuple(p) for p in boolean_pairs],
+    )

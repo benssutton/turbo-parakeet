@@ -4,8 +4,9 @@
 //! ValueError, kernel failure → RuntimeError.
 
 use std::ffi::{c_char, c_int, c_void, CStr};
+use std::sync::Mutex;
 
-use arrow_array::ffi_stream::FFI_ArrowArrayStream;
+use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow_array::{RecordBatch, RecordBatchIterator};
 use arrow_schema::ffi::FFI_ArrowSchema;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -31,8 +32,14 @@ fn value_error(e: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
-/// A whole Arrow stream as one RecordBatch (kernels expect one chunk per column).
-fn read_batch(data: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
+/// Runs `f` on the ArrowArrayStream inside `data`'s `__arrow_c_stream__` capsule
+/// (wide-integer columns refused). The capsule stays alive until `f` returns: `f`
+/// must move the stream out (`from_raw`), leaving a released one behind, so the
+/// capsule's destructor releases nothing twice.
+fn with_stream<T>(
+    data: &Bound<'_, PyAny>,
+    f: impl FnOnce(*mut FFI_ArrowArrayStream) -> PyResult<T>,
+) -> PyResult<T> {
     if !data.hasattr("__arrow_c_stream__")? {
         return Err(PyTypeError::new_err(format!(
             "expected Arrow tabular data (an object with __arrow_c_stream__), got {}",
@@ -47,11 +54,23 @@ fn read_batch(data: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
         ));
     }
     let stream = capsule.pointer() as *mut FFI_ArrowArrayStream;
-    // SAFETY: an "arrow_array_stream" capsule holds a valid, unreleased
-    // ArrowArrayStream (Arrow PyCapsule interface). `from_raw` moves it out and leaves
-    // a released stream behind, so the capsule's destructor releases nothing twice.
+    // SAFETY: an "arrow_array_stream" capsule holds a valid, unreleased ArrowArrayStream.
     unsafe { reject_wide_integers(stream.cast())? };
-    unsafe { read_stream(stream) }.map_err(value_error)
+    f(stream)
+}
+
+/// A whole Arrow stream as one RecordBatch (kernels expect one chunk per column).
+fn read_batch(data: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
+    // SAFETY: the stream is valid and unreleased (with_stream); read_stream moves it out.
+    with_stream(data, |s| unsafe { read_stream(s) }.map_err(value_error))
+}
+
+/// An Arrow stream read batch by batch (the streaming recommender never concatenates).
+fn read_reader(data: &Bound<'_, PyAny>) -> PyResult<ArrowArrayStreamReader> {
+    // SAFETY: as for read_batch; from_raw moves the stream out.
+    with_stream(data, |s| {
+        unsafe { ArrowArrayStreamReader::from_raw(s) }.map_err(value_error)
+    })
 }
 
 /// Arrow has no 128-bit integer type. Polars exports Int128 / UInt128 in its private
@@ -132,6 +151,71 @@ fn run<T: Send>(py: Python<'_>, f: impl FnOnce() -> api::Result<T> + Send) -> Py
         api::Error::InvalidInput(m) => PyValueError::new_err(m),
         api::Error::Compute(m) => PyRuntimeError::new_err(m),
     })
+}
+
+/// The streaming recommender (api::StreamingRecommender): add batches over time,
+/// `finish` at any point. A mutex serialises callers; the work runs without the GIL.
+#[pyclass(frozen, module = "analytics.analytics")]
+struct StreamingRecommender(Mutex<api::StreamingRecommender>);
+
+fn locked(
+    m: &Mutex<api::StreamingRecommender>,
+) -> api::Result<std::sync::MutexGuard<'_, api::StreamingRecommender>> {
+    m.lock()
+        .map_err(|_| api::Error::Compute("recommender poisoned by an earlier panic".into()))
+}
+
+#[pymethods]
+impl StreamingRecommender {
+    #[new]
+    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, zstd_level, seed, boolean_pairs))]
+    fn new(
+        py: Python<'_>,
+        reservoir_rows: u64,
+        block_rows: u64,
+        categorical_threshold: u64,
+        zstd_level: i32,
+        seed: u64,
+        boolean_pairs: Vec<(String, String)>,
+    ) -> PyResult<Self> {
+        let p = api::StreamingParams {
+            reservoir_rows,
+            block_rows,
+            categorical_threshold,
+            zstd_level,
+            seed,
+            boolean_pairs,
+        };
+        run(py, || api::StreamingRecommender::new(p)).map(|r| Self(Mutex::new(r)))
+    }
+
+    /// Adds every batch of `data`, in order. `ineligible`: (name, dtype) of columns the
+    /// caller dropped (Int128 / UInt128, Object); they are marked first.
+    #[pyo3(signature = (data, ineligible=Vec::new()))]
+    fn add(
+        &self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        ineligible: Vec<(String, String)>,
+    ) -> PyResult<()> {
+        let reader = read_reader(data)?;
+        let rec = &self.0;
+        run(py, move || {
+            let mut rec = locked(rec)?;
+            for (name, dtype) in &ineligible {
+                rec.mark_ineligible(name, dtype)?;
+            }
+            for batch in reader {
+                rec.add(&batch.map_err(|e| api::Error::InvalidInput(e.to_string()))?)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn finish(&self, py: Python<'_>) -> PyResult<ArrowTable> {
+        let rec = &self.0;
+        run(py, move || locked(rec)?.finish()).map(ArrowTable)
+    }
 }
 
 #[pyfunction]
@@ -279,6 +363,7 @@ fn describe_and_recommend(
 #[pymodule]
 fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ArrowTable>()?;
+    m.add_class::<StreamingRecommender>()?;
     m.add_function(wrap_pyfunction!(column_gcd, m)?)?;
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_joint_entropy, m)?)?;
