@@ -114,17 +114,18 @@ pub(crate) fn export_series(s: &Series, compat: CompatLevel) -> PolarsResult<Arr
 /// slices their children eagerly but exports them with `offset = validity.offset()`,
 /// so a sliced one with nulls exports as invalid Arrow (child too short), which
 /// arrow-rs panics on. Such a level gets its validity rebuilt from bit 0 (O(len)
-/// bits); every other buffer is shared.
+/// bits, whatever its offset); every other buffer is shared.
 fn ffi_safe(a: Box<dyn polars_arrow::array::Array>) -> Box<dyn polars_arrow::array::Array> {
     use polars_arrow::array::{Array as _, FixedSizeListArray, ListArray, StructArray};
     use polars_arrow::bitmap::Bitmap;
     use polars_arrow::datatypes::PhysicalType as P;
     let fresh = |v: Option<&Bitmap>| {
         v.map(|b| {
-            if b.as_slice().1 == 0 {
-                b.clone()
-            } else {
-                b.iter().collect()
+            // The absolute bit offset is not public, and `as_slice().1` is only that
+            // offset mod 8, so always copy: bytes when byte-aligned, bits otherwise.
+            match b.as_slice() {
+                (bytes, 0, len) => Bitmap::from_u8_slice(bytes, len),
+                _ => b.iter().collect(),
             }
         })
     };
@@ -584,6 +585,69 @@ mod tests {
             .map(|i| if i % 3 == 0 { None } else { Some(i) })
             .collect();
         assert_eq!(ints.iter().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn sliced_nested_columns_with_nulls_export_at_any_offset() {
+        // polars-arrow exports Struct / FixedSizeList with `offset = validity.offset()`
+        // (absolute), so offsets 8, 16, ... (a multiple of 8) need a rebuilt validity too.
+        use polars_arrow::bitmap::Bitmap;
+        let n = 40usize;
+        let a: Vec<Option<i64>> = (0..n as i64)
+            .map(|i| if i % 5 == 0 { None } else { Some(i) })
+            .collect();
+        let outer: Bitmap = (0..n).map(|i| i % 3 != 0).collect();
+        let strukt = StructChunked::from_series(
+            "s".into(),
+            n,
+            [Series::new("a".into(), a.as_slice())].iter(),
+        )
+        .unwrap()
+        .with_outer_validity(Some(outer))
+        .into_series();
+        let lists = Series::new(
+            "l".into(),
+            (0..n as i64)
+                .map(|i| (i % 4 != 0).then(|| Series::new("".into(), &[i])))
+                .collect::<Vec<_>>(),
+        );
+        let array = lists
+            .cast(&DataType::Array(Box::new(DataType::Int64), 1))
+            .unwrap();
+        let list_struct = Series::new(
+            "ls".into(),
+            (0..n as i64)
+                .map(|i| {
+                    (i % 4 != 0).then(|| {
+                        StructChunked::from_series(
+                            "".into(),
+                            2,
+                            [Series::new("a".into(), &[i, i + 1])].iter(),
+                        )
+                        .unwrap()
+                        .with_outer_validity(Some([true, i % 3 != 0].into_iter().collect()))
+                        .into_series()
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
+        for (name, s) in [
+            ("struct", &strukt),
+            ("array", &array),
+            ("list_struct", &list_struct),
+        ] {
+            for offset in [0i64, 1, 3, 8, 16] {
+                let sliced = s.slice(offset, 16);
+                let a = export_series(&sliced, CompatLevel::newest())
+                    .unwrap_or_else(|e| panic!("{name} at offset {offset}: {e}"));
+                assert_eq!(a.len(), 16, "{name} at offset {offset}");
+                assert_eq!(
+                    a.null_count(),
+                    sliced.null_count(),
+                    "{name} at offset {offset}"
+                );
+            }
+        }
     }
 
     #[test]

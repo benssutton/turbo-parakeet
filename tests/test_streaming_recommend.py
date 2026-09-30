@@ -401,9 +401,10 @@ SLICED = {
 
 
 @pytest.mark.parametrize("name", list(SLICED))
-@pytest.mark.parametrize("offset", [1, 2])
+@pytest.mark.parametrize("offset", [1, 2, 8, 16])
 def test_a_sliced_nested_column_streams_like_one_shot(name, offset):
-    frame = pl.DataFrame({"c": SLICED[name]}).slice(offset, 2)
+    # Repeated so the slice at offsets 8 and 16 (validity offset a multiple of 8) is in range.
+    frame = pl.DataFrame({"c": pl.concat([SLICED[name]] * 6)}).slice(offset, 2)
     out = StreamingRecommender().add(frame).finish()
     assert row(out, "c")["n_null"] == frame["c"].null_count()
     assert_parity(out, frame, single_batch=True)
