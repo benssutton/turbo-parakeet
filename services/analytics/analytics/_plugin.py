@@ -25,6 +25,14 @@ def _tuples(
     return None if combos is None else [tuple(c) for c in combos]
 
 
+def checked_table(data):
+    """Arrow tabular data (`__arrow_c_stream__`) read into one table after the Rust
+    boundary's checks (structure, values, types Polars cannot import): ValueError
+    naming the column otherwise. For analytics.base, before Polars reads the data.
+    """
+    return _rs.checked_table(data)
+
+
 def bloom_filter_bits(series: pl.Series, k: int, m: int) -> bytes:
     """A fresh k-hash, m-bit Bloom filter over `series`: its ceil(m/8) bytes."""
     return _rs.bloom_filter(series.to_frame(), k, m)

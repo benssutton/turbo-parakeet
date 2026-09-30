@@ -31,6 +31,8 @@ from typing import Any, Callable, ClassVar, Literal, Self, Sequence
 
 import polars as pl
 
+from analytics import _plugin
+
 Scope = Literal["per_column", "multi_set", "ordered"]
 Column = tuple[str, str]  # (frame name, column name)
 Combo = tuple[Column, ...]  # ARITY columns
@@ -77,6 +79,11 @@ class Technique(ABC):
                         f"frame {name!r} must be a polars DataFrame or LazyFrame, or Arrow tabular data "
                         f"(an object with __arrow_c_stream__), got {type(frame).__name__}"
                     )
+                if hasattr(frame, "__arrow_c_stream__"):
+                    # py-polars trusts Arrow input: malformed values (dictionary keys
+                    # out of range) or a Decimal256 make it panic. The Rust boundary's
+                    # checks run first (ValueError naming the column).
+                    frame = _plugin.checked_table(frame)
                 try:
                     frame = pl.DataFrame(frame)
                 except Exception as exc:

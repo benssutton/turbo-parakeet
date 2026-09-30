@@ -353,6 +353,14 @@ fn describe_and_recommend(
     .map(ArrowTable)
 }
 
+/// Arrow tabular data read and checked (arrow_io's checked import) into one table,
+/// for a caller about to hand it to Polars: py-polars trusts Arrow input and panics
+/// on malformed values (dictionary keys out of range) or a Decimal256.
+#[pyfunction]
+fn checked_table(data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
+    read_batch(data).map(ArrowTable)
+}
+
 #[pymodule]
 fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ArrowTable>()?;
@@ -370,5 +378,6 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(describe_columns, m)?)?;
     m.add_function(wrap_pyfunction!(column_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(describe_and_recommend, m)?)?;
+    m.add_function(wrap_pyfunction!(checked_table, m)?)?;
     Ok(())
 }

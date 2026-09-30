@@ -5,9 +5,11 @@ sizes; a complete sample for the sampled ZSTD estimate; hand-worked known answer
 Accuracy only — nothing here is timed.
 """
 
+import struct
 from pathlib import Path
 
 import polars as pl
+import pyarrow as pa
 import pytest
 
 from analytics.describe import _sizes
@@ -332,3 +334,42 @@ def test_parameters_are_validated(params):
 def test_lazyframe_is_refused():
     with pytest.raises(TypeError, match="LazyFrame"):
         StreamingRecommender().add(pl.LazyFrame({"a": [1]}))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Malformed or unsupported Arrow input is refused, never a crash
+
+
+def dictionary_keys_out_of_range() -> pa.Table:
+    keys = pa.array([0, 1, 5, 1], pa.int32())
+    return pa.table(
+        {"c": pa.DictionaryArray.from_arrays(keys, pa.array(["x", "y"]), safe=False)}
+    )
+
+
+def invalid_utf8() -> pa.Table:
+    offsets = pa.py_buffer(struct.pack("<3i", 0, 2, 4))
+    data = pa.py_buffer(bytes([0xFF, 0xFE, 0xC3, 0x28]))
+    return pa.table({"c": pa.Array.from_buffers(pa.string(), 2, [None, offsets, data])})
+
+
+def decimal256() -> pa.Table:
+    return pa.table({"c": pa.array([1, 2], pa.decimal256(10, 2))})
+
+
+MALFORMED = [
+    (dictionary_keys_out_of_range, "out of bounds"),
+    (invalid_utf8, "(?i)utf-?8"),
+    (lambda: pl.DataFrame(invalid_utf8()), "(?i)utf-?8"),  # Polars does not check it
+    (decimal256, "Decimal256"),
+]
+
+
+@pytest.mark.parametrize(
+    "make, match", MALFORMED, ids=["dictionary_keys", "utf8", "utf8_polars", "decimal256"]
+)
+def test_malformed_input_is_a_value_error(make, match):
+    with pytest.raises(ValueError, match=match):
+        StreamingRecommender().add(make())
+    with pytest.raises(ValueError, match=match):
+        RecommendRust().add({"t": make()}).result()

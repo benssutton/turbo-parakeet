@@ -148,10 +148,12 @@ pub(crate) unsafe fn read_stream(
 // arrays that assert their structure: a malformed input panics, and the release
 // profile aborts on panic. So each batch is checked before arrow-rs builds an array
 // over it: first the raw C structs (buffer and child counts, null pointers, negative
-// lengths), then, once imported, arrow-rs's structural `ArrayData::validate` at every
-// level (buffer sizes, child lengths against the parent's offset + length, first and
-// last offsets). Values are not checked (`validate_full` would be O(n)); a producer
-// that follows the C Data Interface structurally is trusted for its values.
+// lengths, a view array's variadic buffers), then, once imported, every column
+// (`check_column`): a type Polars cannot import is refused (Decimal256 aborts it), and
+// arrow-rs's full validation runs at every level — structure (buffer sizes, child
+// lengths against the parent's offset + length) and values (null counts, every offset,
+// UTF-8, dictionary keys in range: Polars asserts on the keys and reads out of bounds
+// on invalid UTF-8). The values pass is O(n) (~3 ms for a 1M-row string column).
 
 /// The C Stream Interface struct, field for field: arrow-rs keeps its copy's
 /// callbacks private.
@@ -251,7 +253,7 @@ impl Iterator for CheckedReader {
 /// One stream batch, checked (see above), as a RecordBatch of `schema`.
 ///
 /// SAFETY: `array` is a C Data Interface array of `schema`'s struct type whose buffers
-/// hold what its structure says (which is checked, not its values).
+/// are as long as its lengths and offsets say (the one thing that cannot be checked).
 pub(crate) unsafe fn import_checked(
     array: FFI_ArrowArray,
     schema: &SchemaRef,
@@ -259,7 +261,12 @@ pub(crate) unsafe fn import_checked(
     let dt = AT::Struct(schema.fields().clone());
     check_raw(&array as *const FFI_ArrowArray as *const RawArray, &dt)?;
     let data = unsafe { from_ffi_and_data_type(array, dt) }?;
-    validate_tree(&data)?;
+    data.validate_data()?;
+    schema
+        .fields()
+        .iter()
+        .zip(data.child_data())
+        .try_for_each(|(f, c)| check_column(f, c))?;
     let len = data.len();
     RecordBatch::try_new_with_options(
         schema.clone(),
@@ -359,11 +366,12 @@ fn check_raw(a: *const RawArray, dt: &AT) -> std::result::Result<(), ArrowError>
     }
 }
 
-/// arrow-rs's structural validation (`ArrayData::validate`, O(1) per level but for
-/// null counts) at every level, plus the one check it lacks: a FixedSizeList's child
-/// must cover the parent's offset (arrow-rs checks `len · size` only, then slices from
-/// `offset · size`).
-fn validate_tree(d: &ArrayData) -> std::result::Result<(), ArrowError> {
+/// arrow-rs's validation at every level: structure (`ArrayData::validate`) plus the
+/// one structural check it lacks, made before anything reads a FixedSizeList's child
+/// (the child must cover the parent's offset: arrow-rs checks `len · size` only, then
+/// slices from `offset · size`); with `values`, also null counts and values (as
+/// `ArrayData::validate_full`).
+fn validate_tree(d: &ArrayData, values: bool) -> std::result::Result<(), ArrowError> {
     d.validate()?;
     if let AT::FixedSizeList(_, size) = d.data_type() {
         let need = (d.offset() + d.len()).saturating_mul(*size as usize);
@@ -375,22 +383,62 @@ fn validate_tree(d: &ArrayData) -> std::result::Result<(), ArrowError> {
             ));
         }
     }
-    d.child_data().iter().try_for_each(validate_tree)
+    if values {
+        d.validate_nulls()?;
+        d.validate_values()?;
+    }
+    d.child_data()
+        .iter()
+        .try_for_each(|c| validate_tree(c, values))
 }
 
-/// Every column of `batch` validated structurally (`validate_tree`): a RecordBatch
-/// built without validation can hold arrays whose buffers are too short.
+/// The first type within `t` (itself or nested) that Polars cannot import without
+/// aborting: Decimal256 (polars-core reads it as i128, and polars-arrow panics on
+/// Int256). Every other type Polars cannot import is refused with an error by Polars.
+fn polars_unsupported(t: &AT) -> Option<&AT> {
+    match t {
+        AT::Decimal256(..) => Some(t),
+        AT::List(f)
+        | AT::LargeList(f)
+        | AT::FixedSizeList(f, _)
+        | AT::ListView(f)
+        | AT::LargeListView(f)
+        | AT::Map(f, _) => polars_unsupported(f.data_type()),
+        AT::Struct(fs) => fs.iter().find_map(|f| polars_unsupported(f.data_type())),
+        AT::Union(fs, _) => fs
+            .iter()
+            .find_map(|(_, f)| polars_unsupported(f.data_type())),
+        AT::Dictionary(_, v) => polars_unsupported(v),
+        AT::RunEndEncoded(_, v) => polars_unsupported(v.data_type()),
+        _ => None,
+    }
+}
+
+/// One column checked before arrow-rs or Polars reads it (see "checked import"),
+/// errors naming it.
+fn check_column(f: &Field, d: &ArrayData) -> std::result::Result<(), ArrowError> {
+    let err = |e: String| ArrowError::InvalidArgumentError(format!("column {:?}: {e}", f.name()));
+    if let Some(t) = polars_unsupported(f.data_type()) {
+        return Err(err(format!(
+            "{t} is not supported (Polars cannot import it)"
+        )));
+    }
+    validate_tree(d, true).map_err(|e| err(e.to_string()))
+}
+
+/// Every column of `batch` checked (`check_column`): a RecordBatch built without
+/// validation can hold arrays whose buffers are too short or whose values are invalid.
+/// The api entry points run this on every batch: a caller may build one unchecked.
+/// Batches read from a C stream were checked on import already (`import_checked`,
+/// which must check before it builds arrays or concatenates batches), so they are
+/// checked twice; the cost is linear and small next to any kernel's.
 pub(crate) fn validate_batch(batch: &RecordBatch) -> std::result::Result<(), ArrowError> {
     let schema = batch.schema();
     schema
         .fields()
         .iter()
         .zip(batch.columns())
-        .try_for_each(|(f, c)| {
-            validate_tree(&c.to_data()).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!("column {:?}: {e}", f.name()))
-            })
-        })
+        .try_for_each(|(f, c)| check_column(f, &c.to_data()))
 }
 
 #[cfg(test)]
@@ -908,6 +956,83 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("\"s\""));
+        }
+
+        // Value-level malformations: arrow-rs's structural checks pass them, and Polars
+        // asserts (dictionary keys), reads out of bounds (UTF-8) or aborts (Int256).
+
+        fn keys_out_of_range() -> ArrayData {
+            let values = arrow_array::StringArray::from(vec!["x", "y"]).into_data();
+            unsafe {
+                ArrayData::builder(AT::Dictionary(Box::new(AT::Int32), Box::new(AT::Utf8)))
+                    .len(4)
+                    .add_buffer(Buffer::from_vec(vec![0i32, 1, 5, 1]))
+                    .child_data(vec![values])
+                    .build_unchecked()
+            }
+        }
+
+        fn invalid_utf8() -> ArrayData {
+            unsafe {
+                ArrayData::builder(AT::Utf8)
+                    .len(2)
+                    .add_buffer(Buffer::from_vec(vec![0i32, 2, 4]))
+                    .add_buffer(Buffer::from_vec(vec![0xffu8, 0xfe, 0xc3, 0x28]))
+                    .build_unchecked()
+            }
+        }
+
+        fn decimal256() -> ArrayData {
+            arrow_array::Decimal256Array::from(vec![arrow_buffer::i256::from(1)])
+                .with_precision_and_scale(10, 2)
+                .unwrap()
+                .into_data()
+        }
+
+        /// `column`'s rejection, as the one column "x" of a C stream batch and of a
+        /// RecordBatch (api callers).
+        fn rejected_both_ways(column: ArrayData) -> [String; 2] {
+            let batch =
+                RecordBatch::try_from_iter([("x", arrow_array::make_array(column.clone()))])
+                    .unwrap();
+            let direct = validate_batch(&batch).unwrap_err().to_string();
+            let msgs = [rejected(column), direct];
+            for m in &msgs {
+                assert!(m.contains("column \"x\""), "{m}");
+            }
+            msgs
+        }
+
+        #[test]
+        fn dictionary_keys_out_of_range() {
+            for m in rejected_both_ways(keys_out_of_range()) {
+                assert!(m.contains("out of bounds"), "{m}");
+            }
+        }
+
+        #[test]
+        fn invalid_utf8_in_a_string_array() {
+            for m in rejected_both_ways(invalid_utf8()) {
+                assert!(m.to_lowercase().contains("utf8"), "{m}");
+            }
+        }
+
+        #[test]
+        fn a_decimal256_column_polars_cannot_import() {
+            for m in rejected_both_ways(decimal256()) {
+                assert!(m.contains("Decimal256(10, 2) is not supported"), "{m}");
+            }
+            // At any depth.
+            let item = Arc::new(Field::new("item", AT::Decimal256(10, 2), true));
+            let list = arrow_array::ListArray::new(
+                item,
+                arrow_buffer::OffsetBuffer::from_lengths([1]),
+                arrow_array::make_array(decimal256()),
+                None,
+            );
+            for m in rejected_both_ways(list.into_data()) {
+                assert!(m.contains("Decimal256(10, 2) is not supported"), "{m}");
+            }
         }
     }
 }
