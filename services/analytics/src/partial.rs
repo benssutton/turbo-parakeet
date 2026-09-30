@@ -40,10 +40,87 @@ fn gcd128(a: i128, b: i128) -> i128 {
     a as i128
 }
 
-/// Compact copy of `len` rows from `start` (pins none of `a`'s buffers).
+/// Copy of `len` rows from `start` that shares no buffer with `a`, so it pins none of
+/// the source batch. `take` copies most types, but reuses every data buffer of a
+/// Utf8View / BinaryView and the whole values array of a dictionary; those are
+/// compacted here, at any depth (list, fixed-size list, map and struct children).
+/// A dictionary is decoded to its value type: the reservoir casts sampled pieces back
+/// to the column's own dtype, so the sample loses nothing by it.
 pub(crate) fn copy_rows(a: &ArrayRef, start: usize, len: usize) -> Result<ArrayRef, String> {
     let idx = UInt64Array::from_iter_values((start..start + len).map(|i| i as u64));
-    arrow_select::take::take(a.as_ref(), &idx, None).map_err(|e| e.to_string())
+    arrow_select::take::take(a.as_ref(), &idx, None)
+        .and_then(compact)
+        .map_err(|e| e.to_string())
+}
+
+/// `a` (a `take` result) with no buffer shared with its source; see `copy_rows`.
+fn compact(a: ArrayRef) -> Result<ArrayRef, arrow_schema::ArrowError> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::{
+        Array, FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray,
+    };
+    use std::sync::Arc;
+    Ok(match a.data_type() {
+        AT::Utf8View => Arc::new(a.as_string_view().gc()),
+        AT::BinaryView => Arc::new(a.as_binary_view().gc()),
+        AT::Dictionary(_, value) => compact(arrow_cast::cast(&a, value)?)?,
+        AT::List(f) => {
+            let l = a.as_list::<i32>();
+            let values = compact(l.values().clone())?;
+            Arc::new(ListArray::try_new(
+                f.clone(),
+                l.offsets().clone(),
+                values,
+                l.nulls().cloned(),
+            )?)
+        }
+        AT::LargeList(f) => {
+            let l = a.as_list::<i64>();
+            let values = compact(l.values().clone())?;
+            Arc::new(LargeListArray::try_new(
+                f.clone(),
+                l.offsets().clone(),
+                values,
+                l.nulls().cloned(),
+            )?)
+        }
+        AT::FixedSizeList(f, size) => {
+            let l = a.as_fixed_size_list();
+            let values = compact(l.values().clone())?;
+            Arc::new(FixedSizeListArray::try_new(
+                f.clone(),
+                *size,
+                values,
+                l.nulls().cloned(),
+            )?)
+        }
+        AT::Map(f, sorted) => {
+            let m = a.as_map();
+            let entries = compact(Arc::new(m.entries().clone()))?;
+            Arc::new(MapArray::try_new(
+                f.clone(),
+                m.offsets().clone(),
+                entries.as_struct().clone(),
+                m.nulls().cloned(),
+                *sorted,
+            )?)
+        }
+        AT::Struct(fields) => {
+            let s = a.as_struct();
+            let columns = s
+                .columns()
+                .iter()
+                .cloned()
+                .map(compact)
+                .collect::<Result<_, _>>()?;
+            Arc::new(StructArray::try_new(
+                fields.clone(),
+                columns,
+                s.nulls().cloned(),
+            )?)
+        }
+        _ => a,
+    })
 }
 
 /// Polars' view-array data blocks (recommend.rs `polars_views`) replayed on value
@@ -326,10 +403,16 @@ impl LevelStats {
     pub(crate) fn absorb(&mut self, b: BatchStats, threshold: u64) {
         self.n += b.n;
         self.n_null += b.n_null;
-        if b.lo.as_ref().is_some_and(|x| self.lo.as_ref().is_none_or(|y| x.key < y.key)) {
+        if b.lo
+            .as_ref()
+            .is_some_and(|x| self.lo.as_ref().is_none_or(|y| x.key < y.key))
+        {
             self.lo = b.lo;
         }
-        if b.hi.as_ref().is_some_and(|x| self.hi.as_ref().is_none_or(|y| y.key < x.key)) {
+        if b.hi
+            .as_ref()
+            .is_some_and(|x| self.hi.as_ref().is_none_or(|y| y.key < x.key))
+        {
             self.hi = b.hi;
         }
         self.min_len = opt(self.min_len, b.min_len, u64::min);
@@ -504,14 +587,29 @@ mod tests {
             (
                 Series::new(
                     "i".into(),
-                    &[Some(30i64), None, Some(-6), Some(12), Some(30), None, Some(0)],
+                    &[
+                        Some(30i64),
+                        None,
+                        Some(-6),
+                        Some(12),
+                        Some(30),
+                        None,
+                        Some(0),
+                    ],
                 ),
                 false,
             ),
             (
                 Series::new(
                     "f".into(),
-                    &[Some(1.5f64), Some(-0.0), None, Some(f64::NAN), Some(2.25), Some(-7.0)],
+                    &[
+                        Some(1.5f64),
+                        Some(-0.0),
+                        None,
+                        Some(f64::NAN),
+                        Some(2.25),
+                        Some(-7.0),
+                    ],
                 ),
                 false,
             ),
@@ -539,7 +637,12 @@ mod tests {
             let whole = summary(&absorbed(&[s.clone()], track, 10_000));
             for k in [1, 2, 3, 5] {
                 let parts = chunks(&s, k);
-                assert_eq!(summary(&absorbed(&parts, track, 10_000)), whole, "{} k={k}", s.name());
+                assert_eq!(
+                    summary(&absorbed(&parts, track, 10_000)),
+                    whole,
+                    "{} k={k}",
+                    s.name()
+                );
             }
         }
     }
@@ -568,7 +671,8 @@ mod tests {
     #[test]
     fn view_blocks_match_polars_views() {
         let values: Vec<String> = (0..1000).map(|i| "x".repeat(1 + (i * 37) % 9000)).collect();
-        let arr = arrow_array::StringArray::from(values.iter().map(String::as_str).collect::<Vec<_>>());
+        let arr =
+            arrow_array::StringArray::from(values.iter().map(String::as_str).collect::<Vec<_>>());
         let views = polars_views(&arr, &AT::Utf8View).unwrap();
         let measured =
             ipc_body_bytes(views.as_ref(), None).unwrap() - pad8(16 * values.len() as u64);
@@ -583,5 +687,44 @@ mod tests {
         let st = absorbed(&chunks(&s, 1), false, 10_000);
         assert_eq!(st.int_range(), Some((-3, 9)));
         assert_eq!(st.lo.as_ref().unwrap().value.len(), 1);
+    }
+
+    #[test]
+    fn copy_rows_pins_none_of_the_source_buffers() {
+        use arrow_array::types::UInt32Type;
+        use arrow_array::{Array, DictionaryArray, LargeListArray, StringViewArray};
+        use arrow_buffer::OffsetBuffer;
+        use std::sync::Arc;
+
+        let views: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+            (0..100_000).map(|i| format!("value number {i:>12} padded")),
+        ));
+        let n = views.len();
+        let list: ArrayRef = Arc::new(LargeListArray::new(
+            Arc::new(arrow_schema::Field::new_list_field(AT::Utf8View, true)),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(1, n)),
+            views.clone(),
+            None,
+        ));
+        let keys = arrow_array::UInt32Array::from_iter_values((0..n as u32).rev());
+        let dict: ArrayRef =
+            Arc::new(DictionaryArray::<UInt32Type>::try_new(keys, views.clone()).unwrap());
+        for a in [&views, &list, &dict] {
+            assert!(a.to_data().get_buffer_memory_size() > 1 << 20);
+            let copy = copy_rows(a, 500, 5).unwrap();
+            assert_eq!(copy.len(), 5);
+            let retained = copy.to_data().get_buffer_memory_size();
+            assert!(retained < 4096, "{}: {retained} bytes", a.data_type());
+        }
+        // Values survive (the dictionary decodes to its value type).
+        let copy = copy_rows(&dict, 0, 1).unwrap();
+        let s = arrow_cast::cast(&copy, &AT::Utf8).unwrap();
+        assert_eq!(
+            s.as_any()
+                .downcast_ref::<arrow_array::StringArray>()
+                .unwrap()
+                .value(0),
+            format!("value number {:>12} padded", n - 1)
+        );
     }
 }
