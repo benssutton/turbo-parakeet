@@ -453,6 +453,17 @@ fn recast(
     Ok(a)
 }
 
+/// `t` holds the Null type below its top level (a List(Null), a Struct with a Null
+/// field, ...).
+fn holds_nested_null(t: &PT) -> bool {
+    let is_or_holds = |t: &PT| t == &PT::Null || holds_nested_null(t);
+    match t {
+        PT::List(i) | PT::Array(i, _) => is_or_holds(i),
+        PT::Struct(fs) => fs.iter().any(|f| is_or_holds(f.dtype())),
+        _ => false,
+    }
+}
+
 /// A batch column's statistics: None for a Null-typed column; else the column's and,
 /// for List / Array, its inner values'.
 type Stats = Option<(BatchStats, Option<BatchStats>)>;
@@ -584,24 +595,42 @@ impl Streaming {
             )));
         }
         let series = import_batch(batch).map_err(|e| Error::InvalidInput(e.to_string()))?;
-        series.iter().try_for_each(|s| self.check(s))?;
+        // A column holding Null below the top is ineligible, as in one-shot (whose
+        // Python eligibility refuses it); it is kept out of the statistics and sample.
+        let (nested_null, rest): (Vec<_>, Vec<_>) = series
+            .into_iter()
+            .zip(schema.fields().iter().cloned())
+            .zip(batch.columns().iter().cloned())
+            .partition(|((s, _), _)| holds_nested_null(s.dtype()));
+        for ((s, _), _) in &nested_null {
+            // A typed column cannot turn into one (type changed); a Null-typed or
+            // already ineligible one can.
+            let c = self.index.get(s.name().as_str()).map(|&i| &self.columns[i]);
+            if c.is_some_and(|c| !c.ineligible && c.dtype.is_some()) {
+                self.check(s)?;
+            }
+        }
+        let (series, cols): (Vec<(Series, arrow_schema::FieldRef)>, Vec<_>) = rest
+            .into_iter()
+            .map(|((s, f), a)| ((s, f.clone()), (f, a)))
+            .unzip();
+        series.iter().try_for_each(|(s, _)| self.check(s))?;
         let stats: Vec<Stats> = series
             .par_iter()
-            .map(|s| self.batch_stats(s))
+            .map(|(s, _)| self.batch_stats(s))
             .collect::<PolarsResult<_>>()
             .map_err(|e| Error::Compute(e.to_string()))?;
         let rows = batch.num_rows() as u64;
-        let cols: Vec<_> = schema
-            .fields()
-            .iter()
-            .cloned()
-            .zip(batch.columns().iter().cloned())
-            .collect();
         self.reservoir.feed(&cols, rows).map_err(Error::Compute)?;
         // Commit: nothing below can fail.
         let threshold = self.params.categorical_threshold;
         let mut present = HashSet::new();
-        for ((s, f), st) in series.iter().zip(schema.fields()).zip(stats) {
+        for ((s, f), _) in &nested_null {
+            let c = self.column(s.name().as_str());
+            c.ineligible = true;
+            c.input_type = pa_name(f.data_type());
+        }
+        for ((s, f), st) in series.iter().zip(stats) {
             present.insert(s.name().to_string());
             let c = self.column(s.name().as_str());
             match st {
@@ -949,6 +978,41 @@ pub(crate) mod tests {
         assert!(s.mark_ineligible("a", "Object").is_err());
     }
 
+    #[test]
+    fn a_nested_null_column_is_ineligible() {
+        // One-shot lists a column holding Null below the top as ineligible; Polars
+        // exports such a column's Null level with a buffer arrow-rs cannot import.
+        let item = Arc::new(arrow_schema::Field::new("item", AT::Null, true));
+        let nulls: ArrayRef = Arc::new(ListArray::new(
+            item,
+            arrow_buffer::OffsetBuffer::from_lengths([1, 0]),
+            Arc::new(NullArray::new(1)),
+            Some(arrow_buffer::NullBuffer::from(vec![true, false])),
+        ));
+        let b = || batch(vec![("n", nulls.clone()), ("a", ints(&[Some(1), Some(2)]))]);
+        let mut s = streaming();
+        s.add(&b()).unwrap();
+        s.add(&b()).unwrap();
+        let n = col(&s, "n");
+        assert!(n.ineligible);
+        assert_eq!(n.input_type, "list<item: null>");
+        assert_eq!(col(&s, "a").outer.n, 4);
+        let out = s.finish().unwrap();
+        assert_eq!(
+            texts(&out, "status"),
+            vec![Some("ineligible".into()), Some("computed".into())]
+        );
+        // A column already typed cannot turn into one.
+        let mut s = streaming();
+        s.add(&batch(vec![("n", ints(&[Some(1)]))])).unwrap();
+        let err = s.add(&b()).unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidInput(ref m) if m.contains("type changed")),
+            "{err:?}"
+        );
+        assert_eq!(s.n_rows, 1);
+    }
+
     fn one_shot(b: &RecordBatch) -> RecordBatch {
         let out = describe_and_recommend_impl(&import_batch(b).unwrap(), &params()).unwrap();
         export_struct(&out).unwrap()
@@ -1269,6 +1333,42 @@ pub(crate) mod tests {
             texts(&out, "rec_arrow_type"),
             texts(&reference, "rec_arrow_type")
         );
+    }
+
+    /// [[{a:1}]], None, [[{a:3}, None], None], [[{a:5}]], sliced to rows 1..3: a
+    /// Polars Series over it holds structs whose validity starts mid-bitmap, which
+    /// polars-arrow exports as invalid Arrow (arrow-rs panicked on it).
+    fn sliced_lists_of_lists_of_structs() -> RecordBatch {
+        use arrow_array::builder::{LargeListBuilder, StructBuilder};
+        type B = LargeListBuilder<LargeListBuilder<StructBuilder>>;
+        let sb =
+            StructBuilder::from_fields(vec![arrow_schema::Field::new("a", AT::Int64, true)], 8);
+        let mut b: B = LargeListBuilder::new(LargeListBuilder::new(sb));
+        let item = |b: &mut B, v: Option<i64>| {
+            let s = b.values().values();
+            s.field_builder::<Int64Builder>(0).unwrap().append_option(v);
+            s.append(v.is_some());
+        };
+        item(&mut b, Some(1));
+        b.values().append(true);
+        b.append(true);
+        b.append(false);
+        item(&mut b, Some(3));
+        item(&mut b, None);
+        b.values().append(true);
+        b.values().append(false);
+        b.append(true);
+        item(&mut b, Some(5));
+        b.values().append(true);
+        b.append(true);
+        let a: ArrayRef = Arc::new(b.finish());
+        batch(vec![("c", a.slice(1, 2))])
+    }
+
+    #[test]
+    fn sliced_nested_structs_with_nulls_size_like_one_shot() {
+        let b = sliced_lists_of_lists_of_structs();
+        assert_like_one_shot(std::slice::from_ref(&b), &b, "sliced list<list<struct>>");
     }
 
     #[test]

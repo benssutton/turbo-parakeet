@@ -24,6 +24,7 @@ Null means "not computed"; NaN means "computed but mathematically undefined".
 from __future__ import annotations
 
 import importlib
+import io
 import math
 from abc import ABC, abstractmethod
 from itertools import combinations
@@ -59,13 +60,10 @@ class Technique(ABC):
     def add(self, frames: dict[str, Any]) -> Self:
         """Register named frames: Polars DataFrames / LazyFrames, or any Arrow tabular
         object implementing the Arrow PyCapsule interface (pyarrow Table, RecordBatch,
-        RecordBatchReader, …), read once into a Polars DataFrame. Every column holding
-        an Array or Struct (at any depth) is rebuilt first: py-polars 1.41 exports a
-        *sliced* Array/Struct with nulls as inconsistent Arrow (Array: slice offset
-        applied twice; Struct: short child), which aborts the Rust extension's process
-        (arrow-rs panics, and the release profile is panic=abort) and makes
-        pyarrow/DataFusion raise. A gather over every row produces a fresh, consistent
-        buffer. Lazy-safe. Names are unique for the life of the instance."""
+        RecordBatchReader, …), read once into a Polars DataFrame (after the Rust
+        boundary's checks: ValueError on malformed values or a Decimal256). Every
+        column holding an Array or Struct (at any depth) is rebuilt first
+        (`_normalise`). Lazy-safe. Names are unique for the life of the instance."""
         accepted = {}
         for name, frame in frames.items():
             if not isinstance(name, str) or not name:
@@ -300,11 +298,26 @@ def _holds_array_or_struct(dtype: pl.DataType) -> bool:
 
 
 def _normalise(frame: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | pl.LazyFrame:
+    """`frame` with every column holding an Array or Struct (at any depth) rebuilt.
+
+    py-polars 1.41 exports a *sliced* Array / Struct with nulls, at any depth, as
+    inconsistent Arrow: polars-arrow slices their children eagerly but exports
+    `offset = validity offset` (Array: slice offset applied twice; Struct: short
+    child). The Rust extension refuses it (ValueError) and pyarrow / DataFusion raise.
+    An in-memory IPC round trip of those columns rewrites every level from offset 0
+    (a gather does not: a gathered List keeps a sliced inner Array / Struct); it is
+    also faster than a gather (~150 ms vs ~270 ms for three nested 1M-row columns).
+    """
     schema = frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
     cols = [c for c, dt in schema.items() if _holds_array_or_struct(dt)]
     if not cols:
         return frame
-    return frame.with_columns(pl.col(c).gather(pl.int_range(pl.len())) for c in cols)
+    if isinstance(frame, pl.LazyFrame):
+        return frame.map_batches(_normalise, schema=schema, streamable=False)
+    buf = io.BytesIO()
+    frame.select(cols).write_ipc(buf, compression="uncompressed")
+    buf.seek(0)
+    return frame.with_columns(pl.read_ipc(buf, memory_map=False).get_columns())
 
 
 def computed(expr: pl.Expr) -> pl.Expr:

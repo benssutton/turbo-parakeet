@@ -337,6 +337,65 @@ def test_lazyframe_is_refused():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4b. Ordinary Polars frames: nested Null, sliced nested columns
+
+
+@pytest.mark.parametrize(
+    "dtype, value",
+    [
+        (pl.List(pl.Null), [None]),
+        (pl.Struct({"n": pl.Null}), {"n": None}),
+        (pl.Array(pl.Null, 2), [None, None]),
+        (pl.List(pl.Struct({"n": pl.Null})), [{"n": None}]),
+    ],
+    ids=["list", "struct", "array", "list_struct"],
+)
+def test_a_nested_null_column_is_ineligible_like_one_shot(dtype, value):
+    frame = pl.DataFrame({"c": pl.Series([value, None], dtype=dtype), "k": [1, 2]})
+    out = StreamingRecommender().add(frame).finish()
+    ref = one_shot(frame)
+    for r in out.iter_rows(named=True):
+        assert r["status"] == ref[r["column"]]["status"], r["column"]
+    c = row(out, "c")
+    assert (c["status"], c["dtype"]) == ("ineligible", str(dtype))
+    assert row(out, "k")["n_rows"] == 2
+
+
+def test_a_nested_null_arrow_column_is_ineligible():
+    table = pa.table({"c": pa.array([[None], None], pa.list_(pa.null())), "k": [1, 2]})
+    out = StreamingRecommender().add(table).finish()
+    assert row(out, "c")["status"] == "ineligible"
+    assert row(out, "k")["status"] == "computed"
+
+
+SLICED = {
+    "list_array": pl.Series(
+        [[[1, 2]], None, [[3, 4], None], [[5, 6]]], dtype=pl.List(pl.Array(pl.Int64, 2))
+    ),
+    "list_struct": pl.Series([[{"a": 1}], None, [{"a": 3}, None], [{"a": 5}]]),
+    "list_list_struct": pl.Series(
+        [[[{"a": 1}]], None, [[{"a": 3}, None], None], [[{"a": 5}]]]
+    ),
+    "array": pl.Series([[1, 2], None, [3, None], [5, 6]], dtype=pl.Array(pl.Int64, 2)),
+    "struct": pl.Series([{"a": 1}, None, {"a": 3}, {"a": None}]),
+    "struct_list": pl.Series([{"a": [1]}, None, {"a": [3, None]}, {"a": None}]),
+    "array_array": pl.Series(
+        [[[1, 2], [3, 4]], None, [[5, 6], None], [[7, 8], [9, 0]]],
+        dtype=pl.Array(pl.Array(pl.Int64, 2), 2),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(SLICED))
+@pytest.mark.parametrize("offset", [1, 2])
+def test_a_sliced_nested_column_streams_like_one_shot(name, offset):
+    frame = pl.DataFrame({"c": SLICED[name]}).slice(offset, 2)
+    out = StreamingRecommender().add(frame).finish()
+    assert row(out, "c")["n_null"] == frame["c"].null_count()
+    assert_parity(out, frame, single_batch=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 5. Malformed or unsupported Arrow input is refused, never a crash
 
 

@@ -62,7 +62,7 @@ pub(crate) fn export_series(s: &Series, compat: CompatLevel) -> PolarsResult<Arr
     let arr: Box<dyn polars_arrow::array::Array> = if s.n_chunks() == 0 {
         polars_arrow::array::new_empty_array(s.dtype().to_arrow(compat))
     } else {
-        s.rechunk().to_arrow(0, compat)
+        ffi_safe(s.rechunk().to_arrow(0, compat))
     };
     let field = polars_arrow::datatypes::Field::new(s.name().clone(), arr.dtype().clone(), true);
     let schema = polars_arrow::ffi::export_field_to_c(&field);
@@ -105,8 +105,69 @@ pub(crate) fn export_series(s: &Series, compat: CompatLevel) -> PolarsResult<Arr
         )
     };
     let data = unsafe { arrow_array::ffi::from_ffi(array, &schema) }
+        .and_then(|d| validate_tree(&d, false).map(|()| d))
         .map_err(|e| polars_err!(ComputeError: "arrow C data interface: {e}"))?;
     Ok(arrow_array::make_array(data))
+}
+
+/// `a` with every Struct / FixedSizeList level (at any depth) exportable: polars-arrow
+/// slices their children eagerly but exports them with `offset = validity.offset()`,
+/// so a sliced one with nulls exports as invalid Arrow (child too short), which
+/// arrow-rs panics on. Such a level gets its validity rebuilt from bit 0 (O(len)
+/// bits); every other buffer is shared.
+fn ffi_safe(a: Box<dyn polars_arrow::array::Array>) -> Box<dyn polars_arrow::array::Array> {
+    use polars_arrow::array::{Array as _, FixedSizeListArray, ListArray, StructArray};
+    use polars_arrow::bitmap::Bitmap;
+    use polars_arrow::datatypes::PhysicalType as P;
+    let fresh = |v: Option<&Bitmap>| {
+        v.map(|b| {
+            if b.as_slice().1 == 0 {
+                b.clone()
+            } else {
+                b.iter().collect()
+            }
+        })
+    };
+    match a.dtype().to_physical_type() {
+        P::Struct => {
+            let s = a.as_any().downcast_ref::<StructArray>().unwrap();
+            let values = s.values().iter().map(|v| ffi_safe(v.clone())).collect();
+            Box::new(StructArray::new(
+                s.dtype().clone(),
+                s.len(),
+                values,
+                fresh(s.validity()),
+            ))
+        }
+        P::FixedSizeList => {
+            let l = a.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            Box::new(FixedSizeListArray::new(
+                l.dtype().clone(),
+                l.len(),
+                ffi_safe(l.values().clone()),
+                fresh(l.validity()),
+            ))
+        }
+        P::List => {
+            let l = a.as_any().downcast_ref::<ListArray<i32>>().unwrap();
+            Box::new(ListArray::new(
+                l.dtype().clone(),
+                l.offsets().clone(),
+                ffi_safe(l.values().clone()),
+                l.validity().cloned(),
+            ))
+        }
+        P::LargeList => {
+            let l = a.as_any().downcast_ref::<ListArray<i64>>().unwrap();
+            Box::new(ListArray::new(
+                l.dtype().clone(),
+                l.offsets().clone(),
+                ffi_safe(l.values().clone()),
+                l.validity().cloned(),
+            ))
+        }
+        _ => a,
+    }
 }
 
 /// A kernel's one-struct-column result as a RecordBatch of its fields (native layout).

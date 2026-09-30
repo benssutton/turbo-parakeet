@@ -16,13 +16,24 @@ from analytics._dtypes import holds_wide_integer
 from analytics.base import _normalise
 
 
+def _holds_nested_null(dtype: pl.DataType) -> bool:
+    """Null below the top level: ineligible, as in one-shot (py-polars also exports
+    such a Null level with a buffer, which the Arrow boundary refuses)."""
+    if isinstance(dtype, (pl.List, pl.Array)):
+        return dtype.inner == pl.Null or _holds_nested_null(dtype.inner)
+    if isinstance(dtype, pl.Struct):
+        return any(f.dtype == pl.Null or _holds_nested_null(f.dtype) for f in dtype.fields)
+    return False
+
+
 class StreamingRecommender:
     """Narrowest value-preserving Arrow type per column, from a stream of batches.
 
     `add(frame)` takes a Polars DataFrame or any Arrow tabular object
     (`__arrow_c_stream__`); its batches are processed one at a time. Columns may
     appear, disappear (their rows count as null) or start as the Null type. Int128 /
-    UInt128 and Object columns are listed as ineligible. `finish()` returns one row
+    UInt128, Object and nested-Null (List(Null), a Struct with a Null field, ...)
+    columns are listed as ineligible. `finish()` returns one row
     per column and keeps the state, so adding can continue.
     """
 
@@ -61,14 +72,16 @@ class StreamingRecommender:
             ineligible = [
                 (name, str(dtype))
                 for name, dtype in frame.schema.items()
-                if holds_wide_integer(dtype) or isinstance(dtype, pl.Object)
+                if holds_wide_integer(dtype)
+                or isinstance(dtype, pl.Object)
+                or _holds_nested_null(dtype)
             ]
             if len(ineligible) == frame.width:
                 # Dropping every column would lose the height; the rows still count.
                 frame = pl.DataFrame(height=frame.height)
             else:
                 # A sliced Array / Struct with nulls exports as invalid Arrow (see
-                # analytics.base.Technique.add): rebuild those columns.
+                # analytics.base._normalise): rebuild those columns.
                 frame = _normalise(frame.drop([name for name, _ in ineligible]))
             if any(dtype == pl.Null for dtype in frame.schema.values()):
                 # py-polars exports a Null column with one buffer, which arrow-rs
