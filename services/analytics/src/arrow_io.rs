@@ -278,8 +278,14 @@ impl CheckedReader {
     ) -> std::result::Result<Self, ArrowError> {
         let mut stream = unsafe { std::ptr::replace(raw, FFI_ArrowArrayStream::empty()) };
         let s = (&mut stream as *mut FFI_ArrowArrayStream).cast::<RawStream>();
-        let get_schema = unsafe { (*s).get_schema }
-            .ok_or_else(|| ArrowError::CDataInterface("arrow stream already released".into()))?;
+        let released = || ArrowError::CDataInterface("arrow stream already released".into());
+        // A released stream has `release == NULL`; its other members are undefined.
+        if unsafe { (*s).release }.is_none() {
+            return Err(released());
+        }
+        let get_schema = unsafe { (*s).get_schema }.ok_or_else(|| {
+            ArrowError::CDataInterface("arrow stream: no get_schema callback".into())
+        })?;
         let mut schema = FFI_ArrowSchema::empty();
         if unsafe { get_schema(s, &mut schema) } != 0 {
             return Err(unsafe { last_error(s, "get_schema") });
@@ -298,7 +304,12 @@ impl Iterator for CheckedReader {
 
     fn next(&mut self) -> Option<Self::Item> {
         let s = (&mut self.stream as *mut FFI_ArrowArrayStream).cast::<RawStream>();
-        let get_next = unsafe { (*s).get_next }?;
+        let Some(get_next) = (unsafe { (*s).get_next }) else {
+            // A NULL callback is a broken producer, not the end of the stream.
+            return Some(Err(ArrowError::CDataInterface(
+                "arrow stream: no get_next callback".into(),
+            )));
+        };
         let mut array = FFI_ArrowArray::empty();
         if unsafe { get_next(s, &mut array) } != 0 {
             return Some(Err(unsafe { last_error(s, "get_next") }));
@@ -831,6 +842,49 @@ mod tests {
         assert_eq!(out.num_rows(), 3);
         // The stream was moved out and left released, so a second read fails.
         assert!(unsafe { read_stream(&mut stream) }.is_err());
+    }
+
+    fn int_stream() -> FFI_ArrowArrayStream {
+        use arrow_array::{Int64Array, RecordBatchIterator};
+        let b =
+            RecordBatch::try_from_iter([("a", Arc::new(Int64Array::from(vec![1i64])) as ArrayRef)])
+                .unwrap();
+        let schema = b.schema();
+        FFI_ArrowArrayStream::new(Box::new(RecordBatchIterator::new([Ok(b)], schema)))
+    }
+
+    static GET_SCHEMA_CALLED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    unsafe extern "C" fn flag_get_schema(_: *mut RawStream, _: *mut FFI_ArrowSchema) -> c_int {
+        GET_SCHEMA_CALLED.store(true, std::sync::atomic::Ordering::SeqCst);
+        1
+    }
+
+    #[test]
+    fn a_stream_without_release_is_released() {
+        // The C Stream Interface marks a released stream by `release == NULL`; its
+        // other members are then undefined and must not be called.
+        let mut stream = int_stream();
+        let raw = (&mut stream as *mut FFI_ArrowArrayStream).cast::<RawStream>();
+        // (Leaks the producer's state.)
+        unsafe { (*raw).release = None };
+        unsafe { (*raw).get_schema = Some(flag_get_schema) };
+        let err = unsafe { CheckedReader::from_raw(&mut stream) }
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("already released"), "{err}");
+        assert!(!GET_SCHEMA_CALLED.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_stream_without_get_next_is_an_error() {
+        let mut stream = int_stream();
+        let raw = (&mut stream as *mut FFI_ArrowArrayStream).cast::<RawStream>();
+        unsafe { (*raw).get_next = None };
+        let mut reader = unsafe { CheckedReader::from_raw(&mut stream) }.unwrap();
+        let err = reader.next().expect("an error, not the end").unwrap_err();
+        assert!(err.to_string().contains("get_next"), "{err}");
     }
 
     /// Structurally invalid C data, as a producer might send it.

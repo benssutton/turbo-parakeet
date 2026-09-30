@@ -71,8 +71,12 @@ fn read_reader(data: &Bound<'_, PyAny>) -> PyResult<CheckedReader> {
 ///
 /// SAFETY: `stream` points to a valid, unreleased ArrowArrayStream.
 unsafe fn reject_wide_integers(stream: *mut RawStream) -> PyResult<()> {
+    // A released stream has `release == NULL`; its other members are undefined.
+    if unsafe { (*stream).release }.is_none() {
+        return Err(value_error("arrow stream already released"));
+    }
     let get_schema = unsafe { (*stream).get_schema }
-        .ok_or_else(|| value_error("arrow stream already released"))?;
+        .ok_or_else(|| value_error("arrow stream: no get_schema callback"))?;
     let mut schema = FFI_ArrowSchema::empty();
     if unsafe { get_schema(stream, &mut schema) } != 0 {
         let detail = unsafe { (*stream).get_last_error }.and_then(|get_last_error| {
