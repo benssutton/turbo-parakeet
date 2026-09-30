@@ -22,7 +22,9 @@ def _holds_nested_null(dtype: pl.DataType) -> bool:
     if isinstance(dtype, (pl.List, pl.Array)):
         return dtype.inner == pl.Null or _holds_nested_null(dtype.inner)
     if isinstance(dtype, pl.Struct):
-        return any(f.dtype == pl.Null or _holds_nested_null(f.dtype) for f in dtype.fields)
+        return any(
+            f.dtype == pl.Null or _holds_nested_null(f.dtype) for f in dtype.fields
+        )
     return False
 
 

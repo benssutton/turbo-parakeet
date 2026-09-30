@@ -81,20 +81,29 @@ def one_shot(frame: pl.DataFrame) -> dict[str, dict]:
 
 def kept_original(r: dict) -> bool:
     return any(
-        c["outcome"] == "chosen" and c["rule"] == "original" for c in r["rec_candidates"]
+        c["outcome"] == "chosen" and c["rule"] == "original"
+        for c in r["rec_candidates"]
     )
 
 
-def candidates(r: dict, with_original_sizes: bool, dictionary_sizes: bool = True) -> list:
+def candidates(
+    r: dict, with_original_sizes: bool, dictionary_sizes: bool = True
+) -> list:
     return [
         (
-            c["arrow_type"] if dictionary_sizes or c["rule"] != "string→dictionary" else None,
+            (
+                c["arrow_type"]
+                if dictionary_sizes or c["rule"] != "string→dictionary"
+                else None
+            ),
             c["rule"],
             str(c["outcome"]),
-            None
-            if (c["rule"] == "original" and not with_original_sizes)
-            or (c["rule"] == "string→dictionary" and not dictionary_sizes)
-            else c["predicted_bytes"],
+            (
+                None
+                if (c["rule"] == "original" and not with_original_sizes)
+                or (c["rule"] == "string→dictionary" and not dictionary_sizes)
+                else c["predicted_bytes"]
+            ),
         )
         for c in r["rec_candidates"]
     ]
@@ -135,9 +144,9 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         name = r["column"]
         o = ref[name]
         overflowed = bool(r["distinct_overflowed"])
-        original_sizes = (single_batch or not per_batch_sum(r)) and not null_slots_hold_bytes(
-            frame[name]
-        )
+        original_sizes = (
+            single_batch or not per_batch_sum(r)
+        ) and not null_slots_hold_bytes(frame[name])
         keys = ["rec_nullable", "rec_lossy_formatting", "rec_arrow_type"]
         if original_sizes or not kept_original(o):
             keys += ["rec_arrow_size_bytes", "rec_polars_size_bytes"]
@@ -269,7 +278,12 @@ def test_a_new_column_is_backfilled():
     rec = StreamingRecommender().add(pl.DataFrame({"a": [1, 2]}))
     out = rec.add(pl.DataFrame({"a": [3], "b": ["x"]})).finish()
     b = row(out, "b")
-    assert (b["first_row"], b["n_rows"], b["n_null"], b["rec_nullable"]) == (2, 3, 2, True)
+    assert (b["first_row"], b["n_rows"], b["n_null"], b["rec_nullable"]) == (
+        2,
+        3,
+        2,
+        True,
+    )
 
 
 def test_an_absent_column_counts_as_null():
@@ -292,7 +306,9 @@ def test_an_all_ineligible_frame_keeps_its_rows():
 
 
 def test_a_null_typed_column_adopts_a_type():
-    rec = StreamingRecommender().add(pl.DataFrame({"b": pl.Series([None, None], dtype=pl.Null)}))
+    rec = StreamingRecommender().add(
+        pl.DataFrame({"b": pl.Series([None, None], dtype=pl.Null)})
+    )
     b = row(rec.add(pl.DataFrame({"b": ["x", "y"]})).finish(), "b")
     assert b["status"] == "computed" and b["n_null"] == 2
 
@@ -327,7 +343,9 @@ def test_a_float_that_does_not_round_trip_fails_by_statistic():
 
 
 def test_nanoseconds_out_of_range_fail_by_statistic():
-    frame = pl.DataFrame({"s": ["2300-01-01T00:00:00.123456789", "2024-01-01T00:00:00"]})
+    frame = pl.DataFrame(
+        {"s": ["2300-01-01T00:00:00.123456789", "2024-01-01T00:00:00"]}
+    )
     c = by_rule(row(stream(frame, 1), "s"))["string→timestamp"]
     assert c["outcome"] == "failed" and "iso_instant" in c["reason"]
 
@@ -441,7 +459,9 @@ MALFORMED = [
 
 
 @pytest.mark.parametrize(
-    "make, match", MALFORMED, ids=["dictionary_keys", "utf8", "utf8_polars", "decimal256"]
+    "make, match",
+    MALFORMED,
+    ids=["dictionary_keys", "utf8", "utf8_polars", "decimal256"],
 )
 def test_malformed_input_is_a_value_error(make, match):
     with pytest.raises(ValueError, match=match):

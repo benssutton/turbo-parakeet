@@ -7,4 +7,10 @@ from analytics.recommend.streaming import StreamingRecommender
 REFERENCE = "RecommendRust"
 IMPLEMENTATIONS = ("RecommendRust",)
 
-__all__ = ["Recommend", "RecommendRust", "StreamingRecommender", "REFERENCE", "IMPLEMENTATIONS"]
+__all__ = [
+    "Recommend",
+    "RecommendRust",
+    "StreamingRecommender",
+    "REFERENCE",
+    "IMPLEMENTATIONS",
+]
