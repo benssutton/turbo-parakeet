@@ -266,6 +266,31 @@ def test_non_tabular_arrow_raises():
         Toy().add({"f": pa.array([1, 2, 3])})
 
 
+@pytest.mark.parametrize("dtype", [pa.decimal32(5, 2), pa.decimal64(12, 2)])
+def test_arrow_input_reads_as_polars_reads_pyarrow(dtype):
+    # Checked at the Rust boundary first, then read as py-polars reads a pyarrow
+    # Table (its Arrow C stream import aborts on these decimals).
+    t = Toy().add({"f": pa.table({"d": pa.array([1, 2], dtype)})})
+    frame = t._frames["f"]
+    assert frame["d"].dtype == pl.Decimal(dtype.precision, 2)
+    assert pa.table(frame).num_rows == 2  # a frame py-polars can export again
+
+
+def test_arrow_input_polars_cannot_read_is_a_type_error():
+    union = pa.UnionArray.from_sparse(
+        pa.array([0, 1], pa.int8()), [pa.array([1, 2]), pa.array(["a", "b"])]
+    )
+    with pytest.raises(TypeError, match="not Arrow tabular data"):
+        Toy().add({"f": pa.table({"u": union})})
+
+
+def test_malformed_arrow_input_is_a_value_error():
+    keys = pa.array([0, 1, 5, 1], pa.int32())
+    bad = pa.DictionaryArray.from_arrays(keys, pa.array(["x", "y"]), safe=False)
+    with pytest.raises(ValueError, match="out of bounds"):
+        Toy().add({"f": pa.table({"c": bad})})
+
+
 def test_wrong_schema_from_compute_raises():
     class Wrong(Toy):
         def _compute(self, frames, combos):

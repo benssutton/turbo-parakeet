@@ -81,7 +81,7 @@ class Technique(ABC):
                     # py-polars trusts Arrow input: malformed values (dictionary keys
                     # out of range) or a Decimal256 make it panic. The Rust boundary's
                     # checks run first (ValueError naming the column).
-                    frame = _plugin.checked_table(frame)
+                    frame = _arrow_for_polars(_plugin.checked_table(frame))
                 try:
                     frame = pl.DataFrame(frame)
                 except Exception as exc:
@@ -287,6 +287,18 @@ class Technique(ABC):
 
 
 # ── helpers for technique bases and implementations ─────────────────────────────
+
+
+def _arrow_for_polars(table: Any) -> Any:
+    """`table` (an Arrow C stream) as py-polars reads Arrow best: a pyarrow Table when
+    pyarrow is installed. py-polars' own C-stream import builds broken frames from
+    some types (Decimal32 / Decimal64 abort on export) and panics, rather than raising,
+    on types it cannot read (unions, intervals)."""
+    try:
+        import pyarrow as pa
+    except ImportError:
+        return table
+    return pa.table(table)
 
 
 def _holds_array_or_struct(dtype: pl.DataType) -> bool:
