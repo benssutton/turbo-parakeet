@@ -11,6 +11,7 @@ use arrow_data::{layout, ArrayData};
 use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType as AT, Field, Schema, SchemaRef};
 use polars::prelude::*;
+use rayon::prelude::*;
 
 /// Every column of `batch` as a Series. Field metadata travels with each column, so
 /// Polars' own `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` keys restore Categorical / Enum.
@@ -337,11 +338,7 @@ pub(crate) unsafe fn import_checked(
     check_raw(&array as *const FFI_ArrowArray as *const RawArray, &dt)?;
     let data = unsafe { from_ffi_and_data_type(array, dt) }?;
     data.validate_data()?;
-    schema
-        .fields()
-        .iter()
-        .zip(data.child_data())
-        .try_for_each(|(f, c)| check_column(f, c))?;
+    check_columns(schema.fields(), data.child_data())?;
     let len = data.len();
     RecordBatch::try_new_with_options(
         schema.clone(),
@@ -460,11 +457,48 @@ fn validate_tree(d: &ArrayData, values: bool) -> std::result::Result<(), ArrowEr
     }
     if values {
         d.validate_nulls()?;
-        d.validate_values()?;
+        match d.data_type() {
+            AT::Utf8View => validate_utf8_view(d)?,
+            _ => d.validate_values()?,
+        }
     }
     d.child_data()
         .iter()
         .try_for_each(|c| validate_tree(c, values))
+}
+
+/// `ArrayData::validate_values` for a (structurally valid) Utf8View, without decoding
+/// every value: when each data buffer is valid UTF-8 as a whole, a long view's bytes
+/// are valid UTF-8 iff they start and end on char boundaries; an inline ASCII value is
+/// valid as is. Anything else (a buffer holding invalid bytes no view may reference, a
+/// non-ASCII inline value that fails) falls back to arrow-rs's value-by-value check,
+/// which also words the error.
+fn validate_utf8_view(d: &ArrayData) -> std::result::Result<(), ArrowError> {
+    const ASCII: u128 = 0x8080_8080_8080_8080_8080_8080;
+    let views = &d.buffer::<u128>(0)[..d.len()];
+    let bufs = &d.buffers()[1..];
+    if !bufs.iter().all(|b| std::str::from_utf8(b).is_ok()) {
+        return d.validate_values();
+    }
+    // Buffer indices, bounds, inline padding and prefixes.
+    arrow_data::validate_binary_view(views, bufs)?;
+    // Not a UTF-8 continuation byte (or the buffer's end).
+    let boundary = |b: &[u8], i: usize| b.get(i).is_none_or(|&c| (c as i8) >= -0x40);
+    let ok = views.iter().all(|&v| {
+        let len = v as u32 as usize;
+        if len <= 12 {
+            (v >> 32) & ASCII == 0 || std::str::from_utf8(&v.to_le_bytes()[4..4 + len]).is_ok()
+        } else {
+            let b = &bufs[(v >> 64) as u32 as usize];
+            let start = (v >> 96) as u32 as usize;
+            boundary(b, start) && boundary(b, start + len)
+        }
+    });
+    if ok {
+        Ok(())
+    } else {
+        d.validate_values()
+    }
 }
 
 /// The first type within `t` (itself or nested) that Polars cannot import without
@@ -514,19 +548,30 @@ fn check_column(f: &Field, d: &ArrayData) -> std::result::Result<(), ArrowError>
         .map_err(|e| ArrowError::InvalidArgumentError(format!("column {:?}: {e}", f.name())))
 }
 
+/// `check_column` over the columns in parallel (value validation is a linear pass
+/// per column); the first failing column's error, in column order.
+fn check_columns(
+    fields: &arrow_schema::Fields,
+    data: &[ArrayData],
+) -> std::result::Result<(), ArrowError> {
+    let checked: Vec<_> = fields
+        .par_iter()
+        .zip(data.par_iter())
+        .map(|(f, c)| check_column(f, c))
+        .collect();
+    checked.into_iter().collect()
+}
+
 /// Every column of `batch` checked (`check_column`): a RecordBatch built without
 /// validation can hold arrays whose buffers are too short or whose values are invalid.
-/// The api entry points run this on every batch: a caller may build one unchecked.
-/// Batches read from a C stream were checked on import already (`import_checked`,
-/// which must check before it builds arrays or concatenates batches), so they are
-/// checked twice; the cost is linear and small next to any kernel's.
+/// The api entry points do not check (see the api module docs): batches read from a C
+/// stream are checked on import (`import_checked`, which must check before it builds
+/// arrays or concatenates batches), and safely built ones are valid by construction.
+/// This is for a caller holding a RecordBatch from any other unchecked source.
+#[allow(dead_code)] // every current binding imports through `import_checked`
 pub(crate) fn validate_batch(batch: &RecordBatch) -> std::result::Result<(), ArrowError> {
-    let schema = batch.schema();
-    schema
-        .fields()
-        .iter()
-        .zip(batch.columns())
-        .try_for_each(|(f, c)| check_column(f, &c.to_data()))
+    let data: Vec<ArrayData> = batch.columns().iter().map(|c| c.to_data()).collect();
+    check_columns(batch.schema().fields(), &data)
 }
 
 #[cfg(test)]
@@ -1230,6 +1275,67 @@ mod tests {
             for m in rejected_both_ways(invalid_utf8()) {
                 assert!(m.to_lowercase().contains("utf8"), "{m}");
             }
+        }
+
+        /// A Utf8View over one data buffer `data`: `(offset, len)` views into it, or
+        /// inline values given as bytes.
+        fn utf8_view(data: &[u8], views: &[Result<(u32, u32), &[u8]>]) -> ArrayData {
+            let views: Vec<u128> = views
+                .iter()
+                .map(|v| match *v {
+                    Ok((offset, len)) => {
+                        let s = offset as usize;
+                        let mut prefix = [0u8; 4];
+                        prefix.copy_from_slice(&data[s..s + 4]);
+                        len as u128
+                            | (u32::from_le_bytes(prefix) as u128) << 32
+                            | (offset as u128) << 96
+                    }
+                    Err(bytes) => {
+                        let mut b = [0u8; 16];
+                        b[..4].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
+                        b[4..4 + bytes.len()].copy_from_slice(bytes);
+                        u128::from_le_bytes(b)
+                    }
+                })
+                .collect();
+            unsafe {
+                ArrayData::builder(AT::Utf8View)
+                    .len(views.len())
+                    .add_buffer(Buffer::from_vec(views))
+                    .add_buffer(Buffer::from_vec(data.to_vec()))
+                    .build_unchecked()
+            }
+        }
+
+        fn view_batch(d: ArrayData) -> RecordBatch {
+            RecordBatch::try_from_iter([("x", arrow_array::make_array(d))]).unwrap()
+        }
+
+        #[test]
+        fn utf8_view_values() {
+            let data = "ééééééééééé-abcdefghijklmn".as_bytes(); // 22 bytes of é, then ASCII
+                                                                // Valid: whole chars, a non-ASCII inline value, an ASCII one.
+            let ok = utf8_view(
+                data,
+                &[Ok((0, 14)), Ok((22, 13)), Err("né".as_bytes()), Err(b"ab")],
+            );
+            validate_batch(&view_batch(ok)).unwrap();
+            // A view starting or ending inside a char; an invalid inline value.
+            for bad in [
+                utf8_view(data, &[Ok((1, 14))]),
+                utf8_view(data, &[Ok((0, 13))]),
+                utf8_view(data, &[Err(&[0xc3, b'a'])]),
+            ] {
+                let m = validate_batch(&view_batch(bad)).unwrap_err().to_string();
+                assert!(m.contains("column \"x\"") && m.contains("UTF-8"), "{m}");
+            }
+            // Invalid bytes no view references are allowed.
+            let mut junk = data.to_vec();
+            junk.push(0xff);
+            validate_batch(&view_batch(utf8_view(&junk, &[Ok((0, 14))]))).unwrap();
+            let bad = utf8_view(&junk, &[Ok((1, 14))]);
+            assert!(validate_batch(&view_batch(bad)).is_err());
         }
 
         #[test]

@@ -2,6 +2,13 @@
 //! plain parameters and returns an Arrow RecordBatch (Bloom: bytes). No pyo3 and no
 //! Polars type appears in any signature — bindings (python.rs; later Java / C) wrap
 //! exactly this module. Kernels compute on Polars Series behind arrow_io.
+//!
+//! Input batches must be valid Arrow: the entry points do not re-check them (an O(n)
+//! pass over every value). A RecordBatch built with arrow-rs's safe constructors is
+//! valid by construction; one imported through the C Data Interface is not, so callers
+//! import with `arrow_io::read_stream` / `CheckedReader` (python.rs and capi.rs do), or
+//! check with `arrow_io::validate_batch`, before calling in — arrow-rs and Polars may
+//! panic or read out of bounds on a malformed batch.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -9,7 +16,7 @@ use std::fmt;
 use arrow_array::RecordBatch;
 use polars::prelude::{IntoSeries, PolarsError, PolarsResult, Series, StructChunked};
 
-use crate::arrow_io::{export_struct, import_batch, validate_batch};
+use crate::arrow_io::{export_struct, import_batch};
 use crate::bloomfilter::{BloomFilterKwargs, MembershipKwargs};
 use crate::minhash::{LSHKwargs, MinHashKwargs};
 use crate::recommend::Params;
@@ -48,8 +55,8 @@ fn compute(e: PolarsError) -> Error {
     }
 }
 
+/// `batch`'s columns as Series. `batch` must be valid Arrow (see the module docs).
 fn columns(batch: &RecordBatch) -> Result<Vec<Series>> {
-    validate_batch(batch).map_err(|e| Error::InvalidInput(e.to_string()))?;
     let schema = batch.schema();
     let mut seen: HashSet<&str> = HashSet::new();
     for f in schema.fields().iter() {
