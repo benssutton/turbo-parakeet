@@ -1757,6 +1757,77 @@ pub(crate) fn lossy(
     }
 }
 
+/// Proof by statistics (streaming spec §5.1 step 4): Ok when the statistics show that
+/// `t` holds every value of the level. Every rule's own condition already proves its
+/// candidate except string → Float (a value may not round-trip) and string →
+/// Timestamp(ns) (the int64 nanosecond range).
+pub(crate) fn prove(t: &Target, lvl: &Level) -> Result<(), String> {
+    let Some(st) = lvl.p.strings.as_ref().filter(|_| is_text(lvl.dtype)) else {
+        return Ok(());
+    };
+    match t {
+        Target::Fixed(AT::Float32) if st.n_f32_roundtrip_fail > 0 => Err(format!(
+            "n_f32_roundtrip_fail={}",
+            st.n_f32_roundtrip_fail
+        )),
+        Target::Fixed(AT::Float64) if st.n_f64_roundtrip_fail > 0 => Err(format!(
+            "n_f64_roundtrip_fail={}",
+            st.n_f64_roundtrip_fail
+        )),
+        Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, _)) => {
+            match (st.iso_instant_min, st.iso_instant_max) {
+                (Some(lo), Some(hi)) if lo < i64::MIN as i128 || hi > i64::MAX as i128 => Err(
+                    format!("iso_instant range {lo}..{hi} ns exceeds int64"),
+                ),
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `lossy` from statistics alone: arrow-cast renders each value from the value itself
+/// (integers canonically; decimals with exactly `scale` places; floats with ryu; times
+/// and timestamps with chrono's 0/3/6/9 fraction digits, `T`, and `Z` for UTC), so the
+/// scanner's per-value counters decide it exactly.
+pub(crate) fn lossy_by_stats(t: &Target, lvl: &Level) -> bool {
+    match t {
+        Target::Original(_) | Target::Null | Target::Dictionary(..) | Target::Plain(_) => false,
+        _ if is_text(lvl.dtype) => {
+            let Some(st) = lvl.p.strings.as_ref() else {
+                return true;
+            };
+            match t {
+                Target::Boolean | Target::TimestampWithOffset(_) => lvl.n() > 0,
+                Target::BoolPair(..) => lvl.few_distinct.iter().any(|v| v != "true" && v != "false"),
+                Target::Fixed(to) => match to {
+                    AT::Float32 => st.n_f32_render_diff > 0,
+                    AT::Float64 => st.n_f64_render_diff > 0,
+                    AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s) => {
+                        let s = Some(*s as u32);
+                        st.raw_frac_min != s
+                            || st.raw_frac_max != s
+                            || st.n_int_lead0 > 0
+                            || st.n_neg_zero > 0
+                    }
+                    AT::Date32 => st.n_iso_datetime > 0,
+                    AT::Time32(_) | AT::Time64(_) => st.n_iso_time_noncanonical > 0,
+                    AT::Timestamp(_, tz) => {
+                        st.n_iso_time_noncanonical > 0
+                            || st.n_iso_space_sep > 0
+                            || (tz.is_some() && st.n_iso_offset_noncanonical > 0)
+                    }
+                    _ => st.n_neg_zero > 0, // integers: only "-0" renders differently
+                },
+                _ => false,
+            }
+        }
+        Target::Fixed(AT::Float32 | AT::Float64) => false,
+        _ if is_float(lvl.dtype) => lvl.p.floats.is_some_and(|f| f.n_neg_zero > 0),
+        _ => false,
+    }
+}
+
 // ── choosing (Spec B §4.1, §4.4, §5.4) ──────────────────────────────────────
 
 pub(crate) struct Chosen {
@@ -2017,23 +2088,20 @@ fn candidate(
     }
 }
 
-/// Lists: choose the inner type first, then wrap it — as a scalar when every list
-/// holds one item, else as a List with 32-bit offsets (Array keeps its width).
-///
-/// The reported candidates are the outer level's (scalar / list / array / original,
-/// in the order tried) followed by the inner level's (rules prefixed "inner: "), so
-/// a list column shows two `chosen` entries: the outer choice and the inner choice.
-fn choose_list(
+/// A list level's outer candidates (scalar / list / array, then the original) around
+/// the inner choice `it` (with its rank and sizes), unordered.
+#[allow(clippy::too_many_arguments)]
+fn list_candidates(
     lvl: &Level,
     inner: &Level,
-    rows: &[Option<(usize, usize)>],
+    it: &Target,
+    rank: Rank,
+    predicted: u64,
+    projected: f64,
     width: Option<i32>,
-    params: &Params,
-) -> Result<Chosen, String> {
-    let ic = choose(inner, params)?;
+) -> Vec<Candidate> {
     let (n, nulls, r) = (lvl.n_rows() as f64, lvl.n_null() as f64, lvl.r);
-    let inner_t = ic.target.clone();
-    let kept = matches!(inner_t, Target::Original(_));
+    let kept = matches!(it, Target::Original(_));
     let (c, _) = inner.cardinality();
     let mut outer = Vec::new();
     let nested = kept && matches!(inner.dtype, PT::List(_) | PT::Array(..) | PT::Struct(_));
@@ -2044,10 +2112,10 @@ fn choose_list(
             nulls: nulls + inner.n_null() as f64,
             ..inner.shape()
         };
-        let t = inner_t.arrow_type();
+        let t = it.arrow_type();
         outer.push(candidate(
-            Target::Scalar(Box::new(inner_t.clone())),
-            ic.rank,
+            Target::Scalar(Box::new(it.clone())),
+            rank,
             "list→scalar",
             format!(
                 "min_len=1 max_len=1 n_null={} inner_n_null={}",
@@ -2059,13 +2127,13 @@ fn choose_list(
     }
     match width {
         None if inner.n_rows() < 1 << 31 => outer.push(candidate(
-            Target::List(Box::new(inner_t.clone())),
+            Target::List(Box::new(it.clone())),
             Rank::List,
             "large_list→list",
             format!("inner_n_values={}", inner.n_rows()),
             Ok((
-                validity(n, nulls) + pad(4.0 * (n + 1.0)) + ic.predicted as f64,
-                validity(n * r, nulls * r) + pad(4.0 * (n * r + 1.0)) + ic.projected,
+                validity(n, nulls) + pad(4.0 * (n + 1.0)) + predicted as f64,
+                validity(n * r, nulls * r) + pad(4.0 * (n * r + 1.0)) + projected,
             )),
         )),
         // An Array whose inner type is kept is the original type: no candidate.
@@ -2077,9 +2145,9 @@ fn choose_list(
                 nulls: inner.n_null() as f64 + nulls * wf,
                 ..inner.shape()
             };
-            let t = inner_t.arrow_type();
+            let t = it.arrow_type();
             outer.push(candidate(
-                Target::FixedList(Box::new(inner_t.clone()), w),
+                Target::FixedList(Box::new(it.clone()), w),
                 Rank::List,
                 "array→array",
                 format!("width={w}"),
@@ -2099,11 +2167,94 @@ fn choose_list(
         out: outer,
     };
     rules.original();
-    let (i, array, cands) = first_success(rules.out, |t| wrap(t, &lvl.values, rows, &ic.array));
+    rules.out
+}
+
+/// Lists: choose the inner type first, then wrap it — as a scalar when every list
+/// holds one item, else as a List with 32-bit offsets (Array keeps its width).
+///
+/// The reported candidates are the outer level's (scalar / list / array / original,
+/// in the order tried) followed by the inner level's (rules prefixed "inner: "), so
+/// a list column shows two `chosen` entries: the outer choice and the inner choice.
+fn choose_list(
+    lvl: &Level,
+    inner: &Level,
+    rows: &[Option<(usize, usize)>],
+    width: Option<i32>,
+    params: &Params,
+) -> Result<Chosen, String> {
+    let ic = choose(inner, params)?;
+    let cands = list_candidates(
+        lvl,
+        inner,
+        &ic.target,
+        ic.rank,
+        ic.predicted,
+        ic.projected,
+        width,
+    );
+    let (i, array, cands) = first_success(cands, |t| wrap(t, &lvl.values, rows, &ic.array));
     let lossy = !matches!(cands[i].target, Target::Original(_)) && ic.lossy;
     let mut chosen = chosen_from(i, array, cands, lossy);
     chosen.candidates.extend(ic.candidates);
     Ok(chosen)
+}
+
+/// A choice made from statistics alone (streaming): the target and its sizes, no array.
+pub(crate) struct Pick {
+    pub target: Target,
+    pub rank: Rank,
+    pub predicted: u64,
+    pub projected: f64,
+    pub lossy: bool,
+    /// In the order tried; a list's outer candidates, then its inner ones.
+    pub candidates: Vec<Candidate>,
+    /// A list's inner choice.
+    pub inner: Option<Box<Pick>>,
+}
+
+fn pick_at(i: usize, cands: Vec<Candidate>, lossy: bool, inner: Option<Box<Pick>>) -> Pick {
+    let c = &cands[i];
+    let (target, rank, predicted, projected) = (c.target.clone(), c.rank, c.predicted, c.projected);
+    Pick {
+        target,
+        rank,
+        predicted,
+        projected,
+        lossy,
+        candidates: cands,
+        inner,
+    }
+}
+
+/// `choose` with `prove` in place of cast + verify.
+pub(crate) fn pick_by_stats(lvl: &Level, params: &Params) -> Result<Pick, String> {
+    let (i, (), cands) = first_success(candidates(lvl, params)?, |t| prove(t, lvl));
+    let lossy = lossy_by_stats(&cands[i].target, lvl);
+    Ok(pick_at(i, cands, lossy, None))
+}
+
+/// `choose_list` from statistics: wrapping a proven inner type cannot fail.
+pub(crate) fn pick_list_by_stats(
+    lvl: &Level,
+    inner: &Level,
+    width: Option<i32>,
+    params: &Params,
+) -> Result<Pick, String> {
+    let mut ic = pick_by_stats(inner, params)?;
+    let cands = list_candidates(
+        lvl,
+        inner,
+        &ic.target,
+        ic.rank,
+        ic.predicted,
+        ic.projected,
+        width,
+    );
+    let (i, (), mut cands) = first_success(cands, |_| Ok(()));
+    let lossy = !matches!(cands[i].target, Target::Original(_)) && ic.lossy;
+    cands.extend(std::mem::take(&mut ic.candidates));
+    Ok(pick_at(i, cands, lossy, Some(Box::new(ic))))
 }
 
 // ── Polars layout of the result (Spec B §5.5) ───────────────────────────────
@@ -2683,6 +2834,141 @@ mod tests {
             population_rows: None,
             categorical_threshold: 10_000,
             boolean_pairs: vec![("true".into(), "false".into())],
+        }
+    }
+
+    /// The one-shot choice (cast + verify) and the statistics-only pick for one series.
+    fn both(s: Series, p: &Params) -> (Chosen, Pick) {
+        let d = describe_one(&s, 0).unwrap();
+        let values = export_series(&s, CompatLevel::oldest()).unwrap();
+        let size = ipc_body_bytes(values.as_ref(), None).unwrap();
+        let lvl = Level::of_values(
+            s.dtype(),
+            values,
+            &d.outer,
+            d.n_midnight,
+            size,
+            level_estimate(&d.outer, d.n_rows - d.n_null, None),
+            1.0,
+            "",
+        )
+        .unwrap();
+        (choose(&lvl, p).unwrap(), pick_by_stats(&lvl, p).unwrap())
+    }
+
+    fn outcomes(c: &[Candidate]) -> Vec<(String, Outcome)> {
+        c.iter().map(|c| (c.rule.clone(), c.outcome)).collect()
+    }
+
+    #[test]
+    fn statistics_choose_like_cast_and_verify() {
+        let strs = |v: &[Option<&str>]| Series::new("x".into(), v);
+        let mut yes_no = params();
+        yes_no.boolean_pairs = vec![("yes".into(), "no".into())];
+        let cases: Vec<(Series, Params)> = vec![
+            (strs(&[Some("1.50"), Some("2.25"), None]), params()),
+            (strs(&[Some("1.5"), Some("2.25")]), params()),
+            (strs(&[Some("-0"), Some("5")]), params()),
+            (strs(&[Some("2024-01-01 10:00:00"), Some("2024-01-02 11:00:00")]), params()),
+            (strs(&[Some("2024-01-01T10:00:00Z"), Some("2024-01-01T11:00:00+00:00")]), params()),
+            (strs(&[Some("10:00:00.5"), Some("11:00:00")]), params()),
+            (strs(&[Some("Yes"), Some("no"), Some("yes")]), yes_no),
+            (strs(&[Some("true"), Some("false")]), params()),
+            (strs(&[Some("1234567890.1"), Some("0.00000012345")]), params()),
+            (strs(&[Some("2024-01-01"), Some("2024-02-01")]), params()),
+            (strs(&[Some("2024-01-01T00:00:00"), Some("2024-02-01T00:00:00")]), params()),
+            (strs(&[Some("0"), Some("1"), Some("1")]), params()),
+            (Series::new("x".into(), &[0.0f64, -0.0, 1.5]), params()),
+            (Series::new("x".into(), &[1.5f64, 2.25]), params()),
+            (Series::new("x".into(), &[300i64, -2, 7]), params()),
+        ];
+        for (s, p) in cases {
+            let (chosen, pick) = both(s.clone(), &p);
+            assert_eq!(pick.target, chosen.target, "{s:?}");
+            assert_eq!(pick.lossy, chosen.lossy, "{s:?}");
+            assert_eq!(outcomes(&pick.candidates), outcomes(&chosen.candidates), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn statistics_reject_a_float_that_underflows() {
+        let tiny = format!("0.{}1", "0".repeat(400));
+        let (chosen, pick) = both(Series::new("x".into(), &[tiny.as_str(), "1"]), &params());
+        assert_eq!(pick.target, chosen.target);
+        let f64c = pick
+            .candidates
+            .iter()
+            .find(|c| c.rule == "string→float64")
+            .unwrap();
+        assert_eq!(f64c.outcome, Outcome::Failed);
+        assert!(f64c
+            .reason
+            .as_deref()
+            .unwrap()
+            .starts_with("n_f64_roundtrip_fail=1"));
+    }
+
+    #[test]
+    fn statistics_reject_nanoseconds_out_of_range() {
+        let s = Series::new(
+            "x".into(),
+            &["2300-01-01T00:00:00.123456789", "2024-01-01T00:00:00"],
+        );
+        let (chosen, pick) = both(s, &params());
+        assert_eq!(pick.target, chosen.target);
+        let ns = pick
+            .candidates
+            .iter()
+            .find(|c| c.rule == "string→timestamp")
+            .unwrap();
+        assert_eq!(ns.outcome, Outcome::Failed);
+        assert!(ns.reason.as_deref().unwrap().contains("iso_instant"));
+    }
+
+    #[test]
+    fn list_statistics_choose_like_cast_and_verify() {
+        let item = |v: &[i64]| Series::new("".into(), v);
+        for s in [
+            Series::new("x".into(), &[item(&[1]), item(&[2]), item(&[300])]),
+            Series::new("x".into(), &[item(&[1, 2]), item(&[3]), item(&[])]),
+        ] {
+            let d = describe_one(&s, 0).unwrap();
+            let classic = export_series(&s, CompatLevel::oldest()).unwrap();
+            let sz = sizes_of(&s, &classic, 1).unwrap();
+            let rec = recommend(&s, &classic, &d, &sz, &params()).unwrap();
+            let inner = d.inner.as_ref().unwrap();
+            let (_, child, width) = list_parts(&classic).unwrap();
+            let outer = Level::of_values(
+                s.dtype(),
+                classic.clone(),
+                &d.outer,
+                None,
+                sz[0],
+                level_estimate(&d.outer, d.n_rows - d.n_null, None),
+                1.0,
+                "",
+            )
+            .unwrap();
+            let child_size = ipc_body_bytes(child.as_ref(), None).unwrap();
+            let il = Level::of_values(
+                inner.values.dtype(),
+                child,
+                &inner.profile,
+                None,
+                child_size,
+                level_estimate(
+                    &inner.profile,
+                    (inner.values.len() - inner.values.null_count()) as u64,
+                    None,
+                ),
+                1.0,
+                "inner: ",
+            )
+            .unwrap();
+            let pick = pick_list_by_stats(&outer, &il, width, &params()).unwrap();
+            assert_eq!(pa_name(&pick.target.arrow_type()), rec.arrow_type, "{s:?}");
+            assert_eq!(outcomes(&pick.candidates), outcomes(&rec.candidates), "{s:?}");
+            assert_eq!(pick.lossy, rec.lossy);
         }
     }
 
