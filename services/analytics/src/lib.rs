@@ -21,6 +21,7 @@ mod recommend;
 mod reservoir;
 mod shared;
 mod sizes;
+mod streaming;
 
 use mimalloc::MiMalloc;
 
