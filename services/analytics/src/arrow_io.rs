@@ -468,30 +468,37 @@ fn validate_tree(d: &ArrayData, values: bool) -> std::result::Result<(), ArrowEr
 }
 
 /// `ArrayData::validate_values` for a (structurally valid) Utf8View, without decoding
-/// every value: when each data buffer is valid UTF-8 as a whole, a long view's bytes
-/// are valid UTF-8 iff they start and end on char boundaries; an inline ASCII value is
-/// valid as is. Anything else (a buffer holding invalid bytes no view may reference, a
-/// non-ASCII inline value that fails) falls back to arrow-rs's value-by-value check,
-/// which also words the error.
+/// every value: an inline ASCII value is valid as is; when the data buffers are valid
+/// UTF-8 as a whole, a long view's bytes are valid iff they start and end on char
+/// boundaries. The whole-buffer check is used only when the views reference at least
+/// half the buffers' bytes (a sliced batch shares its parent's buffers: checking them
+/// whole per batch would cost the parent's size each time); otherwise long values are
+/// decoded one by one. A failure falls back to arrow-rs's check, which words the error.
 fn validate_utf8_view(d: &ArrayData) -> std::result::Result<(), ArrowError> {
     const ASCII: u128 = 0x8080_8080_8080_8080_8080_8080;
     let views = &d.buffer::<u128>(0)[..d.len()];
     let bufs = &d.buffers()[1..];
-    if !bufs.iter().all(|b| std::str::from_utf8(b).is_ok()) {
-        return d.validate_values();
-    }
     // Buffer indices, bounds, inline padding and prefixes.
     arrow_data::validate_binary_view(views, bufs)?;
+    let long = |v: u128| (v as u32 > 12).then_some(v as u32 as usize);
+    let referenced: usize = views.iter().filter_map(|&v| long(v)).sum();
+    let total: usize = bufs.iter().map(|b| b.len()).sum();
+    let whole = total <= 2 * referenced && bufs.iter().all(|b| std::str::from_utf8(b).is_ok());
     // Not a UTF-8 continuation byte (or the buffer's end).
     let boundary = |b: &[u8], i: usize| b.get(i).is_none_or(|&c| (c as i8) >= -0x40);
-    let ok = views.iter().all(|&v| {
-        let len = v as u32 as usize;
-        if len <= 12 {
+    let ok = views.iter().all(|&v| match long(v) {
+        None => {
+            let len = v as u32 as usize;
             (v >> 32) & ASCII == 0 || std::str::from_utf8(&v.to_le_bytes()[4..4 + len]).is_ok()
-        } else {
+        }
+        Some(len) => {
             let b = &bufs[(v >> 64) as u32 as usize];
             let start = (v >> 96) as u32 as usize;
-            boundary(b, start) && boundary(b, start + len)
+            if whole {
+                boundary(b, start) && boundary(b, start + len)
+            } else {
+                std::str::from_utf8(&b[start..start + len]).is_ok()
+            }
         }
     });
     if ok {
@@ -1324,7 +1331,9 @@ mod tests {
             // A view starting or ending inside a char; an invalid inline value.
             for bad in [
                 utf8_view(data, &[Ok((1, 14))]),
+                utf8_view(data, &[Ok((1, 14)), Ok((22, 13))]), // whole-buffer path
                 utf8_view(data, &[Ok((0, 13))]),
+                utf8_view(data, &[Ok((0, 13)), Ok((22, 13))]),
                 utf8_view(data, &[Err(&[0xc3, b'a'])]),
             ] {
                 let m = validate_batch(&view_batch(bad)).unwrap_err().to_string();
