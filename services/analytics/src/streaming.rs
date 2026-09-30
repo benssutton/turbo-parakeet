@@ -12,7 +12,7 @@ use polars::prelude::{polars_err, AnyValue, DataType as PT, PolarsResult, Series
 use rayon::prelude::*;
 
 use crate::api::{Error, Result};
-use crate::arrow_io::{export_struct, import_array, import_batch};
+use crate::arrow_io::{export_struct, import_array, import_batch, validate_batch};
 use crate::cardinality_estimators::{estimate, Estimate};
 use crate::describe::{assemble, flatten, Profile, Row};
 use crate::partial::{BatchStats, Ext, LevelStats, ViewSim};
@@ -567,8 +567,10 @@ impl Streaming {
         Ok(Some((outer, inner)))
     }
 
-    /// Adds one batch; on error the state is unchanged.
+    /// Adds one batch; on error the state is unchanged. A structurally invalid batch
+    /// is invalid input (arrow-rs and Polars would panic on it).
     pub(crate) fn add(&mut self, batch: &RecordBatch) -> Result<()> {
+        validate_batch(batch).map_err(|e| Error::InvalidInput(e.to_string()))?;
         let schema = batch.schema();
         let mut seen = HashSet::new();
         if let Some(f) = schema
@@ -1395,5 +1397,27 @@ pub(crate) mod tests {
             pl_name(&t, "x", enum_categories(&e).as_deref(), &AT::UInt8),
             "Enum(categories=['b', 'a'])"
         );
+    }
+
+    #[test]
+    fn a_structurally_invalid_batch_is_invalid_input() {
+        use arrow_buffer::Buffer;
+        // Offsets past the values buffer: arrow-rs builds the array unchecked.
+        let data = unsafe {
+            arrow_data::ArrayData::builder(AT::Utf8)
+                .len(2)
+                .add_buffer(Buffer::from_vec(vec![0i32, 3, 100]))
+                .add_buffer(Buffer::from_vec(b"abcdef".to_vec()))
+                .build_unchecked()
+        };
+        let mut s = streaming();
+        let err = s
+            .add(&batch(vec![("s", arrow_array::make_array(data))]))
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidInput(ref m) if m.contains("\"s\"")),
+            "{err:?}"
+        );
+        assert_eq!(s.n_rows, 0);
     }
 }

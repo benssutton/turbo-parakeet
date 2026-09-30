@@ -9,7 +9,7 @@ use std::fmt;
 use arrow_array::RecordBatch;
 use polars::prelude::{IntoSeries, PolarsError, PolarsResult, Series, StructChunked};
 
-use crate::arrow_io::{export_struct, import_batch};
+use crate::arrow_io::{export_struct, import_batch, validate_batch};
 use crate::bloomfilter::{BloomFilterKwargs, MembershipKwargs};
 use crate::minhash::{LSHKwargs, MinHashKwargs};
 use crate::recommend::Params;
@@ -49,6 +49,7 @@ fn compute(e: PolarsError) -> Error {
 }
 
 fn columns(batch: &RecordBatch) -> Result<Vec<Series>> {
+    validate_batch(batch).map_err(|e| Error::InvalidInput(e.to_string()))?;
     let schema = batch.schema();
     let mut seen: HashSet<&str> = HashSet::new();
     for f in schema.fields().iter() {

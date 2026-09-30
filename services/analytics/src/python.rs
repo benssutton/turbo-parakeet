@@ -3,10 +3,10 @@
 //! and leave as `ArrowTable`, which implements it too. Errors: invalid input →
 //! ValueError, kernel failure → RuntimeError.
 
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::CStr;
 use std::sync::Mutex;
 
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::{RecordBatch, RecordBatchIterator};
 use arrow_schema::ffi::FFI_ArrowSchema;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -14,19 +14,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule};
 
 use crate::api;
-use crate::arrow_io::read_stream;
-
-/// The C Stream Interface struct, field for field. arrow-rs keeps its copy's
-/// callbacks private; this mirror lets `reject_wide_integers` call `get_schema`
-/// before arrow-rs imports the stream (a stream may be asked for its schema repeatedly).
-#[repr(C)]
-struct RawStream {
-    get_schema: Option<unsafe extern "C" fn(*mut RawStream, *mut FFI_ArrowSchema) -> c_int>,
-    get_next: Option<unsafe extern "C" fn(*mut RawStream, *mut c_void) -> c_int>,
-    get_last_error: Option<unsafe extern "C" fn(*mut RawStream) -> *const c_char>,
-    release: Option<unsafe extern "C" fn(*mut RawStream)>,
-    private_data: *mut c_void,
-}
+// `RawStream` lets `reject_wide_integers` call `get_schema` before the stream is
+// imported (a stream may be asked for its schema repeatedly).
+use crate::arrow_io::{read_stream, CheckedReader, RawStream};
 
 fn value_error(e: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(e.to_string())
@@ -65,11 +55,12 @@ fn read_batch(data: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
     with_stream(data, |s| unsafe { read_stream(s) }.map_err(value_error))
 }
 
-/// An Arrow stream read batch by batch (the streaming recommender never concatenates).
-fn read_reader(data: &Bound<'_, PyAny>) -> PyResult<ArrowArrayStreamReader> {
+/// An Arrow stream read batch by batch, each batch checked (the streaming
+/// recommender never concatenates).
+fn read_reader(data: &Bound<'_, PyAny>) -> PyResult<CheckedReader> {
     // SAFETY: as for read_batch; from_raw moves the stream out.
     with_stream(data, |s| {
-        unsafe { ArrowArrayStreamReader::from_raw(s) }.map_err(value_error)
+        unsafe { CheckedReader::from_raw(s) }.map_err(value_error)
     })
 }
 
