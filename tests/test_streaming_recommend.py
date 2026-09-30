@@ -113,9 +113,6 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
     Known, accepted differences, narrowed per column:
     - distinct tracking overflowed: parity is not defined (spec §6); the rejected
       dictionary's key width follows `categorical_threshold + 1`, not one-shot's est_high;
-    - Categorical / Enum source, several batches: the original's size is a per-batch
-      sum (every batch carries the dictionary), so the original candidate can move in
-      the order and even win or lose; the other candidates are compared without it;
     - string source whose null slots hold bytes: one-shot measures them in the
       original's size.
     """
@@ -125,29 +122,17 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         name = r["column"]
         o = ref[name]
         overflowed = bool(r["distinct_overflowed"])
-        per_batch_original = not single_batch and isinstance(
-            frame.schema[name], (pl.Categorical, pl.Enum)
-        )
         original_sizes = single_batch and not null_slots_hold_bytes(frame[name])
-        kept = kept_original(o) or kept_original(r)
-        keys = ["rec_nullable", "rec_lossy_formatting"]
-        if not (per_batch_original and kept):
-            keys += ["rec_arrow_type"]
-            if single_batch or not kept_original(o):
-                keys += ["rec_arrow_size_bytes", "rec_polars_size_bytes"]
-                keys += ["rec_arrow_size_zstd_bytes", "rec_polars_size_zstd_bytes"]
-            if not kept_original(o):
-                assert r["rec_polars_type"] == o["rec_polars_type"], name
+        keys = ["rec_nullable", "rec_lossy_formatting", "rec_arrow_type"]
+        if single_batch or not kept_original(o):
+            keys += ["rec_arrow_size_bytes", "rec_polars_size_bytes"]
+            keys += ["rec_arrow_size_zstd_bytes", "rec_polars_size_zstd_bytes"]
+        if not kept_original(o):
+            assert r["rec_polars_type"] == o["rec_polars_type"], name
         for k in keys:
             assert r[k] == o[k], (name, k, r[k], o[k])
         got = candidates(r, original_sizes, not overflowed)
         want = candidates(o, original_sizes, not overflowed)
-        if per_batch_original:
-            got = [c for c in got if c[1] != "original"]
-            want = [c for c in want if c[1] != "original"]
-            if kept:
-                got = [c[:2] + c[3:] for c in got]
-                want = [c[:2] + c[3:] for c in want]
         assert got == want, name
         checked += 1
     assert checked > 0
