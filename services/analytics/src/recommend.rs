@@ -642,12 +642,24 @@ pub(crate) struct Candidate {
 pub(crate) struct Level<'a> {
     /// Polars dtype of these values.
     pub dtype: &'a PT,
-    /// The values in Arrow's classic layout (CompatLevel::oldest).
+    /// The values in Arrow's classic layout (CompatLevel::oldest): the whole level
+    /// (one-shot), a sample block, or none (streaming) — the rules read only its type.
     pub values: ArrayRef,
     pub p: &'a Profile,
+    pub n_rows: u64,
+    pub n_null: u64,
+    /// Exact min / max: integers, or a decimal's unscaled values.
+    pub int_range: Option<(i128, i128)>,
+    /// Exact min / max of a float level, NaN excluded.
+    pub float_range: Option<(f64, f64)>,
+    /// Every distinct non-null value as text, when there are at most five (the
+    /// boolean-pair rule); empty otherwise.
+    pub few_distinct: Vec<String>,
     pub n_midnight: Option<u64>,
-    /// Measured uncompressed size of `values`.
+    /// Uncompressed size of the original type.
     pub size_bytes: u64,
+    /// How `size_bytes` was obtained, for the original candidate's evidence.
+    pub size_note: &'static str,
     pub est: Estimate,
     /// Population rows ÷ frame rows.
     pub r: f64,
@@ -655,6 +667,85 @@ pub(crate) struct Level<'a> {
     pub prefix: &'static str,
     /// Text sources: `values` as LargeUtf8, built once and shared by cast, verify and lossy.
     pub text: OnceCell<Result<LargeStringArray, String>>,
+}
+
+impl<'a> Level<'a> {
+    /// A level over all its values (one-shot): counts, extremes and the few distinct
+    /// values are read off `values` at Describe's argmin / argmax / top-5 rows.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn of_values(
+        dtype: &'a PT,
+        values: ArrayRef,
+        p: &'a Profile,
+        n_midnight: Option<u64>,
+        size_bytes: u64,
+        est: Estimate,
+        r: f64,
+        prefix: &'static str,
+    ) -> Result<Self, String> {
+        let row = |i: Option<u64>| i.filter(|&i| (i as usize) < values.len());
+        let (lo, hi) = (row(p.range.argmin), row(p.range.argmax));
+        let int_range = match (dtype, lo, hi) {
+            (PT::Decimal(..), Some(a), Some(b)) => values
+                .as_primitive_opt::<Decimal128Type>()
+                .map(|d| (d.value(a as usize), d.value(b as usize))),
+            (dt, Some(a), Some(b)) if dt.is_integer() => {
+                int_at(&values, a).zip(int_at(&values, b))
+            }
+            _ => None,
+        };
+        let float_range = match (is_float(dtype), lo, hi) {
+            (true, Some(a), Some(b)) => Some((f64_at(&values, a), f64_at(&values, b))),
+            _ => None,
+        };
+        let few_distinct = if is_text(dtype) && p.freq.n_unique <= 5 {
+            p.freq
+                .top5_idx
+                .iter()
+                .map(|&i| text_of(&values.slice(i as usize, 1)).map(|t| t.value(0).to_string()))
+                .collect::<Result<_, _>>()?
+        } else {
+            Vec::new()
+        };
+        Ok(Level {
+            dtype,
+            n_rows: values.len() as u64,
+            n_null: values.logical_null_count() as u64,
+            values,
+            p,
+            int_range,
+            float_range,
+            few_distinct,
+            n_midnight,
+            size_bytes,
+            size_note: "measured",
+            est,
+            r,
+            prefix,
+            text: Default::default(),
+        })
+    }
+
+    /// A level over one sample block, for `cast_to` / `verify` only (streaming's cross-check).
+    pub(crate) fn of_block(dtype: &'a PT, values: ArrayRef, p: &'a Profile) -> Self {
+        Level {
+            dtype,
+            n_rows: values.len() as u64,
+            n_null: values.logical_null_count() as u64,
+            values,
+            p,
+            int_range: None,
+            float_range: None,
+            few_distinct: Vec::new(),
+            n_midnight: None,
+            size_bytes: 0,
+            size_note: "",
+            est: estimate(0, 0, 0, 0, &[0; 7], None),
+            r: 1.0,
+            prefix: "",
+            text: Default::default(),
+        }
+    }
 }
 
 impl Level<'_> {
@@ -667,11 +758,11 @@ impl Level<'_> {
     }
 
     fn n_rows(&self) -> u64 {
-        self.values.len() as u64
+        self.n_rows
     }
 
     fn n_null(&self) -> u64 {
-        self.values.logical_null_count() as u64
+        self.n_null
     }
 
     fn n(&self) -> u64 {
@@ -689,7 +780,7 @@ impl Level<'_> {
         (c.max(self.p.freq.n_unique as f64), source)
     }
 
-    fn shape(&self) -> Shape {
+    pub(crate) fn shape(&self) -> Shape {
         Shape {
             n: self.n_rows() as f64,
             nulls: self.n_null() as f64,
@@ -813,23 +904,17 @@ impl Rules<'_, '_> {
     }
 
     fn decimal(&mut self, scale: usize) {
-        let (p, v) = (self.lvl.p, &self.lvl.values);
-        let (Some(lo), Some(hi), Some(d)) = (
-            p.range.argmin,
-            p.range.argmax,
-            v.as_primitive_opt::<Decimal128Type>(),
-        ) else {
+        let Some((lo, hi)) = self.lvl.int_range else {
             return;
         };
-        let unscaled = |i: u64| d.value(i as usize);
-        let g = p.gcd.unwrap_or(1);
+        let g = self.lvl.p.gcd.unwrap_or(1);
         let k = if g == 0 {
             scale
         } else {
             trailing_zeros10(g).min(scale)
         };
         let f = 10i128.pow(k as u32);
-        let (lo, hi, s) = (unscaled(lo) / f, unscaled(hi) / f, scale - k);
+        let (lo, hi, s) = (lo / f, hi / f, scale - k);
         let ev = format!("gcd={g} → {k} trailing zeros, scale {scale}→{s}; ");
         if s == 0 {
             return self.integers(lo, hi, "decimal", &ev);
@@ -846,14 +931,13 @@ impl Rules<'_, '_> {
     }
 
     fn float(&mut self) {
-        let (p, v) = (self.lvl.p, &self.lvl.values);
+        let p = self.lvl.p;
         let Some(f) = p.floats else { return }; // Describe profiles every float column: never None
         let ev = format!(
             "n_nan={} n_inf={} n_fractional={} ",
             f.n_nan, f.n_inf, f.n_fractional
         );
-        if let (0, 0, Some(lo), Some(hi)) = (f.n_nan, f.n_inf, p.range.argmin, p.range.argmax) {
-            let (lo, hi) = (f64_at(v, lo), f64_at(v, hi));
+        if let (0, 0, Some((lo, hi))) = (f.n_nan, f.n_inf, self.lvl.float_range) {
             let top = lo.abs().max(hi.abs());
             if f.n_fractional == 0 {
                 if top < 1e38 {
@@ -934,17 +1018,8 @@ impl Rules<'_, '_> {
     fn text(&mut self, params: &Params) -> Result<(), String> {
         let lvl = self.lvl;
         let n = lvl.n();
-        // Only cast the (≤5) top5 rows to text, not the whole column — the rest of
-        // this rule never needs the column's text form.
         let distinct: Vec<String> = if lvl.p.freq.n_unique <= 5 {
-            lvl.p
-                .freq
-                .top5_idx
-                .iter()
-                .map(|&i| {
-                    text_of(&lvl.values.slice(i as usize, 1)).map(|t| t.value(0).to_lowercase())
-                })
-                .collect::<Result<_, _>>()?
+            lvl.few_distinct.iter().map(|v| v.to_lowercase()).collect()
         } else {
             Vec::new()
         };
@@ -1131,7 +1206,7 @@ impl Rules<'_, '_> {
             target: Target::Original(lvl.values.data_type().clone()),
             rank: Rank::Original,
             rule: format!("{}original", lvl.prefix),
-            evidence: format!("measured size_bytes={}", lvl.size_bytes),
+            evidence: format!("{} size_bytes={}", lvl.size_note, lvl.size_bytes),
             predicted: lvl.size_bytes,
             projected: lvl.size_bytes as f64 * lvl.r,
             outcome: Outcome::NotTried,
@@ -1165,10 +1240,8 @@ pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>,
             | PT::UInt16
             | PT::UInt32
             | PT::UInt64 => {
-                if let (Some(a), Some(b)) = (lvl.p.range.argmin, lvl.p.range.argmax) {
-                    if let (Some(lo), Some(hi)) = (int_at(&lvl.values, a), int_at(&lvl.values, b)) {
-                        r.integers(lo, hi, "integer", "");
-                    }
+                if let Some((lo, hi)) = lvl.int_range {
+                    r.integers(lo, hi, "integer", "");
                 }
             }
             PT::Decimal(_, s) => r.decimal(s.unwrap_or(0)),
@@ -2197,36 +2270,37 @@ pub(crate) fn recommend(
         Some(p) if d.n_rows > 0 => p as f64 / d.n_rows as f64,
         _ => 1.0,
     };
-    let outer = Level {
-        dtype: s.dtype(),
-        values: values.clone(),
-        p: &d.outer,
-        n_midnight: d.n_midnight,
+    let outer = Level::of_values(
+        s.dtype(),
+        values.clone(),
+        &d.outer,
+        d.n_midnight,
         size_bytes,
-        est: level_estimate(&d.outer, d.n_rows - d.n_null, q),
+        level_estimate(&d.outer, d.n_rows - d.n_null, q),
         r,
-        prefix: "",
-        text: Default::default(),
-    };
+        "",
+    )
+    .map_err(err)?;
     let chosen = match &d.inner {
         Some(inner) if matches!(s.dtype(), PT::List(_) | PT::Array(..)) => {
             let (rows, child, width) = list_parts(values).map_err(err)?;
             if child.len() == inner.values.len() {
-                let inner_lvl = Level {
-                    dtype: inner.values.dtype(),
-                    size_bytes: ipc_body_bytes(child.as_ref(), None)?,
-                    values: child,
-                    p: &inner.profile,
-                    n_midnight: None,
-                    est: level_estimate(
+                let child_size = ipc_body_bytes(child.as_ref(), None)?;
+                let inner_lvl = Level::of_values(
+                    inner.values.dtype(),
+                    child,
+                    &inner.profile,
+                    None,
+                    child_size,
+                    level_estimate(
                         &inner.profile,
                         (inner.values.len() - inner.values.null_count()) as u64,
                         q,
                     ),
                     r,
-                    prefix: "inner: ",
-                    text: Default::default(),
-                };
+                    "inner: ",
+                )
+                .map_err(err)?;
                 choose_list(&outer, &inner_lvl, &rows, width, params).map_err(err)?
             } else {
                 // Defensive: list_parts builds Describe's flatten, so the lengths agree.
@@ -2612,17 +2686,17 @@ mod tests {
 
     fn types(s: Series, p: &Params) -> Vec<(String, Outcome)> {
         let d = describe_one(&s, 0).unwrap();
-        let lvl = Level {
-            dtype: s.dtype(),
-            values: export_series(&s, CompatLevel::oldest()).unwrap(),
-            p: &d.outer,
-            n_midnight: d.n_midnight,
-            size_bytes: 0,
-            est: level_estimate(&d.outer, d.n_rows - d.n_null, None),
-            r: 1.0,
-            prefix: "",
-            text: Default::default(),
-        };
+        let lvl = Level::of_values(
+            s.dtype(),
+            export_series(&s, CompatLevel::oldest()).unwrap(),
+            &d.outer,
+            d.n_midnight,
+            0,
+            level_estimate(&d.outer, d.n_rows - d.n_null, None),
+            1.0,
+            "",
+        )
+        .unwrap();
         candidates(&lvl, p)
             .unwrap()
             .iter()
@@ -2720,17 +2794,17 @@ mod tests {
         let d = describe_one(&ints, 0).unwrap();
         let values = export_series(&ints, CompatLevel::oldest()).unwrap();
         for dtype in [PT::Float64, PT::Decimal(Some(10), Some(2)), PT::String] {
-            let lvl = Level {
-                dtype: &dtype,
-                values: values.clone(),
-                p: &d.outer,
-                n_midnight: None,
-                size_bytes: 0,
-                est: level_estimate(&d.outer, 2, None),
-                r: 1.0,
-                prefix: "",
-                text: Default::default(),
-            };
+            let lvl = Level::of_values(
+                &dtype,
+                values.clone(),
+                &d.outer,
+                None,
+                0,
+                level_estimate(&d.outer, 2, None),
+                1.0,
+                "",
+            )
+            .unwrap();
             let got: Vec<String> = candidates(&lvl, &params())
                 .unwrap()
                 .iter()
@@ -2750,17 +2824,17 @@ mod tests {
         let s = Series::new("x".into(), &["a", "b", "a", "b", "c"]);
         let d = describe_one(&s, 0).unwrap();
         let evidence = |q: Option<f64>| {
-            let lvl = Level {
-                dtype: s.dtype(),
-                values: export_series(&s, CompatLevel::oldest()).unwrap(),
-                p: &d.outer,
-                n_midnight: None,
-                size_bytes: 0,
-                est: level_estimate(&d.outer, 5, q),
-                r: 1.0,
-                prefix: "",
-                text: Default::default(),
-            };
+            let lvl = Level::of_values(
+                s.dtype(),
+                export_series(&s, CompatLevel::oldest()).unwrap(),
+                &d.outer,
+                None,
+                0,
+                level_estimate(&d.outer, 5, q),
+                1.0,
+                "",
+            )
+            .unwrap();
             candidates(&lvl, &params())
                 .unwrap()
                 .into_iter()
@@ -2797,22 +2871,22 @@ mod tests {
         let s = Series::new("x".into(), &["a", "b", "c"]);
         let d = describe_one(&s, 0).unwrap();
         assert_eq!(d.outer.freq.n_unique, 3);
-        let lvl = Level {
-            dtype: s.dtype(),
-            values: export_series(&s, CompatLevel::oldest()).unwrap(),
-            p: &d.outer,
-            n_midnight: d.n_midnight,
-            size_bytes: 0,
-            est: Estimate {
-                est_cardinality: 1.0,
-                est_low: Some(1.0),
-                est_high: Some(1.0),
-                method: crate::cardinality_estimators::Method::Chao1,
-            },
-            r: 1.0,
-            prefix: "",
-            text: Default::default(),
-        };
+        let lvl = Level::of_values(
+            s.dtype(),
+            export_series(&s, CompatLevel::oldest()).unwrap(),
+            &d.outer,
+            d.n_midnight,
+            0,
+            Estimate {
+                    est_cardinality: 1.0,
+                    est_low: Some(1.0),
+                    est_high: Some(1.0),
+                    method: crate::cardinality_estimators::Method::Chao1,
+                },
+            1.0,
+            "",
+        )
+        .unwrap();
         assert_eq!(lvl.cardinality(), (3.0, "est_high"));
     }
 
@@ -2917,34 +2991,34 @@ mod tests {
             Series::new("x".into(), &[None::<&str>, None]),
         ] {
             let d = describe_one(&s, 0).unwrap();
-            let lvl = Level {
-                dtype: s.dtype(),
-                values: export_series(&s, CompatLevel::oldest()).unwrap(),
-                p: &d.outer,
-                n_midnight: d.n_midnight,
-                size_bytes: 0,
-                est: level_estimate(&d.outer, 0, None),
-                r: 1.0,
-                prefix: "",
-                text: Default::default(),
-            };
+            let lvl = Level::of_values(
+                s.dtype(),
+                export_series(&s, CompatLevel::oldest()).unwrap(),
+                &d.outer,
+                d.n_midnight,
+                0,
+                level_estimate(&d.outer, 0, None),
+                1.0,
+                "",
+            )
+            .unwrap();
             let recast = cast_to(&Target::Null, &lvl).unwrap();
             assert!(verify(&Target::Null, &lvl, &recast).is_ok());
         }
         // A column that is NOT all-null must not verify against Target::Null.
         let s = Series::new("x".into(), &[Some(1i64), None]);
         let d = describe_one(&s, 0).unwrap();
-        let lvl = Level {
-            dtype: s.dtype(),
-            values: export_series(&s, CompatLevel::oldest()).unwrap(),
-            p: &d.outer,
-            n_midnight: d.n_midnight,
-            size_bytes: 0,
-            est: level_estimate(&d.outer, 1, None),
-            r: 1.0,
-            prefix: "",
-            text: Default::default(),
-        };
+        let lvl = Level::of_values(
+            s.dtype(),
+            export_series(&s, CompatLevel::oldest()).unwrap(),
+            &d.outer,
+            d.n_midnight,
+            0,
+            level_estimate(&d.outer, 1, None),
+            1.0,
+            "",
+        )
+        .unwrap();
         let recast = cast_to(&Target::Null, &lvl).unwrap();
         assert!(verify(&Target::Null, &lvl, &recast).is_err());
     }
@@ -3016,17 +3090,17 @@ mod tests {
         let dummy = Series::new("x".into(), &[0i64, 1]);
         let d = describe_one(&dummy, 0).unwrap();
         let dtype = PT::Datetime(PTimeUnit::Microseconds, None);
-        let lvl = Level {
-            dtype: &dtype,
-            values: src,
-            p: &d.outer,
-            n_midnight: None,
-            size_bytes: 0,
-            est: level_estimate(&d.outer, 2, None),
-            r: 1.0,
-            prefix: "",
-            text: Default::default(),
-        };
+        let lvl = Level::of_values(
+            &dtype,
+            src,
+            &d.outer,
+            None,
+            0,
+            level_estimate(&d.outer, 2, None),
+            1.0,
+            "",
+        )
+        .unwrap();
         let target = Target::Fixed(AT::Timestamp(TimeUnit::Microsecond, Some("+05:00".into())));
         assert!(verify(&target, &lvl, &recast).is_err());
     }
@@ -3207,21 +3281,21 @@ mod tests {
         let d = describe_one(s, 0).unwrap();
         let inner = d.inner.as_ref().unwrap();
         let (_, child, _) = list_parts(&classic_layout(s).unwrap()).unwrap();
-        let lvl = Level {
-            dtype: inner.values.dtype(),
-            size_bytes: ipc_body_bytes(child.as_ref(), None).unwrap(),
-            values: child,
-            p: &inner.profile,
-            n_midnight: None,
-            est: level_estimate(
-                &inner.profile,
-                (inner.values.len() - inner.values.null_count()) as u64,
-                None,
-            ),
-            r: 1.0,
-            prefix: "inner: ",
-            text: Default::default(),
-        };
+        let lvl = Level::of_values(
+            inner.values.dtype(),
+            child.clone(),
+            &inner.profile,
+            None,
+            ipc_body_bytes(child.as_ref(), None).unwrap(),
+            level_estimate(
+                    &inner.profile,
+                    (inner.values.len() - inner.values.null_count()) as u64,
+                    None,
+                ),
+            1.0,
+            "inner: ",
+        )
+        .unwrap();
         choose(&lvl, &params()).unwrap()
     }
 
