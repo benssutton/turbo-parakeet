@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType as AT, Field};
-use polars::prelude::{AnyValue, DataType as PT, PolarsResult, Series};
+use polars::prelude::{polars_err, AnyValue, DataType as PT, PolarsResult, Series};
 use rayon::prelude::*;
 
 use crate::api::{Error, Result};
@@ -38,6 +38,25 @@ pub(crate) struct Column {
     pub outer: LevelStats,
     /// List / Array columns: the inner values.
     pub inner: Option<LevelStats>,
+    /// Whether the first concrete batch held the (outer, inner) level as Utf8View /
+    /// BinaryView — as a Polars frame exports through `__arrow_c_stream__`.
+    pub views_input: (bool, bool),
+}
+
+fn is_view(t: &AT) -> bool {
+    matches!(t, AT::Utf8View | AT::BinaryView)
+}
+
+/// A list type's item type.
+fn item_type(t: &AT) -> Option<&AT> {
+    match t {
+        AT::List(f)
+        | AT::LargeList(f)
+        | AT::FixedSizeList(f, _)
+        | AT::ListView(f)
+        | AT::LargeListView(f) => Some(f.data_type()),
+        _ => None,
+    }
 }
 
 pub(crate) struct Streaming {
@@ -128,6 +147,10 @@ fn level<'a>(
 /// FixedSizeList over an analytic inner type (`inner`: the inner level's shape, which
 /// excludes a null row's slots). Dictionaries (Categorical / Enum mappings) and
 /// structs have no analytic form.
+///
+/// Known gap: an Array row that is null but holds values in its slots (hand-built
+/// arrays only; Polars and pyarrow leave them empty or null) is counted as null
+/// slots, so variable-width values under it are missed.
 fn classic_body(
     classic: &AT,
     s: &Shape,
@@ -168,16 +191,27 @@ fn original_size(
 }
 
 /// The original type's IPC body in Polars' layout, as one-shot measures the Series
-/// Polars imports: None where there is no analytic form (dictionaries, structs, nested
-/// lists). Polars converts Utf8/Binary to views zero-copy (polars-compute
-/// `binary_to_binview`): when any value is over 12 bytes (Polars' view blocks hold
-/// bytes) the whole values buffer becomes one data buffer, else there is none.
+/// Polars imports; None where there is no analytic form (dictionaries, structs,
+/// nested lists).
+///
+/// The model: a freshly built Polars frame (view input), or one zero-copy import of a
+/// compact string array (non-view input). A string_view input keeps its own buffers —
+/// for a Polars-built frame, blocks of 8 KiB doubling that hold only values over 12
+/// bytes (`ViewSim`). A Utf8/Binary input is converted zero-copy (polars-compute
+/// `binary_to_binview`): when any value is over 12 bytes the whole values buffer
+/// becomes one data buffer, else there is none. A sliced or filtered frame carries
+/// arbitrary buffers, which no statistic predicts.
 fn original_polars(classic: &AT, o: &ViewShape, inner: Option<&ViewShape>) -> Option<f64> {
     let s = &o.shape;
     let v = validity(s.n, s.nulls);
     Some(match classic {
         AT::Utf8 | AT::LargeUtf8 | AT::Binary | AT::LargeBinary => {
-            v + pad(16.0 * s.n) + if o.all > 0 { pad(s.sum_len) } else { 0.0 }
+            let data = match (o.views_input, o.all > 0) {
+                (true, _) => o.all as f64,
+                (false, true) => pad(s.sum_len),
+                (false, false) => 0.0,
+            };
+            v + pad(16.0 * s.n) + data
         }
         AT::LargeList(f) => {
             v + pad(8.0 * (s.n + 1.0)) + original_polars(f.data_type(), inner?, None)?
@@ -196,20 +230,22 @@ fn original_polars(classic: &AT, o: &ViewShape, inner: Option<&ViewShape>) -> Op
     })
 }
 
-/// A level's analytic Polars-layout inputs: its shape and Polars' view blocks over all
-/// values and over the distinct ones.
+/// A level's analytic Polars-layout inputs: its shape, Polars' view blocks over all
+/// values and over the distinct ones, and whether the input held it as views.
 #[derive(Clone, Copy)]
 struct ViewShape {
     shape: Shape,
     all: u64,
     distinct: u64,
+    views_input: bool,
 }
 
-fn view_shape(lvl: &Level, st: &LevelStats) -> ViewShape {
+fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> ViewShape {
     ViewShape {
         shape: lvl.shape(),
         all: st.views.as_ref().map_or(0, ViewSim::bytes),
         distinct: st.distinct.as_ref().map_or(0, |d| d.views.bytes()),
+        views_input,
     }
 }
 
@@ -285,8 +321,14 @@ fn enum_categories(dtype: &PT) -> Option<Vec<String>> {
 
 /// Column `name`'s rows in block `b` as one Series of `dtype` (absent pieces: nulls),
 /// with compact buffers: appending keeps each piece's view buffers, so the block is
-/// rebuilt through its classic layout, as one-shot's Series is built from its input.
-fn block_series(b: &Block, name: &str, dtype: &PT) -> PolarsResult<Series> {
+/// rebuilt as one-shot's Series is built from its input — through its classic layout
+/// (a zero-copy import), or, for view input, with views built as Polars builds them.
+fn block_series(
+    b: &Block,
+    name: &str,
+    dtype: &PT,
+    views_input: (bool, bool),
+) -> PolarsResult<Series> {
     let mut out = Series::new_empty(name.into(), dtype);
     for piece in &b.pieces {
         let s = match piece.cols.iter().find(|(f, _)| f.name() == name) {
@@ -304,7 +346,11 @@ fn block_series(b: &Block, name: &str, dtype: &PT) -> PolarsResult<Series> {
         };
         out.append(&s)?;
     }
-    let c = classic_layout(&out)?;
+    let mut c = classic_layout(&out)?;
+    if views_input.0 || views_input.1 {
+        // View input keeps its buffers: rebuild them as Polars builds a frame's views.
+        c = to_polars_layout(&c, &AT::UInt32).map_err(|e| polars_err!(ComputeError: "{e}"))?;
+    }
     let s = import_array(&Field::new(name, c.data_type().clone(), true), &c)?;
     if s.dtype() == dtype {
         Ok(s)
@@ -374,6 +420,7 @@ impl Streaming {
                     first_row: self.n_rows,
                     outer,
                     inner: None,
+                    views_input: (false, false),
                 });
                 self.index.insert(name.to_string(), self.columns.len() - 1);
                 self.columns.len() - 1
@@ -493,6 +540,8 @@ impl Streaming {
                     if c.dtype.is_none() {
                         c.dtype = Some(s.dtype().clone());
                         c.input_type = pa_name(f.data_type());
+                        let t = f.data_type();
+                        c.views_input = (is_view(t), item_type(t).is_some_and(is_view));
                     }
                     c.outer.absorb(outer, threshold);
                     if let Some(inner) = inner {
@@ -592,10 +641,10 @@ impl Streaming {
         let ishape = ilvl.as_ref().map(Level::shape);
         (lvl.size_bytes, lvl.size_note) = original_size(&classic, &lvl.shape(), ishape.as_ref(), o);
         let iv = match (&ilvl, inner) {
-            (Some(il), Some((i, _))) => Some(view_shape(il, i)),
+            (Some(il), Some((i, _))) => Some(view_shape(il, i, c.views_input.1)),
             _ => None,
         };
-        let ov = view_shape(&lvl, o);
+        let ov = view_shape(&lvl, o, c.views_input.0);
         // The original's Polars-layout size: analytic where it has a closed form.
         let original_polars =
             original_polars(&classic, &ov, iv.as_ref()).map_or(o.polars_bytes, |b| b as u64);
@@ -626,7 +675,7 @@ impl Streaming {
         let z_level = Some(self.params.zstd_level);
         let mut z = [0u64; 4]; // original Arrow, original Polars, recommended Arrow, recommended Polars
         for b in blocks {
-            let s = block_series(b, &c.name, dtype).map_err(err)?;
+            let s = block_series(b, &c.name, dtype, c.views_input).map_err(err)?;
             let bc = classic_layout(&s).map_err(err)?;
             let sz = sizes_of(&s, &bc, self.params.zstd_level).map_err(err)?;
             z[0] += sz[1];
@@ -718,8 +767,9 @@ pub(crate) mod tests {
     use arrow_schema::DataType as AT;
     use arrow_select::concat::concat;
 
-    use crate::arrow_io::export_struct;
+    use crate::arrow_io::{export_series, export_struct};
     use crate::recommend::{arrow_cast, describe_and_recommend_impl};
+    use polars::prelude::{CompatLevel, NamedFrom};
 
     use super::*;
 
@@ -904,12 +954,13 @@ pub(crate) mod tests {
                 ])) as ArrayRef,
             ),
             ("l", Arc::new(list) as ArrayRef),
-            // Kept in its original type: i/7 needs every float64 digit.
+            // Kept in its original type by construction: beyond float32's range and
+            // with ~200 integer digits, no narrower float or decimal holds it.
             (
                 "f_orig",
                 Arc::new(Float64Array::from(
                     (0..6)
-                        .map(|i| (i % 3 != 1).then(|| (i + 1) as f64 / 7.0))
+                        .map(|i| (i % 3 != 1).then(|| 3.3e200 * (i + 1) as f64 / 7.0))
                         .collect::<Vec<_>>(),
                 )) as ArrayRef,
             ),
@@ -994,6 +1045,51 @@ pub(crate) mod tests {
                 .map(|off| whole.slice(off, k.min(whole.num_rows() - off)))
                 .collect();
             assert_like_one_shot(&batches, &whole, &format!("k={k}"));
+        }
+    }
+
+    /// A frame as Polars exports it through `__arrow_c_stream__`: string_view columns
+    /// whose data blocks Polars built (8 KiB, doubling; only values over 12 bytes).
+    fn polars_views_frame() -> RecordBatch {
+        let text = |i: usize| match i % 3 {
+            0 => None,
+            1 => Some(format!("s{}", i % 7)),
+            _ => Some(format!("a value longer than twelve bytes {i}")),
+        };
+        let n = 900;
+        let s = Series::new("s".into(), (0..n).map(text).collect::<Vec<_>>());
+        let l = Series::new(
+            "l".into(),
+            (0..n)
+                .map(|i| {
+                    (i % 5 != 0).then(|| {
+                        Series::new("".into(), (i..i + i % 3).map(text).collect::<Vec<_>>())
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
+        let cols: Vec<(&str, ArrayRef)> = [&s, &l]
+            .into_iter()
+            .map(|s| {
+                (
+                    s.name().as_str(),
+                    export_series(s, CompatLevel::newest()).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(cols[0].1.data_type(), &AT::Utf8View);
+        batch(cols)
+    }
+
+    #[test]
+    fn view_input_sizes_like_one_shot() {
+        let whole = polars_views_frame();
+        for k in [900, 250, 7] {
+            let batches: Vec<_> = (0..whole.num_rows())
+                .step_by(k)
+                .map(|off| whole.slice(off, k.min(whole.num_rows() - off)))
+                .collect();
+            assert_like_one_shot(&batches, &whole, &format!("views k={k}"));
         }
     }
 
