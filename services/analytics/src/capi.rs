@@ -5,14 +5,15 @@
 //! `analytics_free_error`. Built without Python by
 //! `cargo build --release --no-default-features --target-dir target/capi`.
 
-use std::ffi::{c_char, c_int, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
+use std::sync::Mutex;
 
 use arrow_array::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::RecordBatchIterator;
 
 use crate::api::{self, Error};
-use crate::arrow_io::read_stream;
+use crate::arrow_io::{read_stream, CheckedReader};
 
 const OK: c_int = 0;
 const INVALID_INPUT: c_int = 1;
@@ -148,15 +149,145 @@ pub unsafe extern "C" fn analytics_free_error(error: *mut c_char) {
     }
 }
 
+/// What an `AnalyticsRecommender *` points to. The handle crosses as `void *`: a
+/// pointer to a Rust type in an `extern "C"` signature trips
+/// `improper_ctypes_definitions`.
+type Recommender = Mutex<api::StreamingRecommender>;
+
+/// SAFETY: `h` is null or a live handle from `analytics_recommender_new`.
+unsafe fn recommender<'a>(h: *mut c_void) -> api::Result<&'a Recommender> {
+    if h.is_null() {
+        return Err(Error::InvalidInput("recommender handle is null".into()));
+    }
+    Ok(unsafe { &*(h as *const Recommender) })
+}
+
+fn locked(r: &Recommender) -> api::Result<std::sync::MutexGuard<'_, api::StreamingRecommender>> {
+    r.lock()
+        .map_err(|_| Error::Compute("recommender poisoned by an earlier panic".into()))
+}
+
+/// A streaming recommender (see `api::StreamingRecommender`). On success `*out` holds a
+/// handle the caller frees with `analytics_recommender_free`; it is thread-safe.
+///
+/// # Safety
+/// `out` is null or valid for one pointer write. When `n_bool_pairs > 0`, `bool_true`
+/// and `bool_false` each point to `n_bool_pairs` NUL-terminated UTF-8 strings. `error`
+/// is null or valid for one pointer write.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn analytics_recommender_new(
+    reservoir_rows: u64,
+    block_rows: u64,
+    categorical_threshold: u64,
+    zstd_level: i32,
+    seed: u64,
+    bool_true: *const *const c_char,
+    bool_false: *const *const c_char,
+    n_bool_pairs: usize,
+    out: *mut *mut c_void,
+    error: *mut *mut c_char,
+) -> c_int {
+    let result = (|| {
+        if out.is_null() {
+            return Err(Error::InvalidInput("out is null".into()));
+        }
+        let trues = unsafe { strings(bool_true, n_bool_pairs) }?;
+        let falses = unsafe { strings(bool_false, n_bool_pairs) }?;
+        let r = api::StreamingRecommender::new(api::StreamingParams {
+            reservoir_rows,
+            block_rows,
+            categorical_threshold,
+            zstd_level,
+            seed,
+            boolean_pairs: trues.into_iter().zip(falses).collect(),
+        })?;
+        unsafe { *out = Box::into_raw(Box::new(Mutex::new(r))) as *mut c_void };
+        Ok(())
+    })();
+    unsafe { finish(result, error) }
+}
+
+/// Adds every batch of `batches`, in order; each batch is checked on import (see
+/// `arrow_io::CheckedReader`) and added atomically (on failure the batches before it
+/// stay added).
+///
+/// # Safety
+/// `h` is null or a live handle. `batches` is null or a valid ArrowArrayStream; it is
+/// consumed (left released) whatever the outcome. `error` is null or valid for one
+/// pointer write.
+#[no_mangle]
+pub unsafe extern "C" fn analytics_recommender_add(
+    h: *mut c_void,
+    batches: *mut FFI_ArrowArrayStream,
+    error: *mut *mut c_char,
+) -> c_int {
+    let result = (|| {
+        if batches.is_null() {
+            return Err(Error::InvalidInput("batch stream is null".into()));
+        }
+        // Take the stream first: it is consumed whatever the outcome.
+        let reader = unsafe { CheckedReader::from_raw(batches) }
+            .map_err(|e| Error::InvalidInput(e.to_string()))?;
+        let mut rec = locked(unsafe { recommender(h) }?)?;
+        for batch in reader {
+            rec.add(&batch.map_err(|e| Error::InvalidInput(e.to_string()))?)?;
+        }
+        Ok(())
+    })();
+    unsafe { finish(result, error) }
+}
+
+/// The recommendation so far (see `api::StreamingRecommender::finish`); the state is
+/// kept. On success `*out` holds a one-batch stream the caller owns and must release.
+///
+/// # Safety
+/// `h` is null or a live handle. `out` is null or valid for writing one
+/// ArrowArrayStream. `error` is null or valid for one pointer write.
+#[no_mangle]
+pub unsafe extern "C" fn analytics_recommender_finish(
+    h: *mut c_void,
+    out: *mut FFI_ArrowArrayStream,
+    error: *mut *mut c_char,
+) -> c_int {
+    let result = (|| {
+        if out.is_null() {
+            return Err(Error::InvalidInput("output stream is null".into()));
+        }
+        let batch = locked(unsafe { recommender(h) }?)?.finish()?;
+        let schema = batch.schema();
+        let stream =
+            FFI_ArrowArrayStream::new(Box::new(RecordBatchIterator::new([Ok(batch)], schema)));
+        // `*out` may be uninitialised or released: overwrite it without dropping.
+        unsafe { ptr::write(out, stream) };
+        Ok(())
+    })();
+    unsafe { finish(result, error) }
+}
+
+/// Frees a handle. Null is a no-op.
+///
+/// # Safety
+/// `h` is null or a live handle, not used afterwards.
+#[no_mangle]
+pub unsafe extern "C" fn analytics_recommender_free(h: *mut c_void) {
+    if !h.is_null() {
+        drop(unsafe { Box::from_raw(h as *mut Recommender) });
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::ffi::{c_char, CStr};
+    use std::ffi::{c_char, c_void, CStr};
     use std::ptr;
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
     use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, RecordBatchIterator, StringArray};
+    use arrow_buffer::Buffer;
+    use arrow_data::ArrayData;
+    use arrow_schema::DataType;
 
     use super::*;
 
@@ -191,6 +322,11 @@ mod tests {
                 error,
             )
         }
+    }
+
+    fn released(s: &mut FFI_ArrowArrayStream) -> bool {
+        let raw = (s as *mut FFI_ArrowArrayStream).cast::<crate::arrow_io::RawStream>();
+        unsafe { (*raw).release }.is_none()
     }
 
     fn message(error: *mut c_char) -> String {
@@ -268,6 +404,94 @@ mod tests {
             INVALID_INPUT
         );
         unsafe { analytics_free_error(ptr::null_mut()) };
+    }
+
+    unsafe fn new_recommender(block_rows: u64, error: *mut *mut c_char) -> (c_int, *mut c_void) {
+        let (trues, falses) = ([c"true".as_ptr()], [c"false".as_ptr()]);
+        let mut h = ptr::null_mut();
+        let code = unsafe {
+            analytics_recommender_new(
+                1 << 20,
+                block_rows,
+                10_000,
+                1,
+                0,
+                trues.as_ptr(),
+                falses.as_ptr(),
+                1,
+                &mut h,
+                error,
+            )
+        };
+        (code, h)
+    }
+
+    #[test]
+    fn streaming_recommender_lifecycle() {
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_recommender(1 << 16, &mut error) };
+        assert_eq!(code, OK);
+        for _ in 0..2 {
+            let mut input = stream(vec![("a", ints(&[0, 5, 7]))]);
+            assert_eq!(
+                unsafe { analytics_recommender_add(h, &mut input, &mut error) },
+                OK
+            );
+        }
+        let mut output = FFI_ArrowArrayStream::empty();
+        assert_eq!(
+            unsafe { analytics_recommender_finish(h, &mut output, &mut error) },
+            OK
+        );
+        let batches: Vec<RecordBatch> = ArrowArrayStreamReader::try_new(output)
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let rec = batches[0]
+            .column_by_name("rec_arrow_type")
+            .unwrap()
+            .as_string_view();
+        assert_eq!(rec.value(0), "uint8");
+        unsafe { analytics_recommender_free(h) };
+        unsafe { analytics_recommender_free(ptr::null_mut()) };
+    }
+
+    #[test]
+    fn streaming_recommender_errors() {
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_recommender(0, &mut error) };
+        assert_eq!((code, h.is_null()), (INVALID_INPUT, true));
+        assert!(message(error).contains("block_rows"));
+        let mut input = stream(vec![("a", ints(&[1]))]);
+        let mut error = ptr::null_mut();
+        let code = unsafe { analytics_recommender_add(ptr::null_mut(), &mut input, &mut error) };
+        assert_eq!(code, INVALID_INPUT);
+        assert!(message(error).contains("handle"));
+        // The stream was consumed even though the handle was null.
+        assert!(released(&mut input));
+    }
+
+    #[test]
+    fn streaming_recommender_rejects_a_malformed_stream() {
+        // A string column whose offsets decrease: without the checked import arrow-rs
+        // would build it and a kernel would slice out of bounds (an abort in release).
+        let data = unsafe {
+            ArrayData::builder(DataType::Utf8)
+                .len(2)
+                .add_buffer(Buffer::from_vec(vec![0i32, 2, 1]))
+                .add_buffer(Buffer::from_vec(b"ab".to_vec()))
+                .build_unchecked()
+        };
+        let mut input = stream(vec![("s", Arc::new(StringArray::from(data)) as ArrayRef)]);
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_recommender(1 << 16, &mut error) };
+        assert_eq!(code, OK);
+        let code = unsafe { analytics_recommender_add(h, &mut input, &mut error) };
+        assert_eq!(code, INVALID_INPUT);
+        let m = message(error);
+        assert!(m.contains("offset"), "{m}");
+        assert!(released(&mut input));
+        unsafe { analytics_recommender_free(h) };
     }
 
     #[test]
