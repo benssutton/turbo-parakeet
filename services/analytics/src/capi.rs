@@ -4,6 +4,8 @@
 //! `api::Error`); on failure `*error` holds a message the caller frees with
 //! `analytics_free_error`. Built without Python by
 //! `cargo build --release --no-default-features --target-dir target/capi`.
+//! The streaming recommender's `mark_ineligible` is intentionally not exposed: it exists
+//! for Polars' Int128 / UInt128 columns, which Arrow input cannot carry.
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;

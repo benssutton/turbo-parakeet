@@ -225,7 +225,8 @@ Added to `describe.rs`'s numeric and ISO scanners, counted over every non-null t
   `ipc_body_bytes(block, zstd_level)`, × N ÷ sampled rows, rounded. The recommended sizes use the
   block cast to the chosen type, or its Polars layout.
   - On the snapshot, the in-progress partial block is offered to the reservoir too, so a stream
-    shorter than one block is measured completely.
+    shorter than one block is measured completely. Once the reservoir is full, the in-progress
+    partial block is not sampled (`Reservoir::blocks`): only completed blocks compete for places.
   - When every row is sampled, this is exactly the size of an IPC file written in `block_rows`
     batches.
   - B = 0: all ZSTD sizes are null.
@@ -519,3 +520,15 @@ the item says what the code now does. Items 8–15 were found during implementat
     - originals whose size is a per-batch sum (Struct, deeper nesting), across several batches;
     - string columns whose null slots hold bytes (e.g. Polars' int → String cast): one-shot measures
       them in the original's buffers, the analytic size counts values only.
+16. **Final-review changes.**
+    - Once the reservoir is full, the in-progress partial block is not sampled (§5.3); the ZSTD
+      estimate then rests on completed blocks only.
+    - The streaming-only scanner counters (item 2, the float parse / render probe and the ISO
+      instant) are collected only when `StringStats::proof` is set, by `partial::BatchStats::of`:
+      one-shot Describe / Recommend pay nothing for them.
+    - Validation (item 11) runs once, on import: `api` entry points and `Streaming::add` do not
+      re-check a RecordBatch (callers holding one from an unchecked source use
+      `arrow_io::validate_batch`). Columns are checked in parallel, and Utf8View values by
+      whole-buffer UTF-8 plus char boundaries.
+    - `mark_ineligible` is not exposed through the C ABI: Arrow input cannot carry Int128 /
+      UInt128, the case it exists for in Python.
