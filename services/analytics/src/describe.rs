@@ -779,6 +779,10 @@ pub(crate) struct StringStats {
     pub iso_max_sig_frac_digits: Option<u32>,
     pub offsets: HashSet<i32>,
     pub iso_n_midnight: u64,
+    /// Collect the proof statistics below. Only streaming reads them (`recommend::prove` /
+    /// `lossy_by_stats` on a statistics Level), so the one-shot path leaves this false and
+    /// skips their per-value cost (float parse + render, ISO instant parse); they stay 0/None.
+    pub proof: bool,
     /// Numeric values that are zero written with a minus sign ("-0", "-0.00").
     pub n_neg_zero: u64,
     /// Numeric values whose integer part has a leading zero ("007", "00.5").
@@ -831,12 +835,14 @@ impl StringStats {
             self.max_frac_digits = self.max_frac_digits.max(Some(n.frac_digits));
             self.min_frac_digits = opt_min(self.min_frac_digits, Some(n.frac_digits));
             self.max_sig_digits = self.max_sig_digits.max(Some(n.sig_digits));
-            self.raw_frac_min = opt_min(self.raw_frac_min, Some(n.raw_frac_digits));
-            self.raw_frac_max = self.raw_frac_max.max(Some(n.raw_frac_digits));
-            self.n_int_lead0 += n.int_lead0 as u64;
-            self.n_neg_zero += (n.sig_digits == 0 && b[0] == b'-') as u64;
-            // The numeric grammar is ASCII, so the bytes are valid UTF-8.
-            self.float_probe(std::str::from_utf8(b).unwrap_or_default());
+            if self.proof {
+                self.raw_frac_min = opt_min(self.raw_frac_min, Some(n.raw_frac_digits));
+                self.raw_frac_max = self.raw_frac_max.max(Some(n.raw_frac_digits));
+                self.n_int_lead0 += n.int_lead0 as u64;
+                self.n_neg_zero += (n.sig_digits == 0 && b[0] == b'-') as u64;
+                // The numeric grammar is ASCII, so the bytes are valid UTF-8.
+                self.float_probe(std::str::from_utf8(b).unwrap_or_default());
+            }
             if n.is_int {
                 self.n_numeric_int += 1;
                 self.n_leading_zero += n.leading_zero as u64;
@@ -878,8 +884,10 @@ impl StringStats {
                 self.iso_n_midnight += midnight as u64;
                 self.offsets.insert(offset_minutes);
                 self.datetime_form(b, frac, sig);
-                self.n_iso_offset_noncanonical +=
-                    (offset_minutes == 0 && b.last() != Some(&b'Z')) as u64;
+                if self.proof {
+                    self.n_iso_offset_noncanonical +=
+                        (offset_minutes == 0 && b.last() != Some(&b'Z')) as u64;
+                }
             }
             None => {}
         }
@@ -899,12 +907,18 @@ impl StringStats {
 
     /// `t0`: where the time part starts (0 for a bare time, 11 after a date).
     fn time_form(&mut self, b: &[u8], t0: usize, frac: u32, sig: u32) {
+        if !self.proof {
+            return;
+        }
         let seconds = b.get(t0 + 5) == Some(&b':');
         self.n_iso_time_noncanonical += (!seconds || frac != chrono_frac_digits(sig)) as u64;
     }
 
     /// A datetime's separator, time part and UTC instant (both kinds).
     fn datetime_form(&mut self, b: &[u8], frac: u32, sig: u32) {
+        if !self.proof {
+            return;
+        }
         self.n_iso_space_sep += (b[10] == b' ') as u64;
         self.time_form(b, 11, frac, sig);
         if let Some(v) = parse_iso(b) {
@@ -951,6 +965,7 @@ impl StringStats {
         self.n_iso_time_noncanonical += o.n_iso_time_noncanonical;
         self.n_iso_space_sep += o.n_iso_space_sep;
         self.n_iso_offset_noncanonical += o.n_iso_offset_noncanonical;
+        self.proof |= o.proof;
         self
     }
 }
@@ -1041,7 +1056,12 @@ fn nulls(n: usize) -> Row {
     vec![AnyValue::Null; n]
 }
 
-pub(crate) fn strings(s: &Series) -> PolarsResult<Option<StringStats>> {
+/// `proof`: also collect the streaming proof statistics (`StringStats::proof`).
+pub(crate) fn strings(s: &Series, proof: bool) -> PolarsResult<Option<StringStats>> {
+    let empty = || StringStats {
+        proof,
+        ..Default::default()
+    };
     let st = match s.dtype() {
         DataType::String => s.clone(),
         DataType::Categorical(_, _) | DataType::Enum(_, _) => s.cast(&DataType::String)?,
@@ -1054,15 +1074,15 @@ pub(crate) fn strings(s: &Series) -> PolarsResult<Option<StringStats>> {
                 (0..arr.len())
                     .into_par_iter()
                     .with_min_len(CHUNK)
-                    .fold(StringStats::default, |mut acc, i| {
+                    .fold(empty, |mut acc, i| {
                         if arr.is_valid(i) {
                             acc.add(arr.value(i).as_bytes());
                         }
                         acc
                     })
-                    .reduce(StringStats::default, StringStats::merge)
+                    .reduce(empty, StringStats::merge)
             })
-            .fold(StringStats::default(), StringStats::merge),
+            .fold(empty(), StringStats::merge),
     ))
 }
 
@@ -1080,13 +1100,14 @@ pub(crate) struct Profile {
     pub is_f32: bool,
 }
 
-pub(crate) fn profile(s: &Series, seed: u64) -> PolarsResult<Profile> {
+/// `proof`: see `StringStats::proof` (false on the one-shot path).
+pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profile> {
     let lengths = byte_lengths(s)?;
     Ok(Profile {
         freq: frequencies(&encode_series(s)?, seed, lengths.as_deref()),
         range: range(s, lengths.as_deref())?,
         floats: float_stats(s)?,
-        strings: strings(s)?,
+        strings: strings(s, proof)?,
         gcd: crate::gcd::series_gcd(s)?,
         sum_len: lengths.map(|l| l.iter().sum()),
         is_f32: s.dtype() == &DataType::Float32,
@@ -1266,10 +1287,11 @@ pub(crate) fn flatten(s: &Series) -> PolarsResult<Option<Series>> {
     Ok(Some(inner.take_slice(&idx)?))
 }
 
-pub(crate) fn describe_one(s: &Series, seed: u64) -> PolarsResult<Described> {
+/// `proof`: see `StringStats::proof` (false on the one-shot path).
+pub(crate) fn describe_one(s: &Series, seed: u64, proof: bool) -> PolarsResult<Described> {
     let inner = match flatten(s)? {
         Some(values) => {
-            let profile = profile(&values, seed)?;
+            let profile = profile(&values, seed, proof)?;
             Some(Inner { values, profile })
         }
         None => None,
@@ -1278,7 +1300,7 @@ pub(crate) fn describe_one(s: &Series, seed: u64) -> PolarsResult<Described> {
         name: s.name().clone(),
         n_rows: s.len() as u64,
         n_null: s.null_count() as u64,
-        outer: profile(s, seed)?,
+        outer: profile(s, seed, proof)?,
         n_midnight: n_midnight(s)?,
         inner,
     })
@@ -1304,7 +1326,7 @@ pub(crate) fn assemble(
 pub(crate) fn describe_columns_impl(inputs: &[Series], seed: u64) -> PolarsResult<Series> {
     let rows: Vec<Row> = inputs
         .par_iter()
-        .map(|s| describe_one(s, seed).map(|d| d.row()))
+        .map(|s| describe_one(s, seed, false).map(|d| d.row()))
         .collect::<PolarsResult<_>>()?;
     assemble("describe", &fields(), &rows)
 }
@@ -1691,9 +1713,14 @@ mod tests {
 
     #[test]
     fn profile_gcd_and_lengths() {
-        let p = profile(&Series::new("x".into(), &[Some(10i64), None, Some(30)]), 0).unwrap();
+        let p = profile(
+            &Series::new("x".into(), &[Some(10i64), None, Some(30)]),
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!((p.gcd, p.sum_len), (Some(10), None));
-        let s = profile(&Series::new("x".into(), &["ab", "ab", "c"]), 0).unwrap();
+        let s = profile(&Series::new("x".into(), &["ab", "ab", "c"]), 0, false).unwrap();
         assert_eq!(
             (s.gcd, s.sum_len, s.freq.sum_len_unique),
             (None, Some(5), Some(3))
@@ -1703,10 +1730,10 @@ mod tests {
     #[test]
     fn described_row_matches_fields() {
         let list = Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None]);
-        let d = describe_one(&list, 0).unwrap();
+        let d = describe_one(&list, 0, false).unwrap();
         assert_eq!(d.row().len(), fields().len());
         assert_eq!(d.inner.as_ref().unwrap().values.len(), 2);
-        let floats = describe_one(&Series::new("y".into(), &[1.5f64]), 0).unwrap();
+        let floats = describe_one(&Series::new("y".into(), &[1.5f64]), 0, false).unwrap();
         assert_eq!(floats.row().len(), fields().len());
         assert!(floats.inner.is_none() && floats.outer.floats.is_some());
     }
@@ -1749,7 +1776,10 @@ mod tests {
 
     #[test]
     fn scanner_streaming_statistics_numeric() {
-        let mut st = StringStats::default();
+        let mut st = StringStats {
+            proof: true,
+            ..Default::default()
+        };
         for v in [
             "-0.00",
             "007.50",
@@ -1771,7 +1801,10 @@ mod tests {
 
     #[test]
     fn scanner_streaming_statistics_iso() {
-        let mut st = StringStats::default();
+        let mut st = StringStats {
+            proof: true,
+            ..Default::default()
+        };
         for v in [
             "2024-01-01 10:00:00",
             "2024-01-01T10:00",

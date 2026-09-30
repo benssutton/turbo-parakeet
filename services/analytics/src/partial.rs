@@ -402,7 +402,7 @@ impl BatchStats {
             gcd: crate::gcd::series_gcd(s)?,
             sum_len: lens.as_ref().map(|l| l.iter().sum()),
             floats: float_stats(s)?,
-            strings: strings(s)?,
+            strings: strings(s, true)?,
             n_midnight: n_midnight(s)?,
             keys,
             long_lens: lens.map(|l| l.into_iter().filter(|&x| x > 12).collect()),

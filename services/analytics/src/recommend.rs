@@ -2639,7 +2639,7 @@ pub(crate) fn describe_and_recommend_impl(
     let rows: Vec<Row> = inputs
         .par_iter()
         .map(|s| {
-            let d = describe_one(s, params.seed)?;
+            let d = describe_one(s, params.seed, false)?;
             let classic = classic_layout(s)?;
             let sz = sizes_of(s, &classic, params.zstd_level)?;
             let rec = recommend(s, &classic, &d, &sz, params)?;
@@ -2861,7 +2861,12 @@ mod tests {
     }
 
     use crate::arrow_io::export_series;
-    use crate::describe::describe_one;
+
+    /// Describe with the streaming proof statistics on: these tests also build statistics
+    /// Levels from the profile (`prove` / `lossy_by_stats` read them).
+    pub(super) fn describe_one(s: &Series, seed: u64) -> PolarsResult<Described> {
+        crate::describe::describe_one(s, seed, true)
+    }
     use polars::prelude::{
         CompatLevel, DataType as PT, IntoSeries, NamedFrom, NewChunkedArray, Series,
         TimeUnit as PTimeUnit,
