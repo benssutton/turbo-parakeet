@@ -154,6 +154,12 @@ pub unsafe extern "C" fn analytics_free_error(error: *mut c_char) {
 /// `improper_ctypes_definitions`.
 type Recommender = Mutex<api::StreamingRecommender>;
 
+// The handle is shared across caller threads: checked in the C-only build too.
+const _: () = {
+    fn thread_safe<T: Send + Sync>() {}
+    let _ = thread_safe::<Recommender>;
+};
+
 /// SAFETY: `h` is null or a live handle from `analytics_recommender_new`.
 unsafe fn recommender<'a>(h: *mut c_void) -> api::Result<&'a Recommender> {
     if h.is_null() {
@@ -168,7 +174,10 @@ fn locked(r: &Recommender) -> api::Result<std::sync::MutexGuard<'_, api::Streami
 }
 
 /// A streaming recommender (see `api::StreamingRecommender`). On success `*out` holds a
-/// handle the caller frees with `analytics_recommender_free`; it is thread-safe.
+/// handle the caller frees with `analytics_recommender_free`. Concurrent
+/// `analytics_recommender_add` / `analytics_recommender_finish` calls on one handle
+/// from different threads are safe (serialised by a lock); freeing is not (see
+/// `analytics_recommender_free`).
 ///
 /// # Safety
 /// `out` is null or valid for one pointer write. When `n_bool_pairs > 0`, `bool_true`
@@ -211,6 +220,10 @@ pub unsafe extern "C" fn analytics_recommender_new(
 /// Adds every batch of `batches`, in order; each batch is checked on import (see
 /// `arrow_io::CheckedReader`) and added atomically (on failure the batches before it
 /// stay added).
+///
+/// The handle's lock is held while the whole stream is pulled: a slow producer blocks
+/// `finish` (and other `add`s) on other threads, and a producer whose callbacks
+/// re-enter `add` / `finish` on the same handle deadlocks.
 ///
 /// # Safety
 /// `h` is null or a live handle. `batches` is null or a valid ArrowArrayStream; it is
@@ -268,7 +281,9 @@ pub unsafe extern "C" fn analytics_recommender_finish(
 /// Frees a handle. Null is a no-op.
 ///
 /// # Safety
-/// `h` is null or a live handle, not used afterwards.
+/// `h` is null or a live handle, not used afterwards. Freeing a handle twice, or
+/// while an `add` / `finish` on it is running on another thread, is undefined
+/// behaviour: the caller must ensure every other call has returned.
 #[no_mangle]
 pub unsafe extern "C" fn analytics_recommender_free(h: *mut c_void) {
     if !h.is_null() {
@@ -469,6 +484,89 @@ mod tests {
         assert!(message(error).contains("handle"));
         // The stream was consumed even though the handle was null.
         assert!(released(&mut input));
+    }
+
+    /// `finish`'s `n_rows` for the first column.
+    unsafe fn finished_rows(h: *mut c_void) -> u64 {
+        let mut output = FFI_ArrowArrayStream::empty();
+        let mut error = ptr::null_mut();
+        assert_eq!(
+            unsafe { analytics_recommender_finish(h, &mut output, &mut error) },
+            OK
+        );
+        let batches: Vec<RecordBatch> = ArrowArrayStreamReader::try_new(output)
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        batches[0]
+            .column_by_name("n_rows")
+            .unwrap()
+            .as_primitive::<arrow_array::types::UInt64Type>()
+            .value(0)
+    }
+
+    #[test]
+    fn streaming_recommender_null_arguments_are_invalid_input() {
+        let (trues, falses) = ([c"true".as_ptr()], [c"false".as_ptr()]);
+        let mut error = ptr::null_mut();
+        let code = unsafe {
+            analytics_recommender_new(
+                1 << 20,
+                1 << 16,
+                10_000,
+                1,
+                0,
+                trues.as_ptr(),
+                falses.as_ptr(),
+                1,
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, INVALID_INPUT);
+        assert_eq!(message(error), "out is null");
+
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_recommender(1 << 16, &mut error) };
+        assert_eq!(code, OK);
+        let code = unsafe { analytics_recommender_add(h, ptr::null_mut(), &mut error) };
+        assert_eq!(code, INVALID_INPUT);
+        assert_eq!(message(error), "batch stream is null");
+
+        let mut output = FFI_ArrowArrayStream::empty();
+        let mut error = ptr::null_mut();
+        let code =
+            unsafe { analytics_recommender_finish(ptr::null_mut(), &mut output, &mut error) };
+        assert_eq!(code, INVALID_INPUT);
+        assert!(message(error).contains("handle"));
+
+        let mut error = ptr::null_mut();
+        let code = unsafe { analytics_recommender_finish(h, ptr::null_mut(), &mut error) };
+        assert_eq!(code, INVALID_INPUT);
+        assert_eq!(message(error), "output stream is null");
+        unsafe { analytics_recommender_free(h) };
+    }
+
+    #[test]
+    fn streaming_recommender_finishes_repeatedly_and_adds_after_finishing() {
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_recommender(1 << 16, &mut error) };
+        assert_eq!(code, OK);
+        let mut input = stream(vec![("a", ints(&[0, 5, 7]))]);
+        assert_eq!(
+            unsafe { analytics_recommender_add(h, &mut input, &mut error) },
+            OK
+        );
+        assert_eq!(unsafe { finished_rows(h) }, 3);
+        assert_eq!(unsafe { finished_rows(h) }, 3);
+        let mut input = stream(vec![("a", ints(&[1, 2]))]);
+        assert_eq!(
+            unsafe { analytics_recommender_add(h, &mut input, &mut error) },
+            OK
+        );
+        assert_eq!(unsafe { finished_rows(h) }, 5);
+        assert!(error.is_null());
+        unsafe { analytics_recommender_free(h) };
     }
 
     #[test]
