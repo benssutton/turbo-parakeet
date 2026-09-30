@@ -298,6 +298,31 @@ fn check_raw(a: *const RawArray, dt: &AT) -> std::result::Result<(), ArrowError>
     if n > 0 && a.buffers.is_null() {
         return Err(malformed(dt, "null buffer array".into()));
     }
+    if l.variadic {
+        // arrow-rs reads the last buffer as the variadic buffers' i64 lengths without
+        // a null check, then trusts each length. With no variadic buffer it reads
+        // nothing, and a zero-length buffer may be null.
+        let variadic = n - fixed - 1;
+        // SAFETY: `buffers` holds `n` pointers (non-null: checked above, as n > 0).
+        let bufs = unsafe { std::slice::from_raw_parts(a.buffers, n) };
+        let sizes = bufs[n - 1].cast::<i64>();
+        if variadic > 0 && sizes.is_null() {
+            return Err(malformed(dt, "null variadic sizes buffer".into()));
+        }
+        for i in 0..variadic {
+            // SAFETY: the sizes buffer holds one i64 per variadic buffer.
+            let len = unsafe { sizes.add(i).read_unaligned() };
+            if len < 0 {
+                return Err(malformed(
+                    dt,
+                    format!("variadic buffer {i} has length {len}"),
+                ));
+            }
+            if len > 0 && bufs[fixed + i].is_null() {
+                return Err(malformed(dt, format!("variadic buffer {i} is null")));
+            }
+        }
+    }
     let children: Vec<&AT> = match dt {
         AT::List(f)
         | AT::LargeList(f)
@@ -786,6 +811,64 @@ mod tests {
             // gives it none.
             let msg = rejected_after(ArrayData::new_null(&AT::Null, 3), |a| a.n_buffers = 1);
             assert!(msg.contains("1 buffers, expected 0"), "{msg}");
+        }
+
+        /// A string view with one variadic data buffer: C buffers [validity, views,
+        /// data, sizes].
+        fn a_view_array() -> ArrayData {
+            arrow_array::StringViewArray::from(vec!["a string longer than twelve bytes"])
+                .into_data()
+        }
+
+        /// `a`'s C buffer `i` (negative: from the end).
+        fn buffer_slot(a: &mut RawArray, i: i64) -> &mut *const c_void {
+            let i = if i < 0 { a.n_buffers + i } else { i };
+            // SAFETY: `buffers` holds `n_buffers` pointers, owned by the export.
+            unsafe { &mut *a.buffers.add(i as usize) }
+        }
+
+        #[test]
+        fn a_view_array_without_its_variadic_sizes() {
+            // arrow-rs reads the sizes buffer (the last) without a null check.
+            let msg = rejected_after(a_view_array(), |a| {
+                *buffer_slot(a, -1) = std::ptr::null();
+            });
+            assert!(msg.contains("null variadic sizes buffer"), "{msg}");
+        }
+
+        #[test]
+        fn a_view_array_with_a_negative_variadic_length() {
+            let msg = rejected_after(a_view_array(), |a| {
+                // SAFETY: the sizes buffer holds one i64, in memory the export owns.
+                unsafe { *(*buffer_slot(a, -1) as *mut i64) = -1 };
+            });
+            assert!(msg.contains("variadic buffer 0 has length -1"), "{msg}");
+        }
+
+        #[test]
+        fn a_view_array_without_its_data_buffer() {
+            let msg = rejected_after(a_view_array(), |a| {
+                *buffer_slot(a, 2) = std::ptr::null();
+            });
+            assert!(msg.contains("variadic buffer 0 is null"), "{msg}");
+        }
+
+        #[test]
+        fn a_view_array_without_variadic_buffers_may_omit_its_sizes() {
+            // Inline values only: no variadic buffer, so a null (zero-length) sizes
+            // buffer is allowed.
+            let (mut array, schema) =
+                exported(arrow_array::StringViewArray::from(vec!["short"]).into_data());
+            let raw = (&mut array as *mut FFI_ArrowArray).cast::<RawArray>();
+            let a = unsafe { &mut **(*raw).children };
+            assert_eq!(a.n_buffers, 3);
+            *buffer_slot(a, -1) = std::ptr::null();
+            assert_eq!(
+                unsafe { import_checked(array, &schema) }
+                    .unwrap()
+                    .num_rows(),
+                1
+            );
         }
 
         #[test]
