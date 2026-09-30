@@ -34,13 +34,13 @@ use std::collections::{HashMap, HashSet};
 pub(crate) const CHUNK: usize = 1 << 16;
 
 #[derive(Clone, Copy)]
-struct Entry {
-    count: u64,
-    first: u64,
-    mask: u8,
+pub(crate) struct Entry {
+    pub count: u64,
+    pub first: u64,
+    pub mask: u8,
 }
 
-type Map = HashMap<u64, Entry, FixedState>;
+pub(crate) type Map = HashMap<u64, Entry, FixedState>;
 /// (first row index, value) of the running extreme.
 type Ext<T> = (u64, T);
 
@@ -102,15 +102,20 @@ fn merge(mut a: Map, mut b: Map) -> Map {
     a
 }
 
-pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]>) -> Frequencies {
-    let n = col.len();
-    let map = col
-        .values
+/// The per-value map of `col`, rows counted from `offset` (streaming: the global row
+/// of the batch's first value), so first rows and capture subsets are global.
+pub(crate) fn frequency_map(col: &EncodedColumn, seed: u64, offset: u64) -> Map {
+    col.values
         .par_chunks(CHUNK)
         .zip(col.is_null.par_chunks(CHUNK))
         .enumerate()
-        .map(|(i, (values, nulls))| count_chunk(values, nulls, i * CHUNK, seed))
-        .reduce(|| Map::with_hasher(FixedState::default()), merge);
+        .map(|(i, (values, nulls))| count_chunk(values, nulls, offset as usize + i * CHUNK, seed))
+        .reduce(|| Map::with_hasher(FixedState::default()), merge)
+}
+
+pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]>) -> Frequencies {
+    let n = col.len();
+    let map = frequency_map(col, seed, 0);
 
     let n_null = col.is_null.iter().filter(|&&x| x).count();
     let nf = n as f64;
@@ -190,7 +195,7 @@ fn extremes<T: Copy>(
     (lo.map(|x| x.0), hi.map(|x| x.0))
 }
 
-fn arg_extremes(s: &Series) -> PolarsResult<(Option<u64>, Option<u64>)> {
+pub(crate) fn arg_extremes(s: &Series) -> PolarsResult<(Option<u64>, Option<u64>)> {
     Ok(match s.dtype() {
         DataType::Float32 => extremes(s.f32()?.iter().map(|v| v.filter(|x| !x.is_nan())), lt),
         DataType::Float64 => extremes(s.f64()?.iter().map(|v| v.filter(|x| !x.is_nan())), lt),
@@ -262,7 +267,7 @@ fn min_max_bytes(s: &Series, byte_lens: &[u64]) -> (Option<u64>, Option<u64>) {
 }
 
 /// `byte_lens` must be `Some` (from `byte_lengths`) for String/Categorical/Enum/Binary.
-fn lengths(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<(Option<u64>, Option<u64>)> {
+pub(crate) fn lengths(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<(Option<u64>, Option<u64>)> {
     Ok(match s.dtype() {
         DataType::String
         | DataType::Categorical(_, _)
@@ -289,7 +294,7 @@ fn lengths(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<(Option<u64>, 
 }
 
 /// Byte length of every value (0 for nulls) of a String, Categorical, Enum or Binary series.
-fn byte_lengths(s: &Series) -> PolarsResult<Option<Vec<u64>>> {
+pub(crate) fn byte_lengths(s: &Series) -> PolarsResult<Option<Vec<u64>>> {
     Ok(match s.dtype() {
         DataType::String => Some(
             s.str()?
@@ -1033,7 +1038,7 @@ fn nulls(n: usize) -> Row {
     vec![AnyValue::Null; n]
 }
 
-fn strings(s: &Series) -> PolarsResult<Option<StringStats>> {
+pub(crate) fn strings(s: &Series) -> PolarsResult<Option<StringStats>> {
     let st = match s.dtype() {
         DataType::String => s.clone(),
         DataType::Categorical(_, _) | DataType::Enum(_, _) => s.cast(&DataType::String)?,
@@ -1191,7 +1196,7 @@ impl Described {
 }
 
 /// Datetime values at exactly 00:00:00 local time (column time zone, else naive).
-fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
+pub(crate) fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
     let DataType::Datetime(unit, tz) = s.dtype() else {
         return Ok(None);
     };
@@ -1232,7 +1237,7 @@ fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
 /// Values one level down, skipping null lists — the same definition as the
 /// Python `flatten` (drop_nulls, then explode the non-empty lists). Element i is
 /// what `inner_argmin` / `inner_top5_idx` index into.
-fn flatten(s: &Series) -> PolarsResult<Option<Series>> {
+pub(crate) fn flatten(s: &Series) -> PolarsResult<Option<Series>> {
     let (inner, ranges): (Series, Vec<Option<(usize, usize)>>) = match s.dtype() {
         DataType::List(_) => {
             let ca = s.list()?.rechunk();
@@ -1307,6 +1312,17 @@ mod tests {
 
     fn freq(s: Series) -> Frequencies {
         frequencies(&encode_series(&s).unwrap(), 0, None)
+    }
+
+    #[test]
+    fn frequency_map_offsets_rows() {
+        let whole = encode_series(&Series::new("x".into(), &["a", "b", "a"])).unwrap();
+        let tail = encode_series(&Series::new("x".into(), &["b", "a"])).unwrap();
+        let (w, t) = (frequency_map(&whole, 7, 0), frequency_map(&tail, 7, 1));
+        let b = whole.values[1];
+        assert_eq!((w[&b].first, t[&b].first), (1, 1));
+        assert_eq!(w[&b].mask, t[&b].mask); // capture subsets use the global row
+        assert_eq!(frequencies(&whole, 7, None).n_unique, w.len() as u64);
     }
 
     #[test]
