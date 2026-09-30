@@ -292,6 +292,8 @@ impl CheckedReader {
             return Err(unsafe { last_error(s, "get_schema") });
         }
         let schema = Arc::new(Schema::try_from(&schema)?);
+        // A stream with no batches never reaches the per-batch check.
+        check_schema(&schema)?;
         Ok(CheckedReader { stream, schema })
     }
 
@@ -487,16 +489,29 @@ fn polars_unsupported(t: &AT) -> Option<&AT> {
     }
 }
 
+/// `f`'s type refused if Polars cannot import it, naming the column.
+fn check_field(f: &Field) -> std::result::Result<(), ArrowError> {
+    match polars_unsupported(f.data_type()) {
+        Some(t) => Err(ArrowError::InvalidArgumentError(format!(
+            "column {:?}: {t} is not supported (Polars cannot import it)",
+            f.name()
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Every field of `schema` type-checked (`check_field`), so an input with no rows or
+/// no batches is refused like one with data.
+pub(crate) fn check_schema(schema: &Schema) -> std::result::Result<(), ArrowError> {
+    schema.fields().iter().try_for_each(|f| check_field(f))
+}
+
 /// One column checked before arrow-rs or Polars reads it (see "checked import"),
 /// errors naming it.
 fn check_column(f: &Field, d: &ArrayData) -> std::result::Result<(), ArrowError> {
-    let err = |e: String| ArrowError::InvalidArgumentError(format!("column {:?}: {e}", f.name()));
-    if let Some(t) = polars_unsupported(f.data_type()) {
-        return Err(err(format!(
-            "{t} is not supported (Polars cannot import it)"
-        )));
-    }
-    validate_tree(d, true).map_err(|e| err(e.to_string()))
+    check_field(f)?;
+    validate_tree(d, true)
+        .map_err(|e| ArrowError::InvalidArgumentError(format!("column {:?}: {e}", f.name())))
 }
 
 /// Every column of `batch` checked (`check_column`): a RecordBatch built without
@@ -939,6 +954,27 @@ mod tests {
             .unwrap();
         assert!(err.to_string().contains("already released"), "{err}");
         assert!(!GET_SCHEMA_CALLED.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_stream_with_an_unsupported_schema_is_refused_even_with_no_batches() {
+        use arrow_array::RecordBatchIterator;
+        let item = Arc::new(Field::new("item", AT::Decimal256(10, 2), true));
+        for dt in [AT::Decimal256(10, 2), AT::List(item)] {
+            let schema = Arc::new(Schema::new(vec![Field::new("c", dt, true)]));
+            let mut stream = FFI_ArrowArrayStream::new(Box::new(RecordBatchIterator::new(
+                std::iter::empty(),
+                schema,
+            )));
+            let err = unsafe { CheckedReader::from_raw(&mut stream) }
+                .err()
+                .expect("refused");
+            let m = err.to_string();
+            assert!(
+                m.contains("column \"c\"") && m.contains("Decimal256(10, 2) is not supported"),
+                "{m}"
+            );
+        }
     }
 
     #[test]

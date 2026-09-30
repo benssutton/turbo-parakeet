@@ -13,6 +13,7 @@ import pyarrow as pa
 import pytest
 
 from analytics.describe import _sizes
+from analytics.gcd import GcdRust
 from analytics.recommend import RecommendRust, StreamingRecommender
 from datagen import describe_mixed, stringified
 
@@ -447,3 +448,19 @@ def test_malformed_input_is_a_value_error(make, match):
         StreamingRecommender().add(make())
     with pytest.raises(ValueError, match=match):
         RecommendRust().add({"t": make()}).result()
+
+
+def test_an_unsupported_type_is_refused_even_with_no_rows():
+    # A zero-row table has no batches, so only the schema can be checked.
+    import decimal
+
+    def empty():
+        col = pa.array([decimal.Decimal("1")], pa.decimal256(40, 2))
+        return pa.table({"c": col}).slice(1, 0)
+
+    with pytest.raises(ValueError, match="Decimal256"):
+        StreamingRecommender().add(empty())
+    with pytest.raises(ValueError, match="Decimal256"):
+        RecommendRust().add({"t": empty()}).result()
+    with pytest.raises(ValueError, match="Decimal256"):
+        GcdRust().add({"t": empty()}).result()
