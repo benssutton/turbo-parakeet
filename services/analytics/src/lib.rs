@@ -14,6 +14,7 @@ mod describe;
 mod entropy;
 mod gcd;
 mod minhash;
+mod partial;
 #[cfg(feature = "python")]
 mod python;
 mod recommend;
