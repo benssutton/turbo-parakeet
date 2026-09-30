@@ -13,6 +13,7 @@ import polars as pl
 
 from analytics import _plugin
 from analytics._dtypes import holds_wide_integer
+from analytics.base import _normalise
 
 
 class StreamingRecommender:
@@ -66,7 +67,13 @@ class StreamingRecommender:
                 # Dropping every column would lose the height; the rows still count.
                 frame = pl.DataFrame(height=frame.height)
             else:
-                frame = frame.drop([name for name, _ in ineligible])
+                # A sliced Array / Struct with nulls exports as invalid Arrow (see
+                # analytics.base.Technique.add): rebuild those columns.
+                frame = _normalise(frame.drop([name for name, _ in ineligible]))
+            if any(dtype == pl.Null for dtype in frame.schema.values()):
+                # py-polars exports a Null column with one buffer, which arrow-rs
+                # rejects (the Null type has none); pyarrow re-exports it with none.
+                frame = frame.to_arrow()
         self._rs.add(frame, ineligible)
         return self
 
