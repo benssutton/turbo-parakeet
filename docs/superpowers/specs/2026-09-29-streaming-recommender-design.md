@@ -114,6 +114,11 @@ Distinct                                       merge
 - Capture subsets use `subset(seed, global_row)`.
 - f1 and f2 are the keys whose count is 1 and 2. `history[mask − 1]` counts keys by mask.
 - A text level therefore needs at most about 16 bytes × `categorical_threshold`.
+- After overflow the level stops hashing values and stops maintaining `sum_len_unique` and `first6`.
+  Only the plain counts continue. Overflow is exact, not statistical: the estimate is floored at
+  `n_unique`, so the dictionary is rejected whatever follows. It is never triggered early by a
+  batch's distinct ratio.
+- Schnabel's validity test (`d/n < 0.5`) uses the merged totals at `finish`, never a single batch.
 
 ### 4.3 `add(batch)`
 
