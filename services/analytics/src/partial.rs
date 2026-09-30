@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn splitting_the_stream_does_not_change_the_statistics() {
         for (s, track) in samples() {
-            let whole = summary(&absorbed(&[s.clone()], track, 10_000));
+            let whole = summary(&absorbed(std::slice::from_ref(&s), track, 10_000));
             for k in [1, 2, 3, 5] {
                 let parts = chunks(&s, k);
                 assert_eq!(

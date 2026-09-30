@@ -293,9 +293,8 @@ struct ViewShape {
     distinct: u64,
     views_input: bool,
     cats: Option<Cats>,
-    /// The per-batch measured Polars-layout size (where there is no closed form).
-    polars_bytes: u64,
-    /// The same, of the classic layout rebuilt as `to_polars_layout` does.
+    /// The per-batch measured Polars-layout size (where there is no closed form) of
+    /// the classic layout rebuilt as `to_polars_layout` does.
     rebuilt_polars_bytes: u64,
 }
 
@@ -306,7 +305,6 @@ fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> ViewShape {
         distinct: st.distinct.as_ref().map_or(0, |d| d.views.bytes()),
         views_input,
         cats: cats_of(lvl.dtype),
-        polars_bytes: st.polars_bytes,
         rebuilt_polars_bytes: st.rebuilt_polars_bytes,
     }
 }
@@ -1208,7 +1206,7 @@ pub(crate) mod tests {
             "l".into(),
             (0..n)
                 .map(|i| {
-                    (i % 5 != 0).then(|| {
+                    (!i.is_multiple_of(5)).then(|| {
                         Series::new("".into(), (i..i + i % 3).map(text).collect::<Vec<_>>())
                     })
                 })
@@ -1329,7 +1327,7 @@ pub(crate) mod tests {
         // Rows of 0-2 structs {a: f64, b: string (0-14 bytes, some over 12)}, every
         // 5th row null: the kept inner struct has no closed-form Polars size.
         let row = |i: usize| {
-            (i % 5 != 0).then(|| {
+            (!i.is_multiple_of(5)).then(|| {
                 let k = i % 3;
                 let a = Series::new("a".into(), vec![i as f64 / 7.0; k]);
                 let b = Series::new("b".into(), vec!["x".repeat(i % 15); k]);
