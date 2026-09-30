@@ -317,8 +317,10 @@ def _normalise(frame: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | pl.LazyFram
     `offset = validity offset` (Array: slice offset applied twice; Struct: short
     child). The Rust extension refuses it (ValueError) and pyarrow / DataFusion raise.
     An in-memory IPC round trip of those columns rewrites every level from offset 0
-    (a gather does not: a gathered List keeps a sliced inner Array / Struct); it is
-    also faster than a gather (~150 ms vs ~270 ms for three nested 1M-row columns).
+    (a gather does not: a gathered List keeps a sliced inner Array / Struct). IPC is
+    chosen for that correctness, not speed: it costs more than a gather (~83 ms vs
+    ~16 ms for a 1M-row Struct{x: int, y: str}) and only runs for frames holding an
+    Array / Struct column; flat frames are returned unchanged.
     """
     schema = frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
     cols = [c for c, dt in schema.items() if _holds_array_or_struct(dt)]
