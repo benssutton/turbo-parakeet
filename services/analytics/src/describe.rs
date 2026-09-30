@@ -267,7 +267,10 @@ fn min_max_bytes(s: &Series, byte_lens: &[u64]) -> (Option<u64>, Option<u64>) {
 }
 
 /// `byte_lens` must be `Some` (from `byte_lengths`) for String/Categorical/Enum/Binary.
-pub(crate) fn lengths(s: &Series, byte_lens: Option<&[u64]>) -> PolarsResult<(Option<u64>, Option<u64>)> {
+pub(crate) fn lengths(
+    s: &Series,
+    byte_lens: Option<&[u64]>,
+) -> PolarsResult<(Option<u64>, Option<u64>)> {
     Ok(match s.dtype() {
         DataType::String
         | DataType::Categorical(_, _)
@@ -1747,7 +1750,14 @@ mod tests {
     #[test]
     fn scanner_streaming_statistics_numeric() {
         let mut st = StringStats::default();
-        for v in ["-0.00", "007.50", "1.5", "12", "0.30000000000000001", "16777217"] {
+        for v in [
+            "-0.00",
+            "007.50",
+            "1.5",
+            "12",
+            "0.30000000000000001",
+            "16777217",
+        ] {
             st.add(v.as_bytes());
         }
         assert_eq!(st.n_neg_zero, 1);

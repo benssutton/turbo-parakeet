@@ -690,9 +690,7 @@ impl<'a> Level<'a> {
             (PT::Decimal(..), Some(a), Some(b)) => values
                 .as_primitive_opt::<Decimal128Type>()
                 .map(|d| (d.value(a as usize), d.value(b as usize))),
-            (dt, Some(a), Some(b)) if dt.is_integer() => {
-                int_at(&values, a).zip(int_at(&values, b))
-            }
+            (dt, Some(a), Some(b)) if dt.is_integer() => int_at(&values, a).zip(int_at(&values, b)),
             (PT::Date | PT::Datetime(..) | PT::Duration(_) | PT::Time, Some(a), Some(b)) => {
                 physical_at(&values, a).zip(physical_at(&values, b))
             }
@@ -1804,20 +1802,18 @@ pub(crate) fn prove(t: &Target, lvl: &Level) -> Result<(), String> {
     };
     match t {
         Target::Boolean if st.n_neg_zero > 0 => Err(format!("n_neg_zero={}", st.n_neg_zero)),
-        Target::Fixed(AT::Float32) if st.n_f32_roundtrip_fail > 0 => Err(format!(
-            "n_f32_roundtrip_fail={}",
-            st.n_f32_roundtrip_fail
-        )),
-        Target::Fixed(AT::Float64) if st.n_f64_roundtrip_fail > 0 => Err(format!(
-            "n_f64_roundtrip_fail={}",
-            st.n_f64_roundtrip_fail
-        )),
+        Target::Fixed(AT::Float32) if st.n_f32_roundtrip_fail > 0 => {
+            Err(format!("n_f32_roundtrip_fail={}", st.n_f32_roundtrip_fail))
+        }
+        Target::Fixed(AT::Float64) if st.n_f64_roundtrip_fail > 0 => {
+            Err(format!("n_f64_roundtrip_fail={}", st.n_f64_roundtrip_fail))
+        }
         Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, _))
         | Target::TimestampWithOffset(TimeUnit::Nanosecond) => {
             match (st.iso_instant_min, st.iso_instant_max) {
-                (Some(lo), Some(hi)) if lo < i64::MIN as i128 || hi > i64::MAX as i128 => Err(
-                    format!("iso_instant range {lo}..{hi} ns exceeds int64"),
-                ),
+                (Some(lo), Some(hi)) if lo < i64::MIN as i128 || hi > i64::MAX as i128 => {
+                    Err(format!("iso_instant range {lo}..{hi} ns exceeds int64"))
+                }
                 _ => Ok(()),
             }
         }
@@ -1838,7 +1834,9 @@ pub(crate) fn lossy_by_stats(t: &Target, lvl: &Level) -> bool {
             };
             match t {
                 Target::Boolean | Target::TimestampWithOffset(_) => lvl.n() > 0,
-                Target::BoolPair(..) => lvl.few_distinct.iter().any(|v| v != "true" && v != "false"),
+                Target::BoolPair(..) => {
+                    lvl.few_distinct.iter().any(|v| v != "true" && v != "false")
+                }
                 Target::Fixed(to) => match to {
                     AT::Float32 => st.n_f32_render_diff > 0,
                     AT::Float64 => st.n_f64_render_diff > 0,
@@ -2533,7 +2531,10 @@ pub(crate) fn recommend(
         nullable: chosen.array.logical_null_count() > 0,
         arrow_type: pa_name(&t),
         arrow_size: ipc_body_bytes(chosen.array.as_ref(), None)?,
-        arrow_zstd: Some(ipc_body_bytes(chosen.array.as_ref(), Some(params.zstd_level))?),
+        arrow_zstd: Some(ipc_body_bytes(
+            chosen.array.as_ref(),
+            Some(params.zstd_level),
+        )?),
         polars_type,
         polars_size,
         polars_zstd,
@@ -2908,14 +2909,29 @@ mod tests {
             (strs(&[Some("1.50"), Some("2.25"), None]), params()),
             (strs(&[Some("1.5"), Some("2.25")]), params()),
             (strs(&[Some("-0"), Some("5")]), params()),
-            (strs(&[Some("2024-01-01 10:00:00"), Some("2024-01-02 11:00:00")]), params()),
-            (strs(&[Some("2024-01-01T10:00:00Z"), Some("2024-01-01T11:00:00+00:00")]), params()),
+            (
+                strs(&[Some("2024-01-01 10:00:00"), Some("2024-01-02 11:00:00")]),
+                params(),
+            ),
+            (
+                strs(&[
+                    Some("2024-01-01T10:00:00Z"),
+                    Some("2024-01-01T11:00:00+00:00"),
+                ]),
+                params(),
+            ),
             (strs(&[Some("10:00:00.5"), Some("11:00:00")]), params()),
             (strs(&[Some("Yes"), Some("no"), Some("yes")]), yes_no),
             (strs(&[Some("true"), Some("false")]), params()),
-            (strs(&[Some("1234567890.1"), Some("0.00000012345")]), params()),
+            (
+                strs(&[Some("1234567890.1"), Some("0.00000012345")]),
+                params(),
+            ),
             (strs(&[Some("2024-01-01"), Some("2024-02-01")]), params()),
-            (strs(&[Some("2024-01-01T00:00:00"), Some("2024-02-01T00:00:00")]), params()),
+            (
+                strs(&[Some("2024-01-01T00:00:00"), Some("2024-02-01T00:00:00")]),
+                params(),
+            ),
             (strs(&[Some("0"), Some("1"), Some("1")]), params()),
             (Series::new("x".into(), &[0.0f64, -0.0, 1.5]), params()),
             (Series::new("x".into(), &[1.5f64, 2.25]), params()),
@@ -2942,7 +2958,11 @@ mod tests {
             let (chosen, pick) = both(s, &p);
             assert_eq!(pick.target, chosen.target, "{case}");
             assert_eq!(pick.lossy, chosen.lossy, "{case}");
-            assert_eq!(outcomes(&pick.candidates), outcomes(&chosen.candidates), "{case}");
+            assert_eq!(
+                outcomes(&pick.candidates),
+                outcomes(&chosen.candidates),
+                "{case}"
+            );
         }
     }
 
@@ -3023,7 +3043,11 @@ mod tests {
             .unwrap();
             let pick = pick_list_by_stats(&outer, &il, width, &params()).unwrap();
             assert_eq!(pa_name(&pick.target.arrow_type()), rec.arrow_type, "{s:?}");
-            assert_eq!(outcomes(&pick.candidates), outcomes(&rec.candidates), "{s:?}");
+            assert_eq!(
+                outcomes(&pick.candidates),
+                outcomes(&rec.candidates),
+                "{s:?}"
+            );
             assert_eq!(pick.lossy, rec.lossy);
         }
     }
@@ -3222,11 +3246,11 @@ mod tests {
             d.n_midnight,
             0,
             Estimate {
-                    est_cardinality: 1.0,
-                    est_low: Some(1.0),
-                    est_high: Some(1.0),
-                    method: crate::cardinality_estimators::Method::Chao1,
-                },
+                est_cardinality: 1.0,
+                est_low: Some(1.0),
+                est_high: Some(1.0),
+                method: crate::cardinality_estimators::Method::Chao1,
+            },
             1.0,
             "",
         )
@@ -3632,10 +3656,10 @@ mod tests {
             None,
             ipc_body_bytes(child.as_ref(), None).unwrap(),
             level_estimate(
-                    &inner.profile,
-                    (inner.values.len() - inner.values.null_count()) as u64,
-                    None,
-                ),
+                &inner.profile,
+                (inner.values.len() - inner.values.null_count()) as u64,
+                None,
+            ),
             1.0,
             "inner: ",
         )
