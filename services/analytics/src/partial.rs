@@ -17,7 +17,7 @@ use crate::describe::{
     arg_extremes, byte_lengths, float_stats, frequency_map, lengths, n_midnight, strings,
     FloatStats, Frequencies, Profile, Range, StringStats,
 };
-use crate::recommend::{body_size, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK};
+use crate::recommend::{body_size, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK};
 use crate::shared::encode_series;
 use crate::sizes::{classic_layout, ipc_body_bytes};
 
@@ -328,6 +328,9 @@ pub(crate) struct BatchStats {
     /// Measured classic size, when the classic type has no analytic size.
     size_bytes: u64,
     polars_bytes: u64,
+    /// Nested levels: the Polars-layout size of the classic layout rebuilt as
+    /// one-shot's `to_polars_layout` rebuilds a list's kept inner level.
+    rebuilt_polars_bytes: u64,
     classic: AT,
     is_f32: bool,
 }
@@ -340,10 +343,19 @@ impl BatchStats {
         let classic = export_series(&s.slice(0, 0), CompatLevel::oldest())?
             .data_type()
             .clone();
-        let size_bytes = if body_size(&classic, &Shape::default()).is_ok() {
-            0
+        let (size_bytes, rebuilt_polars_bytes) = if body_size(&classic, &Shape::default()).is_ok() {
+            (0, 0)
         } else {
-            ipc_body_bytes(classic_layout(s)?.as_ref(), None)?
+            let c = classic_layout(s)?;
+            let rebuilt = match classic {
+                AT::Struct(_) | AT::List(_) | AT::LargeList(_) | AT::FixedSizeList(..) => {
+                    let p = to_polars_layout(&c, &AT::UInt32)
+                        .map_err(|e| polars_err!(ComputeError: "{e}"))?;
+                    ipc_body_bytes(p.as_ref(), None)?
+                }
+                _ => 0,
+            };
+            (ipc_body_bytes(c.as_ref(), None)?, rebuilt)
         };
         let (lo, hi) = if has_extremes(s.dtype()) {
             let (a, b) = arg_extremes(s)?;
@@ -396,6 +408,7 @@ impl BatchStats {
             long_lens: lens.map(|l| l.into_iter().filter(|&x| x > 12).collect()),
             size_bytes,
             polars_bytes: ipc_body_bytes(export_series(s, CompatLevel::newest())?.as_ref(), None)?,
+            rebuilt_polars_bytes,
             classic,
             is_f32: s.dtype() == &DataType::Float32,
         })
@@ -424,6 +437,8 @@ pub(crate) struct LevelStats {
     /// of the Polars-layout size.
     pub size_bytes: u64,
     pub polars_bytes: u64,
+    /// Per-batch sum of the rebuilt Polars-layout size (nested levels).
+    pub rebuilt_polars_bytes: u64,
     pub classic: Option<AT>,
     pub is_f32: bool,
 }
@@ -468,6 +483,7 @@ impl LevelStats {
         }
         self.size_bytes += b.size_bytes;
         self.polars_bytes += b.polars_bytes;
+        self.rebuilt_polars_bytes += b.rebuilt_polars_bytes;
         self.classic.get_or_insert(b.classic);
         self.is_f32 = b.is_f32;
     }

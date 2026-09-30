@@ -295,6 +295,8 @@ struct ViewShape {
     cats: Option<Cats>,
     /// The per-batch measured Polars-layout size (where there is no closed form).
     polars_bytes: u64,
+    /// The same, of the classic layout rebuilt as `to_polars_layout` does.
+    rebuilt_polars_bytes: u64,
 }
 
 fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> ViewShape {
@@ -305,6 +307,7 @@ fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> ViewShape {
         views_input,
         cats: cats_of(lvl.dtype),
         polars_bytes: st.polars_bytes,
+        rebuilt_polars_bytes: st.rebuilt_polars_bytes,
     }
 }
 
@@ -351,8 +354,10 @@ fn polars_body(
                 AT::Dictionary(_, v) => AT::Dictionary(Box::new(key.clone()), v.clone()),
                 t => t.clone(),
             };
-            // No closed form (a struct, say): as measured per batch.
-            original_polars(&t, o, inner().ok().as_ref()).unwrap_or(o.polars_bytes as f64)
+            // No closed form (a struct, say): as measured per batch, rebuilt as
+            // one-shot's `to_polars_layout` rebuilds the recast array (exact for one
+            // batch; a Struct's dictionary fields take Polars' UInt32 keys).
+            original_polars(&t, o, inner().ok().as_ref()).unwrap_or(o.rebuilt_polars_bytes as f64)
         }
         t => body_size(&polars_layout(&t.arrow_type(), key), s)?,
     })
@@ -1143,13 +1148,23 @@ pub(crate) mod tests {
 
     /// `batches` streamed recommend and size like `whole` in one shot.
     fn assert_like_one_shot(batches: &[RecordBatch], whole: &RecordBatch, label: &str) {
+        assert_like_one_shot_but(batches, whole, label, &[]);
+    }
+
+    /// As `assert_like_one_shot`, the fields `skip` aside.
+    fn assert_like_one_shot_but(
+        batches: &[RecordBatch],
+        whole: &RecordBatch,
+        label: &str,
+        skip: &[&str],
+    ) {
         let reference = one_shot(whole);
         let mut s = streaming();
         batches.iter().for_each(|b| s.add(b).unwrap());
         let out = s.finish().unwrap();
         let columns = texts(&out, "column");
         assert_eq!(columns, texts(&reference, "column"), "{label}");
-        for name in REC {
+        for name in REC.into_iter().filter(|n| !skip.contains(n)) {
             let (got, want) = (texts(&out, name), texts(&reference, name));
             for (row, (g, w)) in got.iter().zip(&want).enumerate() {
                 // One-shot leaves rec_polars_type null when the original is kept.
@@ -1311,24 +1326,39 @@ pub(crate) mod tests {
 
     #[test]
     fn a_list_of_structs_keeps_its_inner_type() {
-        let s = Series::new(
-            "s".into(),
-            (0..6)
-                .map(|i| {
-                    let a = Series::new("a".into(), &[i as f64 / 7.0, 3.3e200]);
-                    let b = Series::new("b".into(), &["x", "y"]);
-                    polars::prelude::StructChunked::from_series("".into(), 2, [a, b].iter())
-                        .unwrap()
-                        .into_series()
-                })
-                .collect::<Vec<_>>(),
-        );
+        // Rows of 0-2 structs {a: f64, b: string (0-14 bytes, some over 12)}, every
+        // 5th row null: the kept inner struct has no closed-form Polars size.
+        let row = |i: usize| {
+            (i % 5 != 0).then(|| {
+                let k = i % 3;
+                let a = Series::new("a".into(), vec![i as f64 / 7.0; k]);
+                let b = Series::new("b".into(), vec!["x".repeat(i % 15); k]);
+                polars::prelude::StructChunked::from_series("".into(), k, [a, b].iter())
+                    .unwrap()
+                    .into_series()
+            })
+        };
+        let s = Series::new("s".into(), (0..100).map(row).collect::<Vec<_>>());
         let whole = polars_frame(&[s]);
-        let mut st = streaming();
-        st.add(&whole.slice(0, 3)).unwrap();
-        st.add(&whole.slice(3, 3)).unwrap();
-        let out = st.finish().unwrap();
         let reference = one_shot(&whole);
+        assert!(texts(&reference, "rec_arrow_type")[0]
+            .as_deref()
+            .is_some_and(|t| t.contains("struct")));
+        // One batch: every recommendation and size as one-shot's, but the original's
+        // Polars ZSTD size: the input's struct field holds its views in many small
+        // variadic buffers (as py-polars builds them too), each compressed on its
+        // own, which the sample's rebuilt block does not reproduce.
+        assert_like_one_shot_but(
+            std::slice::from_ref(&whole),
+            &whole,
+            "one batch",
+            &["size_polars_zstd_bytes"],
+        );
+        // Several: the same recommendation.
+        let mut st = streaming();
+        st.add(&whole.slice(0, 40)).unwrap();
+        st.add(&whole.slice(40, 60)).unwrap();
+        let out = st.finish().unwrap();
         assert_eq!(
             texts(&out, "rec_arrow_type"),
             texts(&reference, "rec_arrow_type")
