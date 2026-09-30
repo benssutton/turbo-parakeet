@@ -648,7 +648,8 @@ pub(crate) struct Level<'a> {
     pub p: &'a Profile,
     pub n_rows: u64,
     pub n_null: u64,
-    /// Exact min / max: integers, or a decimal's unscaled values.
+    /// Exact min / max: integers, a decimal's unscaled values, or a temporal's
+    /// physical values.
     pub int_range: Option<(i128, i128)>,
     /// Exact min / max of a float level, NaN excluded.
     pub float_range: Option<(f64, f64)>,
@@ -691,6 +692,9 @@ impl<'a> Level<'a> {
                 .map(|d| (d.value(a as usize), d.value(b as usize))),
             (dt, Some(a), Some(b)) if dt.is_integer() => {
                 int_at(&values, a).zip(int_at(&values, b))
+            }
+            (PT::Date | PT::Datetime(..) | PT::Duration(_) | PT::Time, Some(a), Some(b)) => {
+                physical_at(&values, a).zip(physical_at(&values, b))
             }
             _ => None,
         };
@@ -834,6 +838,21 @@ fn int_at(a: &ArrayRef, i: u64) -> Option<i128> {
     let v = arrow_cast(a.slice(i as usize, 1).as_ref(), &AT::Decimal128(38, 0)).ok()?;
     let v = v.as_primitive::<Decimal128Type>();
     v.is_valid(0).then(|| v.value(0))
+}
+
+/// A temporal value's physical integer (days, or the time unit) at row `i`.
+fn physical_at(a: &ArrayRef, i: u64) -> Option<i128> {
+    let v = a.slice(i as usize, 1);
+    let v = match v.data_type() {
+        AT::Date32 | AT::Time32(_) => arrow_cast(
+            arrow_cast(v.as_ref(), &AT::Int32).ok()?.as_ref(),
+            &AT::Int64,
+        ),
+        _ => arrow_cast(v.as_ref(), &AT::Int64),
+    }
+    .ok()?;
+    let v = v.as_primitive::<arrow_array::types::Int64Type>();
+    v.is_valid(0).then(|| v.value(0) as i128)
 }
 
 fn f64_at(a: &ArrayRef, i: u64) -> f64 {
@@ -1759,13 +1778,32 @@ pub(crate) fn lossy(
 
 /// Proof by statistics (streaming spec §5.1 step 4): Ok when the statistics show that
 /// `t` holds every value of the level. Every rule's own condition already proves its
-/// candidate except string → Float (a value may not round-trip) and string →
-/// Timestamp(ns) (the int64 nanosecond range).
+/// candidate except:
+/// - Timestamp → Date32: arrow-cast converts through chrono, which errors on dates
+///   outside its range (checked on the physical `int_range`);
+/// - string → Boolean: "-0" passes the 0/1 integer rule but is not the text "0";
+/// - string → Float32 / Float64: a value may not round-trip;
+/// - string → Timestamp(ns) / timestamp_with_offset(ns): the int64 nanosecond range.
 pub(crate) fn prove(t: &Target, lvl: &Level) -> Result<(), String> {
+    if let (Target::Fixed(AT::Date32), AT::Timestamp(u, _), Some((lo, hi))) =
+        (t, lvl.values.data_type(), lvl.int_range)
+    {
+        let per_s = 1_000_000_000 / unit_ns(u);
+        let in_chrono = |v: i128| {
+            i64::try_from(v.div_euclid(per_s))
+                .is_ok_and(|s| chrono::DateTime::from_timestamp(s, 0).is_some())
+        };
+        if !(in_chrono(lo) && in_chrono(hi)) {
+            return Err(format!(
+                "timestamp range {lo}..{hi} is outside chrono's dates"
+            ));
+        }
+    }
     let Some(st) = lvl.p.strings.as_ref().filter(|_| is_text(lvl.dtype)) else {
         return Ok(());
     };
     match t {
+        Target::Boolean if st.n_neg_zero > 0 => Err(format!("n_neg_zero={}", st.n_neg_zero)),
         Target::Fixed(AT::Float32) if st.n_f32_roundtrip_fail > 0 => Err(format!(
             "n_f32_roundtrip_fail={}",
             st.n_f32_roundtrip_fail
@@ -1774,7 +1812,8 @@ pub(crate) fn prove(t: &Target, lvl: &Level) -> Result<(), String> {
             "n_f64_roundtrip_fail={}",
             st.n_f64_roundtrip_fail
         )),
-        Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, _)) => {
+        Target::Fixed(AT::Timestamp(TimeUnit::Nanosecond, _))
+        | Target::TimestampWithOffset(TimeUnit::Nanosecond) => {
             match (st.iso_instant_min, st.iso_instant_max) {
                 (Some(lo), Some(hi)) if lo < i64::MIN as i128 || hi > i64::MAX as i128 => Err(
                     format!("iso_instant range {lo}..{hi} ns exceeds int64"),
@@ -2209,7 +2248,7 @@ pub(crate) struct Pick {
     pub lossy: bool,
     /// In the order tried; a list's outer candidates, then its inner ones.
     pub candidates: Vec<Candidate>,
-    /// A list's inner choice.
+    /// A list's inner choice; its candidates were moved into this pick's list.
     pub inner: Option<Box<Pick>>,
 }
 
@@ -2881,12 +2920,29 @@ mod tests {
             (Series::new("x".into(), &[0.0f64, -0.0, 1.5]), params()),
             (Series::new("x".into(), &[1.5f64, 2.25]), params()),
             (Series::new("x".into(), &[300i64, -2, 7]), params()),
+            (strs(&[Some("-0"), Some("1")]), params()),
+            (strs(&[Some("-0"), Some("0")]), params()),
+            (
+                strs(&[
+                    Some("2300-01-01T00:00:00.123456789+01:00"),
+                    Some("2024-01-01T00:00:00+02:00"),
+                ]),
+                params(),
+            ),
+            (
+                Series::new("x".into(), &[86_400_000i64 * 100_000_000, 0])
+                    .cast(&PT::Datetime(PTimeUnit::Milliseconds, None))
+                    .unwrap(),
+                params(),
+            ),
         ];
-        for (s, p) in cases {
-            let (chosen, pick) = both(s.clone(), &p);
-            assert_eq!(pick.target, chosen.target, "{s:?}");
-            assert_eq!(pick.lossy, chosen.lossy, "{s:?}");
-            assert_eq!(outcomes(&pick.candidates), outcomes(&chosen.candidates), "{s:?}");
+        for (k, (s, p)) in cases.into_iter().enumerate() {
+            // Not `{s:?}`: Polars panics formatting a datetime outside chrono's range.
+            let case = format!("case {k} ({})", s.dtype());
+            let (chosen, pick) = both(s, &p);
+            assert_eq!(pick.target, chosen.target, "{case}");
+            assert_eq!(pick.lossy, chosen.lossy, "{case}");
+            assert_eq!(outcomes(&pick.candidates), outcomes(&chosen.candidates), "{case}");
         }
     }
 
