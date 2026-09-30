@@ -143,35 +143,84 @@ fn level<'a>(
     }
 }
 
-/// The classic layout's IPC body (spec §5.3): `body_size`, plus LargeList and
-/// FixedSizeList over an analytic inner type (`inner`: the inner level's shape, which
-/// excludes a null row's slots). Dictionaries (Categorical / Enum mappings) and
-/// structs have no analytic form.
+/// A Categorical / Enum level's dictionary values as Polars exports them: every
+/// category of the dtype's mapping, in id order (`CategoricalMapping::to_arrow`) — for
+/// an Enum its categories, for a Categorical every value its Categories object has
+/// seen (other columns' included when it is shared, e.g. the global one). Read at
+/// `finish`: the mapping only grows.
+#[derive(Clone, Copy, Debug, Default)]
+struct Cats {
+    n: f64,
+    sum_len: f64,
+    /// Polars' view blocks over the categories (the native layout).
+    views: u64,
+}
+
+fn cats_of(dtype: &PT) -> Option<Cats> {
+    let m = match dtype {
+        PT::Categorical(_, m) | PT::Enum(_, m) => m,
+        _ => return None,
+    };
+    let mut c = Cats::default();
+    let mut views = ViewSim::default();
+    for i in 0..m.num_cats_upper_bound() {
+        let len = m.cat_to_str(i as _).map_or(0, str::len) as u64;
+        c.n += 1.0;
+        c.sum_len += len as f64;
+        views.push(len);
+    }
+    c.views = views.bytes();
+    Some(c)
+}
+
+/// A dictionary's keys: validity + keys of `key`'s width.
+fn dictionary_keys(key: &AT, s: &Shape) -> std::result::Result<f64, String> {
+    let w = key
+        .primitive_width()
+        .ok_or_else(|| format!("no predicted size for key {}", pa_name(key)))?;
+    Ok(validity(s.n, s.nulls) + pad(s.n * w as f64))
+}
+
+/// The classic layout's IPC body (spec §5.3): `body_size`; a Categorical / Enum
+/// dictionary (keys + every category, `Cats`); LargeList and FixedSizeList over an
+/// analytic inner level (whose shape excludes a null row's slots). Structs have no
+/// analytic form.
 ///
 /// Known gap: an Array row that is null but holds values in its slots (hand-built
 /// arrays only; Polars and pyarrow leave them empty or null) is counted as null
 /// slots, so variable-width values under it are missed.
 fn classic_body(
     classic: &AT,
-    s: &Shape,
-    inner: Option<&Shape>,
+    o: &ViewShape,
+    inner: Option<&ViewShape>,
 ) -> std::result::Result<f64, String> {
+    let s = &o.shape;
     let inner = || inner.copied().ok_or_else(|| "no inner level".to_string());
     match classic {
+        AT::Dictionary(k, values) => {
+            let c = o.cats.ok_or("a dictionary without categories")?;
+            let offsets = match **values {
+                AT::Utf8 => 4.0,
+                AT::LargeUtf8 => 8.0,
+                _ => return Err(format!("no predicted size for {}", pa_name(classic))),
+            };
+            Ok(dictionary_keys(k, s)? + pad(offsets * (c.n + 1.0)) + pad(c.sum_len))
+        }
         AT::LargeList(f) => Ok(validity(s.n, s.nulls)
             + pad(8.0 * (s.n + 1.0))
-            + body_size(f.data_type(), &inner()?)?),
+            + classic_body(f.data_type(), &inner()?, None)?),
         AT::FixedSizeList(f, w) => {
             // The child holds w slots per row; a null row's slots count as null.
             let (i, w) = (inner()?, *w as f64);
             let shape = Shape {
                 n: s.n * w,
-                nulls: i.nulls + s.nulls * w,
-                ..i
+                nulls: i.shape.nulls + s.nulls * w,
+                ..i.shape
             };
-            Ok(validity(s.n, s.nulls) + body_size(f.data_type(), &shape)?)
+            Ok(validity(s.n, s.nulls)
+                + classic_body(f.data_type(), &ViewShape { shape, ..i }, None)?)
         }
-        AT::Dictionary(..) | AT::Struct(_) => Err("no analytic size".into()),
+        AT::Struct(_) => Err("no analytic size".into()),
         t => body_size(t, s),
     }
 }
@@ -180,19 +229,18 @@ fn classic_body(
 /// closed form (predicted = measured), else the per-batch measured sum.
 fn original_size(
     classic: &AT,
-    shape: &Shape,
-    inner: Option<&Shape>,
+    o: &ViewShape,
+    inner: Option<&ViewShape>,
     st: &LevelStats,
 ) -> (u64, &'static str) {
-    match classic_body(classic, shape, inner) {
+    match classic_body(classic, o, inner) {
         Ok(b) => (b as u64, "analytic"),
         Err(_) => (st.size_bytes, "per-batch sum of"),
     }
 }
 
 /// The original type's IPC body in Polars' layout, as one-shot measures the Series
-/// Polars imports; None where there is no analytic form (dictionaries, structs,
-/// nested lists).
+/// Polars imports; None where there is no analytic form (structs, nested lists).
 ///
 /// The model: a freshly built Polars frame (view input), or one zero-copy import of a
 /// compact string array (non-view input). A string_view input keeps its own buffers —
@@ -200,7 +248,8 @@ fn original_size(
 /// bytes (`ViewSim`). A Utf8/Binary input is converted zero-copy (polars-compute
 /// `binary_to_binview`): when any value is over 12 bytes the whole values buffer
 /// becomes one data buffer, else there is none. A sliced or filtered frame carries
-/// arbitrary buffers, which no statistic predicts.
+/// arbitrary buffers, which no statistic predicts. A Categorical / Enum exports its
+/// keys and every category as views Polars builds (`Cats`).
 fn original_polars(classic: &AT, o: &ViewShape, inner: Option<&ViewShape>) -> Option<f64> {
     let s = &o.shape;
     let v = validity(s.n, s.nulls);
@@ -212,6 +261,10 @@ fn original_polars(classic: &AT, o: &ViewShape, inner: Option<&ViewShape>) -> Op
                 (false, false) => 0.0,
             };
             v + pad(16.0 * s.n) + data
+        }
+        AT::Dictionary(k, _) => {
+            let c = o.cats?;
+            dictionary_keys(k, s).ok()? + pad(16.0 * c.n) + c.views as f64
         }
         AT::LargeList(f) => {
             v + pad(8.0 * (s.n + 1.0)) + original_polars(f.data_type(), inner?, None)?
@@ -225,19 +278,23 @@ fn original_polars(classic: &AT, o: &ViewShape, inner: Option<&ViewShape>) -> Op
             };
             v + original_polars(f.data_type(), &ViewShape { shape, ..*i }, None)?
         }
-        AT::Dictionary(..) | AT::Struct(_) | AT::List(_) => return None,
+        AT::Struct(_) | AT::List(_) => return None,
         t => body_size(&polars_layout(t, &AT::UInt32), s).ok()?,
     })
 }
 
-/// A level's analytic Polars-layout inputs: its shape, Polars' view blocks over all
-/// values and over the distinct ones, and whether the input held it as views.
+/// A level's analytic inputs: its shape, Polars' view blocks over all values and
+/// over the distinct ones, whether the input held it as views, and a Categorical /
+/// Enum level's categories.
 #[derive(Clone, Copy)]
 struct ViewShape {
     shape: Shape,
     all: u64,
     distinct: u64,
     views_input: bool,
+    cats: Option<Cats>,
+    /// The per-batch measured Polars-layout size (where there is no closed form).
+    polars_bytes: u64,
 }
 
 fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> ViewShape {
@@ -246,6 +303,8 @@ fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> ViewShape {
         all: st.views.as_ref().map_or(0, ViewSim::bytes),
         distinct: st.distinct.as_ref().map_or(0, |d| d.views.bytes()),
         views_input,
+        cats: cats_of(lvl.dtype),
+        polars_bytes: st.polars_bytes,
     }
 }
 
@@ -285,7 +344,16 @@ fn polars_body(
             };
             v + polars_body(it, &ViewShape { shape, ..i }, None, key)?
         }
-        Target::Original(_) => return Err("the original's Polars size is measured".into()),
+        // A list's kept inner level, laid out as `to_polars_layout` does: a dictionary
+        // takes the Polars key `key` (one-shot widens an Enum's UInt8 keys to it).
+        Target::Original(t) => {
+            let t = match t {
+                AT::Dictionary(_, v) => AT::Dictionary(Box::new(key.clone()), v.clone()),
+                t => t.clone(),
+            };
+            // No closed form (a struct, say): as measured per batch.
+            original_polars(&t, o, inner().ok().as_ref()).unwrap_or(o.polars_bytes as f64)
+        }
         t => body_size(&polars_layout(&t.arrow_type(), key), s)?,
     })
 }
@@ -633,18 +701,15 @@ impl Streaming {
                     i.estimate(t).unwrap_or_else(fallback),
                     "inner: ",
                 );
-                (l.size_bytes, l.size_note) = original_size(&iclassic, &l.shape(), None, i);
-                Some(l)
+                let iv = view_shape(&l, i, c.views_input.1);
+                (l.size_bytes, l.size_note) = original_size(&iclassic, &iv, None, i);
+                Some((l, iv))
             }
             _ => None,
         };
-        let ishape = ilvl.as_ref().map(Level::shape);
-        (lvl.size_bytes, lvl.size_note) = original_size(&classic, &lvl.shape(), ishape.as_ref(), o);
-        let iv = match (&ilvl, inner) {
-            (Some(il), Some((i, _))) => Some(view_shape(il, i, c.views_input.1)),
-            _ => None,
-        };
+        let (ilvl, iv) = ilvl.unzip();
         let ov = view_shape(&lvl, o, c.views_input.0);
+        (lvl.size_bytes, lvl.size_note) = original_size(&classic, &ov, iv.as_ref(), o);
         // The original's Polars-layout size: analytic where it has a closed form.
         let original_polars =
             original_polars(&classic, &ov, iv.as_ref()).map_or(o.polars_bytes, |b| b as u64);
@@ -769,7 +834,7 @@ pub(crate) mod tests {
 
     use crate::arrow_io::{export_series, export_struct};
     use crate::recommend::{arrow_cast, describe_and_recommend_impl};
-    use polars::prelude::{CompatLevel, NamedFrom};
+    use polars::prelude::{CompatLevel, IntoSeries, NamedFrom};
 
     use super::*;
 
@@ -1079,6 +1144,129 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(cols[0].1.data_type(), &AT::Utf8View);
         batch(cols)
+    }
+
+    /// `columns` as Polars exports them: native layout plus Polars' field metadata
+    /// (which restores Categorical / Enum on import).
+    fn polars_frame(columns: &[Series]) -> RecordBatch {
+        let fields: Vec<(arrow_schema::Field, ArrayRef)> = columns
+            .iter()
+            .map(|s| {
+                let a = export_series(s, CompatLevel::newest()).unwrap();
+                let md: HashMap<String, String> = s
+                    .field()
+                    .to_arrow(CompatLevel::newest())
+                    .metadata
+                    .as_deref()
+                    .map(|m| {
+                        m.iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let f = arrow_schema::Field::new(s.name().as_str(), a.data_type().clone(), true)
+                    .with_metadata(md);
+                (f, a)
+            })
+            .collect();
+        let (fields, arrays): (Vec<_>, Vec<_>) = fields.into_iter().unzip();
+        RecordBatch::try_new(Arc::new(arrow_schema::Schema::new(fields)), arrays).unwrap()
+    }
+
+    /// The original candidate's predicted size, per column.
+    fn original_predicted(b: &RecordBatch) -> Vec<Option<String>> {
+        let col = b.column_by_name("rec_candidates").unwrap().as_list::<i64>();
+        (0..b.num_rows())
+            .map(|row| {
+                let v = col.value(row);
+                let s = v.as_struct();
+                let text =
+                    |f: &str| arrow_cast(s.column_by_name(f).unwrap().as_ref(), &AT::Utf8).unwrap();
+                let (rule, predicted) = (text("rule"), text("predicted_bytes"));
+                let (rule, predicted) = (rule.as_string::<i32>(), predicted.as_string::<i32>());
+                (0..s.len())
+                    .find(|&i| rule.value(i) == "original")
+                    .map(|i| predicted.value(i).to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dictionary_sources_size_like_one_shot() {
+        use polars::prelude::{CategoricalPhysical, Categories, FrozenCategories};
+        let long = "a category name longer than twelve bytes";
+        let values: Vec<Option<&str>> = (0..60)
+            .map(|i| match i % 5 {
+                0 => None,
+                1 | 2 => Some("b"),
+                3 => Some("a"),
+                _ => Some(long),
+            })
+            .collect();
+        let e = PT::from_frozen_categories(
+            FrozenCategories::new(["b", "a", "unused", long, "another long unused category"])
+                .unwrap(),
+        );
+        let cats = Categories::new(
+            "streaming-dictionary-test".into(),
+            "".into(),
+            CategoricalPhysical::U32,
+        );
+        let c = PT::Categorical(cats.clone(), cats.mapping());
+        let series = |name: &str, dt: &PT| Series::new(name.into(), &values).cast(dt).unwrap();
+        let l = Series::new(
+            "l".into(),
+            (0..60)
+                .map(|i| {
+                    Series::new("".into(), &values[i..(i + i % 3).min(60)])
+                        .cast(&e)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>(),
+        );
+        let whole = polars_frame(&[series("enum", &e), series("cat", &c), l]);
+        let reference = one_shot(&whole);
+        for k in [60, 7, 1] {
+            let batches: Vec<_> = (0..whole.num_rows())
+                .step_by(k)
+                .map(|off| whole.slice(off, k.min(whole.num_rows() - off)))
+                .collect();
+            assert_like_one_shot(&batches, &whole, &format!("dictionary k={k}"));
+            let mut s = streaming();
+            batches.iter().for_each(|b| s.add(b).unwrap());
+            let out = s.finish().unwrap();
+            assert_eq!(
+                original_predicted(&out),
+                original_predicted(&reference),
+                "k={k}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_list_of_structs_keeps_its_inner_type() {
+        let s = Series::new(
+            "s".into(),
+            (0..6)
+                .map(|i| {
+                    let a = Series::new("a".into(), &[i as f64 / 7.0, 3.3e200]);
+                    let b = Series::new("b".into(), &["x", "y"]);
+                    polars::prelude::StructChunked::from_series("".into(), 2, [a, b].iter())
+                        .unwrap()
+                        .into_series()
+                })
+                .collect::<Vec<_>>(),
+        );
+        let whole = polars_frame(&[s]);
+        let mut st = streaming();
+        st.add(&whole.slice(0, 3)).unwrap();
+        st.add(&whole.slice(3, 3)).unwrap();
+        let out = st.finish().unwrap();
+        let reference = one_shot(&whole);
+        assert_eq!(
+            texts(&out, "rec_arrow_type"),
+            texts(&reference, "rec_arrow_type")
+        );
     }
 
     #[test]
