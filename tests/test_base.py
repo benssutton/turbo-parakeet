@@ -291,6 +291,25 @@ def test_malformed_arrow_input_is_a_value_error():
         Toy().add({"f": pa.table({"c": bad})})
 
 
+class _ArrayOnly:
+    """Arrow data exposing only `__arrow_c_array__` (one struct array)."""
+
+    def __init__(self, batch):
+        self.batch = batch
+
+    def __arrow_c_array__(self, requested_schema=None):
+        return self.batch.__arrow_c_array__(requested_schema)
+
+
+def test_array_only_arrow_input_is_checked():
+    t = Toy().add({"f": _ArrayOnly(pa.record_batch({"a": [1, 2]}))})
+    assert t._frames["f"]["a"].to_list() == [1, 2]
+    keys = pa.array([0, 1, 5, 1], pa.int32())
+    bad = pa.DictionaryArray.from_arrays(keys, pa.array(["x", "y"]), safe=False)
+    with pytest.raises(ValueError, match="out of bounds"):
+        Toy().add({"f": _ArrayOnly(pa.record_batch({"c": bad}))})
+
+
 def test_wrong_schema_from_compute_raises():
     class Wrong(Toy):
         def _compute(self, frames, combos):

@@ -2,8 +2,10 @@
 
 Tables cross the boundary as Arrow: the Polars frames given here are passed as they
 are (they implement the Arrow PyCapsule interface, zero-copy) and results come back
-as Arrow tables, read into flat Polars frames. Only the *Rust implementation classes
-call these; the public API is the technique classes in analytics.<technique>.
+as Arrow tables, read into flat Polars frames. Callers: the *Rust implementation
+classes, analytics.base (`checked_table`, imported lazily when Arrow input is added)
+and analytics.recommend.streaming (`streaming_recommender`); the public API is the
+technique classes in analytics.<technique>.
 """
 
 from collections.abc import Sequence

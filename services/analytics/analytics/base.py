@@ -32,8 +32,6 @@ from typing import Any, Callable, ClassVar, Literal, Self, Sequence
 
 import polars as pl
 
-from analytics import _plugin
-
 Scope = Literal["per_column", "multi_set", "ordered"]
 Column = tuple[str, str]  # (frame name, column name)
 Combo = tuple[Column, ...]  # ARITY columns
@@ -77,11 +75,7 @@ class Technique(ABC):
                         f"frame {name!r} must be a polars DataFrame or LazyFrame, or Arrow tabular data "
                         f"(an object with __arrow_c_stream__), got {type(frame).__name__}"
                     )
-                if hasattr(frame, "__arrow_c_stream__"):
-                    # py-polars trusts Arrow input: malformed values (dictionary keys
-                    # out of range) or a Decimal256 make it panic. The Rust boundary's
-                    # checks run first (ValueError naming the column).
-                    frame = _arrow_for_polars(_plugin.checked_table(frame))
+                frame = _checked_arrow(frame)
                 try:
                     frame = pl.DataFrame(frame)
                 except Exception as exc:
@@ -287,6 +281,25 @@ class Technique(ABC):
 
 
 # ── helpers for technique bases and implementations ─────────────────────────────
+
+
+def _checked_arrow(frame: Any) -> Any:
+    """Arrow tabular `frame` after the Rust boundary's checks (ValueError naming the
+    column): py-polars trusts Arrow input, and malformed values (dictionary keys out of
+    range) or a Decimal256 make it panic. An object exposing only `__arrow_c_array__`
+    (one struct array) is read as a one-batch pyarrow Table first; without pyarrow (or
+    when it is not a struct array) it goes to Polars as it is. The extension is
+    imported here, not at module import, so pure-Python techniques do not need it."""
+    if not hasattr(frame, "__arrow_c_stream__"):
+        try:
+            import pyarrow as pa
+
+            frame = pa.table(frame)
+        except Exception:  # no pyarrow, or not a struct array: Polars decides
+            return frame
+    from analytics import _plugin
+
+    return _arrow_for_polars(_plugin.checked_table(frame))
 
 
 def _arrow_for_polars(table: Any) -> Any:

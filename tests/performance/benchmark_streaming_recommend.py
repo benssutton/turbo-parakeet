@@ -35,7 +35,8 @@ def peak_mb() -> float | None:
     try:
         import resource
 
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # Linux: KiB
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return rss / 2**20 if sys.platform == "darwin" else rss / 1024  # bytes / KiB
     except ImportError:
         try:
             import psutil
