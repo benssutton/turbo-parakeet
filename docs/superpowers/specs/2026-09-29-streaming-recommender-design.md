@@ -1,6 +1,6 @@
 # Streaming Recommender — design
 
-Status: approved, not implemented.
+Status: implemented (plan docs/superpowers/plans/2026-09-30-streaming-recommender.md).
 Builds on: the Recommend technique (2026-09-26-recommend-technique-design.md, "Spec B"), the Arrow FFI
 interface (2026-09-27-arrow-ffi-interface-design.md) and the Java binding
 (2026-09-28-java-binding-design.md), whose `capi.rs` and `python` Cargo feature this spec extends.
@@ -312,9 +312,14 @@ struct StreamingRecommender(Mutex<api::StreamingRecommender>);
 ```
 
 - The `Mutex` serialises concurrent callers, and the GIL is released around the work (`py.detach`,
-  pyo3 0.29).
+  pyo3 0.29). *As implemented:* pyo3 stays at 0.25, so the GIL is released with the existing `run`
+  helper (`allow_threads`), as for every other entry point.
 - Polars' private `_pli128` / `_plu128` columns are not rejected. They are recorded as ineligible
-  (name and null count) and projected out before import.
+  (name and null count) and projected out before import. *As implemented:* the Python wrapper
+  handles them: it drops Int128 / UInt128, Object and nested-Null columns from a Polars frame and
+  passes their (name, dtype) as `add(data, ineligible)`, which marks them (`mark_ineligible`) before
+  the batches. Rust does not project `_pli128` out (a raw Arrow stream holding one is still refused
+  with ValueError, as in one-shot). Their `n_null` is reported as null.
 - `InvalidInput` → ValueError, `Compute` → RuntimeError.
 
 ### 7.3 Python wrapper — `analytics/recommend/streaming.py`
@@ -421,3 +426,96 @@ A standalone script, since the harness assumes `IMPLEMENTATIONS`. On the Describ
 - The existing Describe and Recommend tests pass unchanged after the `describe.rs` / `recommend.rs`
   refactor.
 - The benchmark script runs and writes its results.
+
+## 11. Amendments made during planning and implementation
+
+Items 1–7 were found while planning (the plan's "Spec amendments"); where later work superseded one,
+the item says what the code now does. Items 8–15 were found during implementation and review.
+
+1. **Polars `string_view` sizes are simulated, not a formula.** Polars packs values longer than 12
+   bytes into data blocks whose capacity doubles (8 KiB → 16 MiB, `polars_views` in recommend.rs),
+   and each block is padded separately. `ViewSim` replays that builder on value lengths in stream
+   order:
+   - over all values, for Utf8/Binary results;
+   - over distinct values in first-occurrence order, for a dictionary's values.
+
+   The size is then exact. `sum_len_gt12` is not needed.
+2. **Lossy counters.** The exact per-value set is:
+   - `n_neg_zero` and `n_int_lead0`;
+   - `raw_frac_min` / `raw_frac_max`;
+   - `n_f32_render_diff` / `n_f64_render_diff`;
+   - `n_iso_time_noncanonical` (no seconds, or fraction digits ≠ chrono's 0/3/6/9 grouping);
+   - `n_iso_space_sep`;
+   - `n_iso_offset_noncanonical` (a zero offset not written `Z`);
+   - `FloatStats::n_neg_zero`.
+
+   arrow-cast renders from the value alone: floats with ryu, timestamps with `NaiveDateTime` Debug
+   or RFC 3339 `AutoSi` with `Z`, decimals with exactly `scale` places. So these counters reproduce
+   one-shot `lossy()`.
+3. **Overflowed distinct tracking** gives the estimate method `overflowed` (a new
+   `Method::Overflowed`), with `est_cardinality = categorical_threshold + 1`. The dictionary is
+   rejected by the existing `c > categorical_threshold` reason.
+4. **Ineligible columns** are marked with `mark_ineligible(name, dtype)` before the batches that omit
+   them. Their `n_null` is reported as null, because the caller never sends their values. The Python
+   wrapper marks Int128 / UInt128, Object and nested-Null columns (§7.2). Nested-Null dtypes
+   (`List(Null)`, a Struct with a Null field, `Array(Null)`) that reach Rust are ineligible too, as
+   in one-shot, and a column seen only as the Null type is reported ineligible.
+5. **pyo3 stays at 0.25**, so the GIL is released with the existing `run` / `allow_threads` helper,
+   not `detach`.
+6. **Parity exclusions.** When the original type is kept, `rec_polars_type` isn't compared: one-shot
+   fills it in Python. Original candidates' `predicted_bytes`, and `rec_*_size_bytes` of a kept
+   original whose size is a per-batch sum, are compared only for single-batch streams. *Now narrowed
+   per column:* multi-batch streams compare original sizes wherever they are analytic (items 9 and
+   15 give the remaining exceptions).
+7. **`min` / `max`** are rendered by arrow-cast from the kept extreme values.
+8. **`prove` checks more than §5.1 step 4 lists:**
+   - string → Boolean fails when any text is `-0` (`n_neg_zero`): it passes the 0/1 integer rule
+     but is not the text `0`;
+   - string → timestamp_with_offset(ns), like Timestamp(ns), needs the int64 nanosecond range;
+   - Timestamp → Date32 needs the timestamp range within chrono's dates (arrow-cast converts through
+     chrono): `int_range` carries the temporal physical min / max.
+9. **Original sizes (§5.3) are analytic for more types:** fixed width; strings / binary; lists and
+   fixed-size lists of those; Categorical / Enum (exact, from the dtype's category mapping). Only
+   Struct and deeper nesting remain per-batch sums (the original candidate's evidence says
+   `per-batch sum of`). String Polars sizes follow the input's layout:
+   - view input (a Polars frame's `__arrow_c_stream__`): Polars' view-block model (`ViewSim`);
+   - non-view input (Utf8 / LargeUtf8 / Binary): the zero-copy import model (`binary_to_binview`:
+     the whole values buffer becomes one data buffer when any value is over 12 bytes, else none).
+
+   The original's Polars size models a freshly built Polars frame, or a single zero-copy import of
+   a compact array. A sliced or filtered frame carries arbitrary buffers, which no statistic
+   predicts.
+10. **Reservoir pieces are compact copies.** `copy_rows` (partial.rs) takes the rows, garbage-collects
+    view buffers and re-encodes dictionaries to the values the rows use, at any depth, keeping the
+    source's data type, so a sampled block pins none of the source batch. Before measuring, blocks
+    are rebuilt the way Polars builds views (`block_series`).
+11. **Input validation at every boundary.** `arrow_io::CheckedReader` / `import_checked` check the
+    raw C structs structurally, then run `ArrayData::validate` + `validate_values` and check nulls at
+    every level, check FixedSizeList offsets, and refuse unsupported types (Decimal256, ...) from the
+    schema even with no rows. Malformed input is `InvalidInput` (ValueError / C code 1), not a
+    process abort. Limit: the C Data Interface carries no buffer lengths, so offsets past the
+    producer's real buffer cannot be detected.
+12. **One-shot input** (not only streaming): Arrow input to any technique now goes through
+    `_plugin.checked_table` (the same checks) and reaches Polars as a pyarrow Table when pyarrow is
+    installed. `analytics.base._normalise` rebuilds Array / Struct-holding columns with an in-memory
+    IPC round trip (py-polars 1.41 exports sliced nested columns as invalid Arrow; a gather is not
+    enough below a List). Flat frames are unchanged. The streaming wrapper applies `_normalise` too.
+13. **Atomicity.** Each Arrow batch is atomic: a failed batch leaves the state as it was before that
+    batch. One Python `add` / C `analytics_recommender_add` over a multi-batch stream is not: if a
+    later batch or the producer fails, the earlier batches and the ineligible marks stay applied.
+14. **Known limitations.**
+    - A `List(Null)` column (e.g. a first batch of empty lists) cannot later adopt `List(T)`; a
+      zero-row batch also fixes a column's dtype.
+    - Array rows that are null but hold values (hand-built arrays) are excluded from the original
+      size.
+    - Array ZSTD sizes from 1-row pieces can differ slightly from one-shot.
+    - Struct fields held as many small view buffers make the original's Polars ZSTD size a sample
+      estimate.
+    - The first concrete batch decides whether a column's input is views (`views_input`).
+    - `ffi_safe` copies nested validity bitmaps (at any non-zero offset).
+15. **Parity exceptions (§6), besides the expected differences listed there:**
+    - an overflowed column's dictionary candidate (its key width follows
+      `categorical_threshold + 1`, not one-shot's `est_high`);
+    - originals whose size is a per-batch sum (Struct, deeper nesting), across several batches;
+    - string columns whose null slots hold bytes (e.g. Polars' int → String cast): one-shot measures
+      them in the original's buffers, the analytic size counts values only.

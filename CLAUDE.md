@@ -35,6 +35,8 @@ how column combinations are enumerated.
 
 **Recommend — `analytics.recommend`** (★`RecommendRust`, the only implementation). Narrowest value-preserving Arrow type per column (spec: docs/superpowers/specs/2026-09-26-recommend-technique-design.md): Describe's table plus `rec_*` columns. Step 1 type rules (null → boolean → uint → int → decimal → float → date → time → timestamp → timestamp_with_offset → string; lists → scalar when every list holds one item), step 2 dictionary encoding for strings (key width from `est_high`, Polars key one code narrower). Candidates carry a predicted IPC size and are tried smallest projected population size first (ties: hierarchy rank); each is cast, verified row by row and measured (Arrow and Polars layouts, plain and ZSTD); the original type is always the last resort. `rec_candidates` lists rule, evidence (the metric values tested), predicted/projected size and outcome for every candidate. Keywords: Describe's plus `boolean_pairs=(("true", "false"),)`. No Python implementation, so no reference agreement or algorithmic speedup; oracles are pyarrow/Polars casts and predicted = measured.
 
+**Streaming Recommend — `analytics.recommend.StreamingRecommender`** (Rust only; not on the uniform contract). Recommend's dtype recommendations from batches added over time (spec: docs/superpowers/specs/2026-09-29-streaming-recommender-design.md). `add(frame)` any number of times (columns may appear, disappear or start as Null; other type changes raise; each Arrow batch is atomic, one multi-batch `add` is not), `finish()` at any point → one row per column: `column, status, dtype, first_row, n_rows, n_null, min, max, gcd, sum_len, min_len, max_len, n_unique, distinct_overflowed, est_*`, the size columns, Recommend's `rec_*` columns, `n_sampled_rows, n_sampled_blocks`. Exact running statistics (src/partial.rs) prove each recommendation on every row (`prove`, `lossy_by_stats` in recommend.rs); a seeded Algorithm-L sample of contiguous row blocks (src/reservoir.rs; compact `copy_rows` pieces) gives ZSTD sizes — those of an IPC file written in `block_rows` batches — and cross-checks the chosen type. Original sizes analytic except Struct / deeper nesting (per-batch sums). Distinct values tracked only for text, up to `categorical_threshold`. Int128/UInt128, Object and nested-Null columns ineligible (marked by the Python wrapper, `n_null` null). No `population_rows` (estimates: Schnabel → Chao1). Keywords: `reservoir_rows=524_288` (0: no sample, ZSTD null), `block_rows=65_536`, `categorical_threshold=10_000`, `zstd_level=1`, `seed=0`, `boolean_pairs`.
+
 ## 2. Multi-set (distinct-value sets; pairs may span frames)
 
 Pairs are compared only within one **value family** (ints ≤64-bit; String/Categorical/Enum; otherwise exact dtype) — other pairs are ineligible.
@@ -64,6 +66,7 @@ turbo-parakeet/
 │   ├── src/                                # Rust extension — lib.rs, shared.rs, entropy.rs, chi_squared.rs,
 │   │                                       #   contingency.rs, ari.rs, gcd.rs, bloomfilter.rs, minhash.rs,
 │   │                                       #   describe.rs, sizes.rs, cardinality_estimators.rs, recommend.rs,
+│   │                                       #   partial.rs, reservoir.rs, streaming.rs (streaming recommender),
 │   │                                       #   api.rs, arrow_io.rs, python.rs, capi.rs
 │   ├── bindings/java/                      # Maven project: Panama FFM binding over capi.rs + JUnit tests
 │   └── analytics/
@@ -75,17 +78,20 @@ turbo-parakeet/
 │       └── <technique>/                    # gcd, describe, recommend, membership, similarity, chi_squared,
 │           ├── __init__.py                 #   pairwise_entropy, threeway_entropy, adjusted_rand
 │           ├── base.py                     # technique base: METRICS, eligibility, conclusions, RTOL/ATOL
-│           └── rust.py, <library>.py …     # one file per implementation
+│           ├── rust.py, <library>.py …     # one file per implementation
+│           └── streaming.py                # recommend/ only: StreamingRecommender (not a technique)
 └── tests/
     ├── conftest.py                         # `slow` marker, `dataset` fixture
     ├── datagen.py                          # seeded generators shared with benchmarks
     ├── harness.py                          # implementation_params/load/reference/run/assert_contract/assert_agrees/with_metrics
     ├── test_base.py, test_datagen.py, test_benchmark_harness.py
     ├── test_<technique>.py                 # one per technique package
+    ├── test_streaming_recommend.py         # StreamingRecommender: contract, parity with one-shot, ZSTD, known answers
     ├── data/large_dataset.arrow            # 50K rows, 101 columns
     └── performance/                        # never collected by pytest
         ├── harness.py                      # shared timing harness
-        └── benchmark_<technique>.py        # one per technique package
+        ├── benchmark_<technique>.py        # one per technique package
+        └── benchmark_streaming_recommend.py # standalone: add throughput / finish time beside one-shot
 ```
 
 # Rust Extension (analytics)
@@ -95,19 +101,22 @@ Cargo feature `python` (default) gates pyo3 + python.rs; the Java build is Pytho
 Python-linked library to `target/release`), then `./mvnw test` in `services/analytics/bindings/java/` (JDK 25).
 
 Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design.md, 2026-09-28-java-binding-design.md):
-- `src/api.rs` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown or duplicate column names, a malformed Bloom array or zero Bloom/LSH parameters, wrong column counts, an unimportable Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/`ShapeMismatch` error — a column of the wrong type for the kernel) / `Compute`.
-- `src/arrow_io.rs` — RecordBatch ↔ Polars Series, zero-copy through the C Data Interface (Polars' `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` field metadata restores Categorical / Enum). Kernels still compute on Series; `sizes.rs` / `recommend.rs` measure layouts derived with `export_series`.
-- `src/python.rs` — pyo3 module `analytics.analytics`: reads any `__arrow_c_stream__` object into one batch, rejects Polars' private `_pli128` / `_plu128` (Int128 / UInt128) with ValueError naming the column, releases the GIL, returns `ArrowTable` (itself `__arrow_c_stream__`). InvalidInput → ValueError, Compute → RuntimeError, non-Arrow input → TypeError.
+- `src/api.rs` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown or duplicate column names, a malformed Bloom array or zero Bloom/LSH parameters, wrong column counts, an unimportable Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/`ShapeMismatch` error — a column of the wrong type for the kernel) / `Compute`. `StreamingRecommender` (new / add / mark_ineligible / finish) is the one stateful entry point.
+- `src/arrow_io.rs` — RecordBatch ↔ Polars Series, zero-copy through the C Data Interface (Polars' `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` field metadata restores Categorical / Enum). Kernels still compute on Series; `sizes.rs` / `recommend.rs` measure layouts derived with `export_series`. Every import is checked (`CheckedReader` / `import_checked`: structure on the raw C structs, `ArrayData::validate` + `validate_values` + nulls at every level, FixedSizeList offsets, unsupported types such as Decimal256 refused from the schema), so malformed input is InvalidInput, not a process abort. Limit: the C Data Interface carries no buffer lengths, so offsets past the producer's real buffer go undetected.
+- `src/python.rs` — pyo3 module `analytics.analytics`: reads any `__arrow_c_stream__` object into one batch, rejects Polars' private `_pli128` / `_plu128` (Int128 / UInt128) with ValueError naming the column, releases the GIL, returns `ArrowTable` (itself `__arrow_c_stream__`). InvalidInput → ValueError, Compute → RuntimeError, non-Arrow input → TypeError. `StreamingRecommender` pyclass (frozen, mutex-guarded; `add(data, ineligible)` reads its stream batch by batch, marking the wrapper's ineligible columns first).
 - `src/capi.rs` — C ABI (`extern "C"`, no pyo3): `analytics_describe_and_recommend` (Arrow C Stream in, one-batch
   stream out, plain C parameters; `population_rows < 0` = None) and `analytics_free_error`. Returns 0 / 1 InvalidInput /
   2 Compute with a message in `*error`. Wrapped by `io.github.benssutton.analytics.Analytics` (Java 25 FFM + Arrow Java
-  `arrow-c-data`), which maps 1 → IllegalArgumentException, 2 → RuntimeException. Only describe_and_recommend is bound so far.
+  `arrow-c-data`), which maps 1 → IllegalArgumentException, 2 → RuntimeException. Also `analytics_recommender_{new,add,finish,free}`
+  (opaque `void *` handle; `add` consumes the stream). Only describe_and_recommend is bound in Java so far.
 
-Private — reached only through `analytics._plugin`, only by the `*Rust` classes:
+Private — reached only through `analytics._plugin`, only by the `*Rust` classes (and the exceptions named below):
 `column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
 `pairwise_joint_entropy`, `threeway_joint_entropy` (the classes always pass explicit triplets; `triplets=None` means every triplet, uncapped — C(101,3) = 166,650 at 101 cols, ~65 s at 50K rows),
 `bloom_filter` + `membership_ratio` (the bit array crosses as `bytes`), `minhash` + `lsh_candidates`,
-`describe_columns` + `column_sizes`, `describe_and_recommend`.
+`describe_columns` + `column_sizes`, `describe_and_recommend`; `checked_table` (the checked Arrow import, used by
+`analytics.base` before py-polars reads Arrow input — handed over as a pyarrow Table when pyarrow is installed);
+`StreamingRecommender` (via `_plugin.streaming_recommender`, used only by `analytics.recommend.StreamingRecommender`).
 
 # Testing Convention
 Every technique package declares `REFERENCE` (the exact accuracy reference) and `IMPLEMENTATIONS`.
