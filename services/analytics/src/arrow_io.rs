@@ -20,7 +20,7 @@ pub(crate) fn import_batch(batch: &RecordBatch) -> PolarsResult<Vec<Series>> {
         .collect()
 }
 
-fn import_array(field: &Field, array: &ArrayRef) -> PolarsResult<Series> {
+pub(crate) fn import_array(field: &Field, array: &ArrayRef) -> PolarsResult<Series> {
     let schema = arrow_schema::ffi::FFI_ArrowSchema::try_from(field)
         .map_err(|e| polars_err!(ComputeError: "arrow C data interface: {e}"))?;
     let array = arrow_data::ffi::FFI_ArrowArray::new(&array.to_data());

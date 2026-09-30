@@ -1782,7 +1782,7 @@ fn order(c: &mut [Candidate]) {
 /// Tries the candidates in order; the first success is chosen, failures keep their
 /// reason. Only `not_tried` candidates are attempted (rejected ones, and ones that
 /// could not be sized, already carry their outcome).
-fn first_success<T>(
+pub(crate) fn first_success<T>(
     mut cands: Vec<Candidate>,
     mut attempt: impl FnMut(&Target) -> Result<T, String>,
 ) -> (usize, T, Vec<Candidate>) {
@@ -1849,9 +1849,9 @@ fn choose_original(lvl: &Level, why: &str) -> Chosen {
 /// `pl.when(mask).then(list).otherwise(None)`; an Array's w slots); those are dropped
 /// with a `take`, and `wrap` rebuilds the offsets from row lengths (a null row → empty).
 /// (row spans, compacted values, fixed width).
-type ListParts = (Vec<Option<(usize, usize)>>, ArrayRef, Option<i32>);
+pub(crate) type ListParts = (Vec<Option<(usize, usize)>>, ArrayRef, Option<i32>);
 
-fn list_parts(values: &ArrayRef) -> Result<ListParts, String> {
+pub(crate) fn list_parts(values: &ArrayRef) -> Result<ListParts, String> {
     // (physical start, len) of every row, then the compacted rows.
     let (spans, child, width): (Vec<(usize, usize, bool)>, ArrayRef, Option<i32>) =
         match values.data_type() {
@@ -1939,7 +1939,7 @@ fn take_rows(a: &ArrayRef, idx: &UInt64Array) -> Result<ArrayRef, String> {
 }
 
 /// A list column rebuilt around its recast inner values (`rows` from `list_parts`).
-fn wrap(
+pub(crate) fn wrap(
     t: &Target,
     values: &ArrayRef,
     rows: &[Option<(usize, usize)>],
@@ -2110,7 +2110,7 @@ fn choose_list(
 
 /// `a` converted to the Arrow layout Polars exports for it (`polars_layout`),
 /// recursing through lists and structs; `key` is a dictionary's Polars key.
-fn to_polars_layout(a: &ArrayRef, key: &AT) -> Result<ArrayRef, String> {
+pub(crate) fn to_polars_layout(a: &ArrayRef, key: &AT) -> Result<ArrayRef, String> {
     let item = |c: &ArrayRef| Arc::new(AField::new("item", c.data_type().clone(), true));
     match a.data_type() {
         AT::Dictionary(..) => {
@@ -2166,14 +2166,14 @@ fn to_polars_layout(a: &ArrayRef, key: &AT) -> Result<ArrayRef, String> {
 
 /// Polars' view-array data blocks (polars-arrow `binview`): the first holds 8 KiB,
 /// each next one doubles (capped at 16 MiB) and grows to fit a larger value.
-const VIEW_BLOCK: usize = 8 * 1024;
-const VIEW_MAX_BLOCK: usize = 16 * 1024 * 1024;
+pub(crate) const VIEW_BLOCK: usize = 8 * 1024;
+pub(crate) const VIEW_MAX_BLOCK: usize = 16 * 1024 * 1024;
 
 /// Strings / binaries as the Utf8View / BinaryView array Polars builds from them
 /// (`MutableBinaryViewArray::push_value_into_buffer`): values of ≤ 12 bytes inline
 /// in the view, longer ones appended to the current block, never straddling blocks —
 /// so the measured sizes are Polars' own (arrow-cast would reuse the source buffer).
-fn polars_views(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
+pub(crate) fn polars_views(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
     let bytes = arrow_cast(a, &AT::LargeBinary)?;
     let bytes = bytes.as_binary::<i64>();
     let mut views = Vec::with_capacity(bytes.len());
@@ -2238,11 +2238,13 @@ pub(crate) struct Rec {
     pub nullable: bool,
     pub arrow_type: String,
     pub arrow_size: u64,
-    pub arrow_zstd: u64,
+    /// None when nothing was sampled (streaming, reservoir_rows = 0).
+    pub arrow_zstd: Option<u64>,
     /// None when the original type is kept: Python fills in `str(dtype)`.
     pub polars_type: Option<String>,
     pub polars_size: u64,
-    pub polars_zstd: u64,
+    /// None when nothing was sampled (streaming, reservoir_rows = 0).
+    pub polars_zstd: Option<u64>,
     pub lossy: bool,
     pub candidates: Vec<Candidate>,
 }
@@ -2316,7 +2318,7 @@ pub(crate) fn recommend(
     };
     let t = chosen.array.data_type().clone();
     let (polars_type, polars_size, polars_zstd) = if matches!(chosen.target, Target::Original(_)) {
-        (None, polars_bytes, polars_zstd)
+        (None, polars_bytes, Some(polars_zstd))
     } else {
         let key = chosen.target.polars_key().unwrap_or(AT::UInt32);
         let layout = to_polars_layout(&chosen.array, &key).map_err(err)?;
@@ -2334,14 +2336,14 @@ pub(crate) fn recommend(
         (
             Some(pl_name(&t, name, enum_values.as_deref(), &key)),
             ipc_body_bytes(layout.as_ref(), None)?,
-            ipc_body_bytes(layout.as_ref(), Some(params.zstd_level))?,
+            Some(ipc_body_bytes(layout.as_ref(), Some(params.zstd_level))?),
         )
     };
     Ok(Rec {
         nullable: chosen.array.logical_null_count() > 0,
         arrow_type: pa_name(&t),
         arrow_size: ipc_body_bytes(chosen.array.as_ref(), None)?,
-        arrow_zstd: ipc_body_bytes(chosen.array.as_ref(), Some(params.zstd_level))?,
+        arrow_zstd: Some(ipc_body_bytes(chosen.array.as_ref(), Some(params.zstd_level))?),
         polars_type,
         polars_size,
         polars_zstd,
@@ -2364,7 +2366,7 @@ fn candidate_type() -> PT {
     ])
 }
 
-fn rec_fields() -> Vec<(String, PT)> {
+pub(crate) fn rec_fields() -> Vec<(String, PT)> {
     [
         ("rec_nullable", PT::Boolean),
         ("rec_arrow_type", PT::String),
@@ -2424,16 +2426,16 @@ fn candidates_series(c: &[Candidate]) -> Series {
         .into_series()
 }
 
-fn rec_row(r: &Rec) -> Row {
+pub(crate) fn rec_row(r: &Rec) -> Row {
     let text = |s: &str| AnyValue::StringOwned(s.into());
     vec![
         AnyValue::Boolean(r.nullable),
         text(&r.arrow_type),
         AnyValue::UInt64(r.arrow_size),
-        AnyValue::UInt64(r.arrow_zstd),
+        r.arrow_zstd.map_or(AnyValue::Null, AnyValue::UInt64),
         r.polars_type.as_deref().map_or(AnyValue::Null, text),
         AnyValue::UInt64(r.polars_size),
-        AnyValue::UInt64(r.polars_zstd),
+        r.polars_zstd.map_or(AnyValue::Null, AnyValue::UInt64),
         AnyValue::Boolean(r.lossy),
         AnyValue::List(candidates_series(&r.candidates)),
     ]
