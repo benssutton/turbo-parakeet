@@ -9,6 +9,7 @@
 // level, null lists skipped). Field names and order match
 // analytics/describe/base.py (DescribeRust maps them by name).
 
+use crate::recommend::canon;
 use crate::shared::{encode_series, EncodedColumn};
 use foldhash::fast::FixedState;
 use polars::chunked_array::ops::row_encode::_get_rows_encoded_arr;
@@ -336,6 +337,8 @@ pub(crate) struct FloatStats {
     pub max_frac_digits: Option<u32>,
     /// Finite values that change under f64 → f32 → f64 (meaningless for Float32).
     pub n_f32_inexact: u64,
+    /// Values equal to -0.0 (arrow-cast renders them "-0.0", a decimal "0").
+    pub n_neg_zero: u64,
 }
 
 pub(crate) fn frac_digits(repr: &str) -> u32 {
@@ -352,13 +355,14 @@ pub(crate) fn frac_digits(repr: &str) -> u32 {
 }
 
 impl FloatStats {
-    fn merge(self, o: Self) -> Self {
+    pub(crate) fn merge(self, o: Self) -> Self {
         Self {
             n_nan: self.n_nan + o.n_nan,
             n_inf: self.n_inf + o.n_inf,
             n_fractional: self.n_fractional + o.n_fractional,
             max_frac_digits: self.max_frac_digits.max(o.max_frac_digits),
             n_f32_inexact: self.n_f32_inexact + o.n_f32_inexact,
+            n_neg_zero: self.n_neg_zero + o.n_neg_zero,
         }
     }
 
@@ -368,6 +372,7 @@ impl FloatStats {
         } else if x.is_infinite() {
             self.n_inf += 1;
         } else {
+            self.n_neg_zero += (x == 0.0 && x.is_sign_negative()) as u64;
             self.n_fractional += (x != x.trunc()) as u64;
             self.max_frac_digits = self
                 .max_frac_digits
@@ -382,6 +387,7 @@ impl FloatStats {
         } else if x.is_infinite() {
             self.n_inf += 1;
         } else {
+            self.n_neg_zero += (x == 0.0 && x.is_sign_negative()) as u64;
             self.n_fractional += (x != x.trunc()) as u64;
             self.max_frac_digits = self
                 .max_frac_digits
@@ -464,6 +470,10 @@ pub(crate) struct Numeric {
     /// Significant digits of the whole value: leading zeros (across the dot) and
     /// trailing fraction zeros removed ("0.00120" → 2, "1200" → 4).
     pub sig_digits: u32,
+    /// Fraction digits as written, trailing zeros kept ("1.50" → 2; an integer 0).
+    pub raw_frac_digits: u32,
+    /// The integer part has more than one digit and starts with 0 ("007", "00.5").
+    pub int_lead0: bool,
 }
 
 pub(crate) fn scan_numeric(b: &[u8]) -> Option<Numeric> {
@@ -478,6 +488,7 @@ pub(crate) fn scan_numeric(b: &[u8]) -> Option<Numeric> {
         [b'.', frac @ ..] if !frac.is_empty() && frac.iter().all(u8::is_ascii_digit) => frac,
         _ => return None,
     };
+    let raw_frac_digits = frac.len() as u32;
     let frac = &frac[..frac.iter().rposition(|&c| c != b'0').map_or(0, |p| p + 1)];
     let significant = int
         .iter()
@@ -496,6 +507,8 @@ pub(crate) fn scan_numeric(b: &[u8]) -> Option<Numeric> {
         int_digits: significant as u32,
         frac_digits: frac.len() as u32,
         sig_digits: sig_digits as u32,
+        raw_frac_digits,
+        int_lead0: int.len() > 1 && int[0] == b'0',
     })
 }
 
@@ -737,7 +750,7 @@ pub(crate) fn parse_decimal(b: &[u8], scale: u32) -> Option<i128> {
 }
 
 /// Group C accumulator over the non-null string values of one column.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct StringStats {
     pub n_numeric: u64,
     pub n_numeric_int: u64,
@@ -758,6 +771,30 @@ pub(crate) struct StringStats {
     pub iso_max_sig_frac_digits: Option<u32>,
     pub offsets: HashSet<i32>,
     pub iso_n_midnight: u64,
+    /// Numeric values that are zero written with a minus sign ("-0", "-0.00").
+    pub n_neg_zero: u64,
+    /// Numeric values whose integer part has a leading zero ("007", "00.5").
+    pub n_int_lead0: u64,
+    /// Min / max fraction digits as written (trailing zeros kept; integers 0).
+    pub raw_frac_min: Option<u32>,
+    pub raw_frac_max: Option<u32>,
+    /// Numeric values whose Float32 / Float64 parse is not canonically equal to the text
+    /// (the one-shot `verify_text` float check, value by value).
+    pub n_f32_roundtrip_fail: u64,
+    pub n_f64_roundtrip_fail: u64,
+    /// Numeric values whose Float32 / Float64 parse arrow-cast renders (ryu) as other text.
+    pub n_f32_render_diff: u64,
+    pub n_f64_render_diff: u64,
+    /// UTC instants (ns) of ISO datetimes, both kinds.
+    pub iso_instant_min: Option<i128>,
+    pub iso_instant_max: Option<i128>,
+    /// ISO times / datetimes whose time part arrow-cast renders differently: no seconds,
+    /// or fraction digits other than chrono's 0 / 3 / 6 / 9 grouping of the significant ones.
+    pub n_iso_time_noncanonical: u64,
+    /// ISO datetimes written with a space instead of `T`.
+    pub n_iso_space_sep: u64,
+    /// ISO datetimes with a zero offset not written `Z` (arrow-cast renders UTC as `Z`).
+    pub n_iso_offset_noncanonical: u64,
 }
 
 fn opt_min<T: Ord>(a: Option<T>, b: Option<T>) -> Option<T> {
@@ -765,6 +802,16 @@ fn opt_min<T: Ord>(a: Option<T>, b: Option<T>) -> Option<T> {
         (Some(x), Some(y)) => Some(x.min(y)),
         (x, None) => x,
         (None, y) => y,
+    }
+}
+
+/// Fraction digits chrono prints for a time with `sig` significant ones: 0, 3, 6 or 9.
+fn chrono_frac_digits(sig: u32) -> u32 {
+    match sig {
+        0 => 0,
+        1..=3 => 3,
+        4..=6 => 6,
+        _ => 9,
     }
 }
 
@@ -776,6 +823,12 @@ impl StringStats {
             self.max_frac_digits = self.max_frac_digits.max(Some(n.frac_digits));
             self.min_frac_digits = opt_min(self.min_frac_digits, Some(n.frac_digits));
             self.max_sig_digits = self.max_sig_digits.max(Some(n.sig_digits));
+            self.raw_frac_min = opt_min(self.raw_frac_min, Some(n.raw_frac_digits));
+            self.raw_frac_max = self.raw_frac_max.max(Some(n.raw_frac_digits));
+            self.n_int_lead0 += n.int_lead0 as u64;
+            self.n_neg_zero += (n.sig_digits == 0 && b[0] == b'-') as u64;
+            // The numeric grammar is ASCII, so the bytes are valid UTF-8.
+            self.float_probe(std::str::from_utf8(b).unwrap_or_default());
             if n.is_int {
                 self.n_numeric_int += 1;
                 self.n_leading_zero += n.leading_zero as u64;
@@ -794,6 +847,7 @@ impl StringStats {
             Some(Iso::Time { frac, sig }) => {
                 self.n_iso_time += 1;
                 self.fraction(frac, sig);
+                self.time_form(b, 0, frac, sig);
             }
             Some(Iso::DateTime {
                 frac,
@@ -803,6 +857,7 @@ impl StringStats {
                 self.n_iso_datetime += 1;
                 self.fraction(frac, sig);
                 self.iso_n_midnight += midnight as u64;
+                self.datetime_form(b, frac, sig);
             }
             Some(Iso::DateTimeTz {
                 frac,
@@ -814,8 +869,40 @@ impl StringStats {
                 self.fraction(frac, sig);
                 self.iso_n_midnight += midnight as u64;
                 self.offsets.insert(offset_minutes);
+                self.datetime_form(b, frac, sig);
+                self.n_iso_offset_noncanonical +=
+                    (offset_minutes == 0 && b.last() != Some(&b'Z')) as u64;
             }
             None => {}
+        }
+    }
+
+    /// The one-shot string → float verification and lossy check, value by value:
+    /// parse, render as arrow-cast does (ryu), compare canonically and textually.
+    fn float_probe(&mut self, s: &str) {
+        let mut buf = ryu::Buffer::new();
+        let r = buf.format(s.parse::<f64>().unwrap_or(f64::NAN));
+        self.n_f64_roundtrip_fail += (canon(s) != canon(r)) as u64;
+        self.n_f64_render_diff += (s != r) as u64;
+        let r = buf.format(s.parse::<f32>().unwrap_or(f32::NAN));
+        self.n_f32_roundtrip_fail += (canon(s) != canon(r)) as u64;
+        self.n_f32_render_diff += (s != r) as u64;
+    }
+
+    /// `t0`: where the time part starts (0 for a bare time, 11 after a date).
+    fn time_form(&mut self, b: &[u8], t0: usize, frac: u32, sig: u32) {
+        let seconds = b.get(t0 + 5) == Some(&b':');
+        self.n_iso_time_noncanonical += (!seconds || frac != chrono_frac_digits(sig)) as u64;
+    }
+
+    /// A datetime's separator, time part and UTC instant (both kinds).
+    fn datetime_form(&mut self, b: &[u8], frac: u32, sig: u32) {
+        self.n_iso_space_sep += (b[10] == b' ') as u64;
+        self.time_form(b, 11, frac, sig);
+        if let Some(v) = parse_iso(b) {
+            let t = v.epoch_ns();
+            self.iso_instant_min = opt_min(self.iso_instant_min, Some(t));
+            self.iso_instant_max = self.iso_instant_max.max(Some(t));
         }
     }
 
@@ -843,6 +930,19 @@ impl StringStats {
         self.iso_max_sig_frac_digits = self.iso_max_sig_frac_digits.max(o.iso_max_sig_frac_digits);
         self.offsets.extend(o.offsets);
         self.iso_n_midnight += o.iso_n_midnight;
+        self.n_neg_zero += o.n_neg_zero;
+        self.n_int_lead0 += o.n_int_lead0;
+        self.raw_frac_min = opt_min(self.raw_frac_min, o.raw_frac_min);
+        self.raw_frac_max = self.raw_frac_max.max(o.raw_frac_max);
+        self.n_f32_roundtrip_fail += o.n_f32_roundtrip_fail;
+        self.n_f64_roundtrip_fail += o.n_f64_roundtrip_fail;
+        self.n_f32_render_diff += o.n_f32_render_diff;
+        self.n_f64_render_diff += o.n_f64_render_diff;
+        self.iso_instant_min = opt_min(self.iso_instant_min, o.iso_instant_min);
+        self.iso_instant_max = self.iso_instant_max.max(o.iso_instant_max);
+        self.n_iso_time_noncanonical += o.n_iso_time_noncanonical;
+        self.n_iso_space_sep += o.n_iso_space_sep;
+        self.n_iso_offset_noncanonical += o.n_iso_offset_noncanonical;
         self
     }
 }
@@ -1626,5 +1726,51 @@ mod tests {
             parse_decimal(format!("1{}", "0".repeat(38)).as_bytes(), 0),
             None
         ); // 39 digits
+    }
+
+    #[test]
+    fn scanner_streaming_statistics_numeric() {
+        let mut st = StringStats::default();
+        for v in ["-0.00", "007.50", "1.5", "12", "0.30000000000000001", "16777217"] {
+            st.add(v.as_bytes());
+        }
+        assert_eq!(st.n_neg_zero, 1);
+        assert_eq!(st.n_int_lead0, 1);
+        assert_eq!((st.raw_frac_min, st.raw_frac_max), (Some(0), Some(17)));
+        // f64: only "0.3…01" changes value (parses to 0.3); all but "1.5" render differently.
+        assert_eq!((st.n_f64_roundtrip_fail, st.n_f64_render_diff), (1, 5));
+        // f32: "0.3…01" and "16777217" (→ 16777216) change value.
+        assert_eq!((st.n_f32_roundtrip_fail, st.n_f32_render_diff), (2, 5));
+    }
+
+    #[test]
+    fn scanner_streaming_statistics_iso() {
+        let mut st = StringStats::default();
+        for v in [
+            "2024-01-01 10:00:00",
+            "2024-01-01T10:00",
+            "2024-01-01T10:00:00.5",
+            "2024-01-01T10:00:00.500+00:00",
+            "2024-01-01T10:00:00Z",
+            "10:00:00.120000",
+        ] {
+            st.add(v.as_bytes());
+        }
+        assert_eq!(st.n_iso_space_sep, 1);
+        // no seconds; ".5" (chrono prints .500); ".120000" (chrono prints .120)
+        assert_eq!(st.n_iso_time_noncanonical, 3);
+        assert_eq!(st.n_iso_offset_noncanonical, 1); // "+00:00" renders as "Z"
+        assert_eq!(st.iso_instant_min, Some(1_704_103_200_000_000_000));
+        assert_eq!(st.iso_instant_max, Some(1_704_103_200_500_000_000));
+        let merged = StringStats::default().merge(st.clone());
+        assert_eq!(merged.n_iso_time_noncanonical, 3);
+    }
+
+    #[test]
+    fn float_negative_zero() {
+        let st = float_stats(&Series::new("x".into(), &[0.0f64, -0.0, 1.0]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(st.n_neg_zero, 1);
     }
 }
