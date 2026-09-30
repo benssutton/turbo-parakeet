@@ -212,10 +212,15 @@ Added to `describe.rs`'s numeric and ISO scanners, counted over every non-null t
   layout of a Utf8 result is string_view: `pad(16·N) + pad(sum_len_gt12)`, plus validity. `sizes.rs`
   gains the matching measured case, so that predicted = measured still holds (Spec B §5.1).
 - **Original, uncompressed:** `body_size` of the classic layout where it applies (fixed width,
-  LargeUtf8/LargeBinary, LargeList of those). Otherwise (Categorical's classic dictionary, Struct,
-  deeper nesting) it is the sum of the per-batch measured sizes. The original candidate's evidence
-  names the method. `size_polars_bytes` follows the same rule, applied to the original's Polars
-  layout (`polars_layout`).
+  LargeUtf8/LargeBinary, LargeList of those). Categorical / Enum sizes are analytic too, classic and
+  native: keys from the column's shape, the dictionary from the dtype's category mapping (the
+  categories Polars exports, as views it builds). Otherwise (Struct, deeper nesting) it is the sum
+  of the per-batch measured sizes: exact for one batch. The original candidate's evidence names the
+  method. `size_polars_bytes` follows the same rule, applied to the original's Polars layout
+  (`polars_layout`).
+- **A list's kept inner level with no closed form (a Struct):** its recommended Polars size is the
+  per-batch sum of its classic layout rebuilt as one-shot's `to_polars_layout` rebuilds it (not the
+  input's native export, whose view buffers Polars built differently): exact for one batch.
 - **ZSTD (original and recommended, Arrow and Polars layouts):** Σ over the sampled blocks of
   `ipc_body_bytes(block, zstd_level)`, × N ÷ sampled rows, rounded. The recommended sizes use the
   block cast to the chosen type, or its Polars layout.
