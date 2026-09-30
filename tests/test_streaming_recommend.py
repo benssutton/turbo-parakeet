@@ -109,12 +109,22 @@ def null_slots_hold_bytes(s: pl.Series) -> bool:
     return (data.size if data else 0) > (s.str.len_bytes().sum() or 0)
 
 
+def per_batch_sum(r: dict) -> bool:
+    """The streamed original's size is a sum of per-batch measurements (Struct and
+    deeper nesting): exact for one batch only."""
+    return any(
+        c["rule"] == "original" and "per-batch sum" in (c["evidence"] or "")
+        for c in r["rec_candidates"]
+    )
+
+
 def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: bool):
     """Spec §6: equal recommendations, sizes and candidates; ZSTD when N ≤ block_rows.
 
     Known, accepted differences, narrowed per column:
     - distinct tracking overflowed: parity is not defined (spec §6); the rejected
       dictionary's key width follows `categorical_threshold + 1`, not one-shot's est_high;
+    - the original's size, in several batches, where it is a per-batch sum;
     - string source whose null slots hold bytes: one-shot measures them in the
       original's size.
     """
@@ -124,11 +134,15 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         name = r["column"]
         o = ref[name]
         overflowed = bool(r["distinct_overflowed"])
-        original_sizes = single_batch and not null_slots_hold_bytes(frame[name])
+        original_sizes = (single_batch or not per_batch_sum(r)) and not null_slots_hold_bytes(
+            frame[name]
+        )
         keys = ["rec_nullable", "rec_lossy_formatting", "rec_arrow_type"]
-        if single_batch or not kept_original(o):
+        if original_sizes or not kept_original(o):
             keys += ["rec_arrow_size_bytes", "rec_polars_size_bytes"]
             keys += ["rec_arrow_size_zstd_bytes", "rec_polars_size_zstd_bytes"]
+        if original_sizes:
+            keys += ["size_bytes", "size_polars_bytes"]
         if not kept_original(o):
             assert r["rec_polars_type"] == o["rec_polars_type"], name
         for k in keys:
