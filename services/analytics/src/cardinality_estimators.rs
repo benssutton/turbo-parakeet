@@ -63,6 +63,8 @@ pub(crate) enum Method {
     Duj1,
     Schnabel,
     Chao1,
+    /// Streaming: distinct tracking stopped past `categorical_threshold`; no estimate.
+    Overflowed,
 }
 
 impl Method {
@@ -73,6 +75,7 @@ impl Method {
             Method::Duj1 => "duj1",
             Method::Schnabel => "schnabel",
             Method::Chao1 => "chao1",
+            Method::Overflowed => "overflowed",
         }
     }
 }
@@ -164,6 +167,11 @@ mod tests {
         assert!(schnabel(&[5, 5, 5, 2, 2, 2, 1], 22, 44).is_none());
         assert!(schnabel(&[3, 3, 0, 3, 0, 0, 0], 9, 100).is_none());
         assert!(schnabel(&[0; 7], 0, 0).is_none());
+    }
+
+    #[test]
+    fn overflowed_method_name() {
+        assert_eq!(Method::Overflowed.name(), "overflowed");
     }
 
     #[test]
