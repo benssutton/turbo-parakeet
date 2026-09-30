@@ -44,8 +44,9 @@ fn gcd128(a: i128, b: i128) -> i128 {
 /// the source batch. `take` copies most types, but reuses every data buffer of a
 /// Utf8View / BinaryView and the whole values array of a dictionary; those are
 /// compacted here, at any depth (list, fixed-size list, map and struct children).
-/// A dictionary is decoded to its value type: the reservoir casts sampled pieces back
-/// to the column's own dtype, so the sample loses nothing by it.
+/// The copy has `a`'s data type at every depth: a dictionary keeps its key and value
+/// types, holding only the values its rows use (first-use order, keys renumbered), so
+/// the copy imports under `a`'s original field.
 pub(crate) fn copy_rows(a: &ArrayRef, start: usize, len: usize) -> Result<ArrayRef, String> {
     let idx = UInt64Array::from_iter_values((start..start + len).map(|i| i as u64));
     arrow_select::take::take(a.as_ref(), &idx, None)
@@ -63,7 +64,41 @@ fn compact(a: ArrayRef) -> Result<ArrayRef, arrow_schema::ArrowError> {
     Ok(match a.data_type() {
         AT::Utf8View => Arc::new(a.as_string_view().gc()),
         AT::BinaryView => Arc::new(a.as_binary_view().gc()),
-        AT::Dictionary(_, value) => compact(arrow_cast::cast(&a, value)?)?,
+        AT::Dictionary(key_type, _) => {
+            // Keep only the values the rows use, first-use order; keys renumbered to
+            // match. There are no more of them than before, so they fit the key type.
+            use arrow_array::types::UInt64Type;
+            let d = a.as_any_dictionary();
+            let keys = arrow_cast::cast(d.keys(), &AT::UInt64)?;
+            let mut slot: HashMap<u64, u64> = HashMap::new();
+            let mut used = Vec::new();
+            let renumbered: Vec<u64> = keys
+                .as_primitive::<UInt64Type>()
+                .iter()
+                .map(|k| {
+                    k.map_or(0, |k| {
+                        *slot.entry(k).or_insert_with(|| {
+                            used.push(k);
+                            used.len() as u64 - 1
+                        })
+                    })
+                })
+                .collect();
+            let keys = arrow_array::UInt64Array::new(renumbered.into(), keys.nulls().cloned());
+            let keys = arrow_cast::cast(&keys, key_type)?;
+            let values = arrow_select::take::take(
+                d.values().as_ref(),
+                &arrow_array::UInt64Array::from(used),
+                None,
+            )?;
+            let data = keys
+                .to_data()
+                .into_builder()
+                .data_type(a.data_type().clone())
+                .child_data(vec![compact(values)?.to_data()])
+                .build()?;
+            arrow_array::make_array(data)
+        }
         AT::List(f) => {
             let l = a.as_list::<i32>();
             let values = compact(l.values().clone())?;
@@ -706,25 +741,85 @@ mod tests {
             views.clone(),
             None,
         ));
-        let keys = arrow_array::UInt32Array::from_iter_values((0..n as u32).rev());
+        // Repeated keys and null keys (every 10th row, from row 3).
+        let keys = arrow_array::UInt32Array::from_iter(
+            (0..n as u32).map(|i| (i % 10 != 3).then_some((n as u32 - 1 - i) / 2)),
+        );
         let dict: ArrayRef =
             Arc::new(DictionaryArray::<UInt32Type>::try_new(keys, views.clone()).unwrap());
-        for a in [&views, &list, &dict] {
+        let dict_list: ArrayRef = Arc::new(LargeListArray::new(
+            Arc::new(arrow_schema::Field::new_list_field(
+                dict.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(1, n)),
+            dict.clone(),
+            None,
+        ));
+        let dict_struct: ArrayRef = Arc::new(arrow_array::StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "c",
+                dict.data_type().clone(),
+                true,
+            )),
+            dict.clone(),
+        )]));
+        // The same values with every dictionary decoded to Utf8.
+        let decoded = |dt: &AT| match dt {
+            AT::LargeList(_) => AT::LargeList(Arc::new(arrow_schema::Field::new_list_field(
+                AT::Utf8,
+                true,
+            ))),
+            AT::Struct(_) => AT::Struct(vec![arrow_schema::Field::new("c", AT::Utf8, true)].into()),
+            _ => AT::Utf8,
+        };
+        for a in [&views, &list, &dict, &dict_list, &dict_struct] {
             assert!(a.to_data().get_buffer_memory_size() > 1 << 20);
             let copy = copy_rows(a, 500, 5).unwrap();
             assert_eq!(copy.len(), 5);
+            assert_eq!(copy.data_type(), a.data_type());
             let retained = copy.to_data().get_buffer_memory_size();
             assert!(retained < 4096, "{}: {retained} bytes", a.data_type());
+            let dt = decoded(a.data_type());
+            assert_eq!(
+                arrow_cast::cast(&copy, &dt).unwrap().as_ref(),
+                arrow_cast::cast(&a.slice(500, 5), &dt).unwrap().as_ref(),
+                "{}",
+                a.data_type()
+            );
         }
-        // Values survive (the dictionary decodes to its value type).
-        let copy = copy_rows(&dict, 0, 1).unwrap();
-        let s = arrow_cast::cast(&copy, &AT::Utf8).unwrap();
-        assert_eq!(
-            s.as_any()
-                .downcast_ref::<arrow_array::StringArray>()
-                .unwrap()
-                .value(0),
-            format!("value number {:>12} padded", n - 1)
-        );
+    }
+
+    #[test]
+    fn copied_categoricals_import_under_the_original_field() {
+        use crate::arrow_io::import_array;
+        let cats = Categories::global();
+        let s = Series::new(
+            "c".into(),
+            &[Some("x"), Some("y"), None, Some("z"), Some("x")],
+        )
+        .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
+        .unwrap();
+        let a = export_series(&s, CompatLevel::newest()).unwrap();
+        let md: std::collections::HashMap<String, String> = s
+            .field()
+            .to_arrow(CompatLevel::newest())
+            .metadata
+            .as_deref()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let field = arrow_schema::Field::new("c", a.data_type().clone(), true).with_metadata(md);
+        let copy = copy_rows(&a, 1, 4).unwrap();
+        assert_eq!(copy.data_type(), a.data_type());
+        let back = import_array(&field, &copy).unwrap();
+        assert_eq!(back.dtype(), s.dtype());
+        assert!(back
+            .cast(&DataType::String)
+            .unwrap()
+            .equals_missing(&s.slice(1, 4).cast(&DataType::String).unwrap()));
     }
 }
