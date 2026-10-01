@@ -30,6 +30,45 @@ CANDIDATE = pl.Struct(
         "reason": pl.String,
     }
 )
+VALUE_BLOCK = {
+    "n_unique": pl.UInt64,
+    "unique": pl.Boolean,
+    "est_cardinality": pl.Float64,
+    "est_low": pl.Float64,
+    "est_high": pl.Float64,
+    "est_method": pl.String,
+    "estimates_agree": pl.Boolean,
+    "class": pl.String,
+    "min": pl.String,
+    "max": pl.String,
+    "min_len": pl.UInt64,
+    "max_len": pl.UInt64,
+    "gcd": pl.Decimal(38, 0),
+    "sum_len": pl.UInt64,
+    "sum_len_unique": pl.UInt64,
+    "n_nan": pl.UInt64,
+    "n_inf": pl.UInt64,
+    "n_fractional": pl.UInt64,
+    "max_frac_digits": pl.UInt32,
+    "n_f32_inexact": pl.UInt64,
+    "n_numeric": pl.UInt64,
+    "n_numeric_int": pl.UInt64,
+    "n_leading_zero": pl.UInt64,
+    "numeric_int_min": pl.Decimal(38, 0),
+    "numeric_int_max": pl.Decimal(38, 0),
+    "numeric_max_int_digits": pl.UInt32,
+    "numeric_max_frac_digits": pl.UInt32,
+    "numeric_min_frac_digits": pl.UInt32,
+    "numeric_max_sig_digits": pl.UInt32,
+    "n_iso_date": pl.UInt64,
+    "n_iso_time": pl.UInt64,
+    "n_iso_datetime": pl.UInt64,
+    "n_iso_datetime_tz": pl.UInt64,
+    "iso_max_frac_digits": pl.UInt32,
+    "iso_max_sig_frac_digits": pl.UInt32,
+    "iso_n_offsets": pl.UInt64,
+    "iso_n_midnight": pl.UInt64,
+}
 SCHEMA = {
     "column": pl.String,
     "status": pl.String,
@@ -37,18 +76,8 @@ SCHEMA = {
     "first_row": pl.UInt64,
     "n_rows": pl.UInt64,
     "n_null": pl.UInt64,
-    "min": pl.String,
-    "max": pl.String,
-    "gcd": pl.Decimal(38, 0),
-    "sum_len": pl.UInt64,
-    "min_len": pl.UInt64,
-    "max_len": pl.UInt64,
-    "n_unique": pl.UInt64,
-    "distinct_overflowed": pl.Boolean,
-    "est_cardinality": pl.Float64,
-    "est_low": pl.Float64,
-    "est_high": pl.Float64,
-    "est_method": pl.String,
+    **VALUE_BLOCK,
+    "n_midnight": pl.UInt64,
     "size_bytes": pl.UInt64,
     "size_zstd_bytes": pl.UInt64,
     "size_polars_bytes": pl.UInt64,
@@ -132,9 +161,10 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
     """Spec §6: equal recommendations, sizes and candidates; ZSTD when N ≤ block_rows.
 
     Known, accepted differences, narrowed per column:
-    - the distinct sample in its sampling phase (`distinct_overflowed`): the counts are
+    - the distinct sample in its sampling phase (`est_method` "hll"): the counts are
       HyperLogLog estimates, so the rejected dictionary's key width and size follow the
-      estimated est_high, not one-shot's exact one;
+      estimated est_high, not one-shot's exact one, and n_unique is within 3 standard
+      errors (p = 14) rather than exact;
     - the original's size, in several batches, where it is a per-batch sum;
     - string source whose null slots hold bytes: one-shot measures them in the
       original's size.
@@ -144,7 +174,7 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
     for r in streamed.filter(pl.col("status") == "computed").iter_rows(named=True):
         name = r["column"]
         o = ref[name]
-        overflowed = bool(r["distinct_overflowed"])
+        overflowed = r["est_method"] == "hll"
         original_sizes = (
             single_batch or not per_batch_sum(r)
         ) and not null_slots_hold_bytes(frame[name])
@@ -161,6 +191,24 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         got = candidates(r, original_sizes, not overflowed)
         want = candidates(o, original_sizes, not overflowed)
         assert got == want, name
+        exact_cols = [
+            "n_null", "min", "max", "min_len", "max_len", "sum_len", "gcd", "n_midnight",
+            "n_nan", "n_inf", "n_fractional", "max_frac_digits", "n_f32_inexact",
+            *[
+                c
+                for c in VALUE_BLOCK
+                if c.startswith(("n_numeric", "numeric_", "n_leading", "n_iso", "iso_"))
+            ],
+        ]
+        for k in exact_cols:
+            assert r[k] == o[k], (name, k, r[k], o[k])
+        if overflowed:
+            sigma = 3 * 1.04 / 128  # p = 14
+            assert abs(r["n_unique"] - o["n_unique"]) <= sigma * o["n_unique"] + 1, name
+        else:
+            for k in ["n_unique", "unique", "class", "sum_len_unique"]:
+                assert r[k] == o[k], (name, k, r[k], o[k])
+        assert r["est_low"] <= r["est_cardinality"] <= r["est_high"], name
         checked += 1
     assert checked > 0
 
@@ -324,7 +372,7 @@ def test_a_type_change_is_rejected():
 def test_exact_count_past_the_threshold_rejects_the_dictionary():
     frame = pl.DataFrame({"s": ["a", "b", "c", "d", "e", "a"]})
     s = row(stream(frame, 2, categorical_threshold=3), "s")
-    assert s["n_unique"] == 5 and s["distinct_overflowed"] is False
+    assert s["n_unique"] == 5
     assert s["est_method"] == "observed"
     assert by_rule(s)["string→dictionary"]["outcome"] == "rejected"
 
@@ -333,9 +381,27 @@ def test_overflow_rejects_the_dictionary():
     # More distinct values than the sample holds (k = max(threshold, 1000)).
     frame = pl.DataFrame({"s": [f"v{i}" for i in range(2_000)]})
     s = row(stream(frame, 500, categorical_threshold=3), "s")
-    assert s["n_unique"] >= 1_000 + 1 and s["distinct_overflowed"] is True
+    assert s["n_unique"] >= 1_000 + 1
     assert s["est_method"] == "hll"
     assert by_rule(s)["string→dictionary"]["outcome"] == "rejected"
+
+
+def test_sampling_phase_estimates():
+    n = 60_000
+    frame = pl.DataFrame(
+        {
+            "key": pl.Series([f"id-{i:08d}" for i in range(n)]),
+            "x": [i % 7 for i in range(n)],
+        }
+    )
+    out = stream(frame, 8_192)
+    r = {row["column"]: row for row in out.iter_rows(named=True)}
+    key = r["key"]
+    assert key["est_method"] == "hll" and key["unique"] is True
+    assert abs(key["n_unique"] - n) <= 3 * 1.04 / 128 * n
+    assert abs(key["sum_len_unique"] - 11 * n) <= 0.05 * 11 * n
+    assert key["class"] == "discrete"
+    assert r["x"]["class"] == "ordinal" and r["x"]["n_unique"] == 7
 
 
 def test_no_sample_means_no_zstd_sizes():

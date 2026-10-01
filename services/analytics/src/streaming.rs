@@ -14,12 +14,12 @@ use crate::api::{Error, Result};
 use crate::arrow_io::{export_struct, import_array, import_batch};
 use crate::cardinality_estimators::Estimate;
 use crate::conclusions::conclude;
-use crate::describe::{assemble, flatten, Profile, Row};
-use crate::partial::{BatchStats, Ext, LevelStats, ViewSim};
+use crate::describe::{assemble, flatten, value_fields, Profile, Row};
+use crate::partial::{BatchStats, LevelStats, ViewSim};
 use crate::recommend::{
     body_size, cast_to, list_parts, pa_name, pad, pick_by_stats, pick_list_by_stats, pl_name,
-    polars_layout, rec_fields, rec_row, render_value, to_polars_layout, validity, verify, wrap,
-    Level, Params, Pick, Rec, Shape, Target,
+    polars_layout, rec_fields, rec_row, to_polars_layout, validity, verify, wrap, Level, Params,
+    Pick, Rec, Shape, Target,
 };
 use crate::reservoir::{Block, Reservoir};
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of};
@@ -79,7 +79,8 @@ fn same_type(a: &PT, b: &PT) -> bool {
     }
 }
 
-/// Output columns (spec §6), in order.
+/// Output columns (spec 2026-10-01 §7), in order: the streaming head, Describe's value
+/// block (describe.rs `value_fields`), n_midnight, the size columns, Recommend's, the sample.
 fn output_fields() -> Vec<(String, PT)> {
     let mut f: Vec<(String, PT)> = [
         ("column", PT::String),
@@ -88,26 +89,20 @@ fn output_fields() -> Vec<(String, PT)> {
         ("first_row", PT::UInt64),
         ("n_rows", PT::UInt64),
         ("n_null", PT::UInt64),
-        ("min", PT::String),
-        ("max", PT::String),
-        ("gcd", PT::Decimal(Some(38), Some(0))),
-        ("sum_len", PT::UInt64),
-        ("min_len", PT::UInt64),
-        ("max_len", PT::UInt64),
-        ("n_unique", PT::UInt64),
-        ("distinct_overflowed", PT::Boolean),
-        ("est_cardinality", PT::Float64),
-        ("est_low", PT::Float64),
-        ("est_high", PT::Float64),
-        ("est_method", PT::String),
-        ("size_bytes", PT::UInt64),
-        ("size_zstd_bytes", PT::UInt64),
-        ("size_polars_bytes", PT::UInt64),
-        ("size_polars_zstd_bytes", PT::UInt64),
     ]
     .into_iter()
     .map(|(n, d)| (n.to_string(), d))
     .collect();
+    f.extend(value_fields().into_iter().map(|(n, d)| (n.to_string(), d)));
+    f.push(("n_midnight".into(), PT::UInt64));
+    for n in [
+        "size_bytes",
+        "size_zstd_bytes",
+        "size_polars_bytes",
+        "size_polars_zstd_bytes",
+    ] {
+        f.push((n.into(), PT::UInt64));
+    }
     f.extend(rec_fields());
     f.push(("n_sampled_rows".into(), PT::UInt64));
     f.push(("n_sampled_blocks".into(), PT::UInt64));
@@ -378,12 +373,6 @@ fn nullable(t: &Target, o: &LevelStats, inner: Option<&LevelStats>) -> bool {
         Target::Scalar(_) => o.n_null + inner.map_or(0, |i| i.n_null) > 0,
         _ => o.n_null > 0,
     }
-}
-
-fn render(e: &Option<Ext>) -> AnyValue<'static> {
-    e.as_ref()
-        .and_then(|e| render_value(e.value.as_ref()))
-        .map_or(AnyValue::Null, |s| AnyValue::StringOwned(s.into()))
 }
 
 /// An Enum's categories, found through lists and arrays.
@@ -679,7 +668,6 @@ impl Streaming {
     fn row(&self, c: &Column, blocks: &[&Block], sampled: u64) -> std::result::Result<Row, String> {
         let text = |s: &str| AnyValue::StringOwned(s.into());
         let u = |v: Option<u64>| v.map_or(AnyValue::Null, AnyValue::UInt64);
-        let f = |v: Option<f64>| v.map_or(AnyValue::Null, AnyValue::Float64);
         let dtype = c.dtype.as_ref().filter(|_| !c.ineligible);
         let mut row: Row = vec![
             text(&c.name),
@@ -815,20 +803,9 @@ impl Streaming {
             lossy: pick.lossy,
             candidates: pick.candidates,
         };
-        let exact = o.is_exact();
+        row.extend(p.row(&oc));
+        row.push(u(o.n_midnight));
         row.extend([
-            render(&o.lo),
-            render(&o.hi),
-            p.gcd.map_or(AnyValue::Null, |g| AnyValue::Decimal(g, 0)),
-            u(p.sum_len),
-            u(o.min_len),
-            u(o.max_len),
-            AnyValue::UInt64(p.freq.n_unique),
-            AnyValue::Boolean(!exact),
-            f(Some(oc.est.est_cardinality)),
-            f(oc.est.est_low),
-            f(oc.est.est_high),
-            text(oc.est.method.name()),
             AnyValue::UInt64(lvl.size_bytes),
             u(scale(z[0])),
             AnyValue::UInt64(original_polars),
@@ -1481,10 +1458,6 @@ pub(crate) mod tests {
             Some("a"),
         ]);
         assert_eq!(texts(&out, "n_unique")[0].as_deref(), Some("5"));
-        assert_eq!(
-            texts(&out, "distinct_overflowed")[0].as_deref(),
-            Some("false")
-        );
         assert_eq!(texts(&out, "est_method")[0].as_deref(), Some("observed"));
         assert_eq!(dictionary_outcome(&out), "rejected");
     }
@@ -1501,12 +1474,26 @@ pub(crate) mod tests {
             .parse()
             .unwrap();
         assert!(n_unique >= 1_001, "{n_unique}");
-        assert_eq!(
-            texts(&out, "distinct_overflowed")[0].as_deref(),
-            Some("true")
-        );
         assert_eq!(texts(&out, "est_method")[0].as_deref(), Some("hll"));
         assert_eq!(dictionary_outcome(&out), "rejected");
+    }
+
+    #[test]
+    fn shared_columns_are_filled() {
+        let mut s = Streaming::new(params(), 0, 1);
+        s.add(&batch(vec![(
+            "a",
+            ints(&[Some(0), Some(5), Some(7), Some(0), Some(5), Some(7)]),
+        )]))
+        .unwrap();
+        let out = s.finish().unwrap();
+        let some = |v: &[&str]| v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>();
+        assert_eq!(texts(&out, "class"), some(&["ordinal"])); // 7 ≤ 2·6
+        assert_eq!(texts(&out, "min"), some(&["0"]));
+        assert_eq!(texts(&out, "max"), some(&["7"]));
+        assert_eq!(texts(&out, "unique"), some(&["false"]));
+        assert_eq!(texts(&out, "est_method"), some(&["observed"]));
+        assert_eq!(texts(&out, "n_midnight"), vec![None]);
     }
 
     #[test]

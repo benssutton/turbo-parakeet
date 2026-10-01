@@ -93,6 +93,11 @@ class StreamingRecommenderTest {
                 assertEquals(List.of("computed", "computed"), column(root, "status"));
                 assertEquals(List.of("6", "6"), column(root, "n_rows"));
                 assertEquals("uint8", column(root, "rec_arrow_type").get(0));
+                assertEquals(List.of("ordinal", "boolean"), column(root, "class"));
+                assertEquals(List.of("0", "x"), column(root, "min"));
+                // a: 3 distinct of 6 (≥ half) → observed; s: 2 of 6 → an estimator
+                // (Schnabel), as one-shot picks.
+                assertEquals(List.of("observed", "schnabel"), column(root, "est_method"));
                 return null;
             });
         }
