@@ -11,9 +11,13 @@ use crate::describe::{FloatStats, StringStats};
 /// scale 0, floats with no fraction / NaN / infinity, and strings that are all integers
 /// without leading zeros. `numeric`: the level's numeric extremes (integer, decimal and
 /// float dtypes; None otherwise). Temporal dtypes never qualify.
+/// "Integers" means Int/UInt 8–64 (Int128/UInt128 are ineligible upstream). `n_non_null`:
+/// non-null values at this level. The integer-string range is dropped when a value
+/// overflows the parse (Python drops it past 38 digits; the class cannot differ, since
+/// such values exceed 2·n_values).
 pub(crate) fn whole_range(
     dtype: &PT,
-    n: u64,
+    n_non_null: u64,
     numeric: Option<(f64, f64)>,
     floats: Option<&FloatStats>,
     strings: Option<&StringStats>,
@@ -26,7 +30,7 @@ pub(crate) fn whole_range(
             .and(numeric),
         PT::String | PT::Categorical(..) | PT::Enum(..) => {
             let st = strings?;
-            if st.n_numeric_int != n || st.n_leading_zero != 0 || st.int_overflow {
+            if st.n_numeric_int != n_non_null || st.n_leading_zero != 0 || st.int_overflow {
                 return None;
             }
             Some((st.int_min? as f64, st.int_max? as f64))
@@ -66,6 +70,7 @@ pub(crate) fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use polars::datatypes::{Categories, FrozenCategories};
 
     #[test]
     fn classes_in_order() {
@@ -126,5 +131,63 @@ mod tests {
             ..ints.clone()
         };
         assert_eq!(whole_range(&PT::String, 4, None, None, Some(&zero)), None);
+    }
+
+    #[test]
+    fn whole_range_branches() {
+        let r = Some((0.0, 3.0));
+        assert_eq!(whole_range(&PT::UInt32, 4, r, None, None), r);
+        let ints = StringStats {
+            n_numeric_int: 4,
+            int_min: Some(0),
+            int_max: Some(3),
+            ..Default::default()
+        };
+        let cats = Categories::global();
+        let cat = PT::Categorical(cats.clone(), cats.mapping());
+        let en = PT::from_frozen_categories(FrozenCategories::new(["a", "b"]).unwrap());
+        assert_eq!(whole_range(&cat, 4, None, None, Some(&ints)), r);
+        assert_eq!(whole_range(&en, 4, None, None, Some(&ints)), r);
+        let nan = FloatStats {
+            n_nan: 1,
+            ..Default::default()
+        };
+        let inf = FloatStats {
+            n_inf: 1,
+            ..Default::default()
+        };
+        assert_eq!(whole_range(&PT::Float64, 4, r, Some(&nan), None), None);
+        assert_eq!(whole_range(&PT::Float64, 4, r, Some(&inf), None), None);
+        assert_eq!(whole_range(&PT::Float64, 4, r, None, None), None);
+        assert_eq!(whole_range(&PT::String, 5, None, None, Some(&ints)), None);
+        let over = StringStats {
+            int_overflow: true,
+            ..ints
+        };
+        assert_eq!(whole_range(&PT::String, 4, None, None, Some(&over)), None);
+    }
+
+    #[test]
+    fn ordinal_bounds_and_threshold() {
+        let c = |whole, est| classify(5, 0, Count::Exact(5), whole, est, 10);
+        assert_eq!(c(Some((0.0, 10.0)), 50.0), "ordinal");
+        assert_eq!(c(Some((0.0, 10.1)), 50.0), "discrete");
+        assert_eq!(c(None, 10.0), "categorical");
+        assert_eq!(c(None, 10.5), "discrete");
+    }
+
+    #[test]
+    fn whole_range_feeds_classify() {
+        let ints = StringStats {
+            n_numeric_int: 5,
+            int_min: Some(0),
+            int_max: Some(4),
+            ..Default::default()
+        };
+        let w = whole_range(&PT::String, 5, None, None, Some(&ints));
+        assert_eq!(classify(5, 0, Count::Exact(5), w, 5.0, 1), "ordinal");
+        let f = FloatStats::default();
+        let w = whole_range(&PT::Float64, 5, Some((0.0, 4.0)), Some(&f), None);
+        assert_eq!(classify(5, 0, Count::Exact(5), w, 5.0, 1), "ordinal");
     }
 }
