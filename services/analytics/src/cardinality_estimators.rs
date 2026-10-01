@@ -92,7 +92,7 @@ pub(crate) struct Estimate {
 
 /// The estimate picked by rule (spec 2026-10-01 s4), with `estimates_agree`.
 /// n = non-null values; d = the count. d/n >= 0.5 -> the count itself (observed, or
-/// HLL +- 3 sigma). Below: Schnabel when valid, else Chao1, floored at d (the estimate) and
+/// HLL +- 3 sigma, the high end capped at n). Below: Schnabel when valid, else Chao1, floored at d (the estimate) and
 /// at max(d - 3 sigma, seen) for HLL (the low end): observed values bound the population
 /// from below.
 pub(crate) fn pick_estimate(
@@ -114,10 +114,13 @@ pub(crate) fn pick_estimate(
                 seen as f64 <= estimate,
                 "HLL estimate below the proven count"
             );
+            // The high end is capped at n: there are no more distinct values than values.
             (
                 estimate,
                 (estimate * (1.0 - 3.0 * std_error)).max(seen as f64),
-                estimate * (1.0 + 3.0 * std_error),
+                (estimate * (1.0 + 3.0 * std_error))
+                    .min(n as f64)
+                    .max(estimate),
                 Method::Hll,
             )
         }
@@ -281,6 +284,21 @@ mod tests {
         assert_eq!((e.method, e.est_cardinality), (Method::Schnabel, 10.0));
         assert!((e.est_low.unwrap() - 9.7).abs() < 1e-9);
         assert!((e.est_high.unwrap() - 16.378255262343956).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hll_high_end_is_capped_at_n() {
+        let hll = Count::Hll {
+            estimate: 1_000.0,
+            std_error: 0.05,
+            seen: 900,
+        };
+        // 1000 · (1 + 0.15) = 1150 > 1020 values.
+        let (e, _) = pick_estimate(hll, 1_020, 0, 0, &[0; 7]);
+        assert_eq!(
+            (e.method, e.est_cardinality, e.est_low, e.est_high),
+            (Method::Hll, 1_000.0, Some(900.0), Some(1_020.0))
+        );
     }
 
     #[test]

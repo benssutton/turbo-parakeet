@@ -472,7 +472,15 @@ impl LevelStats {
             }
             Some(d) => {
                 let sketch = self.hll.as_ref().expect("a sampled level has a sketch");
-                let e = sketch.estimate().max((d.len() + 1) as f64);
+                // Proven bounds: len + 1 distinct values seen (one was evicted), and no
+                // more than the non-null values. A sample whose every value occurred once
+                // reports the level unique (`conclude`), so its count is every value.
+                let n_non_null = (self.n - self.n_null) as f64;
+                let e = if d.all_once() {
+                    n_non_null
+                } else {
+                    sketch.estimate().max((d.len() + 1) as f64).min(n_non_null)
+                };
                 let scale = e / d.len() as f64;
                 let sc = |x: u64| (x as f64 * scale).round() as u64;
                 let (f1, f2, h) = d.counts();
@@ -717,6 +725,45 @@ mod tests {
         assert!((e - 50_000.0).abs() <= 3.0 * se * 50_000.0, "{e}");
         assert!(p.freq.n_unique >= 1_001 && p.freq.all_once);
         assert_eq!(p.freq.sum_len_unique, None); // not a text level
+    }
+
+    #[test]
+    fn sampled_counts_stay_within_the_proven_bounds() {
+        use crate::conclusions::conclude;
+        for seed in 0..6u64 {
+            // 50K rows, every 10th null; the rest distinct (seed 0..2), or each value
+            // twice (seed 3..5).
+            let s = Series::new(
+                "i".into(),
+                (0..50_000i64)
+                    .map(|i| {
+                        let v = if seed < 3 { i } else { i / 2 };
+                        (i % 10 != 0).then_some(v + seed as i64 * 1_000_000)
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let mut st = LevelStats::default();
+            for p in chunks(&s, 10_000) {
+                let b = BatchStats::of(&p, st.n, seed, st.is_exact()).unwrap();
+                st.absorb(b, 1_000);
+            }
+            let n = st.n - st.n_null;
+            let p = st.profile(s.dtype());
+            let c = conclude(s.dtype(), st.n, st.n_null, &p, 1_000);
+            let (e, high) = (c.est.est_cardinality, c.est.est_high.unwrap());
+            assert!(p.freq.hll.is_some(), "seed {seed}: sampling phase");
+            assert!(
+                p.freq.n_unique <= n,
+                "seed {seed}: {} > {n}",
+                p.freq.n_unique
+            );
+            assert!(high <= n as f64, "seed {seed}: est_high {high} > {n}");
+            assert!(c.est.est_low.unwrap() <= e && e <= high, "seed {seed}");
+            if c.unique {
+                assert_eq!(p.freq.n_unique, n, "seed {seed}");
+            }
+            assert_eq!(c.unique, seed < 3, "seed {seed}");
+        }
     }
 
     #[test]

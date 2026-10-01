@@ -407,6 +407,7 @@ def test_sampling_phase_estimates():
     key = r["key"]
     assert key["est_method"] == "hll" and key["unique"] is True
     assert abs(key["n_unique"] - n) <= 3 * 1.04 / 128 * n
+    assert key["n_unique"] <= n and key["est_high"] <= n
     assert abs(key["sum_len_unique"] - 11 * n) <= 0.05 * 11 * n
     assert key["class"] == "discrete"
     assert r["x"]["class"] == "ordinal" and r["x"]["n_unique"] == 7
