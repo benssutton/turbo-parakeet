@@ -4,6 +4,7 @@
 
 **Date:** 2026-09-26
 **Status:** Approved in brainstorming; awaiting written-spec review
+**Amended by:** [recommender parity](2026-10-01-recommender-parity-design.md) — estimator rule, `class`, rendered min / max values; entropy, top-5, `population_rows` and Duj1 removed.
 **Follow-up:** Spec B (recommender, cast verification, recast sizes) — separate spec, consumes this technique's output.
 
 ## 1. Purpose

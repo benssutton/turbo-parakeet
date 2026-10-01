@@ -1,6 +1,7 @@
 # Streaming Recommender — design
 
 Status: implemented (plan docs/superpowers/plans/2026-09-30-streaming-recommender.md).
+Amended by [recommender parity](2026-10-01-recommender-parity-design.md): Describe's value columns in the output, HyperLogLog and a bottom-k distinct sample for every dtype, extremes for text / categorical / enum / boolean / binary; `distinct_overflowed` removed.
 Builds on: the Recommend technique (2026-09-26-recommend-technique-design.md, "Spec B"), the Arrow FFI
 interface (2026-09-27-arrow-ffi-interface-design.md) and the Java binding
 (2026-09-28-java-binding-design.md), whose `capi.rs` and `python` Cargo feature this spec extends.

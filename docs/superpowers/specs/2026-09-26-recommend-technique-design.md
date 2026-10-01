@@ -6,6 +6,7 @@
 
 **Date:** 2026-09-26
 **Status:** Implemented (branch `recommend-technique`)
+**Amended by:** [recommender parity](2026-10-01-recommender-parity-design.md) — estimator rule, `class`, rendered min / max values; entropy, top-5, `population_rows` and Duj1 removed.
 **Builds on:** Spec A, `docs/superpowers/specs/2026-09-26-describe-technique-design.md` (the Describe technique).
 
 ## 1. Purpose

@@ -1,6 +1,6 @@
 # Recommender parity — design
 
-Status: approved design, not yet planned.
+Status: implemented (plan docs/superpowers/plans/2026-10-01-recommender-parity.md).
 Builds on: Describe (2026-09-26-describe-technique-design.md), Recommend
 (2026-09-26-recommend-technique-design.md), the Arrow FFI interface and Java binding
 (2026-09-27, 2026-09-28) and the Streaming Recommender (2026-09-29-streaming-recommender-design.md).
@@ -282,3 +282,5 @@ Recommend and streaming specs pointing here.
    `estimates_agree` depend on the seeded split and are not compared.
 9. **`projected_population_bytes` stays** in `rec_candidates`; without `population_rows` it is the
    predicted size scaled by the estimated cardinality only.
+10. **No `Hll::merge`** (implementation, 2026-10-01). Each column's sketch absorbs its batches in
+    order on one thread, so register-wise merging (§3.1, §10) had no caller and was deleted with its test.
