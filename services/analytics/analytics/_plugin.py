@@ -101,9 +101,13 @@ def lsh_candidates(
     )
 
 
-def describe_columns(df: pl.DataFrame, seed: int) -> pl.DataFrame:
-    """column + Describe's value metrics per column (see analytics.describe.base)."""
-    return pl.DataFrame(_rs.describe_columns(df, seed))
+def describe_columns(
+    df: pl.DataFrame, seed: int, categorical_threshold: int
+) -> pl.DataFrame:
+    """column + Describe's value metrics and Rust's conclusions per column, then the
+    private estimator inputs (argmin / argmax, f1, f2, capture history; spec
+    2026-10-01 §13.8)."""
+    return pl.DataFrame(_rs.describe_columns(df, seed, categorical_threshold))
 
 
 def column_sizes(df: pl.DataFrame, zstd_level: int) -> pl.DataFrame:

@@ -4,8 +4,8 @@
 
 use polars::prelude::DataType as PT;
 
-use crate::cardinality_estimators::Count;
-use crate::describe::{FloatStats, StringStats};
+use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
+use crate::describe::{FloatStats, Profile, StringStats};
 
 /// (min, max) when every non-null value is a whole number: integers, Decimal with
 /// scale 0, floats with no fraction / NaN / infinity, and strings that are all integers
@@ -64,6 +64,54 @@ pub(crate) fn classify(
         "categorical"
     } else {
         "discrete"
+    }
+}
+
+/// One level's conclusions: the picked estimate, `estimates_agree`, `unique`, `class`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Conclusions {
+    pub est: Estimate,
+    pub agree: Option<bool>,
+    pub unique: bool,
+    pub class: &'static str,
+}
+
+/// `n_values`: values at this level, nulls included.
+pub(crate) fn conclude(
+    dtype: &PT,
+    n_values: u64,
+    n_null: u64,
+    p: &Profile,
+    threshold: u64,
+) -> Conclusions {
+    let n = n_values - n_null;
+    let f = &p.freq;
+    let count = match f.hll {
+        Some((estimate, std_error)) => Count::Hll {
+            estimate,
+            std_error,
+        },
+        None => Count::Exact(f.n_unique),
+    };
+    let (est, agree) = pick_estimate(count, n, f.f1, f.f2, &f.capture_history);
+    let unique = n > 0
+        && match count {
+            Count::Exact(d) => d == n,
+            Count::Hll { .. } => f.all_once,
+        };
+    let whole = whole_range(dtype, n, p.numeric, p.floats.as_ref(), p.strings.as_ref());
+    Conclusions {
+        est,
+        agree,
+        unique,
+        class: classify(
+            n_values,
+            n_null,
+            count,
+            whole,
+            est.est_cardinality,
+            threshold,
+        ),
     }
 }
 
@@ -189,5 +237,18 @@ mod tests {
         let f = FloatStats::default();
         let w = whole_range(&PT::Float64, 5, Some((0.0, 4.0)), Some(&f), None);
         assert_eq!(classify(5, 0, Count::Exact(5), w, 5.0, 1), "ordinal");
+    }
+
+    #[test]
+    fn conclude_on_a_profile() {
+        use polars::prelude::*;
+        let s = Series::new("x".into(), &[0i64, 4, 1, 2, 3]);
+        let p = crate::describe::profile(&s, 0, false).unwrap();
+        let c = conclude(s.dtype(), 5, 0, &p, 10_000);
+        assert_eq!(
+            (c.class, c.unique, c.est.method.name()),
+            ("ordinal", true, "observed")
+        );
+        assert_eq!((p.min.as_deref(), p.max.as_deref()), (Some("0"), Some("4")));
     }
 }

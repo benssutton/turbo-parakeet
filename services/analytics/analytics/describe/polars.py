@@ -31,7 +31,13 @@ from analytics.describe._values import (
     sig_digits,
     subsets,
 )
-from analytics.describe.base import GROUP_B, GROUP_C, VALUE_METRICS, Describe
+from analytics.describe.base import (
+    GROUP_B,
+    GROUP_C,
+    LEVEL_INPUTS,
+    VALUE_METRICS,
+    Describe,
+)
 from analytics.gcd.base import INTEGER_BACKED
 from analytics.gcd.math import math_gcd
 
@@ -42,7 +48,7 @@ class DescribePolars(Describe):
     def _compute(self, frames, combos):
         rows = [self._row(frames[n][c]) for ((n, c),) in combos]
         return self.metrics_frame(
-            combos, {m: [r[m] for r in rows] for m in self.METRICS}
+            combos, {m: [r[m] for r in rows] for m in {**self.METRICS, **self.INPUTS}}
         )
 
     def _row(self, s: pl.Series) -> dict:
@@ -57,21 +63,18 @@ class DescribePolars(Describe):
         row["inner_n_values"] = None if inner is None else inner.len()
         row["inner_n_null"] = None if inner is None else inner.null_count()
         inner_profile = (
-            dict.fromkeys(VALUE_METRICS) if inner is None else profile(inner, self.seed)
+            dict.fromkeys({**VALUE_METRICS, **LEVEL_INPUTS})
+            if inner is None
+            else profile(inner, self.seed)
         )
         return row | {f"inner_{k}": v for k, v in inner_profile.items()}
 
 
 def profile(s: pl.Series, seed: int) -> dict:
-    """Every VALUE_METRICS entry for one series (outer column or flattened inner values)."""
+    """Every VALUE_METRICS and LEVEL_INPUTS entry for one series (outer column or
+    flattened inner values)."""
     freq = frequencies(s, seed)
-    summary = frequency_summary(
-        freq["count"].to_numpy(),
-        freq["first"].to_numpy(),
-        freq["mask"].to_numpy(),
-        s.len(),
-        s.null_count(),
-    )
+    summary = frequency_summary(freq["count"].to_numpy(), freq["mask"].to_numpy())
     return {
         **summary,
         **extremes(s, freq),

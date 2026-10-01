@@ -30,7 +30,13 @@ from analytics.describe._values import (
     n_midnight,
     subsets,
 )
-from analytics.describe.base import GROUP_B, GROUP_C, VALUE_METRICS, Describe
+from analytics.describe.base import (
+    GROUP_B,
+    GROUP_C,
+    LEVEL_INPUTS,
+    VALUE_METRICS,
+    Describe,
+)
 from analytics.describe.polars import profile as polars_profile
 from analytics.gcd.base import INTEGER_BACKED
 from analytics.gcd.math import math_gcd
@@ -48,7 +54,7 @@ class DescribeDataFusion(Describe):
       - sizes: the shared pyarrow helper (_sizes.column_sizes);
       - inner values: the shared Polars `flatten` (DataFusion's unnest drops null elements);
       - n_midnight: Polars dt.time() (timezone-aware date_trunc is not relied on);
-      - entropy / f1 / f2 / top-5 / capture history: numpy over the GROUP BY result;
+      - f1 / f2 / capture history: numpy over the GROUP BY result;
       - min_len/max_len of Binary: pyarrow binary_length (octet_length takes only strings);
       - every group A metric of List/Array/Struct columns whose values hold floats,
         Enum or Categorical: the Polars reference helpers (SQL cannot key nested
@@ -62,7 +68,7 @@ class DescribeDataFusion(Describe):
         ctx = SessionContext()
         rows = [self._row(ctx, frames[n][c]) for ((n, c),) in combos]
         return self.metrics_frame(
-            combos, {m: [r[m] for r in rows] for m in self.METRICS}
+            combos, {m: [r[m] for r in rows] for m in {**self.METRICS, **self.INPUTS}}
         )
 
     def _row(self, ctx: SessionContext, s: pl.Series) -> dict:
@@ -77,7 +83,9 @@ class DescribeDataFusion(Describe):
         row["inner_n_values"] = None if inner is None else inner.len()
         row["inner_n_null"] = None if inner is None else inner.null_count()
         inner_profile = (
-            dict.fromkeys(VALUE_METRICS) if inner is None else self._profile(ctx, inner)
+            dict.fromkeys({**VALUE_METRICS, **LEVEL_INPUTS})
+            if inner is None
+            else self._profile(ctx, inner)
         )
         return row | {f"inner_{k}": v for k, v in inner_profile.items()}
 
@@ -151,16 +159,10 @@ def _key(dtype: pl.DataType, col: str) -> str:
 def _frequencies(ctx: SessionContext, s: pl.Series) -> dict:
     key = _key(s.dtype, "v")
     freq = ctx.sql(
-        f"SELECT {key} AS k, COUNT(*) AS c, MIN(row) AS f, BIT_OR(CAST(1 AS BIGINT) << sub) AS m "
+        f"SELECT {key} AS k, COUNT(*) AS c, BIT_OR(CAST(1 AS BIGINT) << sub) AS m "
         f"FROM t WHERE v IS NOT NULL GROUP BY {key}"
     ).to_arrow_table()
-    return frequency_summary(
-        freq["c"].to_numpy(),
-        freq["f"].to_numpy(),
-        freq["m"].to_numpy(),
-        s.len(),
-        s.null_count(),
-    )
+    return frequency_summary(freq["c"].to_numpy(), freq["m"].to_numpy())
 
 
 def _extremes(ctx: SessionContext, s: pl.Series) -> dict:

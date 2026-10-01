@@ -1,9 +1,10 @@
 """Per-column profile for choosing narrower / more compressible Arrow types (Spec A:
 docs/superpowers/specs/2026-09-26-describe-technique-design.md).
 
-Implementations fill METRICS. Min, max and top-5 values are reported as row indices
-of their first occurrence; this base renders them, estimates cardinality and
-classifies each column identically for every implementation.
+Implementations fill METRICS and the private INPUTS (first-occurrence argmin / argmax,
+f1, f2, capture history); the base renders min / max (arrow-rs text, `_plugin.render`),
+picks the estimate and classifies each column. Rust-backed implementations may supply
+the conclusions themselves (`_supplied`).
 """
 
 from __future__ import annotations
@@ -23,19 +24,11 @@ LU64 = pl.List(pl.UInt64)
 
 GROUP_A = {  # whole values — every eligible dtype
     "n_unique": U64,
-    "entropy": F64,
-    "f1": U64,
-    "f2": U64,
-    "argmin": U64,
-    "argmax": U64,
     "min_len": U64,
     "max_len": U64,
     "gcd": D38,
     "sum_len": U64,
     "sum_len_unique": U64,
-    "top5_idx": LU64,
-    "top5_count": LU64,
-    "capture_history": LU64,
 }
 GROUP_B = {  # Float32 / Float64 only
     "n_nan": U64,
@@ -85,37 +78,43 @@ METRICS = {
     **{f"inner_{k}": v for k, v in VALUE_METRICS.items()},
 }
 
-CLASS = pl.Enum(["null", "constant", "boolean", "ordinal", "categorical", "discrete"])
-METHOD = pl.Enum(["observed", "hll", "schnabel", "chao1"])
-TOP5 = pl.List(pl.Struct({"value": pl.String, "count": pl.UInt64}))
+# Private estimator inputs (never in the result): first-occurrence row indices of the
+# extremes, singletons / doubletons and the 3-way split's capture history.
+LEVEL_INPUTS = {
+    "argmin": U64,
+    "argmax": U64,
+    "f1": U64,
+    "f2": U64,
+    "capture_history": LU64,
+}
+INPUTS = {**LEVEL_INPUTS, **{f"inner_{k}": v for k, v in LEVEL_INPUTS.items()}}
+
 ESTIMATES = {
     "unique": pl.Boolean,
     "est_cardinality": F64,
-    "est_method": METHOD,
+    "est_method": pl.String,
     "est_low": F64,
     "est_high": F64,
     "estimates_agree": pl.Boolean,
 }
-_RENDERED = {"min": pl.String, "max": pl.String, "top5": TOP5}
-CONCLUSIONS = {
-    **_RENDERED,
-    **ESTIMATES,
-    "class": CLASS,
-    **{f"inner_{k}": v for k, v in _RENDERED.items()},
-    **{f"inner_{k}": v for k, v in ESTIMATES.items()},
-    "inner_class": CLASS,
-}
+_LEVEL = {"min": pl.String, "max": pl.String, **ESTIMATES, "class": pl.String}
+CONCLUSIONS = {**_LEVEL, **{f"inner_{k}": v for k, v in _LEVEL.items()}}
 
-# Agreement: exact unless listed. capture_history depends on each implementation's
-# own seeded split, so it is compared through est_cardinality / est_low / est_high.
-TOLERANCES = {
-    "entropy": 1e-9,
-    "inner_entropy": 1e-9,
-    "size_zstd_bytes": 0.01,
-    "size_polars_zstd_bytes": 0.01,
-}
-SPLIT_DEPENDENT = ("capture_history", "inner_capture_history")
+# Agreement (spec 2026-10-01 §13.8): exact unless listed. est_method and
+# estimates_agree depend on each implementation's own seeded split: not compared.
+EXACT_CONCLUSIONS = [
+    c
+    for c in CONCLUSIONS
+    if c.removeprefix("inner_") in ("min", "max", "unique", "class")
+]
+ESTIMATE_CONCLUSIONS = [
+    c
+    for c in CONCLUSIONS
+    if c.removeprefix("inner_") in ("est_cardinality", "est_low", "est_high")
+]
+TOLERANCES = {"size_zstd_bytes": 0.01, "size_polars_zstd_bytes": 0.01}
 SCHNABEL_RTOL = 0.10
+_NESTED = (pl.List, pl.Array, pl.Struct)
 
 
 def _unsupported(dtype: pl.DataType) -> bool:
@@ -129,7 +128,7 @@ def _unsupported(dtype: pl.DataType) -> bool:
 
 
 class Describe(Technique):
-    """Per-column profile: counts, entropy, cardinality estimates, extremes, lengths,
+    """Per-column profile: counts, cardinality estimates, extremes, lengths,
     float / numeric-string / ISO-datetime scanners, Arrow and Polars sizes, the same
     for list inner values, and a classification (first match wins):
     null → constant → boolean → ordinal → categorical → discrete.
@@ -141,6 +140,7 @@ class Describe(Technique):
     ARITY = 1
     DESCRIPTORS = {"dtype": pl.String}
     METRICS = METRICS
+    INPUTS = INPUTS
     CONCLUSIONS = CONCLUSIONS
 
     def __init__(
@@ -162,8 +162,14 @@ class Describe(Technique):
         self.categorical_threshold = categorical_threshold
         self.zstd_level = zstd_level
         self.seed = seed
+        # Conclusions computed by the implementation itself (RecommendRust), keyed by
+        # (frame, column); cleared after every result().
+        self._supplied: dict[tuple[str, str], dict] = {}
 
     # ── technique hooks ───────────────────────────────────────────────────────
+
+    def _on_result_end(self) -> None:
+        self._supplied = {}
 
     def eligible(self, series: pl.Series) -> bool:
         return not _unsupported(series.dtype)
@@ -190,9 +196,7 @@ class Describe(Technique):
         # otherwise. Cast every tolerance-bearing metric to Float64 first so the
         # float branch always triggers, regardless of the metric's own dtype.
         keys = self.key_columns()
-        exact = [
-            m for m in self.METRICS if m not in TOLERANCES and m not in SPLIT_DEPENDENT
-        ]
+        exact = [m for m in self.METRICS if m not in TOLERANCES] + EXACT_CONCLUSIONS
         problems = metric_mismatches(result, reference, keys, exact, 0.0, 0.0)
 
         def as_float(df, cols):
@@ -207,24 +211,17 @@ class Describe(Technique):
                 rtol,
                 0.0,
             )
-        estimate_cols = [
-            f"{p}{k}"
-            for p in ("", "inner_")
-            for k in ("est_cardinality", "est_low", "est_high")
-        ]
         problems += metric_mismatches(
-            as_float(result, estimate_cols),
-            as_float(reference, estimate_cols),
-            keys,
-            estimate_cols,
-            SCHNABEL_RTOL,
-            0.0,
+            result, reference, keys, ESTIMATE_CONCLUSIONS, SCHNABEL_RTOL, 0.0
         )
         return list(dict.fromkeys(problems))
 
     # ── conclusions for one computed row ─────────────────────────────────────
 
     def _conclusions(self, r: dict) -> dict:
+        supplied = self._supplied.get((r["df_a"], r["col_a"]))
+        if supplied is not None:
+            return supplied
         s = self._collected[r["df_a"]][r["col_a"]]
         out = self._one_level(s, r, "", r["n_rows"])
         if r["inner_n_values"] is not None:
@@ -236,17 +233,10 @@ class Describe(Technique):
         est = estimators.estimate(
             r[f"{p}n_unique"], n, r[f"{p}f1"], r[f"{p}f2"], r[f"{p}capture_history"]
         )
-
-        def at(i):
-            return None if i is None else str(s[i])
-
+        lo, hi = _render(s, r[f"{p}argmin"], r[f"{p}argmax"])
         return {
-            f"{p}min": at(r[f"{p}argmin"]),
-            f"{p}max": at(r[f"{p}argmax"]),
-            f"{p}top5": [
-                {"value": str(s[i]), "count": c}
-                for i, c in zip(r[f"{p}top5_idx"], r[f"{p}top5_count"])
-            ],
+            f"{p}min": lo,
+            f"{p}max": hi,
             **{f"{p}{k}": v for k, v in est.items()},
             f"{p}class": self._classify(s, r, p, n_values, n, est["est_cardinality"]),
         }
@@ -272,6 +262,18 @@ class Describe(Technique):
         if est <= self.categorical_threshold:
             return "categorical"
         return "discrete"
+
+
+def _render(
+    s: pl.Series, lo: int | None, hi: int | None
+) -> tuple[str | None, str | None]:
+    """min / max as arrow-rs text (spec 2026-10-01 §13.1); None for nested dtypes."""
+    if lo is None or isinstance(s.dtype, _NESTED):
+        return None, None
+    from analytics import _plugin
+
+    lo_text, hi_text = _plugin.render(s.gather([lo, hi]))
+    return lo_text, hi_text
 
 
 def _whole_range(s: pl.Series, r: dict, p: str, n: int) -> tuple[float, float] | None:

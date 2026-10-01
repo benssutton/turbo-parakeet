@@ -262,11 +262,17 @@ pub fn lsh_candidates(
     ))
 }
 
-/// `column` plus Describe's value metrics per column.
-pub fn describe_columns(batch: &RecordBatch, seed: u64) -> Result<RecordBatch> {
+/// `column`, Describe's value metrics and conclusions, then the private estimator
+/// inputs (argmin / argmax, f1, f2, capture history and their `inner_` twins).
+pub fn describe_columns(
+    batch: &RecordBatch,
+    seed: u64,
+    categorical_threshold: u64,
+) -> Result<RecordBatch> {
     table(crate::describe::describe_columns_impl(
         &columns(batch)?,
         seed,
+        categorical_threshold,
     ))
 }
 
@@ -664,7 +670,7 @@ mod tests {
                 Arc::new(StringArray::from(vec!["x", "y", "x"])) as ArrayRef,
             ),
         ]);
-        assert_eq!(describe_columns(&b, 0).unwrap().num_rows(), 2);
+        assert_eq!(describe_columns(&b, 0, 10_000).unwrap().num_rows(), 2);
         assert_eq!(column_sizes(&b, 1).unwrap().num_rows(), 2);
         let rec = describe_and_recommend(&b, 0, 1, 10_000, vec![("true".into(), "false".into())])
             .unwrap();

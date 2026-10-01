@@ -45,6 +45,9 @@ class Technique(ABC):
     METRICS: ClassVar[dict[str, pl.DataType]]
     DESCRIPTORS: ClassVar[dict[str, pl.DataType]] = {}
     CONCLUSIONS: ClassVar[dict[str, pl.DataType]] = {}
+    # Private per-row values an implementation returns for the base's conclusions;
+    # never in the result (e.g. Describe's argmin / f1 / capture_history).
+    INPUTS: ClassVar[dict[str, pl.DataType]] = {}
     EXACT: ClassVar[bool] = True
     RTOL: ClassVar[float] = 0.0
     ATOL: ClassVar[float] = 0.0
@@ -119,7 +122,7 @@ class Technique(ABC):
             )
             self._check(rows, len(good))
             keys = self.key_columns()
-            columns = [*keys, "status", *self.METRICS]
+            columns = [*keys, "status", *self.METRICS, *self.INPUTS]
             out = self.keys_frame(combos).join(
                 pl.concat([rows.select(columns), self.null_frame(bad, "ineligible")]),
                 on=keys,
@@ -185,13 +188,18 @@ class Technique(ABC):
         metrics: dict[str, Sequence],
         status: str | Sequence[str] = "computed",
     ) -> pl.DataFrame:
-        """keys + status + METRICS, one row per combo, values in combo order."""
+        """keys + status + METRICS + INPUTS (null where not given), one row per combo,
+        values in combo order."""
         statuses = [status] * len(combos) if isinstance(status, str) else list(status)
         return cls.keys_frame(combos).with_columns(
             pl.Series("status", statuses, dtype=STATUS),
             *(
                 _metric_series(name, metrics[name], dtype)
                 for name, dtype in cls.METRICS.items()
+            ),
+            *(
+                _metric_series(name, metrics.get(name, [None] * len(combos)), dtype)
+                for name, dtype in cls.INPUTS.items()
             ),
         )
 
@@ -265,6 +273,7 @@ class Technique(ABC):
             **{k: pl.String for k in self.key_columns()},
             "status": STATUS,
             **self.METRICS,
+            **self.INPUTS,
         }
         if dict(rows.schema) != expected:
             raise TypeError(

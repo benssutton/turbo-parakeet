@@ -668,7 +668,7 @@ pub(crate) struct Level<'a> {
 
 impl<'a> Level<'a> {
     /// A level over all its values (one-shot): counts, extremes and the few distinct
-    /// values are read off `values` at Describe's argmin / argmax / top-5 rows.
+    /// values are read off `values` at Describe's argmin / argmax / first-occurrence rows.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn of_values(
         dtype: &'a PT,
@@ -697,7 +697,7 @@ impl<'a> Level<'a> {
         };
         let few_distinct = if is_text(dtype) && p.freq.n_unique <= 5 {
             p.freq
-                .top5_idx
+                .first_few
                 .iter()
                 .map(|&i| text_of(&values.slice(i as usize, 1)).map(|t| t.value(0).to_string()))
                 .collect::<Result<_, _>>()?
@@ -784,17 +784,6 @@ impl Level<'_> {
             sum_len_unique: self.p.freq.sum_len_unique.unwrap_or(0) as f64,
         }
     }
-}
-
-pub(crate) fn level_estimate(p: &Profile, n: u64) -> Estimate {
-    pick_estimate(
-        Count::Exact(p.freq.n_unique),
-        n,
-        p.freq.f1,
-        p.freq.f2,
-        &p.freq.capture_history,
-    )
-    .0
 }
 
 /// arrow-cast with `safe: false`: a value that does not fit is an error, not a null.
@@ -1948,7 +1937,7 @@ fn choose_original(lvl: &Level, why: &str) -> Chosen {
 /// Per row of a List/Array column: (start, len) in the child the inner level holds,
 /// or None for a null row; that child; the fixed width (None for List). The child is
 /// Describe's `flatten` — the values of the non-null rows only, in row order — so the
-/// inner profile's argmin/top5 indices point into it: valid row k starts where valid
+/// inner profile's argmin/argmax indices point into it: valid row k starts where valid
 /// row k−1 ends. A null row can still span values (a List's offsets after
 /// `pl.when(mask).then(list).otherwise(None)`; an Array's w slots); those are dropped
 /// with a `take`, and `wrap` rebuilds the offsets from row lengths (a null row → empty).
@@ -2427,13 +2416,14 @@ pub(crate) fn recommend(
     let [size_bytes, _, polars_bytes, polars_zstd] = *sz;
     let name = s.name().as_str();
     let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
+    let (oc, ic) = d.conclusions(params.categorical_threshold);
     let outer = Level::of_values(
         s.dtype(),
         values.clone(),
         &d.outer,
         d.n_midnight,
         size_bytes,
-        level_estimate(&d.outer, d.n_rows - d.n_null),
+        oc.est,
         "",
     )
     .map_err(err)?;
@@ -2448,10 +2438,7 @@ pub(crate) fn recommend(
                     &inner.profile,
                     None,
                     child_size,
-                    level_estimate(
-                        &inner.profile,
-                        (inner.values.len() - inner.values.null_count()) as u64,
-                    ),
+                    ic.map_or(oc.est, |c| c.est),
                     "inner: ",
                 )
                 .map_err(err)?;
@@ -2602,7 +2589,7 @@ pub(crate) fn describe_and_recommend_impl(
             let classic = classic_layout(s)?;
             let sz = sizes_of(s, &classic, params.zstd_level)?;
             let rec = recommend(s, &classic, &d, &sz, params)?;
-            let mut row = d.row();
+            let mut row = d.row(params.categorical_threshold);
             row.extend(sz.iter().map(|&v| AnyValue::UInt64(v)));
             row.extend(rec_row(&rec));
             Ok(row)
@@ -2878,7 +2865,7 @@ mod tests {
             &d.outer,
             d.n_midnight,
             size,
-            level_estimate(&d.outer, d.n_rows - d.n_null),
+            d.conclusions(10_000).0.est,
             "",
         )
         .unwrap();
@@ -3009,7 +2996,7 @@ mod tests {
                 &d.outer,
                 None,
                 sz[0],
-                level_estimate(&d.outer, d.n_rows - d.n_null),
+                d.conclusions(10_000).0.est,
                 "",
             )
             .unwrap();
@@ -3020,10 +3007,7 @@ mod tests {
                 &inner.profile,
                 None,
                 child_size,
-                level_estimate(
-                    &inner.profile,
-                    (inner.values.len() - inner.values.null_count()) as u64,
-                ),
+                d.conclusions(10_000).1.unwrap().est,
                 "inner: ",
             )
             .unwrap();
@@ -3046,7 +3030,7 @@ mod tests {
             &d.outer,
             d.n_midnight,
             0,
-            level_estimate(&d.outer, d.n_rows - d.n_null),
+            d.conclusions(10_000).0.est,
             "",
         )
         .unwrap();
@@ -3153,7 +3137,7 @@ mod tests {
                 &d.outer,
                 None,
                 0,
-                level_estimate(&d.outer, 2),
+                d.conclusions(10_000).0.est,
                 "",
             )
             .unwrap();
@@ -3181,7 +3165,7 @@ mod tests {
             &d.outer,
             None,
             0,
-            level_estimate(&d.outer, 5),
+            d.conclusions(10_000).0.est,
             "",
         )
         .unwrap();
@@ -3338,7 +3322,7 @@ mod tests {
                 &d.outer,
                 d.n_midnight,
                 0,
-                level_estimate(&d.outer, 0),
+                d.conclusions(10_000).0.est,
                 "",
             )
             .unwrap();
@@ -3354,7 +3338,7 @@ mod tests {
             &d.outer,
             d.n_midnight,
             0,
-            level_estimate(&d.outer, 1),
+            d.conclusions(10_000).0.est,
             "",
         )
         .unwrap();
@@ -3435,7 +3419,7 @@ mod tests {
             &d.outer,
             None,
             0,
-            level_estimate(&d.outer, 2),
+            d.conclusions(10_000).0.est,
             "",
         )
         .unwrap();
@@ -3625,10 +3609,7 @@ mod tests {
             &inner.profile,
             None,
             ipc_body_bytes(child.as_ref(), None).unwrap(),
-            level_estimate(
-                &inner.profile,
-                (inner.values.len() - inner.values.null_count()) as u64,
-            ),
+            d.conclusions(10_000).1.unwrap().est,
             "inner: ",
         )
         .unwrap();

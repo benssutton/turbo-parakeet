@@ -123,13 +123,10 @@ DEFAULTS = {
     "n_rows": 4,
     "n_null": 0,
     "n_unique": 4,
-    "entropy": 2.0,
     "f1": 4,
     "f2": 0,
     "argmin": 0,
     "argmax": 3,
-    "top5_idx": [0, 1, 2, 3],
-    "top5_count": [1, 1, 1, 1],
     "capture_history": [1, 1, 0, 1, 0, 0, 1],
     "size_bytes": 32,
     "size_zstd_bytes": 32,
@@ -140,21 +137,16 @@ DEFAULTS = {
 
 def conclude(s: pl.Series, params: dict | None = None, **overrides) -> dict:
     """Describe's conclusions for one column whose metrics are DEFAULTS | overrides."""
-    metrics = {m: None for m in Describe.METRICS} | DEFAULTS | overrides
+    names = {**Describe.METRICS, **Describe.INPUTS}
+    metrics = {m: None for m in names} | DEFAULTS | overrides
     cls = with_metrics(Describe, **{k: [v] for k, v in metrics.items()})
     return run(cls, {"t": s.to_frame()}, **(params or {})).row(0, named=True)
 
 
-def test_renders_min_max_and_top5_from_indices():
-    r = conclude(
-        pl.Series("x", [3.5, 1.25, None, 3.5]),
-        argmin=1,
-        argmax=0,
-        top5_idx=[0, 1],
-        top5_count=[2, 1],
-    )
+def test_renders_min_max_from_indices():
+    r = conclude(pl.Series("x", [3.5, 1.25, None, 3.5]), argmin=1, argmax=0)
     assert (r["min"], r["max"]) == ("1.25", "3.5")
-    assert r["top5"] == [{"value": "3.5", "count": 2}, {"value": "1.25", "count": 1}]
+    assert "argmin" not in r and "f1" not in r  # inputs never reach the result
 
 
 def test_renders_inner_values_from_flattened_indices():
@@ -169,12 +161,10 @@ def test_renders_inner_values_from_flattened_indices():
         inner_f2=0,
         inner_argmin=0,
         inner_argmax=2,
-        inner_top5_idx=[2],
-        inner_top5_count=[1],
         inner_capture_history=[1, 1, 1, 0, 0, 0, 0],
     )
     assert (r["inner_min"], r["inner_max"]) == ("1", "3")
-    assert r["inner_top5"] == [{"value": "3", "count": 1}]
+    assert (r["min"], r["max"]) == (None, None)  # nested extremes are dropped
 
 
 def test_scalar_columns_have_null_inner_conclusions():
@@ -311,16 +301,13 @@ def test_zero_row_column_conclusions():
         pl.Series("x", [], dtype=pl.Int64),
         n_rows=0,
         n_unique=0,
-        entropy=float("nan"),
         f1=0,
         f2=0,
         argmin=None,
         argmax=None,
-        top5_idx=[],
-        top5_count=[],
         capture_history=[0] * 7,
     )
-    assert r["class"] == "null" and r["top5"] == [] and r["min"] is None
+    assert r["class"] == "null" and r["min"] is None
     assert (
         r["est_method"] == "observed"
         and r["est_cardinality"] == 0.0
@@ -351,33 +338,39 @@ def test_agreement_tolerances():
         f1=0,
         f2=0,
         capture_history=[0, 0, 0, 0, 0, 0, 10],
-        entropy=3.0,
         size_zstd_bytes=1_000,
     )
-    ref = run(
-        with_metrics(
-            Describe,
-            **{
-                k: [v]
-                for k, v in (
-                    {m: None for m in Describe.METRICS} | DEFAULTS | base
-                ).items()
-            },
-        ),
-        {"t": s.to_frame()},
-    )
+    names = {**Describe.METRICS, **Describe.INPUTS}
+
+    def result(**changes) -> pl.DataFrame:
+        metrics = {m: None for m in names} | DEFAULTS | base | changes
+        cls = with_metrics(Describe, **{k: [v] for k, v in metrics.items()})
+        return run(cls, {"t": s.to_frame()})
+
+    ref = result()
+    describe = with_metrics(Describe, **{m: [None] for m in names})()
 
     def compare(**changes) -> list[str]:
-        metrics = {m: None for m in Describe.METRICS} | DEFAULTS | base | changes
-        cls = with_metrics(Describe, **{k: [v] for k, v in metrics.items()})
-        return cls().agreement(run(cls, {"t": s.to_frame()}), ref)
+        return describe.agreement(result(**changes), ref)
 
-    assert compare(entropy=3.0 + 1e-12, size_zstd_bytes=1_005) == []
+    def scaled(factor: float) -> list[str]:
+        est = pl.col("est_cardinality") * factor
+        return describe.agreement(ref.with_columns(est), ref)
+
+    assert compare(size_zstd_bytes=1_005) == []
     assert compare(capture_history=[0, 0, 0, 0, 0, 1, 9]) == []  # Schnabel moves < 10%
     assert any("size_zstd_bytes" in p for p in compare(size_zstd_bytes=1_100))
     assert any("n_unique" in p for p in compare(n_unique=11))
-    # [5, 4, 0, 0, 0, 0, 1]: |S1| = 6, |S2| = 5, |S3| = 1, R = 2 → Schnabel 40/3 ≈ 13.3 vs the reference floored at 10 (> 10%)
-    assert any("est_cardinality" in p for p in compare(capture_history=[5, 4, 0, 0, 0, 0, 1]))
+    # [5, 4, 0, 0, 0, 0, 1]: |S1| = 6, |S2| = 5, |S3| = 1, R = 2 → Schnabel 40/3 ≈ 13.3
+    # vs the reference floored at 10 (> 10%)
+    changed = compare(capture_history=[5, 4, 0, 0, 0, 0, 1])
+    assert any("est_cardinality" in p for p in changed)
+    assert scaled(1.05) == []
+    assert any("est_cardinality" in p for p in scaled(1.2))
+    # min / max / unique / class are exact; est_method / estimates_agree not compared
+    assert any("max" in p for p in compare(argmax=0))
+    other_method = ref.with_columns(pl.lit("chao1").alias("est_method"))
+    assert describe.agreement(other_method, ref) == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -437,6 +430,13 @@ OTHERS = implementation_params(PKG, include_reference=False)
 def profile(impl: str, s: pl.Series, **params) -> dict:
     """describe one Series; its result row as a dict."""
     return run(load(impl), {"t": s.to_frame()}, **params).row(0, named=True)
+
+
+def inputs(impl: str, s: pl.Series) -> dict:
+    """The implementation's own row for one Series: METRICS and the private INPUTS
+    (argmin / argmax, f1, f2, capture history), which never reach the result."""
+    t = load(impl)().add({"t": s.to_frame()})
+    return t._compute(t._frames, [(("t", s.name),)]).row(0, named=True)
 
 
 def ineligible_frame() -> pl.DataFrame:
@@ -517,30 +517,20 @@ def test_render_is_arrow_rs_text(s, expected):
 
 
 @pytest.mark.parametrize("impl", ALL)
-def test_frequencies_entropy_and_top5(impl):
-    r = profile(impl, pl.Series("x", ["a", "a", "b", None]))
-    assert (r["n_rows"], r["n_null"], r["n_unique"], r["f1"], r["f2"]) == (
-        4,
-        1,
-        2,
-        1,
-        1,
-    )
-    assert r["entropy"] == approx(1.5)
-    assert (r["top5_idx"], r["top5_count"]) == ([0, 2], [2, 1])
-    assert sum(r["capture_history"]) == 2
-
-
-@pytest.mark.parametrize("impl", ALL)
-def test_top5_ties_break_by_first_occurrence(impl):
-    r = profile(impl, pl.Series("x", [3, 1, 2, 1, 2, 3, 4, 5, 6]))
-    assert (r["top5_idx"], r["top5_count"]) == ([0, 1, 2, 6, 7], [2, 2, 2, 1, 1])
+def test_frequencies(impl):
+    s = pl.Series("x", ["a", "a", "b", None])
+    r = profile(impl, s)
+    assert (r["n_rows"], r["n_null"], r["n_unique"]) == (4, 1, 2)
+    assert (r["min"], r["max"]) == ("a", "b")
+    i = inputs(impl, s)
+    assert (i["f1"], i["f2"], sum(i["capture_history"])) == (1, 1, 2)
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_extremes_are_first_occurrences(impl):
-    r = profile(impl, pl.Series("x", [5, 1, 3, 1, 5]))
-    assert (r["argmin"], r["argmax"], r["min"], r["max"]) == (1, 0, "1", "5")
+    s = pl.Series("x", [5, 1, 3, 1, 5])
+    assert (profile(impl, s)["min"], profile(impl, s)["max"]) == ("1", "5")
+    assert (inputs(impl, s)["argmin"], inputs(impl, s)["argmax"]) == (1, 0)
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -549,11 +539,11 @@ def test_float_zero_and_nan_are_one_value_each(impl):
     assert (
         r["n_unique"],
         r["n_nan"],
-        r["argmin"],
-        r["argmax"],
+        r["min"],
+        r["max"],
         r["n_fractional"],
         r["max_frac_digits"],
-    ) == (3, 2, 0, 4, 1, 1)
+    ) == (3, 2, "0.0", "1.5", 1, 1)
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -600,9 +590,9 @@ def test_string_and_list_lengths(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_enum_orders_by_category_and_categorical_by_string(impl):
     e = profile(impl, pl.Series("x", ["a", "z", "a"], dtype=pl.Enum(["z", "a"])))
-    assert (e["argmin"], e["argmax"]) == (1, 0)
+    assert (e["min"], e["max"]) == ("z", "a")
     c = profile(impl, pl.Series("x", ["z", "a", "z"], dtype=pl.Categorical))
-    assert (c["argmin"], c["argmax"]) == (1, 0)
+    assert (c["min"], c["max"]) == ("a", "z")
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -618,28 +608,27 @@ def test_equal_struct_values_count_once(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_list_whole_and_inner_values(impl):
-    r = profile(
-        impl, pl.Series("x", [[1, None], None, [], [3, 1]], dtype=pl.List(pl.Int64))
-    )
-    assert (r["n_rows"], r["n_null"], r["n_unique"], r["argmin"], r["argmax"]) == (
+    s = pl.Series("x", [[1, None], None, [], [3, 1]], dtype=pl.List(pl.Int64))
+    r = profile(impl, s)
+    assert (r["n_rows"], r["n_null"], r["n_unique"], r["min"], r["max"]) == (
         4,
         1,
         3,
-        2,
-        3,
-    )
+        None,
+        None,
+    )  # nested extremes are dropped
     assert (r["inner_n_values"], r["inner_n_null"], r["inner_n_unique"]) == (
         4,
         1,
         2,
     )  # [1, None, 3, 1]
-    assert (r["inner_argmin"], r["inner_argmax"], r["inner_f1"], r["inner_f2"]) == (
+    i = inputs(impl, s)
+    assert (i["inner_argmin"], i["inner_argmax"], i["inner_f1"], i["inner_f2"]) == (
         0,
         2,
         1,
         1,
     )
-    assert (r["inner_top5_idx"], r["inner_top5_count"]) == ([0, 2], [2, 1])
     assert (r["inner_min"], r["inner_max"]) == ("1", "3")
 
 
@@ -667,25 +656,21 @@ def test_n_midnight_uses_local_time(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_zero_row_and_all_null_columns(impl):
-    z = profile(impl, pl.Series("x", [], dtype=pl.Int32))
-    assert (
-        z["n_rows"],
-        z["n_unique"],
-        z["argmin"],
-        z["top5_idx"],
-        z["capture_history"],
-    ) == (0, 0, None, [], [0] * 7)
-    assert math.isnan(z["entropy"]) and z["size_bytes"] == 0 and z["min_len"] is None
+    s = pl.Series("x", [], dtype=pl.Int32)
+    z = profile(impl, s)
+    assert (z["n_rows"], z["n_unique"], z["min"]) == (0, 0, None)
+    assert inputs(impl, s)["capture_history"] == [0] * 7
+    assert z["size_bytes"] == 0 and z["min_len"] is None
     a = profile(impl, pl.Series("x", [None, None], dtype=pl.String))
-    assert (a["n_unique"], a["entropy"], a["argmin"]) == (0, 0.0, None)
+    assert (a["n_unique"], a["min"], a["class"]) == (0, None, "null")
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_capture_history(impl):
-    everywhere = profile(impl, pl.Series("x", np.repeat(np.arange(10), 1_000)))
+    everywhere = inputs(impl, pl.Series("x", np.repeat(np.arange(10), 1_000)))
     assert everywhere["capture_history"] == [0, 0, 0, 0, 0, 0, 10]
     rng = np.random.default_rng(7)
-    r = profile(impl, pl.Series("x", rng.integers(0, 5_000, 20_000)))
+    r = inputs(impl, pl.Series("x", rng.integers(0, 5_000, 20_000)))
     assert sum(r["capture_history"]) == r["n_unique"]
 
 
@@ -991,19 +976,15 @@ def test_multi_chunk_and_sliced_input(impl):
     s = pl.concat(parts, rechunk=False)
     assert s.n_chunks() == 3
     r = profile(impl, s)
-    assert (r["n_unique"], r["argmin"], r["argmax"], r["top5_idx"]) == (
-        3,
-        2,
-        3,
-        [2, 0, 3],
-    )
+    assert (r["n_unique"], r["min"], r["max"]) == (3, "a", "c")
+    assert (inputs(impl, s)["argmin"], inputs(impl, s)["argmax"]) == (2, 3)
     sliced = pl.Series("x", [[9], [1, 2], None, [3]], dtype=pl.List(pl.Int64)).slice(
         1, 3
     )
     q = profile(impl, sliced)
-    assert (q["inner_n_values"], q["inner_argmin"], q["size_bytes"]) == (
+    assert (q["inner_n_values"], q["inner_min"], q["size_bytes"]) == (
         3,
-        0,
+        "1",
         profile(impl, pl.Series("x", [[1, 2], None, [3]], dtype=pl.List(pl.Int64)))[
             "size_bytes"
         ],
@@ -1017,12 +998,12 @@ def test_first_occurrence_across_parallel_chunks(impl):
     values[2 * chunk + 3] = 1  # first minimum, third chunk
     values[3 * chunk + 1] = 1  # later minimum, fourth chunk
     values[chunk + 7] = 9  # maximum, second chunk
-    r = profile(impl, pl.Series("x", values))
-    assert (r["argmin"], r["argmax"]) == (2 * chunk + 3, chunk + 7)
-    assert (r["top5_idx"], r["top5_count"]) == (
-        [0, 2 * chunk + 3, chunk + 7],
-        [len(values) - 3, 2, 1],
-    )
+    s = pl.Series("x", values)
+    i = inputs(impl, s)
+    assert (i["argmin"], i["argmax"]) == (2 * chunk + 3, chunk + 7)
+    assert (i["n_unique"], i["f1"], i["f2"]) == (3, 1, 1)
+    r = profile(impl, s)
+    assert (r["min"], r["max"]) == ("1", "9")
 
 
 @pytest.mark.parametrize("impl", OTHERS)
@@ -1039,9 +1020,10 @@ def test_categorical_and_enum_sizes_agree(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_nested_ordering_with_null_elements(impl):
     s = pl.Series("x", [[2], [None], [1, None], [], [1]], dtype=pl.List(pl.Int64))
-    want = s.arg_sort(nulls_last=False)  # Polars order is the definition
     r = profile(impl, s)
-    assert (r["argmin"], r["argmax"], r["n_unique"]) == (want[0], want[-1], 5)
+    # Nested extremes are dropped (spec 2026-10-01 §13.3); the inner values keep theirs.
+    assert (r["min"], r["max"], r["n_unique"]) == (None, None, 5)
+    assert (r["inner_min"], r["inner_max"]) == ("1", "2")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1106,29 +1088,29 @@ def test_sliced_nested_with_nulls(impl):
 NESTED_CASES = [
     pytest.param(
         pl.Series("x", [[0.0], [-0.0], [1.5]]),
-        dict(n_unique=2, argmin=0, argmax=2),
+        dict(n_unique=2, min=None, max=None, inner_min="0.0", inner_max="1.5"),
         id="list_negzero",
     ),
     pytest.param(
         pl.Series("x", [{"a": 0.0}, {"a": -0.0}, {"a": 1.0}]),
-        dict(n_unique=2, argmin=0, argmax=2),
+        dict(n_unique=2, min=None, max=None),
         id="struct_negzero",
     ),
     pytest.param(
         pl.Series("x", [["a"], ["z"], ["a"]], dtype=pl.List(pl.Enum(["z", "a"]))),
-        dict(n_unique=2, argmin=1, argmax=0),
+        dict(n_unique=2, min=None, max=None, inner_min="z", inner_max="a"),
         id="list_enum",
     ),
     pytest.param(
         pl.Series("x", [["b"], ["a"], ["b"]], dtype=pl.List(pl.Categorical)),
-        dict(n_unique=2, argmin=1, argmax=0),
+        dict(n_unique=2, min=None, max=None, inner_min="a", inner_max="b"),
         id="list_categorical",
     ),
     pytest.param(
         pl.Series(
             "x", [{"e": "a"}, {"e": "z"}], dtype=pl.Struct({"e": pl.Enum(["z", "a"])})
         ),
-        dict(n_unique=2, argmin=1, argmax=0),
+        dict(n_unique=2, min=None, max=None),
         id="struct_enum",
     ),
 ]

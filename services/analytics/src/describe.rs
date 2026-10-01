@@ -6,9 +6,11 @@
 // per column, columns in parallel (rayon); inside a column the frequency, float
 // and string work runs over 64K-row chunks in parallel. Every value metric is
 // computed on the column and again on its inner values (List/Array flattened one
-// level, null lists skipped). Field names and order match
-// analytics/describe/base.py (DescribeRust maps them by name).
+// level, null lists skipped), with the conclusions (conclusions.rs) and rendered
+// min / max. Field names match analytics/describe/base.py (DescribeRust maps them
+// by name).
 
+use crate::conclusions::{conclude, Conclusions};
 use crate::recommend::canon;
 use crate::shared::{encode_series, EncodedColumn};
 use foldhash::fast::FixedState;
@@ -25,9 +27,8 @@ use std::collections::{HashMap, HashSet};
 //
 // One foldhash map `key → (count, first row, split-subset mask)` per 64K-row
 // chunk, built in parallel and merged (counts summed, first = min, masks OR-ed).
-// One O(distinct) sweep of the merged map yields n_unique, entropy (null as its
-// own category), f1/f2, the capture history and the top 5 (count desc, then
-// first occurrence asc). Keys come from `encode_series` (floats canonicalised;
+// One O(distinct) sweep of the merged map yields n_unique, f1/f2, the capture
+// history and, while there are ≤ 5 distinct values, their first rows. Keys come from `encode_series` (floats canonicalised;
 // strings, nested and struct values hashed — collisions ~6e-11 per pair at 50K
 // rows, accepted as documented in CLAUDE.md).
 
@@ -46,11 +47,16 @@ type Ext<T> = (u64, T);
 
 pub(crate) struct Frequencies {
     pub n_unique: u64,
-    pub entropy: f64,
     pub f1: u64,
     pub f2: u64,
-    pub top5_idx: Vec<u64>,
-    pub top5_count: Vec<u64>,
+    /// First rows of the distinct values, first-occurrence order, while there are ≤ 5
+    /// (Recommend's boolean-pair rule reads them; streaming keeps the same list).
+    pub first_few: Vec<u64>,
+    /// Every distinct value occurred once (streaming's sampling phase: every sampled one).
+    pub all_once: bool,
+    /// Streaming's sampling phase: (HyperLogLog estimate, relative standard error); None
+    /// while `n_unique` is exact.
+    pub hll: Option<(f64, f64)>,
     pub capture_history: [u64; 7],
     /// Total byte length of the distinct values (`lengths` given: string / binary columns).
     pub sum_len_unique: Option<u64>,
@@ -114,44 +120,31 @@ pub(crate) fn frequency_map(col: &EncodedColumn, seed: u64, offset: u64) -> Map 
 }
 
 pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]>) -> Frequencies {
-    let n = col.len();
     let map = frequency_map(col, seed, 0);
-
-    let n_null = col.is_null.iter().filter(|&&x| x).count();
-    let nf = n as f64;
-    let mut entropy = if n == 0 { f64::NAN } else { 0.0 };
     let (mut f1, mut f2, mut history) = (0u64, 0u64, [0u64; 7]);
     let n_unique = map.len() as u64;
-    let mut entries: Vec<Entry> = Vec::with_capacity(map.len());
+    let mut first_few: Vec<u64> = if map.len() <= 5 {
+        map.values().map(|e| e.first).collect()
+    } else {
+        Vec::new()
+    };
+    first_few.sort_unstable();
     let mut unique_len = 0u64;
     for e in map.into_values() {
-        let p = e.count as f64 / nf;
-        entropy -= p * p.log2();
         f1 += (e.count == 1) as u64;
         f2 += (e.count == 2) as u64;
         history[e.mask as usize - 1] += 1;
         if let Some(l) = lengths {
             unique_len += l[e.first as usize];
         }
-        entries.push(e);
     }
-    if n_null > 0 {
-        let p = n_null as f64 / nf;
-        entropy -= p * p.log2();
-    }
-    let order = |a: &Entry, b: &Entry| b.count.cmp(&a.count).then(a.first.cmp(&b.first));
-    if entries.len() > 5 {
-        entries.select_nth_unstable_by(4, order);
-        entries.truncate(5);
-    }
-    entries.sort_unstable_by(order);
     Frequencies {
         n_unique,
-        entropy: entropy + 0.0, // -0.0 → 0.0 for an all-null column
         f1,
         f2,
-        top5_idx: entries.iter().map(|e| e.first).collect(),
-        top5_count: entries.iter().map(|e| e.count).collect(),
+        first_few,
+        all_once: f1 == n_unique,
+        hll: None,
         capture_history: history,
         sum_len_unique: lengths.map(|_| unique_len),
     }
@@ -976,27 +969,27 @@ impl StringStats {
 
 pub(crate) type Row = Vec<AnyValue<'static>>;
 
-/// Metrics computed on any value series, in output order (base.py VALUE_METRICS).
+/// Metrics and conclusions of any value series, in output order (spec 2026-10-01 §7).
 pub(crate) fn value_fields() -> Vec<(&'static str, DataType)> {
-    use DataType::{Float64 as F64, UInt32 as U32, UInt64 as U64};
-    let list = DataType::List(Box::new(U64));
+    use DataType::{Boolean, Float64 as F64, String as Str, UInt32 as U32, UInt64 as U64};
     // Arrow has no plain 128-bit integer; parse_i128 caps values at 38 digits.
     let d38 = DataType::Decimal(Some(38), Some(0));
     vec![
         ("n_unique", U64),
-        ("entropy", F64),
-        ("f1", U64),
-        ("f2", U64),
-        ("argmin", U64),
-        ("argmax", U64),
+        ("unique", Boolean),
+        ("est_cardinality", F64),
+        ("est_low", F64),
+        ("est_high", F64),
+        ("est_method", Str),
+        ("estimates_agree", Boolean),
+        ("class", Str),
+        ("min", Str),
+        ("max", Str),
         ("min_len", U64),
         ("max_len", U64),
         ("gcd", d38.clone()),
         ("sum_len", U64),
         ("sum_len_unique", U64),
-        ("top5_idx", list.clone()),
-        ("top5_count", list.clone()),
-        ("capture_history", list),
         ("n_nan", U64),
         ("n_inf", U64),
         ("n_fractional", U64),
@@ -1038,6 +1031,26 @@ pub(crate) fn fields() -> Vec<(String, DataType)> {
             .map(|(n, d)| (format!("inner_{n}"), d)),
     );
     f
+}
+
+/// Private estimator inputs, appended by `describe_columns` only (Python's reference
+/// conclusions read them; spec 2026-10-01 §13.8).
+pub(crate) fn input_fields() -> Vec<(String, DataType)> {
+    let level = [
+        ("argmin", DataType::UInt64),
+        ("argmax", DataType::UInt64),
+        ("f1", DataType::UInt64),
+        ("f2", DataType::UInt64),
+        (
+            "capture_history",
+            DataType::List(Box::new(DataType::UInt64)),
+        ),
+    ];
+    level
+        .iter()
+        .map(|(n, d)| (n.to_string(), d.clone()))
+        .chain(level.iter().map(|(n, d)| (format!("inner_{n}"), d.clone())))
+        .collect()
 }
 
 fn u64v(v: Option<u64>) -> AnyValue<'static> {
@@ -1098,41 +1111,91 @@ pub(crate) struct Profile {
     pub sum_len: Option<u64>,
     /// Float32 series: `n_f32_inexact` does not apply.
     pub is_f32: bool,
+    /// Rendered extremes (`recommend::render_value`); None for nested dtypes.
+    pub min: Option<String>,
+    pub max: Option<String>,
+    /// Numeric extremes as f64 (integer, decimal and float dtypes), for `ordinal`.
+    pub numeric: Option<(f64, f64)>,
 }
 
 /// `proof`: see `StringStats::proof` (false on the one-shot path).
 pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profile> {
     let lengths = byte_lengths(s)?;
+    let range = range(s, lengths.as_deref())?;
+    let nested = matches!(
+        s.dtype(),
+        DataType::List(_) | DataType::Array(..) | DataType::Struct(_)
+    );
+    let (min, max) = if nested {
+        (None, None)
+    } else {
+        (render_at(s, range.argmin)?, render_at(s, range.argmax)?)
+    };
+    let numeric = numeric_extremes(s, range.argmin, range.argmax)?;
     Ok(Profile {
         freq: frequencies(&encode_series(s)?, seed, lengths.as_deref()),
-        range: range(s, lengths.as_deref())?,
+        range,
         floats: float_stats(s)?,
         strings: strings(s, proof)?,
         gcd: crate::gcd::series_gcd(s)?,
         sum_len: lengths.map(|l| l.iter().sum()),
         is_f32: s.dtype() == &DataType::Float32,
+        min,
+        max,
+        numeric,
     })
 }
 
+/// Row `i` rendered as arrow-rs text (spec 2026-10-01 §13.1).
+fn render_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<String>> {
+    let Some(i) = i else { return Ok(None) };
+    let one = crate::sizes::classic_layout(&s.slice(i as i64, 1))?;
+    Ok(crate::recommend::render_value(one.as_ref()))
+}
+
+/// The values at rows `lo` / `hi` as f64, for integer, decimal and float dtypes.
+fn numeric_extremes(
+    s: &Series,
+    lo: Option<u64>,
+    hi: Option<u64>,
+) -> PolarsResult<Option<(f64, f64)>> {
+    let dt = s.dtype();
+    if !(dt.is_integer() || dt.is_float() || matches!(dt, DataType::Decimal(..))) {
+        return Ok(None);
+    }
+    let at = |i: Option<u64>| -> PolarsResult<Option<f64>> {
+        match i {
+            None => Ok(None),
+            Some(i) => Ok(s.slice(i as i64, 1).cast(&DataType::Float64)?.f64()?.get(0)),
+        }
+    };
+    Ok(at(lo)?.zip(at(hi)?))
+}
+
 impl Profile {
-    /// The metrics in `value_fields()` order.
-    fn row(&self) -> Row {
-        let (f, r) = (&self.freq, &self.range);
+    /// The metrics and conclusions in `value_fields()` order.
+    pub(crate) fn row(&self, c: &Conclusions) -> Row {
+        let f = &self.freq;
+        let text = |s: &Option<String>| {
+            s.clone()
+                .map_or(AnyValue::Null, |s| AnyValue::StringOwned(s.into()))
+        };
         let mut row: Row = vec![
             AnyValue::UInt64(f.n_unique),
-            AnyValue::Float64(f.entropy),
-            AnyValue::UInt64(f.f1),
-            AnyValue::UInt64(f.f2),
-            u64v(r.argmin),
-            u64v(r.argmax),
-            u64v(r.min_len),
-            u64v(r.max_len),
+            AnyValue::Boolean(c.unique),
+            AnyValue::Float64(c.est.est_cardinality),
+            c.est.est_low.map_or(AnyValue::Null, AnyValue::Float64),
+            c.est.est_high.map_or(AnyValue::Null, AnyValue::Float64),
+            AnyValue::StringOwned(c.est.method.name().into()),
+            c.agree.map_or(AnyValue::Null, AnyValue::Boolean),
+            AnyValue::StringOwned(c.class.into()),
+            text(&self.min),
+            text(&self.max),
+            u64v(self.range.min_len),
+            u64v(self.range.max_len),
             d38v(self.gcd),
             u64v(self.sum_len),
             u64v(f.sum_len_unique),
-            listv(&f.top5_idx),
-            listv(&f.top5_count),
-            listv(&f.capture_history),
         ];
         match self.floats {
             Some(fl) => row.extend([
@@ -1179,6 +1242,17 @@ impl Profile {
         }
         row
     }
+
+    /// `input_fields()` values for this level.
+    pub(crate) fn input_row(&self) -> Row {
+        vec![
+            u64v(self.range.argmin),
+            u64v(self.range.argmax),
+            AnyValue::UInt64(self.freq.f1),
+            AnyValue::UInt64(self.freq.f2),
+            listv(&self.freq.capture_history),
+        ]
+    }
 }
 
 /// A list column's values one level down (`flatten`) and their profile.
@@ -1190,6 +1264,7 @@ pub(crate) struct Inner {
 /// Everything Describe measures on one column (sizes excepted — sizes.rs).
 pub(crate) struct Described {
     pub name: PlSmallStr,
+    pub dtype: DataType,
     pub n_rows: u64,
     pub n_null: u64,
     pub outer: Profile,
@@ -1198,22 +1273,54 @@ pub(crate) struct Described {
 }
 
 impl Described {
-    /// One output row in `fields()` order.
-    pub(crate) fn row(&self) -> Row {
+    /// The column's and its inner values' conclusions.
+    pub(crate) fn conclusions(&self, threshold: u64) -> (Conclusions, Option<Conclusions>) {
+        let outer = conclude(
+            &self.dtype,
+            self.n_rows,
+            self.n_null,
+            &self.outer,
+            threshold,
+        );
+        let inner = self.inner.as_ref().map(|i| {
+            conclude(
+                i.values.dtype(),
+                i.values.len() as u64,
+                i.values.null_count() as u64,
+                &i.profile,
+                threshold,
+            )
+        });
+        (outer, inner)
+    }
+
+    /// One `fields()` row.
+    pub(crate) fn row(&self, threshold: u64) -> Row {
+        let (oc, ic) = self.conclusions(threshold);
         let mut row: Row = vec![
             AnyValue::StringOwned(self.name.clone()),
             AnyValue::UInt64(self.n_rows),
             AnyValue::UInt64(self.n_null),
         ];
-        row.extend(self.outer.row());
+        row.extend(self.outer.row(&oc));
         row.push(u64v(self.n_midnight));
-        match &self.inner {
-            Some(i) => {
+        match (&self.inner, ic) {
+            (Some(i), Some(ic)) => {
                 row.push(AnyValue::UInt64(i.values.len() as u64));
                 row.push(AnyValue::UInt64(i.values.null_count() as u64));
-                row.extend(i.profile.row());
+                row.extend(i.profile.row(&ic));
             }
-            None => row.extend(nulls(2 + value_fields().len())),
+            _ => row.extend(nulls(2 + value_fields().len())),
+        }
+        row
+    }
+
+    /// One `input_fields()` row.
+    pub(crate) fn input_row(&self) -> Row {
+        let mut row = self.outer.input_row();
+        match &self.inner {
+            Some(i) => row.extend(i.profile.input_row()),
+            None => row.extend(nulls(5)),
         }
         row
     }
@@ -1260,7 +1367,7 @@ pub(crate) fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
 
 /// Values one level down, skipping null lists — the same definition as the
 /// Python `flatten` (drop_nulls, then explode the non-empty lists). Element i is
-/// what `inner_argmin` / `inner_top5_idx` index into.
+/// what `inner_argmin` / `inner_argmax` index into.
 pub(crate) fn flatten(s: &Series) -> PolarsResult<Option<Series>> {
     let (inner, ranges): (Series, Vec<Option<(usize, usize)>>) = match s.dtype() {
         DataType::List(_) => {
@@ -1298,6 +1405,7 @@ pub(crate) fn describe_one(s: &Series, seed: u64, proof: bool) -> PolarsResult<D
     };
     Ok(Described {
         name: s.name().clone(),
+        dtype: s.dtype().clone(),
         n_rows: s.len() as u64,
         n_null: s.null_count() as u64,
         outer: profile(s, seed, proof)?,
@@ -1323,12 +1431,25 @@ pub(crate) fn assemble(
     Ok(StructChunked::from_series(name.into(), rows.len(), columns.iter())?.into_series())
 }
 
-pub(crate) fn describe_columns_impl(inputs: &[Series], seed: u64) -> PolarsResult<Series> {
+/// `fields()` then the private `input_fields()`, one row per input.
+pub(crate) fn describe_columns_impl(
+    inputs: &[Series],
+    seed: u64,
+    threshold: u64,
+) -> PolarsResult<Series> {
     let rows: Vec<Row> = inputs
         .par_iter()
-        .map(|s| describe_one(s, seed, false).map(|d| d.row()))
+        .map(|s| {
+            describe_one(s, seed, false).map(|d| {
+                let mut row = d.row(threshold);
+                row.extend(d.input_row());
+                row
+            })
+        })
         .collect::<PolarsResult<_>>()?;
-    assemble("describe", &fields(), &rows)
+    let mut schema = fields();
+    schema.extend(input_fields());
+    assemble("describe", &schema, &rows)
 }
 
 #[cfg(test)]
@@ -1351,23 +1472,16 @@ mod tests {
     }
 
     #[test]
-    fn counts_entropy_and_top5() {
+    fn counts_and_first_few() {
         let f = freq(Series::new(
             "a".into(),
             &[Some("a"), Some("a"), Some("b"), None],
         ));
-        assert_eq!((f.n_unique, f.f1, f.f2), (2, 1, 1));
-        assert!((f.entropy - 1.5).abs() < 1e-12);
-        assert_eq!((f.top5_idx, f.top5_count), (vec![0, 2], vec![2, 1]));
-    }
-
-    #[test]
-    fn ties_break_by_first_occurrence() {
-        let f = freq(Series::new("a".into(), &[3i64, 1, 2, 1, 2, 3, 4, 5, 6]));
-        assert_eq!(
-            (f.top5_idx, f.top5_count),
-            (vec![0, 1, 2, 6, 7], vec![2, 2, 2, 1, 1])
-        );
+        assert_eq!((f.n_unique, f.f1, f.f2, f.first_few), (2, 1, 1, vec![0, 2]));
+        assert!(!f.all_once && f.hll.is_none());
+        // More than five distinct values: no list.
+        let g = freq(Series::new("a".into(), &[3i64, 1, 2, 1, 2, 3, 4, 5, 6]));
+        assert!(g.first_few.is_empty());
     }
 
     #[test]
@@ -1378,11 +1492,8 @@ mod tests {
         v[2 * CHUNK + 1] = 9;
         v[3 * CHUNK + 2] = 9;
         let f = freq(Series::new("a".into(), v));
-        assert_eq!(f.n_unique, 2);
-        assert_eq!(
-            (f.top5_idx, f.top5_count),
-            (vec![0, (2 * CHUNK + 1) as u64], vec![(n - 2) as u64, 2])
-        );
+        assert_eq!((f.n_unique, f.f1, f.f2), (2, 0, 1));
+        assert_eq!(f.first_few, vec![0, (2 * CHUNK + 1) as u64]);
     }
 
     #[test]
@@ -1416,10 +1527,9 @@ mod tests {
     #[test]
     fn zero_rows_and_all_null() {
         let z = freq(Series::new_empty("a".into(), &DataType::Int32));
-        assert!(z.entropy.is_nan());
         assert_eq!((z.n_unique, z.capture_history), (0, [0; 7]));
         let a = freq(Series::new("a".into(), &[None::<i32>, None]));
-        assert_eq!((a.n_unique, a.entropy), (0, 0.0));
+        assert_eq!((a.n_unique, a.first_few), (0, vec![]));
     }
 
     #[test]
@@ -1731,11 +1841,50 @@ mod tests {
     fn described_row_matches_fields() {
         let list = Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None]);
         let d = describe_one(&list, 0, false).unwrap();
-        assert_eq!(d.row().len(), fields().len());
+        assert_eq!(d.row(10_000).len(), fields().len());
+        assert_eq!(d.input_row().len(), input_fields().len());
         assert_eq!(d.inner.as_ref().unwrap().values.len(), 2);
+        // Nested extremes are dropped; the inner values keep theirs.
+        assert_eq!(
+            (d.outer.min.as_deref(), d.outer.max.as_deref()),
+            (None, None)
+        );
+        let inner = &d.inner.as_ref().unwrap().profile;
+        assert_eq!(
+            (inner.min.as_deref(), inner.max.as_deref()),
+            (Some("1"), Some("2"))
+        );
         let floats = describe_one(&Series::new("y".into(), &[1.5f64]), 0, false).unwrap();
-        assert_eq!(floats.row().len(), fields().len());
+        assert_eq!(floats.row(10_000).len(), fields().len());
         assert!(floats.inner.is_none() && floats.outer.floats.is_some());
+    }
+
+    #[test]
+    fn rendered_extremes_are_arrow_rs_text() {
+        let ts = Series::new("t".into(), &[1_704_164_645_000_000i64, 0])
+            .cast(&DataType::Datetime(TimeUnit::Microseconds, None))
+            .unwrap();
+        let p = profile(&ts, 0, false).unwrap();
+        assert_eq!(
+            (p.min.as_deref(), p.max.as_deref()),
+            (Some("1970-01-01T00:00:00"), Some("2024-01-02T03:04:05"))
+        );
+        let f = profile(
+            &Series::new("f".into(), &[1.0f64, f64::NAN, -2.5]),
+            0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (f.min.as_deref(), f.max.as_deref()),
+            (Some("-2.5"), Some("1.0"))
+        );
+        assert_eq!(f.numeric, Some((-2.5, 1.0)));
+        let s = profile(&Series::new("s".into(), &["b", "a"]), 0, false).unwrap();
+        assert_eq!(
+            (s.min.as_deref(), s.max.as_deref(), s.numeric),
+            (Some("a"), Some("b"), None)
+        );
     }
 
     #[test]

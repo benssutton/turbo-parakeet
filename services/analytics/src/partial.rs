@@ -507,11 +507,11 @@ impl LevelStats {
         Profile {
             freq: Frequencies {
                 n_unique,
-                entropy: f64::NAN,
                 f1,
                 f2,
-                top5_idx: Vec::new(),
-                top5_count: Vec::new(),
+                first_few: Vec::new(),
+                all_once: false,
+                hll: None,
                 capture_history,
                 sum_len_unique: d.map(|d| d.sum_len_unique),
             },
@@ -526,6 +526,9 @@ impl LevelStats {
             gcd: self.gcd,
             sum_len: self.sum_len,
             is_f32: self.is_f32,
+            min: None,
+            max: None,
+            numeric: None,
         }
     }
 

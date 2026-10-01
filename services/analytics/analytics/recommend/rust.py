@@ -4,8 +4,9 @@ from analytics.recommend.base import Recommend
 
 
 class RecommendRust(Recommend):
-    """Rust extension `describe_and_recommend`: Describe's metrics and sizes, then the
-    candidate types cast, verified and measured with arrow-rs (src/recommend.rs)."""
+    """Rust extension `describe_and_recommend`: Describe's metrics, conclusions and
+    sizes, then the candidate types cast, verified and measured with arrow-rs
+    (src/recommend.rs)."""
 
     def _compute(self, frames, combos):
         rows: dict[tuple[str, str], dict] = {}
@@ -24,6 +25,10 @@ class RecommendRust(Recommend):
                 ):  # the original type was kept
                     r["rec_polars_type"] = str(df.schema[r["column"]])
                 rows[frame, r["column"]] = r
+        # Rust's own conclusions pass through (spec 2026-10-01 §8); the base does not
+        # recompute them.
+        for key, r in rows.items():
+            self._supplied[key] = {c: r[c] for c in self.CONCLUSIONS}
         return self.metrics_frame(
             combos, {m: [rows[k[0]][m] for k in combos] for m in self.METRICS}
         )

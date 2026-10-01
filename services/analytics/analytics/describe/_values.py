@@ -24,7 +24,7 @@ INTEGERS = (
 def flatten(s: pl.Series) -> pl.Series:
     """Values one nesting level down, in order, skipping null lists.
 
-    Element i of the result is what `inner_argmin` / `inner_top5_idx` index into.
+    Element i of the result is what `inner_argmin` / `inner_argmax` index into.
     Empty lists are filtered before exploding because explode turns them into a
     null row. The Rust kernel (describe.rs::flatten) uses the same definition.
     """
@@ -40,21 +40,14 @@ def subsets(n: int, seed: int) -> np.ndarray:
     return np.random.default_rng(seed).integers(0, 3, n)
 
 
-def frequency_summary(count, first, mask, n_rows: int, n_null: int) -> dict:
-    """Group A metrics from a frequency table of distinct non-null values: their
-    counts, first-occurrence row indices and OR-ed split masks (numpy arrays)."""
+def frequency_summary(count, mask) -> dict:
+    """n_unique, f1, f2 and the capture history from a frequency table of distinct
+    non-null values: their counts and OR-ed split masks (numpy arrays)."""
     count = np.asarray(count, dtype=np.int64)
-    first = np.asarray(first, dtype=np.int64)
-    cats = np.append(count, n_null) if n_null else count
-    p = cats / n_rows if n_rows else cats.astype(float)
-    top = np.lexsort((first, -count))[:5]  # count desc, then first occurrence asc
     return {
         "n_unique": len(count),
-        "entropy": float(-(p * np.log2(p)).sum()) + 0.0 if n_rows else float("nan"),
         "f1": int((count == 1).sum()),
         "f2": int((count == 2).sum()),
-        "top5_idx": first[top].tolist(),
-        "top5_count": count[top].tolist(),
         "capture_history": np.bincount(np.asarray(mask, dtype=np.int64), minlength=8)[
             1:8
         ].tolist(),

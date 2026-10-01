@@ -321,9 +321,17 @@ fn lsh_candidates(
 }
 
 #[pyfunction]
-fn describe_columns(py: Python<'_>, data: &Bound<'_, PyAny>, seed: u64) -> PyResult<ArrowTable> {
+fn describe_columns(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    seed: u64,
+    categorical_threshold: u64,
+) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
-    run(py, || api::describe_columns(&batch, seed)).map(ArrowTable)
+    run(py, || {
+        api::describe_columns(&batch, seed, categorical_threshold)
+    })
+    .map(ArrowTable)
 }
 
 #[pyfunction]
