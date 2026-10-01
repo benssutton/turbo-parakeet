@@ -56,8 +56,6 @@ pub(crate) enum Method {
     Hll,
     Schnabel,
     Chao1,
-    /// Streaming: distinct tracking stopped past `categorical_threshold`; removed in Task 9.
-    Overflowed,
 }
 
 impl Method {
@@ -68,7 +66,6 @@ impl Method {
             Method::Hll => "hll",
             Method::Schnabel => "schnabel",
             Method::Chao1 => "chao1",
-            Method::Overflowed => "overflowed",
         }
     }
 }
@@ -278,14 +275,10 @@ mod tests {
             Method::Hll,
             Method::Schnabel,
             Method::Chao1,
-            Method::Overflowed,
         ]
         .iter()
         .map(|m| m.name())
         .collect();
-        assert_eq!(
-            names,
-            ["observed", "hll", "schnabel", "chao1", "overflowed"]
-        );
+        assert_eq!(names, ["observed", "hll", "schnabel", "chao1"]);
     }
 }

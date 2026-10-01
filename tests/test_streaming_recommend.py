@@ -321,10 +321,11 @@ def test_a_type_change_is_rejected():
 
 
 def test_overflow_rejects_the_dictionary():
-    frame = pl.DataFrame({"s": ["a", "b", "c", "d", "e", "a"]})
-    s = row(stream(frame, 2, categorical_threshold=3), "s")
-    assert s["n_unique"] is None and s["distinct_overflowed"] is True
-    assert s["est_method"] == "overflowed"
+    # More distinct values than the sample holds (k = max(threshold, 1000)).
+    frame = pl.DataFrame({"s": [f"v{i}" for i in range(2_000)]})
+    s = row(stream(frame, 500, categorical_threshold=3), "s")
+    assert s["n_unique"] >= 1_000 + 1 and s["distinct_overflowed"] is True
+    assert s["est_method"] == "hll"
     assert by_rule(s)["string→dictionary"]["outcome"] == "rejected"
 
 

@@ -12,13 +12,14 @@ use rayon::prelude::*;
 
 use crate::api::{Error, Result};
 use crate::arrow_io::{export_struct, import_array, import_batch};
-use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
+use crate::cardinality_estimators::Estimate;
+use crate::conclusions::conclude;
 use crate::describe::{assemble, flatten, Profile, Row};
 use crate::partial::{BatchStats, Ext, LevelStats, ViewSim};
 use crate::recommend::{
-    body_size, cast_to, is_text, list_parts, pa_name, pad, pick_by_stats, pick_list_by_stats,
-    pl_name, polars_layout, rec_fields, rec_row, render_value, to_polars_layout, validity, verify,
-    wrap, Level, Params, Pick, Rec, Shape, Target,
+    body_size, cast_to, list_parts, pa_name, pad, pick_by_stats, pick_list_by_stats, pl_name,
+    polars_layout, rec_fields, rec_row, render_value, to_polars_layout, validity, verify, wrap,
+    Level, Params, Pick, Rec, Shape, Target,
 };
 use crate::reservoir::{Block, Reservoir};
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of};
@@ -129,7 +130,14 @@ fn level<'a>(
         p,
         n_rows: st.n,
         n_null: st.n_null,
-        int_range: st.int_range(),
+        // Task 10 gives Boolean / Enum integer keys; the rules read none of theirs.
+        int_range: (dtype.is_integer()
+            || matches!(
+                dtype,
+                PT::Decimal(..) | PT::Date | PT::Datetime(..) | PT::Duration(_) | PT::Time
+            ))
+        .then(|| st.int_range())
+        .flatten(),
         float_range: st.float_range(),
         few_distinct: st.few_distinct(),
         n_midnight: st.n_midnight,
@@ -300,7 +308,11 @@ fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> ViewShape {
     ViewShape {
         shape: lvl.shape(),
         all: st.views.as_ref().map_or(0, ViewSim::bytes),
-        distinct: st.distinct.as_ref().map_or(0, |d| d.views.bytes()),
+        distinct: st
+            .sample
+            .as_ref()
+            .filter(|d| d.is_exact())
+            .map_or(0, |d| d.views.bytes()),
         views_input,
         cats: cats_of(lvl.dtype),
         rebuilt_polars_bytes: st.rebuilt_polars_bytes,
@@ -550,24 +562,12 @@ impl Streaming {
             return Ok(None);
         }
         let c = self.index.get(s.name().as_str()).map(|&i| &self.columns[i]);
-        // Distinct values are hashed until a level overflows, never after.
-        let track = |l: Option<&LevelStats>| l.is_none_or(|l| !l.overflowed());
         let seed = self.params.seed;
-        let outer = BatchStats::of(
-            s,
-            self.n_rows,
-            seed,
-            is_text(s.dtype()) && track(c.map(|c| &c.outer)),
-        )?;
+        let outer = BatchStats::of(s, self.n_rows, seed)?;
         let inner = match flatten(s)? {
             Some(v) => {
                 let prev = c.and_then(|c| c.inner.as_ref());
-                Some(BatchStats::of(
-                    &v,
-                    prev.map_or(0, |l| l.n),
-                    seed,
-                    is_text(v.dtype()) && track(prev),
-                )?)
+                Some(BatchStats::of(&v, prev.map_or(0, |l| l.n), seed)?)
             }
             None => None,
         };
@@ -696,37 +696,30 @@ impl Streaming {
             return Ok(row);
         };
         let t = self.params.categorical_threshold;
-        let fallback = || pick_estimate(Count::Exact(0), 0, 0, 0, &[0; 7]).0;
         let err = |e: polars::prelude::PolarsError| e.to_string();
 
         // Levels from statistics.
         let o = &c.outer;
-        let p = o.profile(t);
-        let est = o.estimate(t);
+        let p = o.profile(dtype);
+        let oc = conclude(dtype, o.n, o.n_null, &p, t);
         let classic = o
             .classic
             .clone()
             .ok_or("a typed column has absorbed no batch")?;
-        let mut lvl = level(dtype, &classic, &p, o, est.unwrap_or_else(fallback), "");
+        let mut lvl = level(dtype, &classic, &p, o, oc.est, "");
         let inner = match (&c.inner, dtype) {
             (Some(i), PT::List(it) | PT::Array(it, _)) => Some((i, &**it)),
             _ => None,
         };
-        let ip = inner.map(|(i, _)| i.profile(t));
+        let ip = inner.map(|(i, it)| i.profile(it));
         let ilvl = match (inner, &ip) {
             (Some((i, it)), Some(ip)) => {
                 let iclassic = i
                     .classic
                     .clone()
                     .ok_or("an inner level has absorbed no batch")?;
-                let mut l = level(
-                    it,
-                    &iclassic,
-                    ip,
-                    i,
-                    i.estimate(t).unwrap_or_else(fallback),
-                    "inner: ",
-                );
+                let ic = conclude(it, i.n, i.n_null, ip, t);
+                let mut l = level(it, &iclassic, ip, i, ic.est, "inner: ");
                 let iv = view_shape(&l, i, c.views_input.1);
                 (l.size_bytes, l.size_note) = original_size(&iclassic, &iv, None, i);
                 Some((l, iv))
@@ -816,7 +809,7 @@ impl Streaming {
             lossy: pick.lossy,
             candidates: pick.candidates,
         };
-        let d = o.distinct.as_ref();
+        let exact = o.sample.as_ref().is_none_or(|d| d.is_exact());
         row.extend([
             render(&o.lo),
             render(&o.hi),
@@ -824,12 +817,12 @@ impl Streaming {
             u(p.sum_len),
             u(o.min_len),
             u(o.max_len),
-            u(d.filter(|d| !d.overflowed).map(|d| d.n_unique())),
-            d.map_or(AnyValue::Null, |d| AnyValue::Boolean(d.overflowed)),
-            f(est.map(|e| e.est_cardinality)),
-            f(est.and_then(|e| e.est_low)),
-            f(est.and_then(|e| e.est_high)),
-            est.map_or(AnyValue::Null, |e| text(e.method.name())),
+            AnyValue::UInt64(p.freq.n_unique),
+            AnyValue::Boolean(!exact),
+            f(Some(oc.est.est_cardinality)),
+            f(oc.est.est_low),
+            f(oc.est.est_high),
+            text(oc.est.method.name()),
             AnyValue::UInt64(lvl.size_bytes),
             u(scale(z[0])),
             AnyValue::UInt64(original_polars),
@@ -1449,22 +1442,22 @@ pub(crate) mod tests {
         let mut p = params();
         p.categorical_threshold = 3;
         let mut s = Streaming::new(p, 1 << 20, 1 << 16);
-        let v = [
-            Some("a"),
-            Some("b"),
-            Some("c"),
-            Some("d"),
-            Some("e"),
-            Some("a"),
-        ];
+        // More distinct values than the sample holds (k = max(threshold, 1000)).
+        let v: Vec<String> = (0..2_000).map(|i| format!("v{i}")).collect();
+        let v: Vec<Option<&str>> = v.iter().map(|x| Some(x.as_str())).collect();
         s.add(&batch(vec![("s", strs(&v))])).unwrap();
         let out = s.finish().unwrap();
-        assert_eq!(texts(&out, "n_unique"), vec![None]);
+        let n_unique: u64 = texts(&out, "n_unique")[0]
+            .as_deref()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(n_unique >= 1_001, "{n_unique}");
         assert_eq!(
             texts(&out, "distinct_overflowed")[0].as_deref(),
             Some("true")
         );
-        assert_eq!(texts(&out, "est_method")[0].as_deref(), Some("overflowed"));
+        assert_eq!(texts(&out, "est_method")[0].as_deref(), Some("hll"));
         let list = out
             .column_by_name("rec_candidates")
             .unwrap()

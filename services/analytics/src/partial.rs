@@ -8,16 +8,18 @@ use std::collections::HashMap;
 
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::DataType as AT;
-use foldhash::fast::FixedState;
 use polars::prelude::*;
 
 use crate::arrow_io::export_series;
-use crate::cardinality_estimators::{pick_estimate, Count, Estimate, Method};
 use crate::describe::{
     arg_extremes, byte_lengths, float_stats, frequency_map, lengths, n_midnight, strings,
     FloatStats, Frequencies, Profile, Range, StringStats,
 };
-use crate::recommend::{body_size, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK};
+use crate::distinct_sample::{sample_size, DistinctSample};
+use crate::hll::{hash_key, Hll};
+use crate::recommend::{
+    body_size, is_text, render_value, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK,
+};
 use crate::shared::encode_series;
 use crate::sizes::{classic_layout, ipc_body_bytes};
 
@@ -246,68 +248,6 @@ pub(crate) struct KeyStat {
     pub text: Option<String>,
 }
 
-/// Distinct values of a text level, bounded by `categorical_threshold` (spec §4.2).
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Distinct {
-    /// key → bits 0–1: count capped at 3 (enough for f1 / f2); bits 2–4: capture mask.
-    map: HashMap<u64, u8, FixedState>,
-    pub sum_len_unique: u64,
-    /// Every distinct value, first-occurrence order, while there are at most five.
-    pub few: Vec<String>,
-    /// The distinct values' view blocks, first-occurrence order (a dictionary's Polars values).
-    pub views: ViewSim,
-    pub overflowed: bool,
-}
-
-impl Distinct {
-    /// `keys` in first-occurrence order.
-    fn absorb(&mut self, keys: Vec<KeyStat>, threshold: u64) {
-        if self.overflowed {
-            return;
-        }
-        for k in keys {
-            match self.map.get_mut(&k.key) {
-                Some(v) => {
-                    let count = ((*v & 3) as u64 + k.count).min(3) as u8;
-                    *v = count | (*v & !3) | (k.mask << 2);
-                }
-                None => {
-                    self.map.insert(k.key, k.count.min(3) as u8 | (k.mask << 2));
-                    self.sum_len_unique += k.len;
-                    self.views.push(k.len);
-                    match k.text {
-                        Some(t) if self.map.len() <= 5 => self.few.push(t),
-                        _ => self.few.clear(),
-                    }
-                }
-            }
-            if self.map.len() as u64 > threshold {
-                // Exact, not statistical: the estimate is floored at n_unique, so the
-                // dictionary is rejected whatever follows. Stop hashing from here on.
-                self.overflowed = true;
-                self.map = HashMap::default();
-                self.few.clear();
-                return;
-            }
-        }
-    }
-
-    pub(crate) fn n_unique(&self) -> u64 {
-        self.map.len() as u64
-    }
-
-    /// (f1, f2, capture history).
-    pub(crate) fn counts(&self) -> (u64, u64, [u64; 7]) {
-        let (mut f1, mut f2, mut h) = (0, 0, [0u64; 7]);
-        for &v in self.map.values() {
-            f1 += (v & 3 == 1) as u64;
-            f2 += (v & 3 == 2) as u64;
-            h[(v >> 2) as usize - 1] += 1;
-        }
-        (f1, f2, h)
-    }
-}
-
 /// One batch's statistics of one level.
 pub(crate) struct BatchStats {
     n: u64,
@@ -321,7 +261,7 @@ pub(crate) struct BatchStats {
     floats: Option<FloatStats>,
     strings: Option<StringStats>,
     n_midnight: Option<u64>,
-    /// Text levels with distinct tracking on: every distinct value, first-occurrence order.
+    /// Every distinct value, first-occurrence order.
     keys: Option<Vec<KeyStat>>,
     /// Text / binary levels: lengths of the values over 12 bytes, row order.
     long_lens: Option<Vec<u64>>,
@@ -337,8 +277,8 @@ pub(crate) struct BatchStats {
 
 impl BatchStats {
     /// `s`: the level's values in one batch; `offset`: the level's global index of its
-    /// first value; distinct values are tracked when `track`.
-    pub(crate) fn of(s: &Series, offset: u64, seed: u64, track: bool) -> PolarsResult<Self> {
+    /// first value.
+    pub(crate) fn of(s: &Series, offset: u64, seed: u64) -> PolarsResult<Self> {
         let lens = byte_lengths(s)?;
         let classic = export_series(&s.slice(0, 0), CompatLevel::oldest())?
             .data_type()
@@ -363,34 +303,31 @@ impl BatchStats {
         } else {
             (None, None)
         };
-        let keys = if track {
-            let map = frequency_map(&encode_series(s)?, seed, offset);
-            let text = if map.len() <= 5 {
-                Some(s.cast(&DataType::String)?)
-            } else {
-                None
-            };
-            let mut keys: Vec<KeyStat> = map
-                .into_iter()
-                .map(|(key, e)| {
-                    let row = (e.first - offset) as usize;
-                    KeyStat {
-                        key,
-                        first: e.first,
-                        count: e.count,
-                        mask: e.mask,
-                        len: lens.as_ref().map_or(0, |l| l[row]),
-                        text: text
-                            .as_ref()
-                            .and_then(|t| t.str().ok()?.get(row).map(str::to_owned)),
-                    }
-                })
-                .collect();
-            keys.sort_unstable_by_key(|k| k.first);
-            Some(keys)
+        let map = frequency_map(&encode_series(s)?, seed, offset);
+        // The values themselves only for text, where the dictionary rules read them.
+        let text = if map.len() <= 5 && is_text(s.dtype()) {
+            Some(s.cast(&DataType::String)?)
         } else {
             None
         };
+        let mut keys: Vec<KeyStat> = map
+            .into_iter()
+            .map(|(key, e)| {
+                let row = (e.first - offset) as usize;
+                KeyStat {
+                    key,
+                    first: e.first,
+                    count: e.count,
+                    mask: e.mask,
+                    len: lens.as_ref().map_or(0, |l| l[row]),
+                    text: text
+                        .as_ref()
+                        .and_then(|t| t.str().ok()?.get(row).map(str::to_owned)),
+                }
+            })
+            .collect();
+        keys.sort_unstable_by_key(|k| k.first);
+        let keys = Some(keys);
         let (min_len, max_len) = lengths(s, lens.as_deref())?;
         Ok(BatchStats {
             n: s.len() as u64,
@@ -430,7 +367,10 @@ pub(crate) struct LevelStats {
     pub floats: Option<FloatStats>,
     pub strings: Option<StringStats>,
     pub n_midnight: Option<u64>,
-    pub distinct: Option<Distinct>,
+    /// Bottom-k sample of the distinct values (every eligible dtype).
+    pub sample: Option<DistinctSample>,
+    /// HyperLogLog of the distinct values (p = 14).
+    pub hll: Option<Hll>,
     /// All values' view blocks (Utf8View / BinaryView results), row order.
     pub views: Option<ViewSim>,
     /// Per-batch sums of the measured classic size (types with no analytic size) and
@@ -473,9 +413,11 @@ impl LevelStats {
         self.strings = opt(self.strings.take(), b.strings, StringStats::merge);
         self.n_midnight = opt(self.n_midnight, b.n_midnight, |a, b| a + b);
         if let Some(keys) = b.keys {
-            self.distinct
-                .get_or_insert_with(Default::default)
-                .absorb(keys, threshold);
+            let h = self.hll.get_or_insert_with(|| Hll::new(14));
+            keys.iter().for_each(|k| h.insert(hash_key(k.key)));
+            self.sample
+                .get_or_insert_with(|| DistinctSample::new(sample_size(threshold)))
+                .absorb(keys);
         }
         if let Some(lens) = b.long_lens {
             let v = self.views.get_or_insert_with(Default::default);
@@ -488,32 +430,55 @@ impl LevelStats {
         self.is_f32 = b.is_f32;
     }
 
-    pub(crate) fn overflowed(&self) -> bool {
-        self.distinct.as_ref().is_some_and(|d| d.overflowed)
-    }
-
-    /// The Profile the rules read. An overflowed level reports `threshold + 1` distinct
-    /// values, so the dictionary gate rejects it.
-    pub(crate) fn profile(&self, threshold: u64) -> Profile {
-        let d = self.distinct.as_ref();
-        let (f1, f2, capture_history) = d.map_or((0, 0, [0; 7]), Distinct::counts);
-        let n_unique = d.map_or(0, |d| {
-            if d.overflowed {
-                threshold + 1
-            } else {
-                d.n_unique()
+    /// The Profile the rules read: exact counts while the sample holds every distinct
+    /// value; past it, the HyperLogLog count with the sample's f1 / f2 / capture history
+    /// scaled to it (spec 2026-10-01 §3.2).
+    pub(crate) fn profile(&self, dtype: &DataType) -> Profile {
+        let text_len = self.sum_len.is_some();
+        let (n_unique, hll, f1, f2, history, all_once, sum_len_unique) = match &self.sample {
+            None => (0, None, 0, 0, [0; 7], false, None),
+            Some(d) if d.is_exact() => {
+                let (f1, f2, h) = d.counts();
+                let unique = text_len.then_some(d.sum_len_unique);
+                (d.len(), None, f1, f2, h, d.all_once(), unique)
             }
-        });
+            Some(d) => {
+                let sketch = self.hll.as_ref().expect("a sampled level has a sketch");
+                let e = sketch.estimate().max((d.len() + 1) as f64);
+                let scale = e / d.len() as f64;
+                let sc = |x: u64| (x as f64 * scale).round() as u64;
+                let (f1, f2, h) = d.counts();
+                let unique = text_len.then(|| (d.mean_len() * e).round() as u64);
+                (
+                    e.round() as u64,
+                    Some((e, sketch.std_error())),
+                    sc(f1),
+                    sc(f2),
+                    h.map(sc),
+                    d.all_once(),
+                    unique,
+                )
+            }
+        };
+        let numeric_dtype =
+            dtype.is_integer() || dtype.is_float() || matches!(dtype, DataType::Decimal(..));
+        let numeric = if numeric_dtype {
+            self.int_range()
+                .map(|(a, b)| (a as f64, b as f64))
+                .or_else(|| self.float_range())
+        } else {
+            None
+        };
         Profile {
             freq: Frequencies {
                 n_unique,
                 f1,
                 f2,
+                capture_history: history,
+                sum_len_unique,
                 first_few: Vec::new(),
-                all_once: false,
-                hll: None,
-                capture_history,
-                sum_len_unique: d.map(|d| d.sum_len_unique),
+                all_once,
+                hll,
             },
             range: Range {
                 argmin: None,
@@ -526,26 +491,16 @@ impl LevelStats {
             gcd: self.gcd,
             sum_len: self.sum_len,
             is_f32: self.is_f32,
-            min: None,
-            max: None,
-            numeric: None,
+            min: self
+                .lo
+                .as_ref()
+                .and_then(|e| render_value(e.value.as_ref())),
+            max: self
+                .hi
+                .as_ref()
+                .and_then(|e| render_value(e.value.as_ref())),
+            numeric,
         }
-    }
-
-    /// Text levels only: Schnabel → Chao1, or `overflowed`.
-    pub(crate) fn estimate(&self, threshold: u64) -> Option<Estimate> {
-        let d = self.distinct.as_ref()?;
-        Some(if d.overflowed {
-            Estimate {
-                est_cardinality: (threshold + 1) as f64,
-                est_low: None,
-                est_high: None,
-                method: Method::Overflowed,
-            }
-        } else {
-            let (f1, f2, h) = d.counts();
-            pick_estimate(Count::Exact(d.n_unique()), self.n - self.n_null, f1, f2, &h).0
-        })
     }
 
     pub(crate) fn int_range(&self) -> Option<(i128, i128)> {
@@ -563,9 +518,9 @@ impl LevelStats {
     }
 
     pub(crate) fn few_distinct(&self) -> Vec<String> {
-        self.distinct
+        self.sample
             .as_ref()
-            .filter(|d| !d.overflowed && d.n_unique() <= 5)
+            .filter(|d| d.is_exact() && d.len() <= 5)
             .map_or_else(Vec::new, |d| d.few.clone())
     }
 }
@@ -576,10 +531,10 @@ mod tests {
     use crate::describe::frequencies;
     use crate::recommend::polars_views;
 
-    fn absorbed(parts: &[Series], track: bool, threshold: u64) -> LevelStats {
+    fn absorbed(parts: &[Series], threshold: u64) -> LevelStats {
         let mut st = LevelStats::default();
         for p in parts {
-            let b = BatchStats::of(p, st.n, 7, track).unwrap();
+            let b = BatchStats::of(p, st.n, 7).unwrap();
             st.absorb(b, threshold);
         }
         st
@@ -594,14 +549,14 @@ mod tests {
 
     fn summary(st: &LevelStats) -> String {
         let key = |e: &Option<Ext>| e.as_ref().map(|e| format!("{:?}", e.key));
-        let d = st.distinct.as_ref().map(|d| {
+        let d = st.sample.as_ref().map(|d| {
             (
-                d.n_unique(),
+                d.len(),
                 d.counts(),
                 d.sum_len_unique,
                 d.few.clone(),
                 d.views.bytes(),
-                d.overflowed,
+                d.is_exact(),
             )
         });
         let s = st.strings.as_ref().map(|s| {
@@ -636,63 +591,54 @@ mod tests {
         )
     }
 
-    fn samples() -> Vec<(Series, bool)> {
+    fn samples() -> Vec<Series> {
         vec![
-            (
-                Series::new(
-                    "i".into(),
-                    &[
-                        Some(30i64),
-                        None,
-                        Some(-6),
-                        Some(12),
-                        Some(30),
-                        None,
-                        Some(0),
-                    ],
-                ),
-                false,
+            Series::new(
+                "i".into(),
+                &[
+                    Some(30i64),
+                    None,
+                    Some(-6),
+                    Some(12),
+                    Some(30),
+                    None,
+                    Some(0),
+                ],
             ),
-            (
-                Series::new(
-                    "f".into(),
-                    &[
-                        Some(1.5f64),
-                        Some(-0.0),
-                        None,
-                        Some(f64::NAN),
-                        Some(2.25),
-                        Some(-7.0),
-                    ],
-                ),
-                false,
+            Series::new(
+                "f".into(),
+                &[
+                    Some(1.5f64),
+                    Some(-0.0),
+                    None,
+                    Some(f64::NAN),
+                    Some(2.25),
+                    Some(-7.0),
+                ],
             ),
-            (
-                Series::new(
-                    "s".into(),
-                    &[
-                        Some("1.50"),
-                        Some("a value longer than twelve"),
-                        None,
-                        Some("2024-01-01T10:00:00"),
-                        Some("1.50"),
-                        Some("another value longer than twelve"),
-                        Some("x"),
-                    ],
-                ),
-                true,
+            Series::new(
+                "s".into(),
+                &[
+                    Some("1.50"),
+                    Some("a value longer than twelve"),
+                    None,
+                    Some("2024-01-01T10:00:00"),
+                    Some("1.50"),
+                    Some("another value longer than twelve"),
+                    Some("x"),
+                ],
             ),
         ]
     }
 
     #[test]
     fn splitting_the_stream_does_not_change_the_statistics() {
-        for (s, track) in samples() {
-            let whole = summary(&absorbed(std::slice::from_ref(&s), track, 10_000));
+        for s in samples() {
+            let whole = summary(&absorbed(std::slice::from_ref(&s), 10_000));
             for k in [1, 2, 3, 5] {
                 let parts = chunks(&s, k);
                 assert_eq!(
-                    summary(&absorbed(&parts, track, 10_000)),
+                    summary(&absorbed(&parts, 10_000)),
                     whole,
                     "{} k={k}",
                     s.name()
@@ -705,21 +651,37 @@ mod tests {
     fn distinct_counts_match_describe() {
         let s = Series::new("s".into(), &["a", "b", "a", "c", "c", "c", "d"]);
         let f = frequencies(&encode_series(&s).unwrap(), 7, None);
-        let st = absorbed(&chunks(&s, 2), true, 10_000);
-        let d = st.distinct.as_ref().unwrap();
-        assert_eq!(d.n_unique(), f.n_unique);
+        let st = absorbed(&chunks(&s, 2), 10_000);
+        let d = st.sample.as_ref().unwrap();
+        assert_eq!(d.len(), f.n_unique);
         assert_eq!(d.counts(), (f.f1, f.f2, f.capture_history));
         assert_eq!(d.few, vec!["a", "b", "c", "d"]);
     }
 
     #[test]
-    fn distinct_tracking_stops_past_the_threshold() {
-        let s = Series::new("s".into(), &["a", "b", "c", "d", "e"]);
-        let st = absorbed(&chunks(&s, 2), true, 3);
-        assert!(st.overflowed());
-        assert_eq!(st.profile(3).freq.n_unique, 4);
-        assert_eq!(st.estimate(3).unwrap().method, Method::Overflowed);
-        assert!(st.few_distinct().is_empty());
+    fn every_dtype_is_counted() {
+        let s = Series::new(
+            "i".into(),
+            (0..2_000i64).map(|i| i % 300).collect::<Vec<_>>(),
+        );
+        let st = absorbed(&chunks(&s, 700), 10_000);
+        let p = st.profile(s.dtype());
+        assert_eq!((p.freq.n_unique, p.freq.hll), (300, None));
+        assert_eq!(
+            (p.min.as_deref(), p.max.as_deref(), p.numeric),
+            (Some("0"), Some("299"), Some((0.0, 299.0)))
+        );
+    }
+
+    #[test]
+    fn past_k_the_count_is_hll() {
+        let s = Series::new("i".into(), (0..50_000i64).collect::<Vec<_>>());
+        let st = absorbed(&chunks(&s, 8_192), 1_000);
+        let p = st.profile(s.dtype());
+        let (e, se) = p.freq.hll.expect("sampling phase");
+        assert!((e - 50_000.0).abs() <= 3.0 * se * 50_000.0, "{e}");
+        assert!(p.freq.n_unique >= 1_001 && p.freq.all_once);
+        assert_eq!(p.freq.sum_len_unique, None); // not a text level
     }
 
     #[test]
@@ -738,7 +700,7 @@ mod tests {
     #[test]
     fn extremes_keep_values_to_render() {
         let s = Series::new("i".into(), &[5i64, -3, 9]);
-        let st = absorbed(&chunks(&s, 1), false, 10_000);
+        let st = absorbed(&chunks(&s, 1), 10_000);
         assert_eq!(st.int_range(), Some((-3, 9)));
         assert_eq!(st.lo.as_ref().unwrap().value.len(), 1);
     }
