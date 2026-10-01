@@ -172,4 +172,40 @@ mod tests {
     fn precision_is_bounded() {
         Hll::new(3);
     }
+
+    #[test]
+    #[should_panic(expected = "outside 4..=18")]
+    fn precision_above_bound_panics() {
+        Hll::new(19);
+    }
+
+    #[test]
+    fn precision_bounds_construct() {
+        Hll::new(4);
+        Hll::new(18);
+    }
+
+    #[test]
+    fn saturated_registers_are_corrected_monotonically() {
+        let build = |top: u8| {
+            let mut h = Hll::new(4);
+            for (i, r) in h.registers.iter_mut().enumerate() {
+                *r = if i < 4 { top } else { 3 };
+            }
+            h
+        };
+        let q = 64 - 4;
+        let saturated = build(q + 1).estimate();
+        let lower = build(10).estimate();
+        assert!(saturated.is_finite() && saturated > 0.0, "{saturated}");
+        assert!(saturated > lower, "{saturated} <= {lower}");
+    }
+
+    #[test]
+    fn tau_boundaries() {
+        assert_eq!(tau(0.0), 0.0);
+        assert_eq!(tau(1.0), 0.0);
+        let t = tau(0.5);
+        assert!(t > 0.0 && t < 1.0 / 3.0, "{t}");
+    }
 }
