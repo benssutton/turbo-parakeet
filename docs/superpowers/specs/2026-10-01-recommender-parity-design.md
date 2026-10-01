@@ -106,10 +106,11 @@ One function in `cardinality_estimators.rs`, used by one-shot Rust and streaming
 `describe/estimators.py` keeps the reference version.
 
 Inputs: n = non-null count; d = distinct count — exact in one-shot and in streaming's exact phase,
-the HLL estimate in the sampling phase; floor = d when exact, d − 3σ when HLL.
+the HLL estimate (floored at k + 1) in the sampling phase; floor = d when exact, and when HLL
+  max(d − 3σ, seen) — seen = k + 1, the distinct values the sample proves.
 
 1. n = 0 → `est_cardinality` 0, interval [0, 0], `est_method` `observed`.
-2. d / n ≥ 0.5 → `est_cardinality` = d; `observed` with [d, d], or `hll` with d ± 3σ.
+2. d / n ≥ 0.5 → `est_cardinality` = d; `observed` with [d, d], or `hll` with [floor, d + 3σ].
 3. d / n < 0.5 → Schnabel when its existing validity test passes, else Chao1 (each with its 95%
    interval as today); `est_cardinality = max(estimate, d)`, `est_low = max(estimator low, floor)`,
    `est_high = max(estimator high, est_cardinality)`. `est_method` `schnabel` or `chao1`.
