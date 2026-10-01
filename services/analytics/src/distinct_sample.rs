@@ -11,7 +11,6 @@ use std::collections::{BinaryHeap, HashMap};
 
 use foldhash::fast::FixedState;
 
-use crate::hll::hash_key;
 use crate::partial::{KeyStat, ViewSim};
 
 /// Sample size for a `categorical_threshold`: at least 1000, so the estimators have
@@ -56,15 +55,21 @@ impl DistinctSample {
         }
     }
 
-    /// `keys`: one batch's distinct values, first-occurrence order.
+    /// `keys`: one batch's distinct values; in first-occurrence order while exact on a
+    /// text / binary level (`few` and `views` read it), any order otherwise.
     pub(crate) fn absorb(&mut self, keys: Vec<KeyStat>) {
         for k in keys {
+            // Sampling: every held value hashes at or below the top, so one above it is
+            // neither held nor admitted; skip it before the map lookup.
+            if self.sampling && self.heap.peek().is_some_and(|&(top, _)| k.hash > top) {
+                continue;
+            }
             if let Some(s) = self.map.get_mut(&k.key) {
                 let count = ((s.v & 3) as u64 + k.count).min(3) as u8;
                 s.v = count | (s.v & !3) | (k.mask << 2);
                 continue;
             }
-            let h = hash_key(k.key);
+            let h = k.hash;
             if self.map.len() == self.k {
                 self.enter_sampling();
                 if self.heap.peek().is_some_and(|&(top, _)| h >= top) {
@@ -149,10 +154,12 @@ impl DistinctSample {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hll::hash_key;
 
     fn ks(key: u64, count: u64, mask: u8, text: Option<&str>) -> KeyStat {
         KeyStat {
             key,
+            hash: hash_key(key),
             first: 0,
             count,
             mask,

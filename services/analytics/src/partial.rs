@@ -240,6 +240,8 @@ fn ext_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<Ext>> {
 /// A distinct value's statistics in one batch.
 pub(crate) struct KeyStat {
     pub key: u64,
+    /// `hll::hash_key(key)`: the sample's order and the sketch's input.
+    pub hash: u64,
     pub first: u64,
     pub count: u64,
     pub mask: u8,
@@ -277,8 +279,9 @@ pub(crate) struct BatchStats {
 
 impl BatchStats {
     /// `s`: the level's values in one batch; `offset`: the level's global index of its
-    /// first value.
-    pub(crate) fn of(s: &Series, offset: u64, seed: u64) -> PolarsResult<Self> {
+    /// first value; `exact`: the level's distinct sample still holds every value (only
+    /// then does the keys' first-occurrence order matter).
+    pub(crate) fn of(s: &Series, offset: u64, seed: u64, exact: bool) -> PolarsResult<Self> {
         let lens = byte_lengths(s)?;
         let classic = export_series(&s.slice(0, 0), CompatLevel::oldest())?
             .data_type()
@@ -316,6 +319,7 @@ impl BatchStats {
                 let row = (e.first - offset) as usize;
                 KeyStat {
                     key,
+                    hash: hash_key(key),
                     first: e.first,
                     count: e.count,
                     mask: e.mask,
@@ -326,7 +330,11 @@ impl BatchStats {
                 }
             })
             .collect();
-        keys.sort_unstable_by_key(|k| k.first);
+        // First-occurrence order feeds the exact phase's `few` and view blocks (text /
+        // binary levels); the sample itself keeps the k smallest hashes in any order.
+        if exact && lens.is_some() {
+            keys.sort_unstable_by_key(|k| k.first);
+        }
         let keys = Some(keys);
         let (min_len, max_len) = lengths(s, lens.as_deref())?;
         Ok(BatchStats {
@@ -414,7 +422,7 @@ impl LevelStats {
         self.n_midnight = opt(self.n_midnight, b.n_midnight, |a, b| a + b);
         if let Some(keys) = b.keys {
             let h = self.hll.get_or_insert_with(|| Hll::new(14));
-            keys.iter().for_each(|k| h.insert(hash_key(k.key)));
+            keys.iter().for_each(|k| h.insert(k.hash));
             self.sample
                 .get_or_insert_with(|| DistinctSample::new(sample_size(threshold)))
                 .absorb(keys);
@@ -504,6 +512,11 @@ impl LevelStats {
         }
     }
 
+    /// Whether the distinct sample still holds every distinct value seen.
+    pub(crate) fn is_exact(&self) -> bool {
+        self.sample.as_ref().is_none_or(DistinctSample::is_exact)
+    }
+
     pub(crate) fn int_range(&self) -> Option<(i128, i128)> {
         match (self.lo.as_ref()?.key, self.hi.as_ref()?.key) {
             (Key::I(a), Key::I(b)) => Some((a, b)),
@@ -535,7 +548,7 @@ mod tests {
     fn absorbed(parts: &[Series], threshold: u64) -> LevelStats {
         let mut st = LevelStats::default();
         for p in parts {
-            let b = BatchStats::of(p, st.n, 7).unwrap();
+            let b = BatchStats::of(p, st.n, 7, st.is_exact()).unwrap();
             st.absorb(b, threshold);
         }
         st

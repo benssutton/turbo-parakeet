@@ -563,11 +563,12 @@ impl Streaming {
         }
         let c = self.index.get(s.name().as_str()).map(|&i| &self.columns[i]);
         let seed = self.params.seed;
-        let outer = BatchStats::of(s, self.n_rows, seed)?;
+        let outer = BatchStats::of(s, self.n_rows, seed, c.is_none_or(|c| c.outer.is_exact()))?;
         let inner = match flatten(s)? {
             Some(v) => {
                 let prev = c.and_then(|c| c.inner.as_ref());
-                Some(BatchStats::of(&v, prev.map_or(0, |l| l.n), seed)?)
+                let exact = prev.is_none_or(LevelStats::is_exact);
+                Some(BatchStats::of(&v, prev.map_or(0, |l| l.n), seed, exact)?)
             }
             None => None,
         };
@@ -619,24 +620,35 @@ impl Streaming {
         self.reservoir.feed(&cols, rows).map_err(Error::Compute)?;
         // Commit: nothing below can fail.
         let threshold = self.params.categorical_threshold;
-        let mut present = HashSet::new();
         for ((s, f), _) in &nested_null {
             let c = self.column(s.name().as_str());
             c.ineligible = true;
             c.input_type = pa_name(f.data_type());
         }
+        // Serially: create new columns and adopt types; then absorb every column's
+        // statistics in parallel (column names are unique, so each slot is one column).
+        let mut placed = Vec::with_capacity(stats.len());
         for ((s, f), st) in series.iter().zip(stats) {
-            present.insert(s.name().to_string());
             let c = self.column(s.name().as_str());
-            match st {
+            if st.is_some() && c.dtype.is_none() {
+                c.dtype = Some(s.dtype().clone());
+                c.input_type = pa_name(f.data_type());
+                let t = f.data_type();
+                c.views_input = (is_view(t), item_type(t).is_some_and(is_view));
+            }
+            placed.push((self.index[s.name().as_str()], st));
+        }
+        let mut slots: Vec<Stats> = (0..self.columns.len()).map(|_| None).collect();
+        for (i, st) in placed {
+            slots[i] = st;
+        }
+        // A column absent from the batch, or Null-typed in it, takes `rows` nulls.
+        self.columns
+            .par_iter_mut()
+            .zip(slots)
+            .for_each(|(c, st)| match st {
                 None => c.outer.nulls(rows),
                 Some((outer, inner)) => {
-                    if c.dtype.is_none() {
-                        c.dtype = Some(s.dtype().clone());
-                        c.input_type = pa_name(f.data_type());
-                        let t = f.data_type();
-                        c.views_input = (is_view(t), item_type(t).is_some_and(is_view));
-                    }
                     c.outer.absorb(outer, threshold);
                     if let Some(inner) = inner {
                         c.inner
@@ -644,13 +656,7 @@ impl Streaming {
                             .absorb(inner, threshold);
                     }
                 }
-            }
-        }
-        for c in &mut self.columns {
-            if !present.contains(&c.name) {
-                c.outer.nulls(rows);
-            }
-        }
+            });
         self.n_rows += rows;
         Ok(())
     }
@@ -809,7 +815,7 @@ impl Streaming {
             lossy: pick.lossy,
             candidates: pick.candidates,
         };
-        let exact = o.sample.as_ref().is_none_or(|d| d.is_exact());
+        let exact = o.is_exact();
         row.extend([
             render(&o.lo),
             render(&o.hi),
