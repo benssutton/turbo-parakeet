@@ -108,12 +108,19 @@ pub(crate) fn pick_estimate(
             estimate,
             std_error,
             seen,
-        } => (
-            estimate,
-            (estimate * (1.0 - 3.0 * std_error)).max(seen as f64),
-            estimate * (1.0 + 3.0 * std_error),
-            Method::Hll,
-        ),
+        } => {
+            // Callers floor the estimate at the proven count.
+            debug_assert!(
+                seen as f64 <= estimate,
+                "HLL estimate below the proven count"
+            );
+            (
+                estimate,
+                (estimate * (1.0 - 3.0 * std_error)).max(seen as f64),
+                estimate * (1.0 + 3.0 * std_error),
+                Method::Hll,
+            )
+        }
     };
     if n == 0 {
         let zero = Estimate {

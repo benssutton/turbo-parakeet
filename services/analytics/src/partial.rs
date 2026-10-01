@@ -193,11 +193,13 @@ impl ViewSim {
     }
 }
 
-/// Ordering key of an extreme: the physical integer, or the float.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+/// Ordering key of an extreme: the physical integer (integers, decimals, temporals,
+/// booleans, Enum codes), the float, or the bytes (strings, Categorical values, binary).
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub(crate) enum Key {
     I(i128),
     F(f64),
+    S(Vec<u8>),
 }
 
 /// A running extreme: its key, and the value itself (one row, classic layout) to render.
@@ -218,20 +220,32 @@ fn has_extremes(dt: &DataType) -> bool {
                 | DataType::Datetime(..)
                 | DataType::Duration(_)
                 | DataType::Time
+                | DataType::String
+                | DataType::Categorical(..)
+                | DataType::Enum(..)
+                | DataType::Boolean
+                | DataType::Binary
         )
 }
 
 fn ext_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<Ext>> {
     let Some(i) = i else { return Ok(None) };
     let one = s.slice(i as i64, 1);
-    let key = if one.dtype().is_float() {
-        one.cast(&DataType::Float64)?.f64()?.get(0).map(Key::F)
-    } else {
-        one.to_physical_repr()
+    let key = match one.dtype() {
+        DataType::String | DataType::Categorical(..) => one
+            .cast(&DataType::String)?
+            .str()?
+            .get(0)
+            .map(|v| Key::S(v.as_bytes().to_vec())),
+        DataType::Binary => one.binary()?.get(0).map(|v| Key::S(v.to_vec())),
+        DataType::Boolean => one.bool()?.get(0).map(|v| Key::I(v as i128)),
+        dt if dt.is_float() => one.cast(&DataType::Float64)?.f64()?.get(0).map(Key::F),
+        _ => one
+            .to_physical_repr()
             .cast(&DataType::Int128)?
             .i128()?
             .get(0)
-            .map(Key::I)
+            .map(Key::I),
     };
     let value = classic_layout(&one)?;
     Ok(key.map(|key| Ext { key, value }))
@@ -518,15 +532,15 @@ impl LevelStats {
     }
 
     pub(crate) fn int_range(&self) -> Option<(i128, i128)> {
-        match (self.lo.as_ref()?.key, self.hi.as_ref()?.key) {
-            (Key::I(a), Key::I(b)) => Some((a, b)),
+        match (&self.lo.as_ref()?.key, &self.hi.as_ref()?.key) {
+            (Key::I(a), Key::I(b)) => Some((*a, *b)),
             _ => None,
         }
     }
 
     pub(crate) fn float_range(&self) -> Option<(f64, f64)> {
-        match (self.lo.as_ref()?.key, self.hi.as_ref()?.key) {
-            (Key::F(a), Key::F(b)) => Some((a, b)),
+        match (&self.lo.as_ref()?.key, &self.hi.as_ref()?.key) {
+            (Key::F(a), Key::F(b)) => Some((*a, *b)),
             _ => None,
         }
     }
@@ -718,6 +732,29 @@ mod tests {
         let st = absorbed(&chunks(&s, 1), 10_000);
         assert_eq!(st.int_range(), Some((-3, 9)));
         assert_eq!(st.lo.as_ref().unwrap().value.len(), 1);
+    }
+
+    #[test]
+    fn text_boolean_and_enum_extremes() {
+        let s = Series::new(
+            "s".into(),
+            &[Some("m"), None, Some("b"), Some("z"), Some("c")],
+        );
+        let st = absorbed(&chunks(&s, 2), 10_000);
+        let p = st.profile(s.dtype());
+        assert_eq!((p.min.as_deref(), p.max.as_deref()), (Some("b"), Some("z")));
+        let b = Series::new("b".into(), &[true, true, false]);
+        let p = absorbed(&chunks(&b, 1), 10_000).profile(b.dtype());
+        assert_eq!(
+            (p.min.as_deref(), p.max.as_deref()),
+            (Some("false"), Some("true"))
+        );
+        let cats = Categories::global();
+        let cat = s
+            .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
+            .unwrap();
+        let p = absorbed(&chunks(&cat, 2), 10_000).profile(cat.dtype());
+        assert_eq!((p.min.as_deref(), p.max.as_deref()), (Some("b"), Some("z")));
     }
 
     #[test]
