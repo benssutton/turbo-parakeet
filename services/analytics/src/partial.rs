@@ -451,7 +451,8 @@ impl LevelStats {
                 let unique = text_len.then(|| (d.mean_len() * e).round() as u64);
                 (
                     e.round() as u64,
-                    Some((e, sketch.std_error())),
+                    // The sample proves len + 1 distinct values: one was evicted.
+                    Some((e, sketch.std_error(), d.len() + 1)),
                     sc(f1),
                     sc(f2),
                     h.map(sc),
@@ -678,7 +679,8 @@ mod tests {
         let s = Series::new("i".into(), (0..50_000i64).collect::<Vec<_>>());
         let st = absorbed(&chunks(&s, 8_192), 1_000);
         let p = st.profile(s.dtype());
-        let (e, se) = p.freq.hll.expect("sampling phase");
+        let (e, se, seen) = p.freq.hll.expect("sampling phase");
+        assert_eq!(seen, 1_001);
         assert!((e - 50_000.0).abs() <= 3.0 * se * 50_000.0, "{e}");
         assert!(p.freq.n_unique >= 1_001 && p.freq.all_once);
         assert_eq!(p.freq.sum_len_unique, None); // not a text level

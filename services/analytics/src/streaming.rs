@@ -1437,27 +1437,17 @@ pub(crate) mod tests {
         assert!(texts(&out, "rec_arrow_type").iter().all(Option::is_some));
     }
 
-    #[test]
-    fn overflow_rejects_the_dictionary() {
+    /// Column "s" streamed with `categorical_threshold` 3.
+    fn threshold_3(v: &[Option<&str>]) -> RecordBatch {
         let mut p = params();
         p.categorical_threshold = 3;
         let mut s = Streaming::new(p, 1 << 20, 1 << 16);
-        // More distinct values than the sample holds (k = max(threshold, 1000)).
-        let v: Vec<String> = (0..2_000).map(|i| format!("v{i}")).collect();
-        let v: Vec<Option<&str>> = v.iter().map(|x| Some(x.as_str())).collect();
-        s.add(&batch(vec![("s", strs(&v))])).unwrap();
-        let out = s.finish().unwrap();
-        let n_unique: u64 = texts(&out, "n_unique")[0]
-            .as_deref()
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert!(n_unique >= 1_001, "{n_unique}");
-        assert_eq!(
-            texts(&out, "distinct_overflowed")[0].as_deref(),
-            Some("true")
-        );
-        assert_eq!(texts(&out, "est_method")[0].as_deref(), Some("hll"));
+        s.add(&batch(vec![("s", strs(v))])).unwrap();
+        s.finish().unwrap()
+    }
+
+    /// The first row's string→dictionary candidate outcome.
+    fn dictionary_outcome(out: &RecordBatch) -> String {
         let list = out
             .column_by_name("rec_candidates")
             .unwrap()
@@ -1471,7 +1461,46 @@ pub(crate) mod tests {
         let i = (0..rules.len())
             .find(|&i| rules.value(i) == "string→dictionary")
             .unwrap();
-        assert_eq!(outcomes.value(i), "rejected");
+        outcomes.value(i).to_string()
+    }
+
+    #[test]
+    fn exact_count_past_the_threshold_rejects_the_dictionary() {
+        let out = threshold_3(&[
+            Some("a"),
+            Some("b"),
+            Some("c"),
+            Some("d"),
+            Some("e"),
+            Some("a"),
+        ]);
+        assert_eq!(texts(&out, "n_unique")[0].as_deref(), Some("5"));
+        assert_eq!(
+            texts(&out, "distinct_overflowed")[0].as_deref(),
+            Some("false")
+        );
+        assert_eq!(texts(&out, "est_method")[0].as_deref(), Some("observed"));
+        assert_eq!(dictionary_outcome(&out), "rejected");
+    }
+
+    #[test]
+    fn overflow_rejects_the_dictionary() {
+        // More distinct values than the sample holds (k = max(threshold, 1000)).
+        let v: Vec<String> = (0..2_000).map(|i| format!("v{i}")).collect();
+        let v: Vec<Option<&str>> = v.iter().map(|x| Some(x.as_str())).collect();
+        let out = threshold_3(&v);
+        let n_unique: u64 = texts(&out, "n_unique")[0]
+            .as_deref()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(n_unique >= 1_001, "{n_unique}");
+        assert_eq!(
+            texts(&out, "distinct_overflowed")[0].as_deref(),
+            Some("true")
+        );
+        assert_eq!(texts(&out, "est_method")[0].as_deref(), Some("hll"));
+        assert_eq!(dictionary_outcome(&out), "rejected");
     }
 
     #[test]

@@ -132,8 +132,9 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
     """Spec §6: equal recommendations, sizes and candidates; ZSTD when N ≤ block_rows.
 
     Known, accepted differences, narrowed per column:
-    - distinct tracking overflowed: parity is not defined (spec §6); the rejected
-      dictionary's key width follows `categorical_threshold + 1`, not one-shot's est_high;
+    - the distinct sample in its sampling phase (`distinct_overflowed`): the counts are
+      HyperLogLog estimates, so the rejected dictionary's key width and size follow the
+      estimated est_high, not one-shot's exact one;
     - the original's size, in several batches, where it is a per-batch sum;
     - string source whose null slots hold bytes: one-shot measures them in the
       original's size.
@@ -318,6 +319,14 @@ def test_a_type_change_is_rejected():
     with pytest.raises(ValueError, match="type changed"):
         rec.add(pl.DataFrame({"a": ["x"]}))
     assert row(rec.finish(), "a")["n_rows"] == 1
+
+
+def test_exact_count_past_the_threshold_rejects_the_dictionary():
+    frame = pl.DataFrame({"s": ["a", "b", "c", "d", "e", "a"]})
+    s = row(stream(frame, 2, categorical_threshold=3), "s")
+    assert s["n_unique"] == 5 and s["distinct_overflowed"] is False
+    assert s["est_method"] == "observed"
+    assert by_rule(s)["string→dictionary"]["outcome"] == "rejected"
 
 
 def test_overflow_rejects_the_dictionary():

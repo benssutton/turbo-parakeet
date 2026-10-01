@@ -71,11 +71,15 @@ impl Method {
 }
 
 /// A level's distinct count: exact, or a HyperLogLog estimate with its relative
-/// standard error.
+/// standard error and `seen`, the distinct values proven to exist (a lower bound).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Count {
     Exact(u64),
-    Hll { estimate: f64, std_error: f64 },
+    Hll {
+        estimate: f64,
+        std_error: f64,
+        seen: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,7 +93,8 @@ pub(crate) struct Estimate {
 /// The estimate picked by rule (spec 2026-10-01 s4), with `estimates_agree`.
 /// n = non-null values; d = the count. d/n >= 0.5 -> the count itself (observed, or
 /// HLL +- 3 sigma). Below: Schnabel when valid, else Chao1, floored at d (the estimate) and
-/// at d - 3 sigma for HLL (the low end): observed values bound the population from below.
+/// at max(d - 3 sigma, seen) for HLL (the low end): observed values bound the population
+/// from below.
 pub(crate) fn pick_estimate(
     count: Count,
     n: u64,
@@ -102,9 +107,10 @@ pub(crate) fn pick_estimate(
         Count::Hll {
             estimate,
             std_error,
+            seen,
         } => (
             estimate,
-            estimate * (1.0 - 3.0 * std_error),
+            (estimate * (1.0 - 3.0 * std_error)).max(seen as f64),
             estimate * (1.0 + 3.0 * std_error),
             Method::Hll,
         ),
@@ -210,6 +216,7 @@ mod tests {
             Count::Hll {
                 estimate: 1_000.0,
                 std_error: 0.01,
+                seen: 0,
             },
             1_500,
             0,
@@ -257,6 +264,7 @@ mod tests {
             Count::Hll {
                 estimate: 10.0,
                 std_error: 0.01,
+                seen: 0,
             },
             40,
             4,
@@ -266,6 +274,30 @@ mod tests {
         assert_eq!((e.method, e.est_cardinality), (Method::Schnabel, 10.0));
         assert!((e.est_low.unwrap() - 9.7).abs() < 1e-9);
         assert!((e.est_high.unwrap() - 16.378255262343956).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hll_low_end_is_floored_at_the_values_seen() {
+        let hll = |seen| Count::Hll {
+            estimate: 1_000.0,
+            std_error: 0.05,
+            seen,
+        };
+        // Ratio ≥ 0.5: 1000 · (1 − 0.15) = 850 < 900 seen.
+        let (e, _) = pick_estimate(hll(900), 1_500, 0, 0, &[0; 7]);
+        assert_eq!((e.method, e.est_low), (Method::Hll, Some(900.0)));
+        let (e, _) = pick_estimate(hll(0), 1_500, 0, 0, &[0; 7]);
+        assert!((e.est_low.unwrap() - 850.0).abs() < 1e-9);
+        // Ratio < 0.5: Schnabel 9.52 [6.47, 16.38]; 10 · (1 − 0.15) = 8.5 < 10 seen.
+        let small = |seen| Count::Hll {
+            estimate: 10.0,
+            std_error: 0.05,
+            seen,
+        };
+        let (e, _) = pick_estimate(small(10), 40, 4, 2, &H10);
+        assert_eq!((e.method, e.est_low), (Method::Schnabel, Some(10.0)));
+        let (e, _) = pick_estimate(small(0), 40, 4, 2, &H10);
+        assert!((e.est_low.unwrap() - 8.5).abs() < 1e-9);
     }
 
     #[test]

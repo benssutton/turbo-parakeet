@@ -54,9 +54,9 @@ pub(crate) struct Frequencies {
     pub first_few: Vec<u64>,
     /// Every distinct value occurred once (streaming's sampling phase: every sampled one).
     pub all_once: bool,
-    /// Streaming's sampling phase: (HyperLogLog estimate, relative standard error); None
-    /// while `n_unique` is exact.
-    pub hll: Option<(f64, f64)>,
+    /// Streaming's sampling phase: (HyperLogLog estimate, relative standard error,
+    /// distinct values proven seen); None while `n_unique` is exact.
+    pub hll: Option<(f64, f64, u64)>,
     pub capture_history: [u64; 7],
     /// Total byte length of the distinct values (`lengths` given: string / binary columns).
     pub sum_len_unique: Option<u64>,

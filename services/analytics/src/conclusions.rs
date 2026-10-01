@@ -87,9 +87,10 @@ pub(crate) fn conclude(
     let n = n_values - n_null;
     let f = &p.freq;
     let count = match f.hll {
-        Some((estimate, std_error)) => Count::Hll {
+        Some((estimate, std_error, seen)) => Count::Hll {
             estimate,
             std_error,
+            seen,
         },
         None => Count::Exact(f.n_unique),
     };
@@ -140,6 +141,7 @@ mod tests {
         let hll = Count::Hll {
             estimate: 2.0,
             std_error: 0.01,
+            seen: 2,
         };
         assert_eq!(c(4, 0, hll, None, 2.0), "categorical"); // HLL is never boolean
     }
