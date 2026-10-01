@@ -249,3 +249,35 @@ removed from tests.
 
 CLAUDE.md's Describe, Recommend and Streaming Recommend sections; amendments in the Describe,
 Recommend and streaming specs pointing here.
+
+## 13. Amendments (planning, 2026-10-01)
+
+1. **Rendering is arrow-rs's, everywhere.** Arrow C++ (pyarrow) and arrow-rs format some
+   types differently (timestamps `2024-01-02 03:04:05` vs `2024-01-02T03:04:05`, floats,
+   durations), so "Arrow's cast" is not one format. The canonical rendering is arrow-rs's cast
+   to Utf8 (`recommend::render_value`). The Python reference implementations render through
+   a private Rust helper (`_plugin.render`), not `pyarrow.compute.cast`. This is a format
+   convention, not a computation, so the references stay independent where it matters.
+2. **Ordering of Enum extremes** is by category order (its physical code), as one-shot does
+   today — not by string value (§6 corrected). Categorical orders by string value.
+3. **Nested extremes are dropped.** List / Array / Struct columns have no `min` / `max` in either
+   recommender (one-shot used to order them by Polars' row encoding).
+4. **Sampling-phase scaling.** f1, f2 and the capture history are the sample's values scaled by
+   (HLL estimate ÷ sample size) — the sample's fractions applied to the HLL count — rather than by
+   1/τ. Both estimate the same quantity; this one is consistent with the reported `n_unique`.
+5. **`n_unique` floor in the sampling phase**: max(HLL estimate, k + 1). At least k + 1 distinct
+   values have been seen, so the dictionary gate always rejects (k ≥ `categorical_threshold`).
+6. **No `DistinctSample::merge`.** Streaming absorbs batches in order; `absorb` keeps the k smallest
+   hashes whatever the batch order, which the tests check instead.
+7. **`classify` lives in `src/conclusions.rs`** with `whole_range` and `conclude`, not in recommend.rs.
+8. **Python contract.** Describe implementations return private per-level `INPUTS` (`argmin`,
+   `argmax`, `f1`, `f2`, `capture_history` and `inner_` twins) beside `METRICS`; the base derives
+   the conclusions (`min`, `max`, `unique`, `est_*`, `estimates_agree`, `class`) and drops the
+   inputs from the output. `describe_columns` (private) returns Rust's conclusions *and* the inputs,
+   so a test compares Rust's conclusions with the Python base's on identical inputs (exact).
+   `describe_and_recommend` returns Rust's conclusions only; `RecommendRust` passes them through.
+   Agreement with the reference compares `min`, `max`, `unique`, `class` exactly and
+   `est_cardinality` / `est_low` / `est_high` within the Schnabel tolerance (10%); `est_method` and
+   `estimates_agree` depend on the seeded split and are not compared.
+9. **`projected_population_bytes` stays** in `rec_candidates`; without `population_rows` it is the
+   predicted size scaled by the estimated cardinality only.
