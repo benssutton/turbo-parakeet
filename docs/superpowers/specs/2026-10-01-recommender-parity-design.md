@@ -84,10 +84,10 @@ Replaces `partial::Distinct` and now covers every eligible dtype, not only text.
   (as `overflowed` does today); dictionaries are rejected from then on since d > k ≥ threshold.
 - **Sampling phase**: f1, f2 and the capture history are the sample's values scaled by 1/τ;
   `sum_len_unique` = (mean sampled length) × the HLL estimate.
-- `absorb(keys)` keeps `Distinct::absorb`'s signature; `merge` = union, sum counts (cap 3), OR masks,
-  keep the k smallest `h`. Merging is order-independent.
-- k = max(`categorical_threshold`, 1000). Memory ≈ 20–30 bytes per entry (≈ 250 KB per column at
-  k = 10 000, worst case).
+- `absorb(keys)` takes one batch's `KeyStat`s (k is fixed by `new(k)`); it keeps the k smallest `h`
+  whatever the batch order (no `merge`: §13.6).
+- k = max(`categorical_threshold`, 1000). Memory ≈ 45–50 bytes per entry (map slot + key, heap entry,
+  hash-map overhead; ≈ 0.5 MB per column at k = 10 000, worst case).
 
 `LevelStats` holds one `Hll` and one `DistinctSample` per eligible level, fed with each batch's
 distinct keys (O(distinct per batch), not O(rows)). One-shot uses neither: it keeps exact counting
