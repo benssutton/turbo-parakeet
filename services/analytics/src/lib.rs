@@ -13,6 +13,7 @@ mod contingency;
 mod describe;
 mod entropy;
 mod gcd;
+mod hll;
 mod minhash;
 mod partial;
 #[cfg(feature = "python")]
