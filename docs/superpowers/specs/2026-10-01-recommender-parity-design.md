@@ -55,8 +55,8 @@ impl Hll {
     pub fn new(p: u8) -> Self;                  // 4 ≤ p ≤ 18
     pub fn insert(&mut self, hash: u64);        // bucket = top p bits; rank = leading zeros of the rest + 1; keep max
     pub fn merge(&mut self, other: &Hll);       // register-wise max (exact; panics on p mismatch)
-    pub fn estimate(&self) -> f64;              // harmonic-mean estimator with α_m; linear counting
-                                                //   when the raw estimate ≤ 2.5m and empty registers exist
+    pub fn estimate(&self) -> f64;              // Ertl's improved estimator (2017): α∞·m²/z from the
+                                                //   register histogram; no bias tables or range switches
     pub fn std_error(&self) -> f64;             // 1.04 / sqrt(m)
 }
 ```
@@ -213,7 +213,7 @@ Describe base renders extremes, estimates and `class` — so C and Java callers 
 
 Rust unit tests:
 - `hll.rs`: estimate within ±3σ of truth for 0, 1, 100, 10⁴, 10⁶ distinct values over several
-  seeds; `merge` equals single-sketch insertion; linear counting at small cardinalities.
+  seeds; `merge` equals single-sketch insertion; the small-range (σ) and saturation (τ) corrections.
 - `distinct_sample.rs`: exact-phase counts, f1, f2, capture history equal `frequency_map`'s;
   order-independent merge; sampling-phase scaled f1 / f2 / history within tolerance on a seeded 10⁶
   stream; first eviction ends `few`, `ViewSim` and exact `sum_len_unique`; k floor of 1000.
