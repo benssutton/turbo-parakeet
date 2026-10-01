@@ -9,6 +9,7 @@ mod bloomfilter;
 mod capi;
 mod cardinality_estimators;
 mod chi_squared;
+mod conclusions;
 mod contingency;
 mod describe;
 mod distinct_sample;

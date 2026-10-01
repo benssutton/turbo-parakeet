@@ -1,0 +1,130 @@
+//! Describe's conclusions (spec 2026-10-01 §4, §5), shared by one-shot and streaming:
+//! the whole-number range behind `ordinal` and the class rule. analytics/describe/base.py
+//! keeps the reference implementation.
+
+use polars::prelude::DataType as PT;
+
+use crate::cardinality_estimators::Count;
+use crate::describe::{FloatStats, StringStats};
+
+/// (min, max) when every non-null value is a whole number: integers, Decimal with
+/// scale 0, floats with no fraction / NaN / infinity, and strings that are all integers
+/// without leading zeros. `numeric`: the level's numeric extremes (integer, decimal and
+/// float dtypes; None otherwise). Temporal dtypes never qualify.
+pub(crate) fn whole_range(
+    dtype: &PT,
+    n: u64,
+    numeric: Option<(f64, f64)>,
+    floats: Option<&FloatStats>,
+    strings: Option<&StringStats>,
+) -> Option<(f64, f64)> {
+    match dtype {
+        dt if dt.is_integer() => numeric,
+        PT::Decimal(_, Some(0)) => numeric,
+        PT::Float32 | PT::Float64 => floats
+            .filter(|f| f.n_fractional == 0 && f.n_nan == 0 && f.n_inf == 0)
+            .and(numeric),
+        PT::String | PT::Categorical(..) | PT::Enum(..) => {
+            let st = strings?;
+            if st.n_numeric_int != n || st.n_leading_zero != 0 || st.int_overflow {
+                return None;
+            }
+            Some((st.int_min? as f64, st.int_max? as f64))
+        }
+        _ => None,
+    }
+}
+
+/// First match wins: null → constant → boolean → ordinal → categorical → discrete.
+/// `n_values`: values at this level, nulls included.
+pub(crate) fn classify(
+    n_values: u64,
+    n_null: u64,
+    count: Count,
+    whole: Option<(f64, f64)>,
+    est: f64,
+    threshold: u64,
+) -> &'static str {
+    if n_null == n_values {
+        return "null";
+    }
+    match count {
+        Count::Exact(1) => return "constant",
+        Count::Exact(2) => return "boolean",
+        _ => {}
+    }
+    if whole.is_some_and(|(lo, hi)| 0.0 <= lo && hi <= 2.0 * n_values as f64) {
+        return "ordinal";
+    }
+    if est <= threshold as f64 {
+        "categorical"
+    } else {
+        "discrete"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classes_in_order() {
+        let c = |nv, nn, count, whole, est| classify(nv, nn, count, whole, est, 10);
+        assert_eq!(c(4, 4, Count::Exact(0), None, 0.0), "null");
+        assert_eq!(c(0, 0, Count::Exact(0), None, 0.0), "null");
+        assert_eq!(c(4, 1, Count::Exact(1), Some((7.0, 7.0)), 1.0), "constant");
+        assert_eq!(c(4, 0, Count::Exact(2), Some((1.0, 5.0)), 2.0), "boolean");
+        assert_eq!(c(5, 0, Count::Exact(5), Some((0.0, 4.0)), 5.0), "ordinal");
+        assert_eq!(
+            c(4, 0, Count::Exact(4), Some((0.0, 9.0)), 4.0),
+            "categorical"
+        ); // 9 > 2·4
+        assert_eq!(
+            c(4, 0, Count::Exact(4), Some((-3.0, 2.0)), 4.0),
+            "categorical"
+        );
+        assert_eq!(c(40, 0, Count::Exact(20), None, 20.0), "discrete");
+        let hll = Count::Hll {
+            estimate: 2.0,
+            std_error: 0.01,
+        };
+        assert_eq!(c(4, 0, hll, None, 2.0), "categorical"); // HLL is never boolean
+    }
+
+    #[test]
+    fn whole_ranges() {
+        let r = Some((0.0, 3.0));
+        assert_eq!(whole_range(&PT::Int64, 4, r, None, None), r);
+        assert_eq!(
+            whole_range(&PT::Decimal(Some(10), Some(0)), 4, r, None, None),
+            r
+        );
+        assert_eq!(
+            whole_range(&PT::Decimal(Some(10), Some(2)), 4, r, None, None),
+            None
+        );
+        assert_eq!(whole_range(&PT::Date, 4, r, None, None), None);
+        let whole = FloatStats {
+            n_fractional: 0,
+            ..Default::default()
+        };
+        let frac = FloatStats {
+            n_fractional: 1,
+            ..Default::default()
+        };
+        assert_eq!(whole_range(&PT::Float64, 4, r, Some(&whole), None), r);
+        assert_eq!(whole_range(&PT::Float64, 4, r, Some(&frac), None), None);
+        let ints = StringStats {
+            n_numeric_int: 4,
+            int_min: Some(0),
+            int_max: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(whole_range(&PT::String, 4, None, None, Some(&ints)), r);
+        let zero = StringStats {
+            n_leading_zero: 1,
+            ..ints.clone()
+        };
+        assert_eq!(whole_range(&PT::String, 4, None, None, Some(&zero)), None);
+    }
+}
