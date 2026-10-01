@@ -23,6 +23,7 @@
 // matters for it; differing leading or trailing zeros set rec_lossy_formatting.
 
 use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
+use crate::conclusions::Conclusions;
 use crate::describe::{
     assemble, describe_one, fields, parse_decimal, parse_iso, Described, Profile, Row,
 };
@@ -2405,18 +2406,19 @@ pub(crate) struct Rec {
 }
 
 /// The recommendation for one column.
-/// `values` is `s` in the classic layout (sizes.rs's `classic_layout`).
+/// `values` is `s` in the classic layout (sizes.rs's `classic_layout`); `(oc, ic)` is
+/// `d.conclusions(params.categorical_threshold)`.
 pub(crate) fn recommend(
     s: &Series,
     values: &ArrayRef,
     d: &Described,
+    (oc, ic): (Conclusions, Option<Conclusions>),
     sz: &Sizes,
     params: &Params,
 ) -> PolarsResult<Rec> {
     let [size_bytes, _, polars_bytes, polars_zstd] = *sz;
     let name = s.name().as_str();
     let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
-    let (oc, ic) = d.conclusions(params.categorical_threshold);
     let outer = Level::of_values(
         s.dtype(),
         values.clone(),
@@ -2588,8 +2590,9 @@ pub(crate) fn describe_and_recommend_impl(
             let d = describe_one(s, params.seed, false)?;
             let classic = classic_layout(s)?;
             let sz = sizes_of(s, &classic, params.zstd_level)?;
-            let rec = recommend(s, &classic, &d, &sz, params)?;
-            let mut row = d.row(params.categorical_threshold);
+            let (oc, ic) = d.conclusions(params.categorical_threshold);
+            let rec = recommend(s, &classic, &d, (oc, ic), &sz, params)?;
+            let mut row = d.row_with(&oc, ic.as_ref());
             row.extend(sz.iter().map(|&v| AnyValue::UInt64(v)));
             row.extend(rec_row(&rec));
             Ok(row)
@@ -2987,7 +2990,7 @@ mod tests {
             let d = describe_one(&s, 0).unwrap();
             let classic = export_series(&s, CompatLevel::oldest()).unwrap();
             let sz = sizes_of(&s, &classic, 1).unwrap();
-            let rec = recommend(&s, &classic, &d, &sz, &params()).unwrap();
+            let rec = recommend(&s, &classic, &d, d.conclusions(10_000), &sz, &params()).unwrap();
             let inner = d.inner.as_ref().unwrap();
             let (_, child, width) = list_parts(&classic).unwrap();
             let outer = Level::of_values(
@@ -3432,7 +3435,15 @@ mod tests {
     fn rec(s: Series) -> Rec {
         let d = describe_one(&s, 0).unwrap();
         let sz = sizes(&s, 1).unwrap();
-        recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &params()).unwrap()
+        recommend(
+            &s,
+            &classic_layout(&s).unwrap(),
+            &d,
+            d.conclusions(10_000),
+            &sz,
+            &params(),
+        )
+        .unwrap()
     }
 
     fn chosen(r: &Rec) -> &Candidate {
@@ -3712,7 +3723,15 @@ mod tests {
 
     fn rec_with(s: Series) -> Rec {
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
-        recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &params()).unwrap()
+        recommend(
+            &s,
+            &classic_layout(&s).unwrap(),
+            &d,
+            d.conclusions(10_000),
+            &sz,
+            &params(),
+        )
+        .unwrap()
     }
 
     #[test]

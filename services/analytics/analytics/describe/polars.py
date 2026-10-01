@@ -20,6 +20,7 @@ from analytics.describe._values import (
     ISO_OFFSET,
     ISO_TIME,
     LEADING_ZERO,
+    NESTED,
     NUMERIC,
     NUMERIC_INT,
     STRING_LIKE,
@@ -120,6 +121,8 @@ def frequencies(s: pl.Series, seed: int) -> pl.DataFrame:
 def extremes(s: pl.Series, freq: pl.DataFrame) -> dict:
     """First occurrence of the min and max: sort the distinct values (Polars order;
     NaN excluded) and take their first-occurrence indices."""
+    if isinstance(s.dtype, NESTED):  # no extremes (spec 2026-10-01 §13.3)
+        return {"argmin": None, "argmax": None}
     values = freq.select("v", "first")
     if isinstance(s.dtype, FLOATS):
         values = values.filter(pl.col("v").is_not_nan())

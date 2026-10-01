@@ -6,7 +6,8 @@ from analytics.describe.base import Describe
 class DescribeRust(Describe):
     """Rust extension: `describe_columns` (one pass per column; rayon across columns and
     64K-row chunks) and `column_sizes`. Rust also returns its own conclusions; this
-    class lets the base derive them from the same inputs, which tests compare."""
+    class lets the base derive them from the same inputs instead, and tests compare
+    them."""
 
     def _compute(self, frames, combos):
         rows: dict[tuple[str, str], dict] = {}

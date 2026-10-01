@@ -14,7 +14,7 @@ import polars as pl
 from analytics._dtypes import WIDE_INTEGERS
 from analytics.base import Technique, metric_mismatches
 from analytics.describe import estimators
-from analytics.describe._values import FLOATS, INTEGERS, STRING_LIKE, flatten
+from analytics.describe._values import FLOATS, INTEGERS, NESTED, STRING_LIKE, flatten
 
 U64, U32, F64 = pl.UInt64, pl.UInt32, pl.Float64
 D38 = pl.Decimal(
@@ -114,7 +114,6 @@ ESTIMATE_CONCLUSIONS = [
 ]
 TOLERANCES = {"size_zstd_bytes": 0.01, "size_polars_zstd_bytes": 0.01}
 SCHNABEL_RTOL = 0.10
-_NESTED = (pl.List, pl.Array, pl.Struct)
 
 
 def _unsupported(dtype: pl.DataType) -> bool:
@@ -268,7 +267,7 @@ def _render(
     s: pl.Series, lo: int | None, hi: int | None
 ) -> tuple[str | None, str | None]:
     """min / max as arrow-rs text (spec 2026-10-01 §13.1); None for nested dtypes."""
-    if lo is None or isinstance(s.dtype, _NESTED):
+    if lo is None or isinstance(s.dtype, NESTED):
         return None, None
     from analytics import _plugin
 

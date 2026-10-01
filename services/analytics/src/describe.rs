@@ -14,7 +14,6 @@ use crate::conclusions::{conclude, Conclusions};
 use crate::recommend::canon;
 use crate::shared::{encode_series, EncodedColumn};
 use foldhash::fast::FixedState;
-use polars::chunked_array::ops::row_encode::_get_rows_encoded_arr;
 use polars::prelude::*;
 use polars_arrow::array::Array;
 use polars_arrow::bitmap::Bitmap;
@@ -28,9 +27,10 @@ use std::collections::{HashMap, HashSet};
 // One foldhash map `key → (count, first row, split-subset mask)` per 64K-row
 // chunk, built in parallel and merged (counts summed, first = min, masks OR-ed).
 // One O(distinct) sweep of the merged map yields n_unique, f1/f2, the capture
-// history and, while there are ≤ 5 distinct values, their first rows. Keys come from `encode_series` (floats canonicalised;
-// strings, nested and struct values hashed — collisions ~6e-11 per pair at 50K
-// rows, accepted as documented in CLAUDE.md).
+// history and, while there are ≤ 5 distinct values, their first rows. Keys come
+// from `encode_series` (floats canonicalised; strings, nested and struct values
+// hashed — collisions ~6e-11 per pair at 50K rows, accepted as documented in
+// CLAUDE.md).
 
 pub(crate) const CHUNK: usize = 1 << 16;
 
@@ -157,8 +157,8 @@ pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]
 // Ordering matches Polars `sort()`: integers, Decimal and temporals by physical
 // value; floats numerically with NaN excluded (-0.0 ties 0.0); strings and
 // binary by bytes; Categorical by string value; Enum by category order (its
-// physical code); List, Array and Struct by Polars' row encoding — the encoding
-// its sort uses. Ties keep the lowest row index.
+// physical code). List, Array and Struct have no extremes (spec 2026-10-01
+// §13.3). Ties keep the lowest row index.
 
 pub(crate) struct Range {
     pub argmin: Option<u64>,
@@ -196,16 +196,7 @@ pub(crate) fn arg_extremes(s: &Series) -> PolarsResult<(Option<u64>, Option<u64>
         DataType::Binary => extremes(s.binary()?.iter(), lt),
         DataType::Categorical(_, _) => return arg_extremes(&s.cast(&DataType::String)?),
         DataType::Boolean => extremes(s.bool()?.iter(), lt),
-        DataType::List(_) | DataType::Array(_, _) | DataType::Struct(_) => {
-            let rows = _get_rows_encoded_arr(&[s.clone().into_column()], &[false], &[false])?;
-            let valid = s.is_not_null();
-            extremes(
-                rows.values_iter()
-                    .zip(valid.iter())
-                    .map(|(r, ok)| (ok == Some(true)).then_some(r)),
-                lt,
-            )
-        }
+        DataType::List(_) | DataType::Array(_, _) | DataType::Struct(_) => (None, None),
         _ => {
             let p = s.to_physical_repr();
             match p.dtype() {
@@ -1122,15 +1113,8 @@ pub(crate) struct Profile {
 pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profile> {
     let lengths = byte_lengths(s)?;
     let range = range(s, lengths.as_deref())?;
-    let nested = matches!(
-        s.dtype(),
-        DataType::List(_) | DataType::Array(..) | DataType::Struct(_)
-    );
-    let (min, max) = if nested {
-        (None, None)
-    } else {
-        (render_at(s, range.argmin)?, render_at(s, range.argmax)?)
-    };
+    // Nested dtypes have no argmin / argmax, hence no min / max.
+    let (min, max) = (render_at(s, range.argmin)?, render_at(s, range.argmax)?);
     let numeric = numeric_extremes(s, range.argmin, range.argmax)?;
     Ok(Profile {
         freq: frequencies(&encode_series(s)?, seed, lengths.as_deref()),
@@ -1297,18 +1281,23 @@ impl Described {
     /// One `fields()` row.
     pub(crate) fn row(&self, threshold: u64) -> Row {
         let (oc, ic) = self.conclusions(threshold);
+        self.row_with(&oc, ic.as_ref())
+    }
+
+    /// One `fields()` row from conclusions already computed (`conclusions`).
+    pub(crate) fn row_with(&self, oc: &Conclusions, ic: Option<&Conclusions>) -> Row {
         let mut row: Row = vec![
             AnyValue::StringOwned(self.name.clone()),
             AnyValue::UInt64(self.n_rows),
             AnyValue::UInt64(self.n_null),
         ];
-        row.extend(self.outer.row(&oc));
+        row.extend(self.outer.row(oc));
         row.push(u64v(self.n_midnight));
         match (&self.inner, ic) {
             (Some(i), Some(ic)) => {
                 row.push(AnyValue::UInt64(i.values.len() as u64));
                 row.push(AnyValue::UInt64(i.values.null_count() as u64));
-                row.extend(i.profile.row(&ic));
+                row.extend(i.profile.row(ic));
             }
             _ => row.extend(nulls(2 + value_fields().len())),
         }
@@ -1581,7 +1570,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_use_polars_sort_order() {
+    fn lists_have_lengths_but_no_extremes() {
         let s = Series::new(
             "x".into(),
             [
@@ -1591,7 +1580,7 @@ mod tests {
                 Some(Series::new_empty("".into(), &DataType::Int64)),
             ],
         );
-        assert_eq!(r(s), (Some(3), Some(1), Some(0), Some(2)));
+        assert_eq!(r(s), (None, None, Some(0), Some(2)));
     }
 
     #[test]

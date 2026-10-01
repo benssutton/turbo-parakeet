@@ -5,7 +5,6 @@ Oracles: hand-worked known answers and DescribePolars, the technique's reference
 Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
 
-import math
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -529,8 +528,8 @@ def test_frequencies(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_extremes_are_first_occurrences(impl):
     s = pl.Series("x", [5, 1, 3, 1, 5])
-    assert (profile(impl, s)["min"], profile(impl, s)["max"]) == ("1", "5")
-    assert (inputs(impl, s)["argmin"], inputs(impl, s)["argmax"]) == (1, 0)
+    r, i = profile(impl, s), inputs(impl, s)
+    assert (r["min"], r["max"], i["argmin"], i["argmax"]) == ("1", "5", 1, 0)
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -623,6 +622,7 @@ def test_list_whole_and_inner_values(impl):
         2,
     )  # [1, None, 3, 1]
     i = inputs(impl, s)
+    assert (i["argmin"], i["argmax"]) == (None, None)  # nested: no extremes
     assert (i["inner_argmin"], i["inner_argmax"], i["inner_f1"], i["inner_f2"]) == (
         0,
         2,
@@ -977,7 +977,8 @@ def test_multi_chunk_and_sliced_input(impl):
     assert s.n_chunks() == 3
     r = profile(impl, s)
     assert (r["n_unique"], r["min"], r["max"]) == (3, "a", "c")
-    assert (inputs(impl, s)["argmin"], inputs(impl, s)["argmax"]) == (2, 3)
+    i = inputs(impl, s)
+    assert (i["argmin"], i["argmax"]) == (2, 3)
     sliced = pl.Series("x", [[9], [1, 2], None, [3]], dtype=pl.List(pl.Int64)).slice(
         1, 3
     )

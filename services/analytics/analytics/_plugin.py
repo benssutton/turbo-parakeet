@@ -129,7 +129,8 @@ def describe_and_recommend(
     categorical_threshold: int,
     boolean_pairs: tuple[tuple[str, str], ...],
 ) -> pl.DataFrame:
-    """column, every Describe metric, the size metrics and the rec_* columns."""
+    """column, every Describe metric and Rust's conclusions (min / max, estimates,
+    class), the size metrics and the rec_* columns."""
     return pl.DataFrame(
         _rs.describe_and_recommend(
             df,

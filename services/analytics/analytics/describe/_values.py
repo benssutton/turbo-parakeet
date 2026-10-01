@@ -9,6 +9,7 @@ import polars as pl
 
 FLOATS = (pl.Float32, pl.Float64)
 STRING_LIKE = (pl.String, pl.Categorical, pl.Enum)
+NESTED = (pl.List, pl.Array, pl.Struct)  # no min / max (spec 2026-10-01 §13.3)
 INTEGERS = (
     pl.Int8,
     pl.Int16,
