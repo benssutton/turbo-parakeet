@@ -1133,8 +1133,10 @@ def test_rust_conclusions_equal_the_reference_rule():
     for frame in [describe_mixed(2_000), stringified(describe_mixed(500))]:
         raw = _plugin.describe_columns(frame, 0, 10_000)
         derived = DescribeRust().add({"t": frame}).result()
+        # Same rule; float operation order may differ by an ulp.
         for c in CONCLUSIONS:
-            if CONCLUSIONS[c] == pl.Float64:  # same rule, floating-point op order may differ by an ulp
-                assert raw[c].to_list() == approx(derived[c].to_list(), rel=1e-12, nan_ok=True), c
+            if CONCLUSIONS[c] == pl.Float64:
+                got = raw[c].to_list()
+                assert got == approx(derived[c].to_list(), rel=1e-12, nan_ok=True), c
             else:
                 assert raw[c].to_list() == derived[c].to_list(), c

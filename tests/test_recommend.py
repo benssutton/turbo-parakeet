@@ -762,8 +762,10 @@ def test_rust_conclusions_match_describe():
     frame = describe_mixed(2_000)
     a = run(impl(), {"t": frame})
     b = DescribeRust().add({"t": frame}).result()
+    # Same rule; float operation order may differ by an ulp.
     for c in CONCLUSIONS:
-        if CONCLUSIONS[c] == pl.Float64:  # same rule, floating-point op order may differ by an ulp
-            assert a[c].to_list() == approx(b[c].to_list(), rel=1e-12, nan_ok=True), c
+        if CONCLUSIONS[c] == pl.Float64:
+            got = a[c].to_list()
+            assert got == approx(b[c].to_list(), rel=1e-12, nan_ok=True), c
         else:
             assert a[c].to_list() == b[c].to_list(), c
