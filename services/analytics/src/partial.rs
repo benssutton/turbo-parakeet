@@ -12,8 +12,8 @@ use polars::prelude::*;
 
 use crate::arrow_io::export_series;
 use crate::describe::{
-    arg_extremes, byte_lengths, float_stats, frequency_map, lengths, n_midnight, strings,
-    FloatStats, Frequencies, Profile, Range, StringStats,
+    arg_extremes, byte_lengths, float_stats, frequency_map, frequency_map_below, lengths,
+    n_midnight, strings, FloatStats, Frequencies, Profile, Range, StringStats,
 };
 use crate::distinct_sample::{sample_size, DistinctSample};
 use crate::hll::{hash_key, Hll};
@@ -22,6 +22,9 @@ use crate::recommend::{
 };
 use crate::shared::encode_series;
 use crate::sizes::{classic_layout, ipc_body_bytes};
+
+/// HyperLogLog precision: 2^14 registers, 16 KB, relative standard error ≈ 0.8%.
+const HLL_P: u8 = 14;
 
 fn pad8(x: u64) -> u64 {
     x.next_multiple_of(8)
@@ -305,6 +308,8 @@ pub(crate) struct BatchStats {
     n_midnight: Option<u64>,
     /// Every distinct value, first-occurrence order.
     keys: Option<Vec<KeyStat>>,
+    /// HyperLogLog of the batch's distinct values (merged into the level's).
+    sketch: Hll,
     /// Text / binary levels: lengths of the values over 12 bytes, row order.
     long_lens: Option<Vec<u64>>,
     /// Measured classic size, when the classic type has no analytic size.
@@ -319,9 +324,9 @@ pub(crate) struct BatchStats {
 
 impl BatchStats {
     /// `s`: the level's values in one batch; `offset`: the level's global index of its
-    /// first value; `exact`: the level's distinct sample still holds every value (only
-    /// then does the keys' first-occurrence order matter).
-    pub(crate) fn of(s: &Series, offset: u64, seed: u64, exact: bool) -> PolarsResult<Self> {
+    /// first value; `top`: the level's distinct-sample top hash in the sampling phase
+    /// (None while exact: then the keys' first-occurrence order matters).
+    pub(crate) fn of(s: &Series, offset: u64, seed: u64, top: Option<u64>) -> PolarsResult<Self> {
         let lens = byte_lengths(s)?;
         let classic = export_series(&s.slice(0, 0), CompatLevel::oldest())?
             .data_type()
@@ -346,33 +351,41 @@ impl BatchStats {
         } else {
             (None, None)
         };
-        let map = frequency_map(&encode_series(s)?, seed, offset);
-        // The values themselves only for text, where the dictionary rules read them.
-        let text = if map.len() <= 5 && is_text(s.dtype()) {
+        let enc = encode_series(s)?;
+        // Sampling phase: only values hashing at or below the sample's top can still be
+        // held or admitted (the top only falls); the sketch takes every row's hash.
+        let (map, mut sketch) = match top {
+            Some(t) => frequency_map_below(&enc, seed, offset, t, HLL_P),
+            None => (frequency_map(&enc, seed, offset), Hll::new(HLL_P)),
+        };
+        // The values themselves only for text in the exact phase (`few`).
+        let text = if top.is_none() && map.len() <= 5 && is_text(s.dtype()) {
             Some(s.cast(&DataType::String)?)
         } else {
             None
         };
-        let mut keys: Vec<KeyStat> = map
-            .into_iter()
-            .map(|(key, e)| {
-                let row = (e.first - offset) as usize;
-                KeyStat {
-                    key,
-                    hash: hash_key(key),
-                    first: e.first,
-                    count: e.count,
-                    mask: e.mask,
-                    len: lens.as_ref().map_or(0, |l| l[row]),
-                    text: text
-                        .as_ref()
-                        .and_then(|t| t.str().ok()?.get(row).map(str::to_owned)),
-                }
-            })
-            .collect();
+        let mut keys: Vec<KeyStat> = Vec::with_capacity(map.len());
+        for (key, e) in map {
+            let hash = hash_key(key);
+            if top.is_none() {
+                sketch.insert(hash);
+            }
+            let row = (e.first - offset) as usize;
+            keys.push(KeyStat {
+                key,
+                hash,
+                first: e.first,
+                count: e.count,
+                mask: e.mask,
+                len: lens.as_ref().map_or(0, |l| l[row]),
+                text: text
+                    .as_ref()
+                    .and_then(|t| t.str().ok()?.get(row).map(str::to_owned)),
+            });
+        }
         // First-occurrence order feeds the exact phase's `few` and view blocks (text /
         // binary levels); the sample itself keeps the k smallest hashes in any order.
-        if exact && lens.is_some() {
+        if top.is_none() && lens.is_some() {
             keys.sort_unstable_by_key(|k| k.first);
         }
         let keys = Some(keys);
@@ -390,6 +403,7 @@ impl BatchStats {
             strings: strings(s, true)?,
             n_midnight: n_midnight(s)?,
             keys,
+            sketch,
             long_lens: lens.map(|l| l.into_iter().filter(|&x| x > 12).collect()),
             size_bytes,
             polars_bytes: ipc_body_bytes(export_series(s, CompatLevel::newest())?.as_ref(), None)?,
@@ -461,8 +475,9 @@ impl LevelStats {
         self.strings = opt(self.strings.take(), b.strings, StringStats::merge);
         self.n_midnight = opt(self.n_midnight, b.n_midnight, |a, b| a + b);
         if let Some(keys) = b.keys {
-            let h = self.hll.get_or_insert_with(|| Hll::new(14));
-            keys.iter().for_each(|k| h.insert(k.hash));
+            self.hll
+                .get_or_insert_with(|| Hll::new(HLL_P))
+                .merge(&b.sketch);
             self.sample
                 .get_or_insert_with(|| DistinctSample::new(sample_size(threshold)))
                 .absorb(keys);
@@ -558,9 +573,9 @@ impl LevelStats {
         }
     }
 
-    /// Whether the distinct sample still holds every distinct value seen.
-    pub(crate) fn is_exact(&self) -> bool {
-        self.sample.as_ref().is_none_or(DistinctSample::is_exact)
+    /// Sampling phase: the largest hash the distinct sample holds (None while exact).
+    pub(crate) fn sample_top(&self) -> Option<u64> {
+        self.sample.as_ref().and_then(DistinctSample::top)
     }
 
     pub(crate) fn int_range(&self) -> Option<(i128, i128)> {
@@ -594,7 +609,7 @@ mod tests {
     fn absorbed(parts: &[Series], threshold: u64) -> LevelStats {
         let mut st = LevelStats::default();
         for p in parts {
-            let b = BatchStats::of(p, st.n, 7, st.is_exact()).unwrap();
+            let b = BatchStats::of(p, st.n, 7, st.sample_top()).unwrap();
             st.absorb(b, threshold);
         }
         st
@@ -762,7 +777,7 @@ mod tests {
             );
             let mut st = LevelStats::default();
             for p in chunks(&s, 10_000) {
-                let b = BatchStats::of(&p, st.n, seed, st.is_exact()).unwrap();
+                let b = BatchStats::of(&p, st.n, seed, st.sample_top()).unwrap();
                 st.absorb(b, 1_000);
             }
             let n = st.n - st.n_null;

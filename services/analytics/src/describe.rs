@@ -11,6 +11,7 @@
 // by name).
 
 use crate::conclusions::{conclude, Conclusions};
+use crate::hll::{hash_key, Hll};
 use crate::recommend::canon;
 use crate::shared::{encode_series, EncodedColumn};
 use foldhash::fast::FixedState;
@@ -117,6 +118,54 @@ pub(crate) fn frequency_map(col: &EncodedColumn, seed: u64, offset: u64) -> Map 
         .enumerate()
         .map(|(i, (values, nulls))| count_chunk(values, nulls, offset as usize + i * CHUNK, seed))
         .reduce(|| Map::with_hasher(FixedState::default()), merge)
+}
+
+/// Streaming's sampling phase: every non-null row's `hash_key` into a HyperLogLog
+/// (precision `p`), and `frequency_map` restricted to the values hashing at or below
+/// `top` (the only ones a bottom-k sample can still hold or admit). Each kept value's
+/// count, first row and mask cover all of its rows, as in `frequency_map`.
+pub(crate) fn frequency_map_below(
+    col: &EncodedColumn,
+    seed: u64,
+    offset: u64,
+    top: u64,
+    p: u8,
+) -> (Map, Hll) {
+    col.values
+        .par_chunks(CHUNK)
+        .zip(col.is_null.par_chunks(CHUNK))
+        .enumerate()
+        .map(|(i, (values, nulls))| {
+            let start = offset + (i * CHUNK) as u64;
+            let mut map = Map::with_hasher(FixedState::default());
+            let mut sketch = Hll::new(p);
+            for (j, (&key, &null)) in values.iter().zip(nulls).enumerate() {
+                if null {
+                    continue;
+                }
+                let hash = hash_key(key);
+                sketch.insert(hash);
+                if hash > top {
+                    continue;
+                }
+                let row = start + j as u64;
+                let e = map.entry(key).or_insert(Entry {
+                    count: 0,
+                    first: row,
+                    mask: 0,
+                });
+                e.count += 1;
+                e.mask |= 1 << subset(seed, row);
+            }
+            (map, sketch)
+        })
+        .reduce(
+            || (Map::with_hasher(FixedState::default()), Hll::new(p)),
+            |(a, mut sa), (b, sb)| {
+                sa.merge(&sb);
+                (merge(a, b), sa)
+            },
+        )
 }
 
 pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]>) -> Frequencies {
@@ -1447,6 +1496,40 @@ mod tests {
 
     fn freq(s: Series) -> Frequencies {
         frequencies(&encode_series(&s).unwrap(), 0, None)
+    }
+
+    #[test]
+    fn frequency_map_below_is_the_full_map_restricted() {
+        // Three chunks, repeated values, nulls; offset as in a later streaming batch.
+        let n = 2 * CHUNK + 777;
+        let s = Series::new(
+            "x".into(),
+            (0..n as i64)
+                .map(|i| (i % 11 != 0).then_some(i % 40_000))
+                .collect::<Vec<_>>(),
+        );
+        let enc = encode_series(&s).unwrap();
+        let full = frequency_map(&enc, 3, 1_000);
+        let mut hashes: Vec<u64> = full.keys().map(|&k| hash_key(k)).collect();
+        hashes.sort_unstable();
+        let top = hashes[hashes.len() / 10];
+        let (below, sketch) = frequency_map_below(&enc, 3, 1_000, top, 14);
+        let want: Vec<_> = full
+            .iter()
+            .filter(|(&k, _)| hash_key(k) <= top)
+            .map(|(&k, e)| (k, e.count, e.first, e.mask))
+            .collect();
+        let mut got: Vec<_> = below
+            .iter()
+            .map(|(&k, e)| (k, e.count, e.first, e.mask))
+            .collect();
+        let mut want = want;
+        want.sort_unstable();
+        got.sort_unstable();
+        assert_eq!(got, want);
+        let mut all = Hll::new(14);
+        hashes.iter().for_each(|&h| all.insert(h));
+        assert_eq!(sketch, all);
     }
 
     #[test]

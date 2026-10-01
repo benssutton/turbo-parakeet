@@ -108,6 +108,15 @@ impl DistinctSample {
         }
     }
 
+    /// Sampling phase: the largest held hash; no value above it is held or admitted.
+    pub(crate) fn top(&self) -> Option<u64> {
+        if self.sampling {
+            self.heap.peek().map(|&(h, _)| h)
+        } else {
+            None
+        }
+    }
+
     /// Whether the sample still holds every distinct value seen.
     pub(crate) fn is_exact(&self) -> bool {
         !self.sampling

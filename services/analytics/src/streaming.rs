@@ -550,12 +550,13 @@ impl Streaming {
         }
         let c = self.index.get(s.name().as_str()).map(|&i| &self.columns[i]);
         let seed = self.params.seed;
-        let outer = BatchStats::of(s, self.n_rows, seed, c.is_none_or(|c| c.outer.is_exact()))?;
+        let top = c.and_then(|c| c.outer.sample_top());
+        let outer = BatchStats::of(s, self.n_rows, seed, top)?;
         let inner = match flatten(s)? {
             Some(v) => {
                 let prev = c.and_then(|c| c.inner.as_ref());
-                let exact = prev.is_none_or(LevelStats::is_exact);
-                Some(BatchStats::of(&v, prev.map_or(0, |l| l.n), seed, exact)?)
+                let top = prev.and_then(LevelStats::sample_top);
+                Some(BatchStats::of(&v, prev.map_or(0, |l| l.n), seed, top)?)
             }
             None => None,
         };
