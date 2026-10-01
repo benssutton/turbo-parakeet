@@ -75,15 +75,30 @@ def test_schnabel_invalid_cases():
 HISTORY_10 = [0, 0, 0, 0, 0, 0, 10]
 
 
-def test_estimate_picks_schnabel_then_chao1():
-    sch = estimators.estimate(10, 40, 4, 2, HISTORY_10)
-    assert sch["est_method"] == "schnabel" and sch["est_cardinality"] == approx(
-        9.523809523809524
+def test_estimate_rule():
+    assert estimators.estimate(0, 0, 0, 0, [0] * 7)["est_method"] == "observed"
+    high = estimators.estimate(10, 15, 4, 2, HISTORY_10)  # d/n ≥ 0.5
+    assert (high["est_method"], high["est_cardinality"], high["est_high"]) == (
+        "observed",
+        10.0,
+        10.0,
     )
-    assert sch["estimates_agree"] is True  # [10.25, 26.0] overlaps [6.47, 16.38]
-    chao = estimators.estimate(10, 15, 4, 2, HISTORY_10)  # d/n ≥ 0.5 → Schnabel invalid
-    assert chao["est_method"] == "chao1" and chao["est_cardinality"] == 12.0
-    assert chao["schnabel"] is None and chao["estimates_agree"] is None
+    sch = estimators.estimate(10, 40, 4, 2, HISTORY_10)  # Schnabel 9.52 floored at 10
+    assert (sch["est_method"], sch["est_cardinality"], sch["est_low"]) == (
+        "schnabel",
+        10.0,
+        10.0,
+    )
+    assert sch["est_high"] == approx(16.378255262343956)
+    assert sch["estimates_agree"] is True
+    chao = estimators.estimate(9, 100, 4, 2, [3, 3, 0, 3, 0, 0, 0])  # no recapture
+    c, lo, hi = estimators.chao1(9, 4, 2)
+    assert (chao["est_method"], chao["est_cardinality"], chao["est_high"]) == (
+        "chao1",
+        c,
+        hi,
+    )
+    assert chao["est_low"] == max(lo, 9) and chao["estimates_agree"] is None
 
 
 def test_estimates_disagree_under_heavy_skew():
@@ -220,7 +235,7 @@ CLASS_CASES = [
     pytest.param(
         pl.Series("x", [-3, 5, 1, 2]),
         dict(argmin=0, argmax=1),
-        {"categorical_threshold": 5},
+        {"categorical_threshold": 3},
         "discrete",
         id="over_threshold",
     ),
@@ -304,7 +319,7 @@ def test_zero_row_column_conclusions():
     )
     assert r["class"] == "null" and r["top5"] == [] and r["min"] is None
     assert (
-        r["est_method"] == "chao1"
+        r["est_method"] == "observed"
         and r["est_cardinality"] == 0.0
         and r["unique"] is False
     )
@@ -359,7 +374,7 @@ def test_agreement_tolerances():
     assert any("size_zstd_bytes" in p for p in compare(size_zstd_bytes=1_100))
     assert any("n_unique" in p for p in compare(n_unique=11))
     # [5, 4, 0, 0, 0, 0, 1]: |S1| = 6, |S2| = 5, |S3| = 1, R = 2 → Schnabel 40/3 ≈ 13.3 vs 9.52 (> 10%)
-    assert any("schnabel" in p for p in compare(capture_history=[5, 4, 0, 0, 0, 0, 1]))
+    assert any("est_cardinality" in p for p in compare(capture_history=[5, 4, 0, 0, 0, 0, 1]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -86,16 +86,10 @@ METRICS = {
 }
 
 CLASS = pl.Enum(["null", "constant", "boolean", "ordinal", "categorical", "discrete"])
-METHOD = pl.Enum(["schnabel", "chao1"])
+METHOD = pl.Enum(["observed", "hll", "schnabel", "chao1"])
 TOP5 = pl.List(pl.Struct({"value": pl.String, "count": pl.UInt64}))
 ESTIMATES = {
     "unique": pl.Boolean,
-    "chao1": F64,
-    "chao1_low": F64,
-    "chao1_high": F64,
-    "schnabel": F64,
-    "schnabel_low": F64,
-    "schnabel_high": F64,
     "est_cardinality": F64,
     "est_method": METHOD,
     "est_low": F64,
@@ -213,12 +207,16 @@ class Describe(Technique):
                 rtol,
                 0.0,
             )
-        schnabel_cols = ["schnabel", "inner_schnabel"]
+        estimate_cols = [
+            f"{p}{k}"
+            for p in ("", "inner_")
+            for k in ("est_cardinality", "est_low", "est_high")
+        ]
         problems += metric_mismatches(
-            as_float(result, schnabel_cols),
-            as_float(reference, schnabel_cols),
+            as_float(result, estimate_cols),
+            as_float(reference, estimate_cols),
             keys,
-            schnabel_cols,
+            estimate_cols,
             SCHNABEL_RTOL,
             0.0,
         )

@@ -13,7 +13,7 @@ use rayon::prelude::*;
 
 use crate::api::{Error, Result};
 use crate::arrow_io::{export_struct, import_array, import_batch};
-use crate::cardinality_estimators::{estimate, Estimate};
+use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
 use crate::describe::{assemble, flatten, Profile, Row};
 use crate::partial::{BatchStats, Ext, LevelStats, ViewSim};
 use crate::recommend::{
@@ -702,7 +702,7 @@ impl Streaming {
             return Ok(row);
         };
         let t = self.params.categorical_threshold;
-        let fallback = || estimate(0, 0, 0, 0, &[0; 7]);
+        let fallback = || pick_estimate(Count::Exact(0), 0, 0, 0, &[0; 7]).0;
         let err = |e: polars::prelude::PolarsError| e.to_string();
 
         // Levels from statistics.

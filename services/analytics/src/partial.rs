@@ -12,7 +12,7 @@ use foldhash::fast::FixedState;
 use polars::prelude::*;
 
 use crate::arrow_io::export_series;
-use crate::cardinality_estimators::{estimate, Estimate, Method};
+use crate::cardinality_estimators::{pick_estimate, Count, Estimate, Method};
 use crate::describe::{
     arg_extremes, byte_lengths, float_stats, frequency_map, lengths, n_midnight, strings,
     FloatStats, Frequencies, Profile, Range, StringStats,
@@ -541,7 +541,7 @@ impl LevelStats {
             }
         } else {
             let (f1, f2, h) = d.counts();
-            estimate(d.n_unique(), self.n - self.n_null, f1, f2, &h)
+            pick_estimate(Count::Exact(d.n_unique()), self.n - self.n_null, f1, f2, &h).0
         })
     }
 

@@ -22,7 +22,7 @@
 // ("007.50") is unlikely to be an identifier, so only numeric equivalence
 // matters for it; differing leading or trailing zeros set rec_lossy_formatting.
 
-use crate::cardinality_estimators::{estimate, Estimate};
+use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
 use crate::describe::{
     assemble, describe_one, fields, parse_decimal, parse_iso, Described, Profile, Row,
 };
@@ -736,7 +736,7 @@ impl<'a> Level<'a> {
             n_midnight: None,
             size_bytes: 0,
             size_note: "",
-            est: estimate(0, 0, 0, 0, &[0; 7]),
+            est: pick_estimate(Count::Exact(0), 0, 0, 0, &[0; 7]).0,
             prefix: "",
             text: Default::default(),
         }
@@ -787,13 +787,14 @@ impl Level<'_> {
 }
 
 pub(crate) fn level_estimate(p: &Profile, n: u64) -> Estimate {
-    estimate(
-        p.freq.n_unique,
+    pick_estimate(
+        Count::Exact(p.freq.n_unique),
         n,
         p.freq.f1,
         p.freq.f2,
         &p.freq.capture_history,
     )
+    .0
 }
 
 /// arrow-cast with `safe: false`: a value that does not fit is an error, not a null.
@@ -3162,8 +3163,8 @@ mod tests {
                 .unwrap()
                 .evidence
         };
-        let chao = evidence();
-        assert!(chao.contains("method=chao1 est_low="), "{chao}");
+        let evidence = evidence();
+        assert!(evidence.contains("method=observed est_low=3"), "{evidence}");
     }
 
     #[test]

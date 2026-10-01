@@ -61,25 +61,27 @@ def schnabel(
 
 
 def estimate(d: int, n: int, f1: int, f2: int, history: Sequence[int]) -> dict:
-    """Every estimate plus the one picked by rule: Schnabel valid → Schnabel; else Chao1."""
+    """The estimate picked by rule (spec 2026-10-01 §4) for an exact count d of n
+    non-null values: d/n ≥ 0.5 → d itself ("observed"); below, Schnabel when valid,
+    else Chao1, floored at d. Same rule as cardinality_estimators::pick_estimate."""
+    if n == 0:
+        return _picked(False, 0.0, "observed", 0.0, 0.0, None)
+    if d / n >= 0.5:
+        return _picked(d == n, float(d), "observed", float(d), float(d), None)
     c, c_lo, c_hi = chao1(d, f1, f2)
     sch = schnabel(history, d, n)
-    s, s_lo, s_hi = sch if sch else (None, None, None)
-    if sch:
-        method, est, lo, hi = "schnabel", s, s_lo, s_hi
-    else:
-        method, est, lo, hi = "chao1", c, c_lo, c_hi
+    e, lo, hi, method = (*sch, "schnabel") if sch else (c, c_lo, c_hi, "chao1")
+    est = max(e, d)
+    agree = None if sch is None else (c_lo <= sch[2] and sch[1] <= c_hi)
+    return _picked(False, est, method, max(lo, d), max(hi, est), agree)
+
+
+def _picked(unique, est, method, lo, hi, agree) -> dict:
     return {
-        "unique": d == n and n > 0,
-        "chao1": c,
-        "chao1_low": c_lo,
-        "chao1_high": c_hi,
-        "schnabel": s,
-        "schnabel_low": s_lo,
-        "schnabel_high": s_hi,
-        "est_cardinality": est,
+        "unique": unique,
+        "est_cardinality": float(est),
         "est_method": method,
-        "est_low": lo,
-        "est_high": hi,
-        "estimates_agree": None if sch is None else (c_lo <= s_hi and s_lo <= c_hi),
+        "est_low": float(lo),
+        "est_high": float(hi),
+        "estimates_agree": agree,
     }

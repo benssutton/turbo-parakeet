@@ -50,21 +50,35 @@ pub(crate) fn schnabel(history: &[u64; 7], d: u64, n: u64) -> Option<(f64, f64, 
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Method {
+    /// The exact distinct count (cardinality ratio >= 0.5, or nothing to estimate).
+    Observed,
+    /// The HyperLogLog count (streaming's sampling phase, ratio >= 0.5).
+    Hll,
     Schnabel,
     Chao1,
-    /// Streaming: distinct tracking stopped past `categorical_threshold`; no estimate.
+    /// Streaming: distinct tracking stopped past `categorical_threshold`; removed in Task 9.
     Overflowed,
 }
 
 impl Method {
-    /// Lower-case name, as the dictionary candidate's evidence reports it.
+    /// Lower-case name, as `est_method` and the dictionary candidate's evidence report it.
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Method::Observed => "observed",
+            Method::Hll => "hll",
             Method::Schnabel => "schnabel",
             Method::Chao1 => "chao1",
             Method::Overflowed => "overflowed",
         }
     }
+}
+
+/// A level's distinct count: exact, or a HyperLogLog estimate with its relative
+/// standard error.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Count {
+    Exact(u64),
+    Hll { estimate: f64, std_error: f64 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -75,25 +89,61 @@ pub(crate) struct Estimate {
     pub method: Method,
 }
 
-/// The estimate picked by rule: Schnabel when valid, else Chao1.
-pub(crate) fn estimate(d: u64, n: u64, f1: u64, f2: u64, history: &[u64; 7]) -> Estimate {
-    match schnabel(history, d, n) {
-        Some((s, lo, hi)) => Estimate {
-            est_cardinality: s,
-            est_low: Some(lo),
-            est_high: Some(hi),
-            method: Method::Schnabel,
-        },
-        None => {
-            let (c, lo, hi) = chao1(d, f1, f2);
-            Estimate {
-                est_cardinality: c,
-                est_low: Some(lo),
-                est_high: Some(hi),
-                method: Method::Chao1,
-            }
-        }
+/// The estimate picked by rule (spec 2026-10-01 s4), with `estimates_agree`.
+/// n = non-null values; d = the count. d/n >= 0.5 -> the count itself (observed, or
+/// HLL +- 3 sigma). Below: Schnabel when valid, else Chao1, floored at d (the estimate) and
+/// at d - 3 sigma for HLL (the low end): observed values bound the population from below.
+pub(crate) fn pick_estimate(
+    count: Count,
+    n: u64,
+    f1: u64,
+    f2: u64,
+    history: &[u64; 7],
+) -> (Estimate, Option<bool>) {
+    let (d, floor, high, method) = match count {
+        Count::Exact(d) => (d as f64, d as f64, d as f64, Method::Observed),
+        Count::Hll { estimate, std_error } => (
+            estimate,
+            estimate * (1.0 - 3.0 * std_error),
+            estimate * (1.0 + 3.0 * std_error),
+            Method::Hll,
+        ),
+    };
+    if n == 0 {
+        let zero = Estimate {
+            est_cardinality: 0.0,
+            est_low: Some(0.0),
+            est_high: Some(0.0),
+            method: Method::Observed,
+        };
+        return (zero, None);
     }
+    if d / n as f64 >= 0.5 {
+        let e = Estimate {
+            est_cardinality: d,
+            est_low: Some(floor),
+            est_high: Some(high),
+            method,
+        };
+        return (e, None);
+    }
+    let du = d.round() as u64;
+    let (c, c_lo, c_hi) = chao1(du, f1, f2);
+    let sch = schnabel(history, du, n);
+    let (e, lo, hi, method) = match sch {
+        Some((s, s_lo, s_hi)) => (s, s_lo, s_hi, Method::Schnabel),
+        None => (c, c_lo, c_hi, Method::Chao1),
+    };
+    let est = e.max(d);
+    (
+        Estimate {
+            est_cardinality: est,
+            est_low: Some(lo.max(floor)),
+            est_high: Some(hi.max(est)),
+            method,
+        },
+        sch.map(|(_, s_lo, s_hi)| c_lo <= s_hi && s_lo <= c_hi),
+    )
 }
 
 #[cfg(test)]
@@ -135,16 +185,53 @@ mod tests {
         assert!(schnabel(&[0; 7], 0, 0).is_none());
     }
 
+    const H10: [u64; 7] = [0, 0, 0, 0, 0, 0, 10];
+
     #[test]
-    fn overflowed_method_name() {
-        assert_eq!(Method::Overflowed.name(), "overflowed");
+    fn no_values_is_observed_zero() {
+        let (e, agree) = pick_estimate(Count::Exact(0), 0, 0, 0, &[0; 7]);
+        assert_eq!((e.method, e.est_cardinality, e.est_low, e.est_high), (Method::Observed, 0.0, Some(0.0), Some(0.0)));
+        assert_eq!(agree, None);
     }
 
     #[test]
-    fn estimate_picks_schnabel_then_chao1() {
-        let h = [0, 0, 0, 0, 0, 0, 10];
-        assert_eq!(estimate(10, 40, 4, 2, &h).method, Method::Schnabel);
-        let chao = estimate(10, 15, 4, 2, &h);
-        assert_eq!((chao.method, chao.est_cardinality), (Method::Chao1, 12.0));
+    fn high_ratio_is_the_count() {
+        let (e, _) = pick_estimate(Count::Exact(10), 15, 4, 2, &H10);
+        assert_eq!((e.method, e.est_cardinality, e.est_low, e.est_high), (Method::Observed, 10.0, Some(10.0), Some(10.0)));
+        let (h, agree) = pick_estimate(Count::Hll { estimate: 1_000.0, std_error: 0.01 }, 1_500, 0, 0, &[0; 7]);
+        assert_eq!((h.method, h.est_cardinality, agree), (Method::Hll, 1_000.0, None));
+        assert!((h.est_low.unwrap() - 970.0).abs() < 1e-9 && (h.est_high.unwrap() - 1_030.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn low_ratio_is_schnabel_floored_at_the_count() {
+        // Schnabel 9.52 [6.47, 16.38] < d = 10: the estimate and low end are floored at 10.
+        let (e, agree) = pick_estimate(Count::Exact(10), 40, 4, 2, &H10);
+        assert_eq!((e.method, e.est_cardinality, e.est_low), (Method::Schnabel, 10.0, Some(10.0)));
+        assert!((e.est_high.unwrap() - 16.378255262343956).abs() < 1e-9);
+        assert_eq!(agree, Some(true));
+    }
+
+    #[test]
+    fn low_ratio_without_recaptures_is_chao1() {
+        let h = [3, 3, 0, 3, 0, 0, 0];
+        let (e, agree) = pick_estimate(Count::Exact(9), 100, 4, 2, &h);
+        let (c, lo, hi) = chao1(9, 4, 2);
+        assert_eq!((e.method, e.est_cardinality, e.est_low, e.est_high), (Method::Chao1, c, Some(lo.max(9.0)), Some(hi)));
+        assert_eq!(agree, None);
+    }
+
+    #[test]
+    fn hll_floor_is_three_standard_errors_below() {
+        let (e, _) = pick_estimate(Count::Hll { estimate: 100.0, std_error: 0.01 }, 1_000, 90, 5, &[0; 7]);
+        assert_eq!(e.method, Method::Chao1);
+        assert!(e.est_cardinality >= 100.0 && e.est_low.unwrap() >= 97.0 - 1e-9);
+    }
+
+    #[test]
+    fn method_names() {
+        let names: Vec<_> = [Method::Observed, Method::Hll, Method::Schnabel, Method::Chao1, Method::Overflowed]
+            .iter().map(|m| m.name()).collect();
+        assert_eq!(names, ["observed", "hll", "schnabel", "chao1", "overflowed"]);
     }
 }

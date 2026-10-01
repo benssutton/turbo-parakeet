@@ -528,23 +528,15 @@ def test_dictionary_gate_rejects_above_threshold():
     )
 
 
-def test_population_projection_chooses_plain_over_dictionary():
-    # 600 singletons, 200 doubletons, 200 values × 5: n = 2,000, d = 1,000 (d/n = 0.5, so
-    # Chao1 — est_high ≈ 2,115 — sizes the dictionary); 30-byte values.
+def test_projection_scales_the_dictionary_by_the_estimate():
     ids = [f"id-{i:027d}" for i in range(1_000)]
-    s = pl.Series("x", ids[:600] + ids[600:800] * 2 + ids[800:] * 5)
+    s = pl.Series("x", ids[:600] + ids[600:800] * 2 + ids[800:] * 10)
     r = rec(s)
-    plain = by_type(r)["string"]
     dictionary = next(
         c for c in r["rec_candidates"] if c["arrow_type"].startswith("dictionary")
     )
-    assert (
-        dictionary["predicted_bytes"] < plain["predicted_bytes"]
-    )  # smaller on the frame …
-    assert (
-        dictionary["projected_population_bytes"] > plain["projected_population_bytes"]
-    )  # … larger in the population
-    assert r["rec_arrow_type"] == "string"
+    assert r["est_method"] in ("schnabel", "chao1") and r["est_cardinality"] > 1_000
+    assert dictionary["projected_population_bytes"] > dictionary["predicted_bytes"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
