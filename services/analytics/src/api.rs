@@ -278,6 +278,31 @@ pub fn column_sizes(batch: &RecordBatch, zstd_level: i32) -> Result<RecordBatch>
     ))
 }
 
+/// Every value of every column as text (`recommend::render_value`): the canonical
+/// rendering of `min` / `max`, for the Python reference implementations.
+pub fn render(batch: &RecordBatch) -> Result<RecordBatch> {
+    let columns: Vec<arrow_array::ArrayRef> = batch
+        .columns()
+        .iter()
+        .map(|c| {
+            std::sync::Arc::new(arrow_array::StringArray::from_iter(
+                (0..c.len()).map(|i| crate::recommend::render_value(c.slice(i, 1).as_ref())),
+            )) as arrow_array::ArrayRef
+        })
+        .collect();
+    let fields: Vec<_> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| arrow_schema::Field::new(f.name(), arrow_schema::DataType::Utf8, true))
+        .collect();
+    RecordBatch::try_new(
+        std::sync::Arc::new(arrow_schema::Schema::new(fields)),
+        columns,
+    )
+    .map_err(|e| Error::Compute(e.to_string()))
+}
+
 /// Describe's table, the size columns and the `rec_*` columns per column.
 pub fn describe_and_recommend(
     batch: &RecordBatch,
@@ -386,6 +411,19 @@ mod tests {
 
     fn batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
         RecordBatch::try_from_iter(columns).unwrap()
+    }
+
+    #[test]
+    fn render_gives_text_and_nulls() {
+        use arrow_array::Array;
+        let out = render(&batch(vec![(
+            "a",
+            Arc::new(Int64Array::from(vec![Some(3), None])) as ArrayRef,
+        )]))
+        .unwrap();
+        assert_eq!(out.schema().field(0).data_type(), &AT::Utf8);
+        let c = out.column(0).as_string::<i32>();
+        assert_eq!((c.value(0), c.is_valid(1)), ("3", false));
     }
 
     #[test]

@@ -1478,6 +1478,15 @@ pub(crate) fn cast_to(t: &Target, lvl: &Level) -> Result<ArrayRef, String> {
     }
 }
 
+/// Row 0 of `a` as text: arrow-rs's cast to Utf8, the one rendering of `min` / `max`
+/// in every recommender (spec 2026-10-01 section 6, 13.1). None for a null, or a value with
+/// no text form (e.g. non-UTF-8 binary).
+pub(crate) fn render_value(a: &dyn Array) -> Option<String> {
+    let s = arrow_cast(a.slice(0, 1).as_ref(), &AT::Utf8).ok()?;
+    let s = s.as_string::<i32>();
+    s.is_valid(0).then(|| s.value(0).to_string())
+}
+
 fn render(a: &ArrayRef, i: usize) -> String {
     arrow_cast(a.slice(i, 1).as_ref(), &AT::Utf8)
         .ok()
@@ -2610,6 +2619,33 @@ pub(crate) fn describe_and_recommend_impl(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn render_value_is_arrow_rs_text() {
+        use arrow_array::{
+            BooleanArray, Date32Array, Decimal128Array, Float64Array, TimestampMicrosecondArray,
+        };
+        let one = |a: ArrayRef| render_value(a.as_ref());
+        assert_eq!(
+            one(Arc::new(Float64Array::from(vec![2.5]))).as_deref(),
+            Some("2.5")
+        );
+        assert_eq!(
+            one(Arc::new(BooleanArray::from(vec![false]))).as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            one(Arc::new(Date32Array::from(vec![19_724]))).as_deref(),
+            Some("2024-01-02")
+        );
+        let ts = TimestampMicrosecondArray::from(vec![1_704_164_645_000_000]);
+        assert_eq!(one(Arc::new(ts)).as_deref(), Some("2024-01-02T03:04:05"));
+        let dec = Decimal128Array::from(vec![150])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        assert_eq!(one(Arc::new(dec)).as_deref(), Some("1.50"));
+        assert_eq!(one(Arc::new(Float64Array::from(vec![None]))), None);
+    }
+
     use super::*;
     use crate::sizes::ipc_body_bytes;
     use arrow_array::{

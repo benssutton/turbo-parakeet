@@ -333,6 +333,12 @@ fn column_sizes(py: Python<'_>, data: &Bound<'_, PyAny>, zstd_level: i32) -> PyR
 }
 
 #[pyfunction]
+fn render(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::render(&batch)).map(ArrowTable)
+}
+
+#[pyfunction]
 #[pyo3(signature = (data, *, seed, zstd_level, categorical_threshold, boolean_pairs))]
 fn describe_and_recommend(
     py: Python<'_>,
@@ -379,6 +385,7 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lsh_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(describe_columns, m)?)?;
     m.add_function(wrap_pyfunction!(column_sizes, m)?)?;
+    m.add_function(wrap_pyfunction!(render, m)?)?;
     m.add_function(wrap_pyfunction!(describe_and_recommend, m)?)?;
     m.add_function(wrap_pyfunction!(checked_table, m)?)?;
     Ok(())

@@ -494,6 +494,24 @@ def test_agrees_with_reference_on_large_dataset(impl):
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
 
+
+
+@pytest.mark.parametrize(
+    "s, expected",
+    [
+        (pl.Series([2.5, 1.0]), ["2.5", "1.0"]),
+        (pl.Series([False, True]), ["false", "true"]),
+        (pl.Series([datetime(2024, 1, 2, 3, 4, 5)]), ["2024-01-02T03:04:05"]),
+        (pl.Series([datetime(2024, 1, 2)]).dt.date(), ["2024-01-02"]),
+        (pl.Series([Decimal("1.50")], dtype=pl.Decimal(10, 2)), ["1.50"]),
+        (pl.Series(["b", "a"], dtype=pl.Categorical), ["b", "a"]),
+        (pl.Series([1, None]), ["1", None]),
+    ],
+)
+def test_render_is_arrow_rs_text(s, expected):
+    from analytics import _plugin
+
+    assert _plugin.render(s) == expected
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Known answers (the reference is included, so these are its oracle tests)
 

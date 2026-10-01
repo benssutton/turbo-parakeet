@@ -18,8 +18,8 @@ use crate::describe::{assemble, flatten, Profile, Row};
 use crate::partial::{BatchStats, Ext, LevelStats, ViewSim};
 use crate::recommend::{
     arrow_cast, body_size, cast_to, is_text, list_parts, pa_name, pad, pick_by_stats,
-    pick_list_by_stats, pl_name, polars_layout, rec_fields, rec_row, to_polars_layout, validity,
-    verify, wrap, Level, Params, Pick, Rec, Shape, Target,
+    pick_list_by_stats, pl_name, polars_layout, rec_fields, rec_row, render_value,
+    to_polars_layout, validity, verify, wrap, Level, Params, Pick, Rec, Shape, Target,
 };
 use crate::reservoir::{Block, Reservoir};
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of};
@@ -371,13 +371,8 @@ fn nullable(t: &Target, o: &LevelStats, inner: Option<&LevelStats>) -> bool {
 
 fn render(e: &Option<Ext>) -> AnyValue<'static> {
     e.as_ref()
-        .and_then(|e| arrow_cast(e.value.as_ref(), &AT::Utf8).ok())
-        .and_then(|a| {
-            let s = a.as_string::<i32>();
-            s.is_valid(0)
-                .then(|| AnyValue::StringOwned(s.value(0).into()))
-        })
-        .unwrap_or(AnyValue::Null)
+        .and_then(|e| render_value(e.value.as_ref()))
+        .map_or(AnyValue::Null, |s| AnyValue::StringOwned(s.into()))
 }
 
 /// An Enum's categories, found through lists and arrays.
