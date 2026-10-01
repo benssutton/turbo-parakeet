@@ -754,3 +754,16 @@ def test_rust_cardinality_matches_python_estimators():
             assert float(m[1]) == approx(expected, rel=1e-9), (r["col_a"], c["rule"])
             checked += 1
     assert checked >= 5
+
+
+def test_rust_conclusions_match_describe():
+    from analytics.describe import CONCLUSIONS, DescribeRust
+
+    frame = describe_mixed(2_000)
+    a = run(impl(), {"t": frame})
+    b = DescribeRust().add({"t": frame}).result()
+    for c in CONCLUSIONS:
+        if CONCLUSIONS[c] == pl.Float64:  # same rule, floating-point op order may differ by an ulp
+            assert a[c].to_list() == approx(b[c].to_list(), rel=1e-12, nan_ok=True), c
+        else:
+            assert a[c].to_list() == b[c].to_list(), c

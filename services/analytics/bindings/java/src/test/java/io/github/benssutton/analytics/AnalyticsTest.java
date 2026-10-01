@@ -71,6 +71,10 @@ class AnalyticsTest {
             assertEquals(2, result.getRowCount());
             assertEquals(List.of("a", "s"), strings(result, "column"));
             assertEquals(List.of("uint8", "string"), strings(result, "rec_arrow_type"));
+            assertEquals(List.of("categorical", "boolean"), strings(result, "class"));
+            assertEquals(List.of("0", "x"), strings(result, "min"));
+            assertEquals(List.of("7", "y"), strings(result, "max"));
+            assertEquals(List.of("observed", "observed"), strings(result, "est_method"));
             assertFalse(output.loadNextBatch());
         }
     }

@@ -1122,3 +1122,19 @@ NESTED_CASES = [
 def test_nested_floats_and_enums(impl, s, expected):
     r = profile(impl, s)
     assert {k: r[k] for k in expected} == expected
+
+
+def test_rust_conclusions_equal_the_reference_rule():
+    """describe_columns returns Rust's conclusions and the inputs; the Python base
+    derives its own from those inputs (DescribeRust). Same inputs, same rule."""
+    from analytics import _plugin
+    from analytics.describe import CONCLUSIONS, DescribeRust
+
+    for frame in [describe_mixed(2_000), stringified(describe_mixed(500))]:
+        raw = _plugin.describe_columns(frame, 0, 10_000)
+        derived = DescribeRust().add({"t": frame}).result()
+        for c in CONCLUSIONS:
+            if CONCLUSIONS[c] == pl.Float64:  # same rule, floating-point op order may differ by an ulp
+                assert raw[c].to_list() == approx(derived[c].to_list(), rel=1e-12, nan_ok=True), c
+            else:
+                assert raw[c].to_list() == derived[c].to_list(), c
