@@ -627,14 +627,8 @@ mod tests {
         ]);
         assert_eq!(describe_columns(&b, 0).unwrap().num_rows(), 2);
         assert_eq!(column_sizes(&b, 1).unwrap().num_rows(), 2);
-        let rec = describe_and_recommend(
-            &b,
-            0,
-            1,
-            10_000,
-            vec![("true".into(), "false".into())],
-        )
-        .unwrap();
+        let rec = describe_and_recommend(&b, 0, 1, 10_000, vec![("true".into(), "false".into())])
+            .unwrap();
         assert_eq!(
             rec.column_by_name("rec_arrow_type")
                 .unwrap()

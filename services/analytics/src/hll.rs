@@ -23,7 +23,10 @@ pub(crate) struct Hll {
 impl Hll {
     /// 2^p one-byte registers; p in 4..=18.
     pub(crate) fn new(p: u8) -> Self {
-        assert!((4..=18).contains(&p), "HyperLogLog precision {p} outside 4..=18");
+        assert!(
+            (4..=18).contains(&p),
+            "HyperLogLog precision {p} outside 4..=18"
+        );
         Hll {
             p,
             registers: vec![0; 1 << p],
@@ -136,7 +139,10 @@ mod tests {
                 let h = sketch(n, seed);
                 let e = h.estimate();
                 let tolerance = (3.0 * h.std_error() * n as f64).max(1.0);
-                assert!((e - n as f64).abs() <= tolerance, "n={n} seed={seed} estimate={e}");
+                assert!(
+                    (e - n as f64).abs() <= tolerance,
+                    "n={n} seed={seed} estimate={e}"
+                );
             }
         }
     }

@@ -214,7 +214,10 @@ mod tests {
         assert_eq!(ab.keys(), ba.keys());
         assert_eq!(ab.counts(), ba.counts());
         let held = ab.keys();
-        let f2 = held.iter().filter(|k| (20_000..30_000).contains(*k)).count() as u64;
+        let f2 = held
+            .iter()
+            .filter(|k| (20_000..30_000).contains(*k))
+            .count() as u64;
         let (f1, f2_got, _) = ab.counts();
         assert_eq!((f1, f2_got), (held.len() as u64 - f2, f2));
         let mut smallest: Vec<u64> = (0..60_000).collect();

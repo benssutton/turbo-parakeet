@@ -137,7 +137,6 @@ fn level<'a>(
         size_bytes: 0,
         size_note: "",
         est,
-        r: 1.0,
         prefix,
         text: Default::default(),
     }

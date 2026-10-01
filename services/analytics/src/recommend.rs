@@ -7,7 +7,7 @@
 // Per column: Describe's profile (describe.rs) and Rust cardinality estimates
 // (cardinality_estimators.rs) feed the step-1 type rules and the step-2
 // dictionary rule, which emit candidate Arrow types with analytically predicted
-// IPC sizes (§5.1). Candidates are tried smallest projected population size
+// IPC sizes (§5.1). Candidates are tried smallest projected size
 // first, ties broken by hierarchy rank; each is cast, verified row by row
 // against the original and measured with sizes.rs; the first that verifies is
 // chosen. The original type is always a candidate and cannot fail.
@@ -253,8 +253,8 @@ fn py_str(s: &str) -> String {
 }
 
 /// Python `str(dtype)` of the Polars type that holds `t`. A dictionary is an Enum of
-/// `enum_values` when given (exact cardinality), else a Categorical named after
-/// `column` whose physical type is `key`.
+/// `enum_values` when given (the categories of a kept Enum source), else a Categorical
+/// named after `column` whose physical type is `key`.
 pub(crate) fn pl_name(t: &AT, column: &str, enum_values: Option<&[String]>, key: &AT) -> String {
     let unit = |u: &TimeUnit| match u {
         TimeUnit::Second | TimeUnit::Millisecond => "ms",
@@ -348,18 +348,17 @@ pub(crate) struct Shape {
 }
 
 impl Shape {
-    /// The population the frame samples: row-proportional terms scale by `r`; a
-    /// dictionary holds `c` values of the observed mean length.
-    pub(crate) fn project(&self, r: f64, c: f64) -> Shape {
+    /// The same frame with a dictionary of `c` values of the observed mean length.
+    pub(crate) fn project(&self, c: f64) -> Shape {
         let per_value = if self.d > 0.0 {
             self.sum_len_unique / self.d
         } else {
             0.0
         };
         Shape {
-            n: self.n * r,
-            nulls: self.nulls * r,
-            sum_len: self.sum_len * r,
+            n: self.n,
+            nulls: self.nulls,
+            sum_len: self.sum_len,
             d: c,
             sum_len_unique: per_value * c,
         }
@@ -661,8 +660,6 @@ pub(crate) struct Level<'a> {
     /// How `size_bytes` was obtained, for the original candidate's evidence.
     pub size_note: &'static str,
     pub est: Estimate,
-    /// Population rows ÷ frame rows.
-    pub r: f64,
     /// "" or "inner: " — prefixes every rule name.
     pub prefix: &'static str,
     /// Text sources: `values` as LargeUtf8, built once and shared by cast, verify and lossy.
@@ -680,7 +677,6 @@ impl<'a> Level<'a> {
         n_midnight: Option<u64>,
         size_bytes: u64,
         est: Estimate,
-        r: f64,
         prefix: &'static str,
     ) -> Result<Self, String> {
         let row = |i: Option<u64>| i.filter(|&i| (i as usize) < values.len());
@@ -721,7 +717,6 @@ impl<'a> Level<'a> {
             size_bytes,
             size_note: "measured",
             est,
-            r,
             prefix,
             text: Default::default(),
         })
@@ -742,7 +737,6 @@ impl<'a> Level<'a> {
             size_bytes: 0,
             size_note: "",
             est: estimate(0, 0, 0, 0, &[0; 7]),
-            r: 1.0,
             prefix: "",
             text: Default::default(),
         }
@@ -770,7 +764,7 @@ impl Level<'_> {
         self.n_rows() - self.n_null()
     }
 
-    /// Population cardinality for dictionaries: est_high where an interval exists,
+    /// Estimated dictionary cardinality: est_high where an interval exists,
     /// floored at the observed distinct count (an estimate must never claim fewer
     /// distinct values than were actually observed).
     fn cardinality(&self) -> (f64, &'static str) {
@@ -793,7 +787,13 @@ impl Level<'_> {
 }
 
 pub(crate) fn level_estimate(p: &Profile, n: u64) -> Estimate {
-    estimate(p.freq.n_unique, n, p.freq.f1, p.freq.f2, &p.freq.capture_history)
+    estimate(
+        p.freq.n_unique,
+        n,
+        p.freq.f1,
+        p.freq.f2,
+        &p.freq.capture_history,
+    )
 }
 
 /// arrow-cast with `safe: false`: a value that does not fit is an error, not a null.
@@ -861,7 +861,7 @@ impl Rules<'_, '_> {
         let t = target.arrow_type();
         let (c, _) = self.lvl.cardinality();
         let sizes = body_size(&t, &self.shape)
-            .and_then(|p| Ok((p, body_size(&t, &self.shape.project(self.lvl.r, c))?)));
+            .and_then(|p| Ok((p, body_size(&t, &self.shape.project(c))?)));
         self.out.push(candidate(
             target,
             rank,
@@ -1217,7 +1217,7 @@ impl Rules<'_, '_> {
             rule: format!("{}original", lvl.prefix),
             evidence: format!("{} size_bytes={}", lvl.size_note, lvl.size_bytes),
             predicted: lvl.size_bytes,
-            projected: lvl.size_bytes as f64 * lvl.r,
+            projected: lvl.size_bytes as f64,
             outcome: Outcome::NotTried,
             reason: None,
         });
@@ -2129,7 +2129,7 @@ fn list_candidates(
     projected: f64,
     width: Option<i32>,
 ) -> Vec<Candidate> {
-    let (n, nulls, r) = (lvl.n_rows() as f64, lvl.n_null() as f64, lvl.r);
+    let (n, nulls) = (lvl.n_rows() as f64, lvl.n_null() as f64);
     let kept = matches!(it, Target::Original(_));
     let (c, _) = inner.cardinality();
     let mut outer = Vec::new();
@@ -2151,7 +2151,7 @@ fn list_candidates(
                 lvl.n_null(),
                 inner.n_null()
             ),
-            body_size(&t, &shape).and_then(|p| Ok((p, body_size(&t, &shape.project(r, c))?))),
+            body_size(&t, &shape).and_then(|p| Ok((p, body_size(&t, &shape.project(c))?))),
         ));
     }
     match width {
@@ -2162,7 +2162,7 @@ fn list_candidates(
             format!("inner_n_values={}", inner.n_rows()),
             Ok((
                 validity(n, nulls) + pad(4.0 * (n + 1.0)) + predicted as f64,
-                validity(n * r, nulls * r) + pad(4.0 * (n * r + 1.0)) + projected,
+                validity(n, nulls) + pad(4.0 * (n + 1.0)) + projected,
             )),
         )),
         // An Array whose inner type is kept is the original type: no candidate.
@@ -2183,7 +2183,7 @@ fn list_candidates(
                 body_size(&t, &shape).and_then(|p| {
                     Ok((
                         validity(n, nulls) + p,
-                        validity(n * r, nulls * r) + body_size(&t, &shape.project(r, c))?,
+                        validity(n, nulls) + body_size(&t, &shape.project(c))?,
                     ))
                 }),
             ));
@@ -2393,24 +2393,6 @@ pub(crate) fn polars_views(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
     }
 }
 
-/// A dictionary's values (the Enum categories), looking through one list level.
-fn dictionary_values(a: &ArrayRef) -> Option<Vec<String>> {
-    match a.data_type() {
-        AT::Dictionary(..) => {
-            let v = arrow_cast(a.as_any_dictionary().values().as_ref(), &AT::Utf8).ok()?;
-            Some(
-                v.as_string::<i32>()
-                    .iter()
-                    .map(|x| x.unwrap_or_default().to_string())
-                    .collect(),
-            )
-        }
-        AT::List(_) => dictionary_values(a.as_list::<i32>().values()),
-        AT::FixedSizeList(..) => dictionary_values(a.as_fixed_size_list().values()),
-        _ => None,
-    }
-}
-
 // ── one column ───────────────────────────────────────────────────────────────
 
 pub(crate) struct Rec {
@@ -2448,7 +2430,6 @@ pub(crate) fn recommend(
         d.n_midnight,
         size_bytes,
         level_estimate(&d.outer, d.n_rows - d.n_null),
-        1.0,
         "",
     )
     .map_err(err)?;
@@ -2467,7 +2448,6 @@ pub(crate) fn recommend(
                         &inner.profile,
                         (inner.values.len() - inner.values.null_count()) as u64,
                     ),
-                    1.0,
                     "inner: ",
                 )
                 .map_err(err)?;
@@ -2868,7 +2848,6 @@ mod tests {
             d.n_midnight,
             size,
             level_estimate(&d.outer, d.n_rows - d.n_null),
-            1.0,
             "",
         )
         .unwrap();
@@ -3000,7 +2979,6 @@ mod tests {
                 None,
                 sz[0],
                 level_estimate(&d.outer, d.n_rows - d.n_null),
-                1.0,
                 "",
             )
             .unwrap();
@@ -3015,7 +2993,6 @@ mod tests {
                     &inner.profile,
                     (inner.values.len() - inner.values.null_count()) as u64,
                 ),
-                1.0,
                 "inner: ",
             )
             .unwrap();
@@ -3039,7 +3016,6 @@ mod tests {
             d.n_midnight,
             0,
             level_estimate(&d.outer, d.n_rows - d.n_null),
-            1.0,
             "",
         )
         .unwrap();
@@ -3147,7 +3123,6 @@ mod tests {
                 None,
                 0,
                 level_estimate(&d.outer, 2),
-                1.0,
                 "",
             )
             .unwrap();
@@ -3177,7 +3152,6 @@ mod tests {
                 None,
                 0,
                 level_estimate(&d.outer, 5),
-                1.0,
                 "",
             )
             .unwrap();
@@ -3223,7 +3197,6 @@ mod tests {
                 est_high: Some(1.0),
                 method: crate::cardinality_estimators::Method::Chao1,
             },
-            1.0,
             "",
         )
         .unwrap();
@@ -3338,7 +3311,6 @@ mod tests {
                 d.n_midnight,
                 0,
                 level_estimate(&d.outer, 0),
-                1.0,
                 "",
             )
             .unwrap();
@@ -3355,7 +3327,6 @@ mod tests {
             d.n_midnight,
             0,
             level_estimate(&d.outer, 1),
-            1.0,
             "",
         )
         .unwrap();
@@ -3437,7 +3408,6 @@ mod tests {
             None,
             0,
             level_estimate(&d.outer, 2),
-            1.0,
             "",
         )
         .unwrap();
@@ -3631,7 +3601,6 @@ mod tests {
                 &inner.profile,
                 (inner.values.len() - inner.values.null_count()) as u64,
             ),
-            1.0,
             "inner: ",
         )
         .unwrap();
@@ -3734,14 +3703,7 @@ mod tests {
 
     fn rec_with(s: Series) -> Rec {
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
-        recommend(
-            &s,
-            &classic_layout(&s).unwrap(),
-            &d,
-            &sz,
-            &params(),
-        )
-        .unwrap()
+        recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &params()).unwrap()
     }
 
     #[test]
