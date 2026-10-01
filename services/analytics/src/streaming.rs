@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType as AT, Field};
 use polars::prelude::{polars_err, AnyValue, DataType as PT, PolarsResult, Series};
@@ -17,9 +16,9 @@ use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
 use crate::describe::{assemble, flatten, Profile, Row};
 use crate::partial::{BatchStats, Ext, LevelStats, ViewSim};
 use crate::recommend::{
-    arrow_cast, body_size, cast_to, is_text, list_parts, pa_name, pad, pick_by_stats,
-    pick_list_by_stats, pl_name, polars_layout, rec_fields, rec_row, render_value,
-    to_polars_layout, validity, verify, wrap, Level, Params, Pick, Rec, Shape, Target,
+    body_size, cast_to, is_text, list_parts, pa_name, pad, pick_by_stats, pick_list_by_stats,
+    pl_name, polars_layout, rec_fields, rec_row, render_value, to_polars_layout, validity, verify,
+    wrap, Level, Params, Pick, Rec, Shape, Target,
 };
 use crate::reservoir::{Block, Reservoir};
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of};
