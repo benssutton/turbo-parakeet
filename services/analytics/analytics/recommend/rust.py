@@ -11,16 +11,10 @@ class RecommendRust(Recommend):
         rows: dict[tuple[str, str], dict] = {}
         for frame, group in group_by_frame(combos).items():
             df = frames[frame].select([c for ((_, c),) in group])
-            pop = self._population(frame)
-            if pop is not None and pop < df.height:
-                raise ValueError(
-                    f"population_rows {pop} < {df.height} rows in frame {frame!r}"
-                )
             out = _plugin.describe_and_recommend(
                 df,
                 seed=self.seed,
                 zstd_level=self.zstd_level,
-                population_rows=pop,
                 categorical_threshold=self.categorical_threshold,
                 boolean_pairs=self.boolean_pairs,
             )

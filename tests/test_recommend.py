@@ -72,11 +72,6 @@ def test_constructor_validates_boolean_pairs():
         cls(boolean_pairs=(("y",),))
 
 
-def test_population_rows_below_frame_rows_raise():
-    with pytest.raises(ValueError):
-        rec(pl.Series("x", [1, 2, 3]), population_rows=2)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Known answers
 
@@ -372,12 +367,12 @@ KNOWN = [
         'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))',
         id="categorical_narrows_key",
     ),
-    # Enum keeps its dictionary with 32-bit value offsets (the original has 64-bit); exact cardinality → Enum.
+    # Enum keeps its dictionary with 32-bit value offsets (the original has 64-bit).
     pytest.param(
         pl.Series("x", ["a", "b"] * 50, dtype=pl.Enum(["a", "b"])),
-        {"population_rows": 100},
+        {},
         DICT8,
-        "Enum(categories=['a', 'b'])",
+        'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))',
         id="enum_keeps_dictionary",
     ),
     # 200 singletons: Chao1 est_high ≈ 26,438 > categorical_threshold → dictionary rejected; Utf8 (2,608) beats the original (3,608).
@@ -487,11 +482,6 @@ def test_over_15_significant_digits_has_no_float_candidate():
 
 def test_dictionary_polars_types():
     s = pl.Series("x", ["a", "b"] * 50)
-    exact = rec(s, population_rows=100)
-    assert (
-        exact["rec_arrow_type"] == "dictionary<values=string, indices=uint8, ordered=0>"
-    )
-    assert exact["rec_polars_type"] == "Enum(categories=['a', 'b'])"
     assert (
         rec(s)["rec_polars_type"]
         == 'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))'
@@ -511,13 +501,9 @@ def test_dictionary_polars_types():
 def test_dictionary_key_widths(d, arrow_key):
     s = pl.Series(
         "x",
-        (
-            [f"v{i:05d}" for i in range(d)] * 2
-            if d > 1_000
-            else [f"v{i:05d}" for i in range(d)] * 40
-        ),
+        [f"v{i:05d}" for i in range(d)] * 2,
     )
-    r = rec(s, population_rows=s.len(), categorical_threshold=100_000)
+    r = rec(s, categorical_threshold=100_000)
     assert (
         r["rec_arrow_type"]
         == f"dictionary<values=string, indices={arrow_key}, ordered=0>"
@@ -531,9 +517,7 @@ def test_dictionary_key_widths(d, arrow_key):
 
 
 def test_dictionary_gate_rejects_above_threshold():
-    r = rec(
-        pl.Series("x", ["a", "b"] * 500), population_rows=1_000, categorical_threshold=1
-    )
+    r = rec(pl.Series("x", ["a", "b"] * 500), categorical_threshold=1)
     assert r["rec_arrow_type"] == "string"
     dictionary = next(
         c for c in r["rec_candidates"] if c["arrow_type"].startswith("dictionary")
@@ -758,13 +742,12 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
     assert checked >= min(10, result.height)
 
 
-@pytest.mark.parametrize("population_rows", [None, 1_000_000])
-def test_rust_cardinality_matches_python_estimators(population_rows):
+def test_rust_cardinality_matches_python_estimators():
     frames = {
         "mixed": describe_mixed(2_000),
         "strings": stringified(describe_mixed(500)),
     }
-    result = run(impl(), frames, population_rows=population_rows)
+    result = run(impl(), frames)
     checked = 0
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
         for c in r["rec_candidates"]:

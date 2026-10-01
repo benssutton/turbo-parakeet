@@ -529,7 +529,7 @@ impl LevelStats {
         }
     }
 
-    /// Text levels only: Schnabel → Chao1 (no population), or `overflowed`.
+    /// Text levels only: Schnabel → Chao1, or `overflowed`.
     pub(crate) fn estimate(&self, threshold: u64) -> Option<Estimate> {
         let d = self.distinct.as_ref()?;
         Some(if d.overflowed {
@@ -541,7 +541,7 @@ impl LevelStats {
             }
         } else {
             let (f1, f2, h) = d.counts();
-            estimate(d.n_unique(), self.n - self.n_null, f1, f2, &h, None)
+            estimate(d.n_unique(), self.n - self.n_null, f1, f2, &h)
         })
     }
 

@@ -48,19 +48,8 @@ pub(crate) fn schnabel(history: &[u64; 7], d: u64, n: u64) -> Option<(f64, f64, 
     Some((a / (r + 1.0), a / r_hi, a / r_lo))
 }
 
-/// Haas–Stokes Duj1: a sample of n non-null values at sampling fraction q.
-pub(crate) fn duj1(d: u64, f1: u64, n: u64, q: f64) -> f64 {
-    if n == 0 {
-        0.0
-    } else {
-        d as f64 / (1.0 - (1.0 - q) * f1 as f64 / n as f64)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Method {
-    Exact,
-    Duj1,
     Schnabel,
     Chao1,
     /// Streaming: distinct tracking stopped past `categorical_threshold`; no estimate.
@@ -71,8 +60,6 @@ impl Method {
     /// Lower-case name, as the dictionary candidate's evidence reports it.
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Method::Exact => "exact",
-            Method::Duj1 => "duj1",
             Method::Schnabel => "schnabel",
             Method::Chao1 => "chao1",
             Method::Overflowed => "overflowed",
@@ -88,45 +75,24 @@ pub(crate) struct Estimate {
     pub method: Method,
 }
 
-/// The estimate picked by rule: q == 1 → exact; q < 1 → Duj1; Schnabel valid →
-/// Schnabel; else Chao1. q = frame rows / population rows (None: unknown).
-pub(crate) fn estimate(
-    d: u64,
-    n: u64,
-    f1: u64,
-    f2: u64,
-    history: &[u64; 7],
-    q: Option<f64>,
-) -> Estimate {
-    let (c, c_lo, c_hi) = chao1(d, f1, f2);
-    match (q, schnabel(history, d, n)) {
-        (Some(1.0), _) => {
-            let d = d as f64;
-            Estimate {
-                est_cardinality: d,
-                est_low: Some(d),
-                est_high: Some(d),
-                method: Method::Exact,
-            }
-        }
-        (Some(q), _) => Estimate {
-            est_cardinality: duj1(d, f1, n, q),
-            est_low: None,
-            est_high: None,
-            method: Method::Duj1,
-        },
-        (None, Some((s, lo, hi))) => Estimate {
+/// The estimate picked by rule: Schnabel when valid, else Chao1.
+pub(crate) fn estimate(d: u64, n: u64, f1: u64, f2: u64, history: &[u64; 7]) -> Estimate {
+    match schnabel(history, d, n) {
+        Some((s, lo, hi)) => Estimate {
             est_cardinality: s,
             est_low: Some(lo),
             est_high: Some(hi),
             method: Method::Schnabel,
         },
-        (None, None) => Estimate {
-            est_cardinality: c,
-            est_low: Some(c_lo),
-            est_high: Some(c_hi),
-            method: Method::Chao1,
-        },
+        None => {
+            let (c, lo, hi) = chao1(d, f1, f2);
+            Estimate {
+                est_cardinality: c,
+                est_low: Some(lo),
+                est_high: Some(hi),
+                method: Method::Chao1,
+            }
+        }
     }
 }
 
@@ -175,24 +141,10 @@ mod tests {
     }
 
     #[test]
-    fn duj1_cases() {
-        assert!((duj1(10, 4, 40, 0.5) - 10.526315789473685).abs() < 1e-12);
-        assert_eq!(duj1(0, 0, 0, 0.5), 0.0);
-    }
-
-    #[test]
-    fn estimate_picks_exact_then_duj1_then_schnabel_then_chao1() {
+    fn estimate_picks_schnabel_then_chao1() {
         let h = [0, 0, 0, 0, 0, 0, 10];
-        let exact = estimate(10, 40, 4, 2, &h, Some(1.0));
-        assert_eq!(
-            (exact.method, exact.est_cardinality, exact.est_high),
-            (Method::Exact, 10.0, Some(10.0))
-        );
-        let duj = estimate(10, 40, 4, 2, &h, Some(0.5));
-        assert_eq!((duj.method, duj.est_high), (Method::Duj1, None));
-        assert!((duj.est_cardinality - 10.526315789473685).abs() < 1e-12);
-        assert_eq!(estimate(10, 40, 4, 2, &h, None).method, Method::Schnabel);
-        let chao = estimate(10, 15, 4, 2, &h, None);
+        assert_eq!(estimate(10, 40, 4, 2, &h).method, Method::Schnabel);
+        let chao = estimate(10, 15, 4, 2, &h);
         assert_eq!((chao.method, chao.est_cardinality), (Method::Chao1, 12.0));
     }
 }

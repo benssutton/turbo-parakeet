@@ -703,7 +703,7 @@ impl Streaming {
             return Ok(row);
         };
         let t = self.params.categorical_threshold;
-        let fallback = || estimate(0, 0, 0, 0, &[0; 7], None);
+        let fallback = || estimate(0, 0, 0, 0, &[0; 7]);
         let err = |e: polars::prelude::PolarsError| e.to_string();
 
         // Levels from statistics.
@@ -875,7 +875,6 @@ pub(crate) mod tests {
         Params {
             seed: 0,
             zstd_level: 1,
-            population_rows: None,
             categorical_threshold: 10_000,
             boolean_pairs: vec![("true".into(), "false".into())],
         }

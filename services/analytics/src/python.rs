@@ -333,13 +333,12 @@ fn column_sizes(py: Python<'_>, data: &Bound<'_, PyAny>, zstd_level: i32) -> PyR
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, *, seed, zstd_level, population_rows, categorical_threshold, boolean_pairs))]
+#[pyo3(signature = (data, *, seed, zstd_level, categorical_threshold, boolean_pairs))]
 fn describe_and_recommend(
     py: Python<'_>,
     data: &Bound<'_, PyAny>,
     seed: u64,
     zstd_level: i32,
-    population_rows: Option<u64>,
     categorical_threshold: u64,
     boolean_pairs: Vec<(String, String)>,
 ) -> PyResult<ArrowTable> {
@@ -349,7 +348,6 @@ fn describe_and_recommend(
             &batch,
             seed,
             zstd_level,
-            population_rows,
             categorical_threshold,
             boolean_pairs,
         )

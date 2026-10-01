@@ -60,25 +60,12 @@ def schnabel(
     return a / (r + 1), a / r_hi, a / r_lo
 
 
-def duj1(d: int, f1: int, n: int, q: float) -> float:
-    """Haas–Stokes Duj1: sample of n non-null values (sampling fraction q) → population NDV."""
-    return 0.0 if n == 0 else d / (1 - (1 - q) * f1 / n)
-
-
-def estimate(
-    d: int, n: int, f1: int, f2: int, history: Sequence[int], q: float | None
-) -> dict:
-    """Every estimate plus the one picked by rule: q == 1 → exact; q < 1 → Duj1;
-    Schnabel valid → Schnabel; else Chao1. q = frame rows / population rows (None: unknown).
-    """
+def estimate(d: int, n: int, f1: int, f2: int, history: Sequence[int]) -> dict:
+    """Every estimate plus the one picked by rule: Schnabel valid → Schnabel; else Chao1."""
     c, c_lo, c_hi = chao1(d, f1, f2)
     sch = schnabel(history, d, n)
     s, s_lo, s_hi = sch if sch else (None, None, None)
-    if q == 1.0:
-        method, est, lo, hi = "exact", float(d), float(d), float(d)
-    elif q is not None:
-        method, est, lo, hi = "duj1", duj1(d, f1, n, q), None, None
-    elif sch:
+    if sch:
         method, est, lo, hi = "schnabel", s, s_lo, s_hi
     else:
         method, est, lo, hi = "chao1", c, c_lo, c_hi

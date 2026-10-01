@@ -283,14 +283,12 @@ pub fn describe_and_recommend(
     batch: &RecordBatch,
     seed: u64,
     zstd_level: i32,
-    population_rows: Option<u64>,
     categorical_threshold: u64,
     boolean_pairs: Vec<(String, String)>,
 ) -> Result<RecordBatch> {
     let params = Params {
         seed,
         zstd_level,
-        population_rows,
         categorical_threshold,
         boolean_pairs,
     };
@@ -345,7 +343,6 @@ impl StreamingRecommender {
         let params = Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
-            population_rows: None,
             categorical_threshold: p.categorical_threshold,
             boolean_pairs: p.boolean_pairs,
         };
@@ -634,7 +631,6 @@ mod tests {
             &b,
             0,
             1,
-            None,
             10_000,
             vec![("true".into(), "false".into())],
         )

@@ -86,7 +86,7 @@ METRICS = {
 }
 
 CLASS = pl.Enum(["null", "constant", "boolean", "ordinal", "categorical", "discrete"])
-METHOD = pl.Enum(["exact", "duj1", "schnabel", "chao1"])
+METHOD = pl.Enum(["schnabel", "chao1"])
 TOP5 = pl.List(pl.Struct({"value": pl.String, "count": pl.UInt64}))
 ESTIMATES = {
     "unique": pl.Boolean,
@@ -140,9 +140,7 @@ class Describe(Technique):
     for list inner values, and a classification (first match wins):
     null → constant → boolean → ordinal → categorical → discrete.
 
-    `population_rows` (int, or dict frame → int) is the size of the population the
-    frame samples; it selects the estimator (exact / Duj1) and N in the ordinal rule
-    (0 ≤ min, max ≤ 2N). `seed` fixes the 3-way split behind the Schnabel estimate.
+    `seed` fixes the 3-way split behind the Schnabel estimate.
     """
 
     SCOPE = "per_column"
@@ -154,25 +152,11 @@ class Describe(Technique):
     def __init__(
         self,
         *,
-        population_rows: int | dict[str, int] | None = None,
         categorical_threshold: int = 10_000,
         zstd_level: int = 1,
         seed: int = 0,
     ) -> None:
         super().__init__()
-        pops = (
-            []
-            if population_rows is None
-            else (
-                population_rows.values()
-                if isinstance(population_rows, dict)
-                else [population_rows]
-            )
-        )
-        if any(not isinstance(p, int) or p < 0 for p in pops):
-            raise ValueError(
-                f"population_rows must be non-negative ints, got {population_rows!r}"
-            )
         if categorical_threshold < 0:
             raise ValueError(
                 f"categorical_threshold must be >= 0, got {categorical_threshold}"
@@ -181,15 +165,9 @@ class Describe(Technique):
             raise ValueError(f"zstd_level must be in 1..22, got {zstd_level}")
         if not 0 <= seed < 2**64:
             raise ValueError(f"seed must be in [0, 2**64), got {seed}")
-        self.population_rows = population_rows
         self.categorical_threshold = categorical_threshold
         self.zstd_level = zstd_level
         self.seed = seed
-
-    def _population(self, frame: str) -> int | None:
-        if isinstance(self.population_rows, dict):
-            return self.population_rows.get(frame)
-        return self.population_rows
 
     # ── technique hooks ───────────────────────────────────────────────────────
 
@@ -250,33 +228,15 @@ class Describe(Technique):
 
     def _conclusions(self, r: dict) -> dict:
         s = self._collected[r["df_a"]][r["col_a"]]
-        n_rows = r["n_rows"]
-        pop = self._population(r["df_a"])
-        if pop is not None and pop < n_rows:
-            raise ValueError(
-                f"population_rows {pop} < {n_rows} rows in frame {r['df_a']!r}"
-            )
-        q = None if pop is None else 1.0 if pop == n_rows else n_rows / pop
-        out = self._one_level(s, r, "", n_rows, q, pop if pop is not None else n_rows)
+        out = self._one_level(s, r, "", r["n_rows"])
         if r["inner_n_values"] is not None:
-            inner_n = r["inner_n_values"]
-            out |= self._one_level(
-                flatten(s), r, "inner_", inner_n, q, inner_n / q if q else inner_n
-            )
+            out |= self._one_level(flatten(s), r, "inner_", r["inner_n_values"])
         return out
 
-    def _one_level(
-        self,
-        s: pl.Series,
-        r: dict,
-        p: str,
-        n_values: int,
-        q: float | None,
-        big_n: float,
-    ) -> dict:
+    def _one_level(self, s: pl.Series, r: dict, p: str, n_values: int) -> dict:
         n = n_values - r[f"{p}n_null"]
         est = estimators.estimate(
-            r[f"{p}n_unique"], n, r[f"{p}f1"], r[f"{p}f2"], r[f"{p}capture_history"], q
+            r[f"{p}n_unique"], n, r[f"{p}f1"], r[f"{p}f2"], r[f"{p}capture_history"]
         )
 
         def at(i):
@@ -290,9 +250,7 @@ class Describe(Technique):
                 for i, c in zip(r[f"{p}top5_idx"], r[f"{p}top5_count"])
             ],
             **{f"{p}{k}": v for k, v in est.items()},
-            f"{p}class": self._classify(
-                s, r, p, n_values, n, big_n, est["est_cardinality"]
-            ),
+            f"{p}class": self._classify(s, r, p, n_values, n, est["est_cardinality"]),
         }
 
     def _classify(
@@ -302,7 +260,6 @@ class Describe(Technique):
         p: str,
         n_values: int,
         n: int,
-        big_n: float,
         est: float,
     ) -> str:
         if r[f"{p}n_null"] == n_values:
@@ -312,7 +269,7 @@ class Describe(Technique):
         if r[f"{p}n_unique"] == 2:
             return "boolean"
         bounds = _whole_range(s, r, p, n)
-        if bounds is not None and 0 <= bounds[0] and bounds[1] <= 2 * big_n:
+        if bounds is not None and 0 <= bounds[0] and bounds[1] <= 2 * n_values:
             return "ordinal"
         if est <= self.categorical_threshold:
             return "categorical"

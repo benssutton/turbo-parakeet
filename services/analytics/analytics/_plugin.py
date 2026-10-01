@@ -116,7 +116,6 @@ def describe_and_recommend(
     *,
     seed: int,
     zstd_level: int,
-    population_rows: int | None,
     categorical_threshold: int,
     boolean_pairs: tuple[tuple[str, str], ...],
 ) -> pl.DataFrame:
@@ -126,7 +125,6 @@ def describe_and_recommend(
             df,
             seed=seed,
             zstd_level=zstd_level,
-            population_rows=population_rows,
             categorical_threshold=categorical_threshold,
             boolean_pairs=[tuple(p) for p in boolean_pairs],
         )

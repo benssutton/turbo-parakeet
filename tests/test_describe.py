@@ -72,51 +72,30 @@ def test_schnabel_invalid_cases():
     assert estimators.schnabel([0] * 7, 0, 0) is None
 
 
-def test_duj1():
-    assert estimators.duj1(10, 4, 40, 0.5) == approx(10.526315789473685)
-    assert estimators.duj1(0, 0, 0, 0.5) == 0.0
-
-
 HISTORY_10 = [0, 0, 0, 0, 0, 0, 10]
 
 
-def test_estimate_picks_exact_then_duj1_then_schnabel_then_chao1():
-    exact = estimators.estimate(10, 40, 4, 2, HISTORY_10, q=1.0)
-    assert (
-        exact["est_method"],
-        exact["est_cardinality"],
-        exact["est_low"],
-        exact["est_high"],
-    ) == ("exact", 10.0, 10.0, 10.0)
-    duj = estimators.estimate(10, 40, 4, 2, HISTORY_10, q=0.5)
-    assert duj["est_method"] == "duj1" and duj["est_cardinality"] == approx(
-        10.526315789473685
-    )
-    assert duj["est_low"] is None and duj["est_high"] is None
-    sch = estimators.estimate(10, 40, 4, 2, HISTORY_10, q=None)
+def test_estimate_picks_schnabel_then_chao1():
+    sch = estimators.estimate(10, 40, 4, 2, HISTORY_10)
     assert sch["est_method"] == "schnabel" and sch["est_cardinality"] == approx(
         9.523809523809524
     )
     assert sch["estimates_agree"] is True  # [10.25, 26.0] overlaps [6.47, 16.38]
-    chao = estimators.estimate(
-        10, 15, 4, 2, HISTORY_10, q=None
-    )  # d/n ≥ 0.5 → Schnabel invalid
+    chao = estimators.estimate(10, 15, 4, 2, HISTORY_10)  # d/n ≥ 0.5 → Schnabel invalid
     assert chao["est_method"] == "chao1" and chao["est_cardinality"] == 12.0
     assert chao["schnabel"] is None and chao["estimates_agree"] is None
 
 
 def test_estimates_disagree_under_heavy_skew():
-    e = estimators.estimate(
-        10, 40, 8, 0, HISTORY_10, q=None
-    )  # Chao1 [17.47, 114.95] vs Schnabel [6.47, 16.38]
+    e = estimators.estimate(10, 40, 8, 0, HISTORY_10)  # Chao1 [17.47, 114.95] vs Schnabel [6.47, 16.38]
     assert e["estimates_agree"] is False
 
 
 def test_unique_flag():
     assert (
-        estimators.estimate(5, 5, 5, 0, [5, 0, 0, 0, 0, 0, 0], None)["unique"] is True
+        estimators.estimate(5, 5, 5, 0, [5, 0, 0, 0, 0, 0, 0])["unique"] is True
     )
-    assert estimators.estimate(0, 0, 0, 0, [0] * 7, None)["unique"] is False
+    assert estimators.estimate(0, 0, 0, 0, [0] * 7)["unique"] is False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,19 +168,6 @@ def test_scalar_columns_have_null_inner_conclusions():
     )
 
 
-def test_estimate_branches_follow_population_rows():
-    s = pl.Series("x", [1, 2, 3, 4])
-    assert (
-        conclude(s)["est_method"] == "chao1" and conclude(s)["est_cardinality"] == 10.0
-    )
-    assert conclude(s, {"population_rows": 4})["est_method"] == "exact"
-    duj = conclude(s, {"population_rows": 8})
-    assert duj["est_method"] == "duj1" and duj["est_cardinality"] == approx(8.0)
-    assert conclude(s, {"population_rows": {"t": 8}})["est_method"] == "duj1"
-    with pytest.raises(ValueError, match="population_rows"):
-        conclude(s, {"population_rows": 3})
-
-
 def test_schnabel_branch_and_agreement_flag():
     s = pl.Series("x", list(range(10)) * 4)
     agree = conclude(
@@ -264,13 +230,6 @@ CLASS_CASES = [
         {},
         "categorical",
         id="max_over_2N",
-    ),
-    pytest.param(
-        pl.Series("x", [0, 9, 1, 2]),
-        dict(argmin=0, argmax=1),
-        {"population_rows": 100},
-        "ordinal",
-        id="2N_uses_population",
     ),
     pytest.param(
         pl.Series("x", [0.0, 2.0, 1.0, 3.0]),
@@ -358,8 +317,6 @@ def test_zero_row_column_conclusions():
         {"zstd_level": 0},
         {"zstd_level": 23},
         {"seed": -1},
-        {"population_rows": -5},
-        {"population_rows": {"t": -1}},
     ],
 )
 def test_constructor_validates(params):

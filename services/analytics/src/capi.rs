@@ -68,7 +68,6 @@ unsafe fn describe_and_recommend(
     input: *mut FFI_ArrowArrayStream,
     seed: u64,
     zstd_level: i32,
-    population_rows: i64,
     categorical_threshold: u64,
     bool_true: *const *const c_char,
     bool_false: *const *const c_char,
@@ -85,12 +84,10 @@ unsafe fn describe_and_recommend(
     }
     let trues = unsafe { strings(bool_true, n_bool_pairs) }?;
     let falses = unsafe { strings(bool_false, n_bool_pairs) }?;
-    let population_rows = u64::try_from(population_rows).ok();
     let out = api::describe_and_recommend(
         &batch,
         seed,
         zstd_level,
-        population_rows,
         categorical_threshold,
         trues.into_iter().zip(falses).collect(),
     )?;
@@ -102,7 +99,7 @@ unsafe fn describe_and_recommend(
 }
 
 /// Describe's table, the size columns and the `rec_*` columns per column of `input`
-/// (see `api::describe_and_recommend`). `population_rows < 0` means none. On success
+/// (see `api::describe_and_recommend`). On success
 /// `*output` holds a one-batch stream the caller owns and must release.
 ///
 /// # Safety
@@ -116,7 +113,6 @@ pub unsafe extern "C" fn analytics_describe_and_recommend(
     input: *mut FFI_ArrowArrayStream,
     seed: u64,
     zstd_level: i32,
-    population_rows: i64,
     categorical_threshold: u64,
     bool_true: *const *const c_char,
     bool_false: *const *const c_char,
@@ -129,7 +125,6 @@ pub unsafe extern "C" fn analytics_describe_and_recommend(
             input,
             seed,
             zstd_level,
-            population_rows,
             categorical_threshold,
             bool_true,
             bool_false,
@@ -318,7 +313,7 @@ mod tests {
         Arc::new(Int64Array::from(v.to_vec()))
     }
 
-    /// Python's defaults: seed 0, ZSTD level 1, no population, threshold 10 000, ("true", "false").
+    /// Python's defaults: seed 0, ZSTD level 1, threshold 10 000, ("true", "false").
     unsafe fn call(
         input: *mut FFI_ArrowArrayStream,
         output: *mut FFI_ArrowArrayStream,
@@ -330,7 +325,6 @@ mod tests {
                 input,
                 0,
                 1,
-                -1,
                 10_000,
                 trues.as_ptr(),
                 falses.as_ptr(),

@@ -28,7 +28,6 @@ public final class Analytics {
             ADDRESS,    // ArrowArrayStream *input (consumed)
             JAVA_LONG,  // uint64_t seed
             JAVA_INT,   // int32_t zstd_level
-            JAVA_LONG,  // int64_t population_rows (< 0 = none)
             JAVA_LONG,  // uint64_t categorical_threshold
             ADDRESS,    // const char *const *bool_true
             ADDRESS,    // const char *const *bool_false
@@ -59,7 +58,6 @@ public final class Analytics {
                 MemorySegment.ofAddress(in.memoryAddress()),
                 params.seed(),
                 params.zstdLevel(),
-                params.populationRows().orElse(-1),
                 params.categoricalThreshold(),
                 trues,
                 falses,

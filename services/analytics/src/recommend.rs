@@ -601,7 +601,6 @@ pub(crate) fn decimal_from_repr(repr: &str, scale: u32) -> Option<i128> {
 pub(crate) struct Params {
     pub seed: u64,
     pub zstd_level: i32,
-    pub population_rows: Option<u64>,
     pub categorical_threshold: u64,
     pub boolean_pairs: Vec<(String, String)>,
 }
@@ -742,7 +741,7 @@ impl<'a> Level<'a> {
             n_midnight: None,
             size_bytes: 0,
             size_note: "",
-            est: estimate(0, 0, 0, 0, &[0; 7], None),
+            est: estimate(0, 0, 0, 0, &[0; 7]),
             r: 1.0,
             prefix: "",
             text: Default::default(),
@@ -793,15 +792,8 @@ impl Level<'_> {
     }
 }
 
-pub(crate) fn level_estimate(p: &Profile, n: u64, q: Option<f64>) -> Estimate {
-    estimate(
-        p.freq.n_unique,
-        n,
-        p.freq.f1,
-        p.freq.f2,
-        &p.freq.capture_history,
-        q,
-    )
+pub(crate) fn level_estimate(p: &Profile, n: u64) -> Estimate {
+    estimate(p.freq.n_unique, n, p.freq.f1, p.freq.f2, &p.freq.capture_history)
 }
 
 /// arrow-cast with `safe: false`: a value that does not fit is an error, not a null.
@@ -2449,25 +2441,14 @@ pub(crate) fn recommend(
     let [size_bytes, _, polars_bytes, polars_zstd] = *sz;
     let name = s.name().as_str();
     let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
-    let q = params.population_rows.map(|p| {
-        if p == d.n_rows {
-            1.0
-        } else {
-            d.n_rows as f64 / p as f64
-        }
-    });
-    let r = match params.population_rows {
-        Some(p) if d.n_rows > 0 => p as f64 / d.n_rows as f64,
-        _ => 1.0,
-    };
     let outer = Level::of_values(
         s.dtype(),
         values.clone(),
         &d.outer,
         d.n_midnight,
         size_bytes,
-        level_estimate(&d.outer, d.n_rows - d.n_null, q),
-        r,
+        level_estimate(&d.outer, d.n_rows - d.n_null),
+        1.0,
         "",
     )
     .map_err(err)?;
@@ -2485,9 +2466,8 @@ pub(crate) fn recommend(
                     level_estimate(
                         &inner.profile,
                         (inner.values.len() - inner.values.null_count()) as u64,
-                        q,
                     ),
-                    r,
+                    1.0,
                     "inner: ",
                 )
                 .map_err(err)?;
@@ -2516,13 +2496,8 @@ pub(crate) fn recommend(
             &arrow_cast(layout.as_ref(), &t).map_err(err)?,
         )
         .map_err(|e| err(format!("Polars layout: {e}")))?;
-        let enum_values = if q == Some(1.0) {
-            dictionary_values(&chosen.array)
-        } else {
-            None
-        };
         (
-            Some(pl_name(&t, name, enum_values.as_deref(), &key)),
+            Some(pl_name(&t, name, None, &key)),
             ipc_body_bytes(layout.as_ref(), None)?,
             Some(ipc_body_bytes(layout.as_ref(), Some(params.zstd_level))?),
         )
@@ -2876,7 +2851,6 @@ mod tests {
         Params {
             seed: 0,
             zstd_level: 1,
-            population_rows: None,
             categorical_threshold: 10_000,
             boolean_pairs: vec![("true".into(), "false".into())],
         }
@@ -2893,7 +2867,7 @@ mod tests {
             &d.outer,
             d.n_midnight,
             size,
-            level_estimate(&d.outer, d.n_rows - d.n_null, None),
+            level_estimate(&d.outer, d.n_rows - d.n_null),
             1.0,
             "",
         )
@@ -3025,7 +2999,7 @@ mod tests {
                 &d.outer,
                 None,
                 sz[0],
-                level_estimate(&d.outer, d.n_rows - d.n_null, None),
+                level_estimate(&d.outer, d.n_rows - d.n_null),
                 1.0,
                 "",
             )
@@ -3040,7 +3014,6 @@ mod tests {
                 level_estimate(
                     &inner.profile,
                     (inner.values.len() - inner.values.null_count()) as u64,
-                    None,
                 ),
                 1.0,
                 "inner: ",
@@ -3065,7 +3038,7 @@ mod tests {
             &d.outer,
             d.n_midnight,
             0,
-            level_estimate(&d.outer, d.n_rows - d.n_null, None),
+            level_estimate(&d.outer, d.n_rows - d.n_null),
             1.0,
             "",
         )
@@ -3173,7 +3146,7 @@ mod tests {
                 &d.outer,
                 None,
                 0,
-                level_estimate(&d.outer, 2, None),
+                level_estimate(&d.outer, 2),
                 1.0,
                 "",
             )
@@ -3196,14 +3169,14 @@ mod tests {
     fn dictionary_evidence_names_the_estimator() {
         let s = Series::new("x".into(), &["a", "b", "a", "b", "c"]);
         let d = describe_one(&s, 0).unwrap();
-        let evidence = |q: Option<f64>| {
+        let evidence = || {
             let lvl = Level::of_values(
                 s.dtype(),
                 export_series(&s, CompatLevel::oldest()).unwrap(),
                 &d.outer,
                 None,
                 0,
-                level_estimate(&d.outer, 5, q),
+                level_estimate(&d.outer, 5),
                 1.0,
                 "",
             )
@@ -3215,14 +3188,8 @@ mod tests {
                 .unwrap()
                 .evidence
         };
-        let chao = evidence(None);
+        let chao = evidence();
         assert!(chao.contains("method=chao1 est_low="), "{chao}");
-        let duj = evidence(Some(0.5));
-        assert!(
-            duj.contains("method=duj1") && !duj.contains("est_low"),
-            "{duj}"
-        );
-        assert!(evidence(Some(1.0)).contains("c=3.0 from est_high method=exact est_low=3.0"));
     }
 
     #[test]
@@ -3370,7 +3337,7 @@ mod tests {
                 &d.outer,
                 d.n_midnight,
                 0,
-                level_estimate(&d.outer, 0, None),
+                level_estimate(&d.outer, 0),
                 1.0,
                 "",
             )
@@ -3387,7 +3354,7 @@ mod tests {
             &d.outer,
             d.n_midnight,
             0,
-            level_estimate(&d.outer, 1, None),
+            level_estimate(&d.outer, 1),
             1.0,
             "",
         )
@@ -3469,7 +3436,7 @@ mod tests {
             &d.outer,
             None,
             0,
-            level_estimate(&d.outer, 2, None),
+            level_estimate(&d.outer, 2),
             1.0,
             "",
         )
@@ -3663,7 +3630,6 @@ mod tests {
             level_estimate(
                 &inner.profile,
                 (inner.values.len() - inner.values.null_count()) as u64,
-                None,
             ),
             1.0,
             "inner: ",
@@ -3748,17 +3714,6 @@ mod tests {
 
     #[test]
     fn polars_types_of_results() {
-        let s = Series::new("x".into(), &["a", "b", "a", "b", "a", "b"]);
-        let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
-        let exact = Params {
-            population_rows: Some(6),
-            ..params()
-        };
-        let r = recommend(&s, &classic_layout(&s).unwrap(), &d, &sz, &exact).unwrap();
-        assert_eq!(
-            r.polars_type.as_deref(),
-            Some("Enum(categories=['a', 'b'])")
-        );
         let many: Vec<&str> = (0..200)
             .map(|i| if i % 2 == 0 { "alpha" } else { "beta" })
             .collect();
@@ -3777,17 +3732,14 @@ mod tests {
         assert!(r.polars_size > 0);
     }
 
-    fn rec_with(s: Series, population_rows: Option<u64>) -> Rec {
+    fn rec_with(s: Series) -> Rec {
         let (d, sz) = (describe_one(&s, 0).unwrap(), sizes(&s, 1).unwrap());
         recommend(
             &s,
             &classic_layout(&s).unwrap(),
             &d,
             &sz,
-            &Params {
-                population_rows,
-                ..params()
-            },
+            &params(),
         )
         .unwrap()
     }
@@ -3797,18 +3749,16 @@ mod tests {
         // Oracle: the same data cast in Polars and measured by analytics/describe/_sizes.py
         // (size_polars_bytes). Views inline ≤ 12 bytes; longer values fill 8 KiB, 16 KiB, … blocks.
         let long = |i: usize| format!("long string number {i:06}");
-        let cases: Vec<(Series, Option<u64>, &str, u64)> = vec![
+        let cases: Vec<(Series, &str, u64)> = vec![
             (
                 Series::new("x".into(), &[Some("x"), Some("y"), Some("x"), None]),
-                Some(4),
-                "Enum(categories=['x', 'y'])",
+                "Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8))",
                 48,
             ),
             (
-                Series::new("x".into(), ["a long category value 1", "b"].repeat(4)),
-                Some(8),
-                "Enum(categories=['a long category value 1', 'b'])",
-                64,
+                Series::new("x".into(), ["a long category value 1", "b"].repeat(40)),
+                "Categorical(Categories(name=\"x\", namespace=\"\", physical=pl.UInt8))",
+                136,
             ),
             (
                 Series::new(
@@ -3819,7 +3769,6 @@ mod tests {
                         Some(Series::new("".into(), &["a"])),
                     ],
                 ),
-                None,
                 "List(String)",
                 88,
             ),
@@ -3832,7 +3781,6 @@ mod tests {
                         Some(Series::new("".into(), &["a"])),
                     ],
                 ),
-                None,
                 "List(String)",
                 112,
             ),
@@ -3841,13 +3789,11 @@ mod tests {
                     "x".into(),
                     (0..256).map(|i| format!("s{i}")).collect::<Vec<_>>(),
                 ),
-                None,
                 "String",
                 4096,
             ),
             (
                 Series::new("x".into(), (0..1000).map(long).collect::<Vec<_>>()),
-                None,
                 "String",
                 41_008,
             ),
@@ -3858,7 +3804,6 @@ mod tests {
                         .map(|i| (i % 3 != 0).then(|| long(i)))
                         .collect::<Vec<_>>(),
                 ),
-                None,
                 "String",
                 32_784,
             ),
@@ -3867,13 +3812,12 @@ mod tests {
                     "x".into(),
                     &[Some(&b"ab"[..]), Some(&b"0123456789abcdefg"[..]), None],
                 ),
-                None,
                 "Binary",
                 80,
             ),
         ];
-        for (s, population_rows, polars_type, polars_size) in cases {
-            let r = rec_with(s, population_rows);
+        for (s, polars_type, polars_size) in cases {
+            let r = rec_with(s);
             assert_eq!(
                 (r.polars_type.as_deref(), r.polars_size),
                 (Some(polars_type), polars_size),
