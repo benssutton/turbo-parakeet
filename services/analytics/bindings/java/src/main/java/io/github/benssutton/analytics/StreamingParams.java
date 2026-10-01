@@ -9,6 +9,8 @@ import java.util.List;
  * @param reservoirRows rows of contiguous blocks sampled for ZSTD sizes and the cross-check
  *                      (0: no sample, ZSTD sizes null); 0 or at least {@code blockRows}
  * @param blockRows     rows per sampled block (at least 1)
+ * @param categoricalThreshold the dictionary gate; also sizes each level's distinct sample,
+ *                      k = max(categoricalThreshold, 1000), ≈ 50 bytes per sampled value
  */
 public record StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
                               int zstdLevel, long seed, List<Params.BooleanPair> booleanPairs) {

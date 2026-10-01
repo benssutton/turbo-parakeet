@@ -734,7 +734,9 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
     assert checked >= min(10, result.height)
 
 
-def test_rust_cardinality_matches_python_estimators():
+def test_dictionary_evidence_reads_est_high():
+    """The dictionary candidates' evidence cardinality is Rust's own conclusion
+    (est_high / est_cardinality, floored at n_unique) from the same result."""
     frames = {
         "mixed": describe_mixed(2_000),
         "strings": stringified(describe_mixed(500)),

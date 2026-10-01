@@ -26,6 +26,10 @@ import org.apache.arrow.vector.ipc.ArrowReader;
  * null) or start as the Null type; any other type change is an {@link IllegalArgumentException}.
  * {@link #finish} at any point returns one row per column and keeps the state.
  *
+ * <p>Memory per eligible level (a column, or a list's inner values), every dtype: ≈ 16 KB of
+ * HyperLogLog plus a distinct sample of up to ≈ 50 bytes × k, k = max(categoricalThreshold,
+ * 1000) — ≈ 0.5 MB at the default 10 000, so ≈ 0.5 GB for 1 000 high-cardinality columns.
+ *
  * <p>Thread safety: {@code add} and {@code finish} may be called from several threads (the
  * native side serialises them); {@link #close} waits for calls in progress. A producer whose
  * callbacks re-enter this recommender while {@code add} pulls its stream deadlocks.

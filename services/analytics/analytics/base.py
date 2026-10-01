@@ -211,7 +211,8 @@ class Technique(ABC):
 
     @classmethod
     def rows_from_plugin(cls, frame: str, plugin_rows: pl.DataFrame) -> pl.DataFrame:
-        """Plugin output keyed by col_a[, col_b[, col_c]] -> keys + computed status + METRICS."""
+        """Plugin output keyed by col_a[, col_b[, col_c]] -> keys + computed status + METRICS.
+        Carries no INPUTS: a technique with INPUTS selects them itself."""
         return plugin_rows.with_columns(
             *(pl.lit(frame).alias(f"df_{s}") for s in _SUFFIXES[: cls.ARITY]),
             pl.lit("computed", dtype=STATUS).alias("status"),
@@ -241,7 +242,8 @@ class Technique(ABC):
     def _compute(
         self, frames: dict[str, pl.DataFrame], combos: list[Combo]
     ) -> pl.DataFrame:
-        """Implementation: keys + status ("computed"/"pruned") + METRICS for exactly `combos`."""
+        """Implementation: keys + status ("computed"/"pruned") + METRICS + INPUTS
+        (optional) for exactly `combos`."""
 
     def _conclude(self, out: pl.DataFrame) -> pl.DataFrame:
         """Technique base: add CONCLUSIONS (null unless status == computed)."""

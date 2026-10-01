@@ -169,7 +169,7 @@ def _frequencies(ctx: SessionContext, s: pl.Series) -> dict:
 def _extremes(ctx: SessionContext, s: pl.Series) -> dict:
     if isinstance(s.dtype, NESTED):  # no extremes (spec 2026-10-01 §13.3)
         return {"argmin": None, "argmax": None}
-    ok ="o IS NOT NULL" + (" AND NOT isnan(o)" if isinstance(s.dtype, FLOATS) else "")
+    ok = "o IS NOT NULL" + (" AND NOT isnan(o)" if isinstance(s.dtype, FLOATS) else "")
     key = _key(s.dtype, "o")
     r = _one(
         ctx,

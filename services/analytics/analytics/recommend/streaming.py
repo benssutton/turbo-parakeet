@@ -5,6 +5,10 @@ in Rust (src/streaming.rs): exact running statistics prove each recommendation o
 row; a sample of contiguous row blocks (`reservoir_rows`, in blocks of `block_rows`)
 gives ZSTD sizes — those of an IPC file written in `block_rows` batches — and a
 cross-check. Not a technique on the uniform contract: add batches, finish at any time.
+
+Distinct counts (spec docs/superpowers/specs/2026-10-01-recommender-parity-design.md):
+every eligible level, every dtype, keeps a HyperLogLog and a bottom-k distinct sample
+(k = max(categorical_threshold, 1000)); exact while the sample holds every value.
 """
 
 from __future__ import annotations
@@ -37,6 +41,11 @@ class StreamingRecommender:
     UInt128, Object and nested-Null (List(Null), a Struct with a Null field, ...)
     columns are listed as ineligible. `finish()` returns one row
     per column and keeps the state, so adding can continue.
+
+    Memory per eligible level (a column, or a list's inner values), every dtype:
+    ≈ 16 KB of HyperLogLog plus a distinct sample of up to ≈ 50 bytes × k, where
+    k = max(categorical_threshold, 1000) — ≈ 0.5 MB at the default 10 000, so
+    ≈ 0.5 GB for 1 000 high-cardinality columns.
     """
 
     def __init__(

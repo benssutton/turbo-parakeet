@@ -209,6 +209,26 @@ pub(crate) struct Ext {
     pub value: ArrayRef,
 }
 
+/// Integer-backed numeric and temporal dtypes: those whose integer range (`int_range`)
+/// the recommendation rules read.
+pub(crate) fn has_int_range(dt: &DataType) -> bool {
+    dt.is_integer()
+        || matches!(
+            dt,
+            DataType::Decimal(..)
+                | DataType::Date
+                | DataType::Datetime(..)
+                | DataType::Duration(_)
+                | DataType::Time
+        )
+}
+
+/// Numeric dtypes: those whose extremes feed the conclusions' whole-number range
+/// (`Profile::numeric`). Temporal dtypes never do.
+pub(crate) fn is_numeric(dt: &DataType) -> bool {
+    dt.is_integer() || dt.is_float() || matches!(dt, DataType::Decimal(..))
+}
+
 /// Dtypes whose min / max the rules read (as integers or floats) and the output renders.
 fn has_extremes(dt: &DataType) -> bool {
     dt.is_integer()
@@ -497,9 +517,7 @@ impl LevelStats {
                 )
             }
         };
-        let numeric_dtype =
-            dtype.is_integer() || dtype.is_float() || matches!(dtype, DataType::Decimal(..));
-        let numeric = if numeric_dtype {
+        let numeric = if is_numeric(dtype) {
             self.int_range()
                 .map(|(a, b)| (a as f64, b as f64))
                 .or_else(|| self.float_range())

@@ -92,9 +92,9 @@ INPUTS = {**LEVEL_INPUTS, **{f"inner_{k}": v for k, v in LEVEL_INPUTS.items()}}
 ESTIMATES = {
     "unique": pl.Boolean,
     "est_cardinality": F64,
-    "est_method": pl.String,
     "est_low": F64,
     "est_high": F64,
+    "est_method": pl.String,
     "estimates_agree": pl.Boolean,
 }
 _LEVEL = {"min": pl.String, "max": pl.String, **ESTIMATES, "class": pl.String}

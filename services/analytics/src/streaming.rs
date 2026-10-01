@@ -17,7 +17,7 @@ use crate::arrow_io::{export_struct, import_array, import_batch};
 use crate::cardinality_estimators::Estimate;
 use crate::conclusions::conclude;
 use crate::describe::{assemble, flatten, value_fields, Profile, Row};
-use crate::partial::{BatchStats, LevelStats, ViewSim};
+use crate::partial::{has_int_range, BatchStats, LevelStats, ViewSim};
 use crate::recommend::{
     body_size, cast_to, list_parts, pa_name, pad, pick_by_stats, pick_list_by_stats, pl_name,
     polars_layout, rec_fields, rec_row, to_polars_layout, validity, verify, wrap, Level, Params,
@@ -127,14 +127,10 @@ fn level<'a>(
         p,
         n_rows: st.n,
         n_null: st.n_null,
-        // Task 10 gives Boolean / Enum integer keys; the rules read none of theirs.
-        int_range: (dtype.is_integer()
-            || matches!(
-                dtype,
-                PT::Decimal(..) | PT::Date | PT::Datetime(..) | PT::Duration(_) | PT::Time
-            ))
-        .then(|| st.int_range())
-        .flatten(),
+        // Boolean and Enum extremes also carry integer keys (the value, the category
+        // code); the rules read an integer range only for integer-backed numeric and
+        // temporal dtypes.
+        int_range: has_int_range(dtype).then(|| st.int_range()).flatten(),
         float_range: st.float_range(),
         few_distinct: st.few_distinct(),
         n_midnight: st.n_midnight,
