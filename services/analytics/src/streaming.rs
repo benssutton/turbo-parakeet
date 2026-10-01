@@ -1,7 +1,9 @@
 //! Streaming recommender (spec
 //! docs/superpowers/specs/2026-09-29-streaming-recommender-design.md): record batches
 //! are added over time; per-column statistics (partial.rs) and a block reservoir
-//! (reservoir.rs) are kept; `finish` recommends from them at any point.
+//! (reservoir.rs) are kept; `finish` recommends from them at any point. Its output
+//! shares Describe's value columns and conclusions (parity spec
+//! docs/superpowers/specs/2026-10-01-recommender-parity-design.md, §7).
 
 use std::collections::{HashMap, HashSet};
 

@@ -139,8 +139,10 @@ public final class StreamingRecommender implements AutoCloseable {
     }
 
     /**
-     * One row per column seen so far (spec §6: {@code column, status, dtype, first_row, n_rows,
-     * n_null, …, rec_*, n_sampled_rows, n_sampled_blocks}); the state is kept, so adding can
+     * One row per column seen so far, with the columns of the parity spec
+     * (docs/superpowers/specs/2026-10-01-recommender-parity-design.md §7: {@code column, status,
+     * dtype, first_row, n_rows, n_null}, Describe's value block, {@code n_midnight}, the sizes,
+     * {@code rec_*}, {@code n_sampled_rows, n_sampled_blocks}); the state is kept, so adding can
      * continue. The returned reader holds one batch; the caller closes it.
      *
      * @throws RuntimeException      for a failure inside the Rust kernels

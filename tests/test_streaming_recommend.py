@@ -158,13 +158,15 @@ def per_batch_sum(r: dict) -> bool:
 
 
 def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: bool):
-    """Spec §6: equal recommendations, sizes and candidates; ZSTD when N ≤ block_rows.
+    """Parity spec (docs/superpowers/specs/2026-10-01-recommender-parity-design.md)
+    §7 / §10: equal recommendations, sizes, candidates and shared value columns; ZSTD
+    when N ≤ block_rows.
 
     Known, accepted differences, narrowed per column:
     - the distinct sample in its sampling phase (`est_method` "hll"): the counts are
       HyperLogLog estimates, so the rejected dictionary's key width and size follow the
-      estimated est_high, not one-shot's exact one, and n_unique is within 3 standard
-      errors (p = 14) rather than exact;
+      estimated est_high, not one-shot's exact one; n_unique is within 3 standard
+      errors (p = 14) and sum_len_unique within 5% rather than exact;
     - the original's size, in several batches, where it is a per-batch sum;
     - string source whose null slots hold bytes: one-shot measures them in the
       original's size.
@@ -192,7 +194,7 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         want = candidates(o, original_sizes, not overflowed)
         assert got == want, name
         exact_cols = [
-            "n_null", "min", "max", "min_len", "max_len", "sum_len", "gcd", "n_midnight",
+            "n_rows", "n_null", "min", "max", "min_len", "max_len", "sum_len", "gcd", "n_midnight",
             "n_nan", "n_inf", "n_fractional", "max_frac_digits", "n_f32_inexact",
             *[
                 c
@@ -205,6 +207,12 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         if overflowed:
             sigma = 3 * 1.04 / 128  # p = 14
             assert abs(r["n_unique"] - o["n_unique"]) <= sigma * o["n_unique"] + 1, name
+            for k in ["unique", "class"]:
+                assert r[k] == o[k], (name, k, r[k], o[k])
+            if o["sum_len_unique"] is not None:
+                assert r["sum_len_unique"] == pytest.approx(
+                    o["sum_len_unique"], rel=0.05
+                ), (name, r["sum_len_unique"], o["sum_len_unique"])
         else:
             for k in ["n_unique", "unique", "class", "sum_len_unique"]:
                 assert r[k] == o[k], (name, k, r[k], o[k])
