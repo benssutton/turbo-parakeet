@@ -494,6 +494,8 @@ def test_agrees_with_reference_on_large_dataset(impl):
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Known answers (the reference is included, so these are its oracle tests)
 
 
 @pytest.mark.parametrize(
@@ -512,8 +514,6 @@ def test_render_is_arrow_rs_text(s, expected):
     from analytics import _plugin
 
     assert _plugin.render(s) == expected
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Known answers (the reference is included, so these are its oracle tests)
 
 
 @pytest.mark.parametrize("impl", ALL)

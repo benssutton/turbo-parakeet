@@ -112,7 +112,7 @@ def column_sizes(df: pl.DataFrame, zstd_level: int) -> pl.DataFrame:
 
 
 def render(s: pl.Series) -> list[str | None]:
-    """`s`'s values as text, rendered by arrow-rs's cast to Utf8, the one format of
+    """`s`'s values as text, rendered by arrow-rs's cast to Utf8 — the one format of
     Describe's / Recommend's min and max (recommend.rs `render_value`)."""
     return pl.DataFrame(_rs.render(s.to_frame())).to_series().to_list()
 

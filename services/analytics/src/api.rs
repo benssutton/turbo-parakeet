@@ -279,7 +279,8 @@ pub fn column_sizes(batch: &RecordBatch, zstd_level: i32) -> Result<RecordBatch>
 }
 
 /// Every value of every column as text (`recommend::render_value`): the canonical
-/// rendering of `min` / `max`, for the Python reference implementations.
+/// rendering of `min` / `max`, for the Python reference implementations. Meant for a
+/// few values per column: each value is cast on its own.
 pub fn render(batch: &RecordBatch) -> Result<RecordBatch> {
     let columns: Vec<arrow_array::ArrayRef> = batch
         .columns()

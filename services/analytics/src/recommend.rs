@@ -1479,7 +1479,7 @@ pub(crate) fn cast_to(t: &Target, lvl: &Level) -> Result<ArrayRef, String> {
 }
 
 /// Row 0 of `a` as text: arrow-rs's cast to Utf8, the one rendering of `min` / `max`
-/// in every recommender (spec 2026-10-01 section 6, 13.1). None for a null, or a value with
+/// in every recommender (spec 2026-10-01 §6, §13.1). None for a null, or a value with
 /// no text form (e.g. non-UTF-8 binary).
 pub(crate) fn render_value(a: &dyn Array) -> Option<String> {
     let s = arrow_cast(a.slice(0, 1).as_ref(), &AT::Utf8).ok()?;
@@ -1488,13 +1488,7 @@ pub(crate) fn render_value(a: &dyn Array) -> Option<String> {
 }
 
 fn render(a: &ArrayRef, i: usize) -> String {
-    arrow_cast(a.slice(i, 1).as_ref(), &AT::Utf8)
-        .ok()
-        .and_then(|s| {
-            let s = s.as_string::<i32>();
-            s.is_valid(0).then(|| s.value(0).to_string())
-        })
-        .unwrap_or_else(|| "null".into())
+    render_value(a.slice(i, 1).as_ref()).unwrap_or_else(|| "null".into())
 }
 
 /// Rows compared per ArrayData equality check in `first_mismatch`.
@@ -2619,6 +2613,12 @@ pub(crate) fn describe_and_recommend_impl(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::sizes::ipc_body_bytes;
+    use arrow_array::{
+        builder::StringDictionaryBuilder, types::UInt8Type, DictionaryArray, StringArray,
+    };
+
     #[test]
     fn render_value_is_arrow_rs_text() {
         use arrow_array::{
@@ -2645,12 +2645,6 @@ mod tests {
         assert_eq!(one(Arc::new(dec)).as_deref(), Some("1.50"));
         assert_eq!(one(Arc::new(Float64Array::from(vec![None]))), None);
     }
-
-    use super::*;
-    use crate::sizes::ipc_body_bytes;
-    use arrow_array::{
-        builder::StringDictionaryBuilder, types::UInt8Type, DictionaryArray, StringArray,
-    };
 
     #[test]
     fn pyarrow_type_names() {
