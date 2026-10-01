@@ -367,13 +367,13 @@ KNOWN = [
         'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))',
         id="categorical_narrows_key",
     ),
-    # Enum keeps its dictionary with 32-bit value offsets (the original has 64-bit).
+    # Enum source, two values: Schnabel's est_high (~7.4) projects the narrower dictionary larger than the original, so the Enum is kept.
     pytest.param(
         pl.Series("x", ["a", "b"] * 50, dtype=pl.Enum(["a", "b"])),
         {},
-        DICT8,
-        'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))',
-        id="enum_keeps_dictionary",
+        "dictionary<values=large_string, indices=uint8, ordered=0>",
+        "Enum(categories=['a', 'b'])",
+        id="enum_kept_when_cardinality_is_uncertain",
     ),
     # 200 singletons: Chao1 est_high ≈ 26,438 > categorical_threshold → dictionary rejected; Utf8 (2,608) beats the original (3,608).
     pytest.param(
