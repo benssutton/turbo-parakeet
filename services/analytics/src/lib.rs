@@ -11,6 +11,7 @@ mod cardinality_estimators;
 mod chi_squared;
 mod contingency;
 mod describe;
+mod distinct_sample;
 mod entropy;
 mod gcd;
 mod hll;

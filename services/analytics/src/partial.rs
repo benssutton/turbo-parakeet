@@ -237,13 +237,13 @@ fn ext_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<Ext>> {
 
 /// A distinct value's statistics in one batch.
 pub(crate) struct KeyStat {
-    key: u64,
-    first: u64,
-    count: u64,
-    mask: u8,
-    len: u64,
+    pub key: u64,
+    pub first: u64,
+    pub count: u64,
+    pub mask: u8,
+    pub len: u64,
     /// The value, when the batch holds at most five distinct values.
-    text: Option<String>,
+    pub text: Option<String>,
 }
 
 /// Distinct values of a text level, bounded by `categorical_threshold` (spec §4.2).
