@@ -149,14 +149,14 @@ String columns rendered with Arrow's cast to string: arrow-rs `cast(…, Utf8)` 
 `pyarrow.compute.cast(…, pa.string())` in the DataFusion and Polars Describe implementations.
 
 Ordering is unchanged: numbers by value with NaN excluded; strings by bytes; booleans false < true;
-Categorical / Enum by their string value. Lists have no `min` / `max`; `inner_min` / `inner_max`
+Categorical by its string value, Enum by category order (§13.2). Lists have no `min` / `max`; `inner_min` / `inner_max`
 cover their inner values (one-shot only).
 
 - One-shot Rust: finds the argmin / argmax index as today, then renders that row in describe.rs.
   `argmin` / `argmax` leave the output.
-- Streaming: `has_extremes` gains String, Categorical, Enum and Boolean. Text extremes are kept with
+- Streaming: `has_extremes` gains String, Categorical, Enum, Boolean and Binary. Text extremes are kept with
   a new `Key::S` (the bytes), compared per batch — one stored string per extreme. Rendering stays
-  `render` in streaming.rs.
+  `render` in streaming.rs. The stored value is the one rendered value (a Categorical / Enum extreme is cast to a plain string first, so no dictionary is retained).
 
 ## 7. Output columns
 

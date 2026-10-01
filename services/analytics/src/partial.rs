@@ -247,7 +247,13 @@ fn ext_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<Ext>> {
             .get(0)
             .map(Key::I),
     };
-    let value = classic_layout(&one)?;
+    // A dictionary extreme would export (and retain) its whole category mapping.
+    let value = match one.dtype() {
+        DataType::Categorical(..) | DataType::Enum(..) => {
+            classic_layout(&one.cast(&DataType::String)?)?
+        }
+        _ => classic_layout(&one)?,
+    };
     Ok(key.map(|key| Ext { key, value }))
 }
 
@@ -753,8 +759,31 @@ mod tests {
         let cat = s
             .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
             .unwrap();
-        let p = absorbed(&chunks(&cat, 2), 10_000).profile(cat.dtype());
+        let st = absorbed(&chunks(&cat, 2), 10_000);
+        let p = st.profile(cat.dtype());
         assert_eq!((p.min.as_deref(), p.max.as_deref()), (Some("b"), Some("z")));
+        let plain = |e: &Option<Ext>| {
+            let v = &e.as_ref().unwrap().value;
+            v.len() == 1 && matches!(v.data_type(), AT::Utf8 | AT::LargeUtf8 | AT::Utf8View)
+        };
+        assert!(plain(&st.lo) && plain(&st.hi));
+        // Enum: ordered by category code (["b", "a"]), not by string.
+        let en = Series::new("e".into(), &["a", "b", "a"])
+            .cast(&DataType::from_frozen_categories(
+                polars::datatypes::FrozenCategories::new(["b", "a"]).unwrap(),
+            ))
+            .unwrap();
+        let st = absorbed(&chunks(&en, 1), 10_000);
+        let p = st.profile(en.dtype());
+        assert_eq!((p.min.as_deref(), p.max.as_deref()), (Some("b"), Some("a")));
+        assert!(plain(&st.lo) && plain(&st.hi));
+        let bin = Series::new(
+            "bin".into(),
+            &[Some(&b"m"[..]), None, Some(b"b"), Some(b"z")],
+        );
+        let p = absorbed(&chunks(&bin, 2), 10_000).profile(bin.dtype());
+        assert_eq!((p.min.is_some(), p.max.is_some()), (true, true));
+        assert_ne!(p.min, p.max);
     }
 
     #[test]
