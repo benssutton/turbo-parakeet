@@ -108,7 +108,9 @@ Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design
   stream out, plain C parameters; `population_rows < 0` = None) and `analytics_free_error`. Returns 0 / 1 InvalidInput /
   2 Compute with a message in `*error`. Wrapped by `io.github.benssutton.analytics.Analytics` (Java 25 FFM + Arrow Java
   `arrow-c-data`), which maps 1 → IllegalArgumentException, 2 → RuntimeException. Also `analytics_recommender_{new,add,finish,free}`
-  (opaque `void *` handle; `add` consumes the stream). Only describe_and_recommend is bound in Java so far.
+  (opaque `void *` handle; `add` consumes the stream), wrapped by `io.github.benssutton.analytics.StreamingRecommender`
+  (AutoCloseable; `StreamingParams`; a read/write lock keeps `close` from racing `add`/`finish`, a Cleaner frees an
+  unclosed handle). `Native` holds the shared library lookup and error mapping.
 
 Private — reached only through `analytics._plugin`, only by the `*Rust` classes (and the exceptions named below):
 `column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
