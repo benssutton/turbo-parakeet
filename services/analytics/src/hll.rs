@@ -1,8 +1,7 @@
 //! HyperLogLog distinct counting (Flajolet et al. 2007) with Ertl's improved estimator
 //! ("New cardinality estimation algorithms for HyperLogLog sketches", 2017), which needs
 //! no bias tables or range switches. Callers pass one well-mixed 64-bit hash per value
-//! (`hash_key`); registers merge by max, so sketches of separate batches or threads
-//! combine exactly. No Polars or Arrow types: a later entry point can wrap it as is.
+//! (`hash_key`). No Polars or Arrow types: a later entry point can wrap it as is.
 
 use std::hash::BuildHasher;
 
@@ -46,14 +45,6 @@ impl Hll {
         let r = &mut self.registers[i];
         if rank > *r {
             *r = rank;
-        }
-    }
-
-    /// Register-wise max: exactly the sketch of both inputs' values.
-    pub(crate) fn merge(&mut self, other: &Hll) {
-        assert_eq!(self.p, other.p, "HyperLogLog precisions differ");
-        for (a, &b) in self.registers.iter_mut().zip(&other.registers) {
-            *a = (*a).max(b);
         }
     }
 
@@ -156,21 +147,6 @@ mod tests {
             }
         }
         assert!((h.estimate() - 1_000.0).abs() < 30.0, "{}", h.estimate());
-    }
-
-    #[test]
-    fn merge_equals_one_sketch() {
-        let (mut a, mut b, mut all) = (Hll::new(12), Hll::new(12), Hll::new(12));
-        for v in 0..5_000u64 {
-            a.insert(hash_key(v));
-            all.insert(hash_key(v));
-        }
-        for v in 3_000..9_000u64 {
-            b.insert(hash_key(v));
-            all.insert(hash_key(v));
-        }
-        a.merge(&b);
-        assert_eq!(a, all);
     }
 
     #[test]
