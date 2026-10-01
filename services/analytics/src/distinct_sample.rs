@@ -44,6 +44,7 @@ pub(crate) struct DistinctSample {
 
 impl DistinctSample {
     pub(crate) fn new(k: usize) -> Self {
+        debug_assert!(k > 0, "a sample holds at least one value");
         DistinctSample {
             k,
             map: HashMap::default(),
@@ -72,6 +73,7 @@ impl DistinctSample {
                 let (_, evicted) = self.heap.pop().expect("a full sample is not empty");
                 self.map.remove(&evicted);
             }
+            debug_assert!(k.mask != 0, "a counted value has a capture mask");
             self.map.insert(
                 k.key,
                 Slot {
@@ -211,6 +213,10 @@ mod tests {
         ba.absorb(batch(0..30_000));
         assert_eq!(ab.keys(), ba.keys());
         assert_eq!(ab.counts(), ba.counts());
+        let held = ab.keys();
+        let f2 = held.iter().filter(|k| (20_000..30_000).contains(*k)).count() as u64;
+        let (f1, f2_got, _) = ab.counts();
+        assert_eq!((f1, f2_got), (held.len() as u64 - f2, f2));
         let mut smallest: Vec<u64> = (0..60_000).collect();
         smallest.sort_unstable_by_key(|&k| hash_key(k));
         smallest.truncate(1_000);
@@ -228,5 +234,49 @@ mod tests {
         let n = d.len() as f64;
         assert!((f1 as f64 / n - 0.5).abs() < 0.03, "f1={f1}");
         assert!((f2 as f64 / n - 0.5).abs() < 0.03, "f2={f2}");
+    }
+
+    #[test]
+    fn boundary_at_exactly_k() {
+        let mut d = DistinctSample::new(1_000);
+        d.absorb(batch(0..1_000));
+        assert!(d.is_exact());
+        assert_eq!(d.len(), 1_000);
+        d.absorb(batch(1_000..1_001));
+        assert!(!d.is_exact());
+        assert_eq!(d.len(), 1_000);
+    }
+
+    #[test]
+    fn rejected_key_is_not_readmitted() {
+        let mut d = DistinctSample::new(1_000);
+        d.absorb(batch(0..5_000));
+        let held = d.keys();
+        let gone = (0..5_000).find(|k| held.binary_search(k).is_err()).unwrap();
+        let counts = d.counts();
+        d.absorb(vec![ks(gone, 1, 1, None)]);
+        assert_eq!(d.keys(), held);
+        assert_eq!(d.counts(), counts);
+    }
+
+    #[test]
+    fn mean_len_of_held_values() {
+        let mut d = DistinctSample::new(1_000);
+        assert_eq!(d.mean_len(), 0.0);
+        let mut a = ks(1, 1, 1, None);
+        a.len = 10;
+        let mut b = ks(2, 1, 1, None);
+        b.len = 30;
+        d.absorb(vec![a, b]);
+        assert_eq!(d.mean_len(), 20.0);
+    }
+
+    #[test]
+    fn full_mask_lands_in_last_history_bucket() {
+        let mut d = DistinctSample::new(1_000);
+        for m in [1, 2, 4] {
+            d.absorb(vec![ks(7, 1, m, None)]);
+        }
+        assert_eq!(d.counts().2[6], 1);
     }
 }
