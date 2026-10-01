@@ -76,13 +76,16 @@ HISTORY_10 = [0, 0, 0, 0, 0, 0, 10]
 
 
 def test_estimate_rule():
-    assert estimators.estimate(0, 0, 0, 0, [0] * 7)["est_method"] == "observed"
+    zero = estimators.estimate(0, 0, 0, 0, [0] * 7)
+    assert zero["est_method"] == "observed"
+    assert (zero["est_low"], zero["est_high"]) == (0.0, 0.0)
     high = estimators.estimate(10, 15, 4, 2, HISTORY_10)  # d/n ≥ 0.5
     assert (high["est_method"], high["est_cardinality"], high["est_high"]) == (
         "observed",
         10.0,
         10.0,
     )
+    assert high["est_low"] == 10.0
     sch = estimators.estimate(10, 40, 4, 2, HISTORY_10)  # Schnabel 9.52 floored at 10
     assert (sch["est_method"], sch["est_cardinality"], sch["est_low"]) == (
         "schnabel",
@@ -373,7 +376,7 @@ def test_agreement_tolerances():
     assert compare(capture_history=[0, 0, 0, 0, 0, 1, 9]) == []  # Schnabel moves < 10%
     assert any("size_zstd_bytes" in p for p in compare(size_zstd_bytes=1_100))
     assert any("n_unique" in p for p in compare(n_unique=11))
-    # [5, 4, 0, 0, 0, 0, 1]: |S1| = 6, |S2| = 5, |S3| = 1, R = 2 → Schnabel 40/3 ≈ 13.3 vs 9.52 (> 10%)
+    # [5, 4, 0, 0, 0, 0, 1]: |S1| = 6, |S2| = 5, |S3| = 1, R = 2 → Schnabel 40/3 ≈ 13.3 vs the reference floored at 10 (> 10%)
     assert any("est_cardinality" in p for p in compare(capture_history=[5, 4, 0, 0, 0, 0, 1]))
 
 

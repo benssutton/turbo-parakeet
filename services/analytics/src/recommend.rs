@@ -3145,25 +3145,22 @@ mod tests {
     fn dictionary_evidence_names_the_estimator() {
         let s = Series::new("x".into(), &["a", "b", "a", "b", "c"]);
         let d = describe_one(&s, 0).unwrap();
-        let evidence = || {
-            let lvl = Level::of_values(
-                s.dtype(),
-                export_series(&s, CompatLevel::oldest()).unwrap(),
-                &d.outer,
-                None,
-                0,
-                level_estimate(&d.outer, 5),
-                "",
-            )
-            .unwrap();
-            candidates(&lvl, &params())
-                .unwrap()
-                .into_iter()
-                .find(|c| c.rule == "string→dictionary")
-                .unwrap()
-                .evidence
-        };
-        let evidence = evidence();
+        let lvl = Level::of_values(
+            s.dtype(),
+            export_series(&s, CompatLevel::oldest()).unwrap(),
+            &d.outer,
+            None,
+            0,
+            level_estimate(&d.outer, 5),
+            "",
+        )
+        .unwrap();
+        let evidence = candidates(&lvl, &params())
+            .unwrap()
+            .into_iter()
+            .find(|c| c.rule == "string→dictionary")
+            .unwrap()
+            .evidence;
         assert!(evidence.contains("method=observed est_low=3"), "{evidence}");
     }
 

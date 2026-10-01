@@ -107,7 +107,7 @@ CONCLUSIONS = {
 }
 
 # Agreement: exact unless listed. capture_history depends on each implementation's
-# own seeded split, so it is compared through the Schnabel estimate instead.
+# own seeded split, so it is compared through est_cardinality / est_low / est_high.
 TOLERANCES = {
     "entropy": 1e-9,
     "inner_entropy": 1e-9,
