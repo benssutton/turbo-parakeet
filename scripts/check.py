@@ -129,6 +129,9 @@ def sonar() -> None:
     if not token:
         sys.exit("SONARQUBE_TOKEN is not set (see sonar/README.md)")
     coverage_py()
+    # The scanner reads SONAR_TOKEN; `-e SONAR_TOKEN` forwards it from this environment
+    # (keeps the token off the command line).
+    os.environ["SONAR_TOKEN"] = token
     _run(
         [
             "docker",
