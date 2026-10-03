@@ -1,0 +1,4 @@
+# Pinned so local checks and CI use the same compiler, rustfmt and clippy.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

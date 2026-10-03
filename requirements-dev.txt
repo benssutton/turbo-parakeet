@@ -1,0 +1,8 @@
+# Pinned developer / CI tooling: local checks and the workflow install the same versions.
+# Bump deliberately (Dependabot proposes weekly); lint results then don't change underfoot.
+black==26.5.1
+ruff==0.16.10
+pre-commit==4.6.2
+maturin==1.14.1
+pytest>=7.4
+pytest-cov>=7.1

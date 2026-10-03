@@ -57,6 +57,16 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 
 **Not implemented:** run-length / REE compression analysis (`run_length.py` was deleted in `93f6dcb`). A Wald-Wolfowitz runs test is planned as a future ordered/per-column technique on this same contract.
 
+# Checks, CI and local tooling
+`python scripts/check.py <step|group>` (run with the p312 Python) runs exactly what CI runs: `fast` (rustfmt, black, clippy for both
+feature sets, ruff), `check` (fast + build + `cargo test --lib` + pytest), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
+`lint`, `build`, `test-rust`, `test-py`, `test-java`, `coverage-rust`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
+Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin) and `rust-toolchain.toml` (compiler, rustfmt, clippy);
+`Cargo.lock` is committed. Optional git hooks: `.pre-commit-config.yaml` (commit: rustfmt + black; push: clippy + ruff + Rust tests).
+`.github/workflows/ci-cd.yml`: lint, Rust coverage, Python tests (Linux + Windows), Java, CodeQL (public repos only), Semgrep, and a
+`status` gate job; actions are pinned by SHA; the only schedule is weekly. `.github/dependabot.yml`: weekly, grouped, never more often.
+Local SonarQube Community Build + the official SonarQube MCP server (`.mcp.json`): see `sonar/README.md`.
+
 # Project Structure
 
 ```

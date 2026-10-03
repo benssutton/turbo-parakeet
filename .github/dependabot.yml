@@ -1,0 +1,43 @@
+# Weekly version updates (security updates are separate and immediate). This repo changes
+# slowly, so nothing here runs more often than once a week; updates are grouped to keep
+# the PR count down.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /services/analytics
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      rust:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: maven
+    directory: /services/analytics/bindings/java
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      java:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]

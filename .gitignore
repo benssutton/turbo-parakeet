@@ -5,9 +5,14 @@ __pycache__/
 
 .coverage
 
-Cargo.lock
 target/
 
 tests/performance/results/
 
 docs/superpowers/
+
+coverage.xml
+htmlcov/
+.scannerwork/
+services/analytics/lcov.info
+services/analytics/coverage-html/

@@ -1,0 +1,21 @@
+# Local hooks run the same commands as CI (scripts/check.py). Install once, from the
+# project's Python environment:
+#   python -m pip install -r requirements-dev.txt
+#   pre-commit install --install-hooks && pre-commit install --hook-type pre-push
+# Skip in an emergency with `git commit --no-verify`; CI still runs everything.
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: format-check
+        name: rustfmt + black
+        entry: python scripts/check.py fmt-check
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: lint-and-rust-tests
+        name: clippy + ruff + cargo test
+        entry: python scripts/check.py lint test-rust
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
