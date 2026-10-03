@@ -15,7 +15,7 @@
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <arrow.version>18.1.0</arrow.version>
+    <arrow.version>19.0.0</arrow.version>
     <junit.version>6.1.3</junit.version>
     <analytics.library.dir>${project.basedir}/../../target/capi/release</analytics.library.dir>
   </properties>
