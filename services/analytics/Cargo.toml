@@ -22,7 +22,7 @@ pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py39"], optio
 
 #Concurrent hashmaps & hashing functions
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-foldhash = "0.1"
+foldhash = "0.2"
 
 #Parallelism
 rayon = "1.10"
