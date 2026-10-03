@@ -6,4 +6,4 @@ pre-commit==4.6.2
 maturin==1.14.1
 pytest>=7.4
 pytest-cov>=7.1
-pytest-xdist>=3.8  # parallel tests: scripts/check.py runs pytest -n 4
+pytest-xdist>=3.8  # parallel tests: pytest.ini sets -n 4

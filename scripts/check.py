@@ -20,8 +20,6 @@ ROOT = Path(__file__).resolve().parent.parent
 CRATE = ROOT / "services" / "analytics"
 JAVA = CRATE / "bindings" / "java"
 PY = sys.executable
-# pytest-xdist workers for the Python tests (locally, in CI and for the Sonar coverage run).
-PYTEST_WORKERS = "4"
 WINDOWS = os.name == "nt"
 MVNW = str(JAVA / ("mvnw.cmd" if WINDOWS else "mvnw"))
 
@@ -81,7 +79,7 @@ def test_rust() -> None:
 
 
 def test_py() -> None:
-    _run([PY, "-m", "pytest", "-q", "-n", PYTEST_WORKERS])
+    _run([PY, "-m", "pytest", "-q"])
 
 
 def build_capi() -> None:
@@ -122,19 +120,7 @@ def coverage_rust() -> None:
 
 
 def coverage_py() -> None:
-    _run(
-        [
-            PY,
-            "-m",
-            "pytest",
-            "--cov=.",
-            "--cov-report=xml",
-            "--cov-report=html",
-            "-q",
-            "-n",
-            PYTEST_WORKERS,
-        ]
-    )
+    _run([PY, "-m", "pytest", "--cov=.", "--cov-report=xml", "--cov-report=html", "-q"])
 
 
 def sonar() -> None:
