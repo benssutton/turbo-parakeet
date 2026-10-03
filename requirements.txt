@@ -17,6 +17,6 @@ datasketch>=1.6
 polars-ds>=0.13.0
 
 # Benchmark alternatives — optional; benchmarks degrade gracefully if absent
-scipy>=1.11
+scipy>=1.18.1
 fastbloom-rs>=0.5.10
 scikit-learn>=1.3
