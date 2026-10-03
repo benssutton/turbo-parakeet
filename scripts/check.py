@@ -152,7 +152,7 @@ def _llvm_cov_env() -> dict[str, str]:
 
 def coverage_rust_full() -> None:
     """Rust coverage from the unit tests AND the Python tests, merged (what CI uploads to
-    Codecov; needs cargo-llvm-cov). The pytest run drives an instrumented build of the
+    Codecov; needs cargo-llvm-cov, and also writes coverage.xml for Python). The pytest run drives an instrumented build of the
     extension, which covers python.rs and the rest of what only Python reaches. The
     normal extension in the working tree is put back afterwards."""
     env = _llvm_cov_env()
@@ -169,7 +169,7 @@ def coverage_rust_full() -> None:
     try:
         _run(["cargo", "test", "--lib", "--profile", "coverage"], CRATE, env)
         _run([PY, "-m", "maturin", "develop", "--profile", "coverage"], CRATE, env)
-        _run([PY, "-m", "pytest", "-q"], ROOT, env)
+        _run([PY, "-m", "pytest", "-q", "--cov=.", "--cov-report=xml"], ROOT, env)
     finally:
         # The instrumented extension would write profile data on every later Python run.
         for f in ext:

@@ -63,8 +63,12 @@ feature sets, ruff), `check` (fast + build + `cargo test --lib` + pytest; `pytes
 `lint`, `build`, `test-rust`, `test-py`, `test-java`, `coverage-rust`, `coverage-rust-full`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
 Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin, pytest-xdist) and `rust-toolchain.toml` (compiler, rustfmt, clippy);
 `Cargo.lock` is committed. Optional git hooks: `.pre-commit-config.yaml` (commit: rustfmt + black; push: clippy + ruff + Rust tests).
-`.github/workflows/ci-cd.yml`: lint, Rust coverage, Python tests (Linux + Windows), Java, CodeQL (public repos only), Semgrep, and a
-`status` gate job; actions are pinned by SHA; the only schedule is weekly. `.github/dependabot.yml`: weekly, grouped, never more often.
+`.github/workflows/ci-cd.yml`: lint, Rust + Python coverage (one job: unit tests, then pytest on an instrumented extension), Java,
+CodeQL (public repos only), Semgrep, Windows Python tests, and a `status` gate job; actions are pinned by SHA. **Cost control** (private
+repo, limited Actions minutes; Windows bills 2x): the Windows job runs only on the weekly schedule / manual dispatch, Java not on
+pull requests, docs-only changes (`*.md`, docs/, sonar/, notebooks/) skip the pipeline, superseded runs are cancelled; a cold Rust
+cache (any `Cargo.lock` change) makes a run ~3x dearer. `.github/dependabot.yml`: Rust / Python weekly, Java / Actions monthly,
+grouped, at most 2 open PRs per ecosystem.
 Rust coverage (`coverage-rust-full`, what CI uploads to Codecov) merges the unit tests with the Python tests run against an
 instrumented build of the extension (Cargo profile `coverage`: no LTO; dedicated target dir `target/llvm-cov-target`), because
 python.rs is reachable only from Python; the step restores the normal extension afterwards. Cold build ≈ 20 min (dependencies,

@@ -1,6 +1,7 @@
-# Weekly version updates (security updates are separate and immediate). This repo changes
-# slowly, so nothing here runs more often than once a week; updates are grouped to keep
-# the PR count down.
+# Version updates (security updates are separate and immediate). This repo changes slowly
+# and CI minutes are limited (every Cargo.lock change invalidates the Rust build cache, so a
+# run costs ~3x more): Rust and Python weekly, Java and Actions monthly; updates are grouped
+# and at most 2 PRs per ecosystem are open at once.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -8,6 +9,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 2
     groups:
       rust:
         patterns: ["*"]
@@ -18,6 +20,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 2
     groups:
       python:
         patterns: ["*"]
@@ -26,8 +29,8 @@ updates:
   - package-ecosystem: maven
     directory: /services/analytics/bindings/java
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       java:
         patterns: ["*"]
@@ -36,8 +39,8 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       actions:
         patterns: ["*"]
