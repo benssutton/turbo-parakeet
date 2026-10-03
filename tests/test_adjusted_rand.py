@@ -64,11 +64,9 @@ def test_known_answers(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_no_overlap_is_nan(impl):
     row = _ari(impl, [1, 2, None, None], [None, None, 1, 2])
-    assert (
-        math.isnan(row["ari"])
-        and row["n_valid"] == 0
-        and row["same_partition"] is False
-    )
+    assert math.isnan(row["ari"])
+    assert row["n_valid"] == 0
+    assert row["same_partition"] is False
 
 
 @pytest.mark.parametrize("impl", ALL)

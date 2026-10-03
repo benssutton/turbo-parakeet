@@ -351,6 +351,55 @@ fn malformed(dt: &AT, what: String) -> ArrowError {
     ArrowError::CDataInterface(format!("malformed {dt} array: {what}"))
 }
 
+/// A view type's variadic buffers: arrow-rs reads the last buffer as the variadic
+/// buffers' i64 lengths without a null check, then trusts each length. With no variadic
+/// buffer it reads nothing, and a zero-length buffer may be null. `n` buffers, `fixed`
+/// of them non-variadic (`n > 0`, `buffers` non-null: checked by the caller).
+fn check_variadic(
+    a: &RawArray,
+    dt: &AT,
+    n: usize,
+    fixed: usize,
+) -> std::result::Result<(), ArrowError> {
+    let variadic = n - fixed - 1;
+    // SAFETY: `buffers` holds `n` pointers (non-null: checked by the caller, as n > 0).
+    let bufs = unsafe { std::slice::from_raw_parts(a.buffers, n) };
+    let sizes = bufs[n - 1].cast::<i64>();
+    if variadic > 0 && sizes.is_null() {
+        return Err(malformed(dt, "null variadic sizes buffer".into()));
+    }
+    for i in 0..variadic {
+        // SAFETY: the sizes buffer holds one i64 per variadic buffer.
+        let len = unsafe { sizes.add(i).read_unaligned() };
+        if len < 0 {
+            return Err(malformed(
+                dt,
+                format!("variadic buffer {i} has length {len}"),
+            ));
+        }
+        if len > 0 && bufs[fixed + i].is_null() {
+            return Err(malformed(dt, format!("variadic buffer {i} is null")));
+        }
+    }
+    Ok(())
+}
+
+/// The data types of `dt`'s child arrays, in order.
+fn child_types(dt: &AT) -> Vec<&AT> {
+    match dt {
+        AT::List(f)
+        | AT::LargeList(f)
+        | AT::FixedSizeList(f, _)
+        | AT::ListView(f)
+        | AT::LargeListView(f)
+        | AT::Map(f, _) => vec![f.data_type()],
+        AT::Struct(fs) => fs.iter().map(|f| f.data_type()).collect(),
+        AT::Union(fs, _) => fs.iter().map(|(_, f)| f.data_type()).collect(),
+        AT::RunEndEncoded(r, v) => vec![r.data_type(), v.data_type()],
+        _ => vec![],
+    }
+}
+
 /// The raw C array `a` against its type `dt`, recursively: what arrow-rs's import
 /// asserts or trusts before it validates anything.
 fn check_raw(a: *const RawArray, dt: &AT) -> std::result::Result<(), ArrowError> {
@@ -378,42 +427,9 @@ fn check_raw(a: *const RawArray, dt: &AT) -> std::result::Result<(), ArrowError>
         return Err(malformed(dt, "null buffer array".into()));
     }
     if l.variadic {
-        // arrow-rs reads the last buffer as the variadic buffers' i64 lengths without
-        // a null check, then trusts each length. With no variadic buffer it reads
-        // nothing, and a zero-length buffer may be null.
-        let variadic = n - fixed - 1;
-        // SAFETY: `buffers` holds `n` pointers (non-null: checked above, as n > 0).
-        let bufs = unsafe { std::slice::from_raw_parts(a.buffers, n) };
-        let sizes = bufs[n - 1].cast::<i64>();
-        if variadic > 0 && sizes.is_null() {
-            return Err(malformed(dt, "null variadic sizes buffer".into()));
-        }
-        for i in 0..variadic {
-            // SAFETY: the sizes buffer holds one i64 per variadic buffer.
-            let len = unsafe { sizes.add(i).read_unaligned() };
-            if len < 0 {
-                return Err(malformed(
-                    dt,
-                    format!("variadic buffer {i} has length {len}"),
-                ));
-            }
-            if len > 0 && bufs[fixed + i].is_null() {
-                return Err(malformed(dt, format!("variadic buffer {i} is null")));
-            }
-        }
+        check_variadic(a, dt, n, fixed)?;
     }
-    let children: Vec<&AT> = match dt {
-        AT::List(f)
-        | AT::LargeList(f)
-        | AT::FixedSizeList(f, _)
-        | AT::ListView(f)
-        | AT::LargeListView(f)
-        | AT::Map(f, _) => vec![f.data_type()],
-        AT::Struct(fs) => fs.iter().map(|f| f.data_type()).collect(),
-        AT::Union(fs, _) => fs.iter().map(|(_, f)| f.data_type()).collect(),
-        AT::RunEndEncoded(r, v) => vec![r.data_type(), v.data_type()],
-        _ => vec![],
-    };
+    let children = child_types(dt);
     if a.n_children as usize != children.len() {
         return Err(malformed(
             dt,

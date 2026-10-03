@@ -115,8 +115,10 @@ def test_empty_column(impl):
     df = pl.DataFrame({"e": pl.Series([None, None], dtype=pl.Int64), "v": [1, 2]})
     r = run(load(impl), {"t": df}).row(0, named=True)
     assert r["status"] == "computed"
-    assert math.isnan(r["ratio_a_in_b"]) and r["ratio_b_in_a"] == 0.0
-    assert r["unique_a"] is False and r["relationship"] == "none"
+    assert math.isnan(r["ratio_a_in_b"])
+    assert r["ratio_b_in_a"] == 0.0
+    assert r["unique_a"] is False
+    assert r["relationship"] == "none"
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -137,13 +139,15 @@ def test_false_positive_rate_on_disjoint_sets(impl):
         "b": pl.DataFrame({"w": list(range(10_000, 12_000))}),
     }
     r = run(load(impl), frames).row(0, named=True)
-    assert r["ratio_a_in_b"] <= 0.03 and r["ratio_b_in_a"] <= 0.03
+    assert r["ratio_a_in_b"] <= 0.03
+    assert r["ratio_b_in_a"] <= 0.03
 
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_fp_rate_validation(impl):
+    cls = load(impl)
     with pytest.raises(ValueError):
-        load(impl)(fp_rate=0.0)
+        cls(fp_rate=0.0)
 
 
 # ── optional-dependency import isolation ────────────────────────────────────

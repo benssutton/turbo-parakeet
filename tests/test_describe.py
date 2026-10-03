@@ -13,7 +13,6 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 import pytest
-from pytest import approx
 
 from analytics.describe import Describe, _sizes, estimators
 from datagen import describe_mixed, stringified
@@ -35,13 +34,13 @@ LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
 
 
 def test_chao1_with_doubletons():
-    assert estimators.chao1(10, 4, 2) == approx(
+    assert estimators.chao1(10, 4, 2) == pytest.approx(
         (12.0, 10.249903382590167, 26.00618590489368)
     )
 
 
 def test_chao1_without_doubletons():
-    assert estimators.chao1(5, 3, 0) == approx(
+    assert estimators.chao1(5, 3, 0) == pytest.approx(
         (8.0, 5.369121767830802, 29.38219792045809)
     )
 
@@ -52,14 +51,14 @@ def test_chao1_without_unseen_mass_is_exact():
 
 
 def test_schnabel_when_every_value_is_in_every_subset():
-    assert estimators.schnabel([0, 0, 0, 0, 0, 0, 10], 10, 30_000) == approx(
+    assert estimators.schnabel([0, 0, 0, 0, 0, 0, 10], 10, 30_000) == pytest.approx(
         (9.523809523809524, 6.474567576908709, 16.378255262343956)
     )
 
 
 def test_schnabel_mixed_history():
     # |S1| = 13, |S2| = 13, |S3| = 7, |S1 ∪ S2| = 20, R = 6 + 5 = 11, A = 13·13 + 7·20 = 309
-    assert estimators.schnabel([5, 5, 5, 2, 2, 2, 1], 22, 1_000) == approx(
+    assert estimators.schnabel([5, 5, 5, 2, 2, 2, 1], 22, 1_000) == pytest.approx(
         (25.75, 15.69849888622768, 56.349688010901595)
     )
 
@@ -91,7 +90,7 @@ def test_estimate_rule():
         10.0,
         10.0,
     )
-    assert sch["est_high"] == approx(16.378255262343956)
+    assert sch["est_high"] == pytest.approx(16.378255262343956)
     assert sch["estimates_agree"] is True
     chao = estimators.estimate(9, 100, 4, 2, [3, 3, 0, 3, 0, 0, 0])  # no recapture
     c, lo, hi = estimators.chao1(9, 4, 2)
@@ -100,7 +99,8 @@ def test_estimate_rule():
         c,
         hi,
     )
-    assert chao["est_low"] == max(lo, 9) and chao["estimates_agree"] is None
+    assert chao["est_low"] == max(lo, 9)
+    assert chao["estimates_agree"] is None
 
 
 def test_estimates_disagree_under_heavy_skew():
@@ -145,7 +145,9 @@ def conclude(s: pl.Series, params: dict | None = None, **overrides) -> dict:
 def test_renders_min_max_from_indices():
     r = conclude(pl.Series("x", [3.5, 1.25, None, 3.5]), argmin=1, argmax=0)
     assert (r["min"], r["max"]) == ("1.25", "3.5")
-    assert "argmin" not in r and "f1" not in r  # inputs never reach the result
+    # inputs never reach the result
+    assert "argmin" not in r
+    assert "f1" not in r
 
 
 def test_renders_inner_values_from_flattened_indices():
@@ -168,11 +170,9 @@ def test_renders_inner_values_from_flattened_indices():
 
 def test_scalar_columns_have_null_inner_conclusions():
     r = conclude(pl.Series("x", [1, 2, 3, 4]))
-    assert (
-        r["inner_min"] is None
-        and r["inner_class"] is None
-        and r["inner_est_method"] is None
-    )
+    assert r["inner_min"] is None
+    assert r["inner_class"] is None
+    assert r["inner_est_method"] is None
 
 
 def test_schnabel_branch_and_agreement_flag():
@@ -180,7 +180,8 @@ def test_schnabel_branch_and_agreement_flag():
     agree = conclude(
         s, n_rows=40, n_unique=10, f1=0, f2=0, capture_history=[0, 0, 0, 0, 0, 0, 10]
     )
-    assert agree["est_method"] == "schnabel" and agree["estimates_agree"] is True
+    assert agree["est_method"] == "schnabel"
+    assert agree["estimates_agree"] is True
     skew = conclude(
         s, n_rows=40, n_unique=10, f1=8, f2=0, capture_history=[0, 0, 0, 0, 0, 0, 10]
     )
@@ -306,12 +307,11 @@ def test_zero_row_column_conclusions():
         argmax=None,
         capture_history=[0] * 7,
     )
-    assert r["class"] == "null" and r["min"] is None
-    assert (
-        r["est_method"] == "observed"
-        and r["est_cardinality"] == 0.0
-        and r["unique"] is False
-    )
+    assert r["class"] == "null"
+    assert r["min"] is None
+    assert r["est_method"] == "observed"
+    assert r["est_cardinality"] == 0.0
+    assert r["unique"] is False
 
 
 @pytest.mark.parametrize(
@@ -660,7 +660,8 @@ def test_zero_row_and_all_null_columns(impl):
     z = profile(impl, s)
     assert (z["n_rows"], z["n_unique"], z["min"]) == (0, 0, None)
     assert inputs(impl, s)["capture_history"] == [0] * 7
-    assert z["size_bytes"] == 0 and z["min_len"] is None
+    assert z["size_bytes"] == 0
+    assert z["min_len"] is None
     a = profile(impl, pl.Series("x", [None, None], dtype=pl.String))
     assert (a["n_unique"], a["min"], a["class"]) == (0, None, "null")
 
@@ -678,7 +679,7 @@ def test_capture_history(impl):
 def test_sizes_through_the_technique(impl):
     r = profile(impl, pl.Series("x", np.arange(1_000, dtype=np.int32)))
     assert (r["size_bytes"], r["size_polars_bytes"]) == (4_000, 4_000)
-    assert r["size_zstd_bytes"] == approx(1_912, rel=0.01)
+    assert r["size_zstd_bytes"] == pytest.approx(1_912, rel=0.01)
     assert (
         profile(
             impl,
@@ -928,17 +929,15 @@ def test_stringified_describe_mixed(impl):
     assert out["dt_tz"]["iso_n_offsets"] == 2  # GMT and BST across 2024
     assert out["time"]["n_iso_time"] == _non_null(source, "time")
     assert out["f64_price"]["n_numeric"] == _non_null(source, "f64_price")
-    assert (
-        out["dec"]["n_numeric"] == _non_null(source, "dec")
-        and out["dec"]["numeric_max_frac_digits"] <= 2
-    )
+    assert out["dec"]["n_numeric"] == _non_null(source, "dec")
+    assert out["dec"]["numeric_max_frac_digits"] <= 2
     # Polars writes "1e-7", "1.5e+20", "inf", "NaN": exponent and special forms are deliberately not numeric.
     assert out["f64"]["n_numeric"] == int(
         text["f64"].is_in(["0.0", "-0.0", "0.1"]).sum()
     )
-    assert (
-        out["bool"]["n_numeric"] == 0 and out["bool"]["n_iso_date"] == 0
-    )  # "true" / "false"
+    # "true" / "false"
+    assert out["bool"]["n_numeric"] == 0
+    assert out["bool"]["n_iso_date"] == 0
     lst = out["list_i64"]
     assert lst["inner_n_numeric_int"] == lst["inner_n_values"] - lst["inner_n_null"]
 
@@ -1137,6 +1136,8 @@ def test_rust_conclusions_equal_the_reference_rule():
         for c in CONCLUSIONS:
             if CONCLUSIONS[c] == pl.Float64:
                 got = raw[c].to_list()
-                assert got == approx(derived[c].to_list(), rel=1e-12, nan_ok=True), c
+                assert got == pytest.approx(
+                    derived[c].to_list(), rel=1e-12, nan_ok=True
+                ), c
             else:
                 assert raw[c].to_list() == derived[c].to_list(), c

@@ -14,7 +14,6 @@ from pathlib import Path
 import polars as pl
 import pyarrow as pa
 import pytest
-from pytest import approx
 
 from analytics.describe import _sizes
 from datagen import describe_mixed, stringified
@@ -459,10 +458,8 @@ def test_failed_cast_falls_back_to_the_next_candidate():
     assert r["rec_arrow_type"] == "string"
     failed = by_type(r)["timestamp[ns]"]
     assert failed["outcome"] == "failed"
-    assert (
-        "row 0" in failed["reason"]
-        and "2300-01-01T00:00:00.123456789" in failed["reason"]
-    )
+    assert "row 0" in failed["reason"]
+    assert "2300-01-01T00:00:00.123456789" in failed["reason"]
 
 
 NUMERIC = re.compile(r"(u?int\d+|decimal\d+|float|double|halffloat)$|decimal\d+\(")
@@ -522,10 +519,8 @@ def test_dictionary_gate_rejects_above_threshold():
     dictionary = next(
         c for c in r["rec_candidates"] if c["arrow_type"].startswith("dictionary")
     )
-    assert (
-        dictionary["outcome"] == "rejected"
-        and "categorical_threshold=1" in dictionary["reason"]
-    )
+    assert dictionary["outcome"] == "rejected"
+    assert "categorical_threshold=1" in dictionary["reason"]
 
 
 def test_projection_scales_the_dictionary_by_the_estimate():
@@ -535,7 +530,8 @@ def test_projection_scales_the_dictionary_by_the_estimate():
     dictionary = next(
         c for c in r["rec_candidates"] if c["arrow_type"].startswith("dictionary")
     )
-    assert r["est_method"] in ("schnabel", "chao1") and r["est_cardinality"] > 1_000
+    assert r["est_method"] in ("schnabel", "chao1")
+    assert r["est_cardinality"] > 1_000
     assert dictionary["projected_population_bytes"] > dictionary["predicted_bytes"]
 
 
@@ -722,12 +718,12 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
         assert _sizes.ipc_body_bytes(arrow, None) == r["rec_arrow_size_bytes"], r[
             "col_a"
         ]
-        assert _sizes.ipc_body_bytes(arrow, level) == approx(
+        assert _sizes.ipc_body_bytes(arrow, level) == pytest.approx(
             r["rec_arrow_size_zstd_bytes"], rel=0.01, abs=16
         ), r["col_a"]
         native = _sizes.column_sizes(polars, level)
         assert native["size_polars_bytes"] == r["rec_polars_size_bytes"], r["col_a"]
-        assert native["size_polars_zstd_bytes"] == approx(
+        assert native["size_polars_zstd_bytes"] == pytest.approx(
             r["rec_polars_size_zstd_bytes"], rel=0.01, abs=16
         ), r["col_a"]
         checked += 1
@@ -753,7 +749,10 @@ def test_dictionary_evidence_reads_est_high():
             prefix = "inner_" if c["rule"].startswith("inner: ") else ""
             # Rust floors the cardinality at the observed distinct count.
             expected = max(r[f"{prefix}{m[2]}"], r[f"{prefix}n_unique"])
-            assert float(m[1]) == approx(expected, rel=1e-9), (r["col_a"], c["rule"])
+            assert float(m[1]) == pytest.approx(expected, rel=1e-9), (
+                r["col_a"],
+                c["rule"],
+            )
             checked += 1
     assert checked >= 5
 
@@ -768,6 +767,6 @@ def test_rust_conclusions_match_describe():
     for c in CONCLUSIONS:
         if CONCLUSIONS[c] == pl.Float64:
             got = a[c].to_list()
-            assert got == approx(b[c].to_list(), rel=1e-12, nan_ok=True), c
+            assert got == pytest.approx(b[c].to_list(), rel=1e-12, nan_ok=True), c
         else:
             assert a[c].to_list() == b[c].to_list(), c

@@ -13,6 +13,45 @@ pub(crate) struct LSHKwargs {
     pub(crate) rows_per_band: usize,
 }
 
+type Buckets = HashMap<(usize, u64), Vec<usize>, FoldHashFast>;
+
+/// Assigns each row's signature bands to buckets: (band index, band hash) → row indices.
+fn band_buckets(
+    signatures: &ListChunked,
+    num_bands: usize,
+    rows_per_band: usize,
+) -> PolarsResult<Buckets> {
+    let mut buckets: Buckets = HashMap::with_hasher(FoldHashFast::default());
+    for (idx, opt_sig) in signatures.into_iter().enumerate() {
+        let Some(sig_series) = opt_sig else { continue };
+        let sig: Vec<u32> = sig_series.u32()?.into_iter().flatten().collect();
+        for band_idx in 0..num_bands {
+            let start = band_idx * rows_per_band;
+            let end = start + rows_per_band;
+            if end <= sig.len() {
+                let band_hash = hash_band(&sig[start..end]);
+                buckets.entry((band_idx, band_hash)).or_default().push(idx);
+            }
+        }
+    }
+    Ok(buckets)
+}
+
+/// The unique (smaller, larger) row-index pairs that share any bucket.
+fn bucket_pairs(buckets: &Buckets) -> HashSet<(usize, usize), FoldHashFast> {
+    let mut seen_pairs: HashSet<(usize, usize), FoldHashFast> =
+        HashSet::with_capacity_and_hasher(256, FoldHashFast::default());
+    for indices in buckets.values().filter(|v| v.len() > 1) {
+        for (i, &idx_a) in indices.iter().enumerate() {
+            for &idx_b in &indices[i + 1..] {
+                // Consistent ordering for deduplication
+                seen_pairs.insert((idx_a.min(idx_b), idx_a.max(idx_b)));
+            }
+        }
+    }
+    seen_pairs
+}
+
 /// Find candidate pairs using Locality Sensitive Hashing (LSH).
 ///
 /// This function takes a DataFrame with MinHash signatures and finds pairs
@@ -31,62 +70,9 @@ pub(crate) struct LSHKwargs {
 /// # Returns
 /// A DataFrame with columns (col_a: Utf8, col_b: Utf8) containing candidate pairs
 pub(crate) fn lsh_candidates_impl(inputs: &[Series], kwargs: &LSHKwargs) -> PolarsResult<Series> {
-    let names = &inputs[0];
-    let signatures = &inputs[1];
-
-    let names_ca = names.str()?;
-    let signatures_list = signatures.list()?;
-
-    let num_bands = kwargs.num_bands;
-    let rows_per_band = kwargs.rows_per_band;
-
-    // Create buckets: (band_index, band_hash) -> list of row indices
-    let mut buckets: HashMap<(usize, u64), Vec<usize>, FoldHashFast> =
-        HashMap::with_hasher(FoldHashFast::default());
-
-    // Process each row - extract signatures and assign to buckets
-    for (idx, opt_sig) in signatures_list.into_iter().enumerate() {
-        if let Some(sig_series) = opt_sig {
-            let sig_ca = sig_series.u32()?;
-            let sig: Vec<u32> = sig_ca.into_iter().flatten().collect();
-
-            // Split signature into bands and hash each band
-            for band_idx in 0..num_bands {
-                let start = band_idx * rows_per_band;
-                let end = start + rows_per_band;
-
-                if end <= sig.len() {
-                    let band_slice = &sig[start..end];
-                    let band_hash = hash_band(band_slice);
-
-                    buckets.entry((band_idx, band_hash)).or_default().push(idx);
-                }
-            }
-        }
-    }
-
-    // Collect unique candidate pairs from buckets
-    let mut seen_pairs: HashSet<(usize, usize), FoldHashFast> =
-        HashSet::with_capacity_and_hasher(256, FoldHashFast::default());
-
-    for indices in buckets.values() {
-        if indices.len() > 1 {
-            // Generate all pairs from items in the same bucket
-            for i in 0..indices.len() {
-                for j in (i + 1)..indices.len() {
-                    let idx_a = indices[i];
-                    let idx_b = indices[j];
-                    // Ensure consistent ordering for deduplication
-                    let pair = if idx_a < idx_b {
-                        (idx_a, idx_b)
-                    } else {
-                        (idx_b, idx_a)
-                    };
-                    seen_pairs.insert(pair);
-                }
-            }
-        }
-    }
+    let names_ca = inputs[0].str()?;
+    let buckets = band_buckets(inputs[1].list()?, kwargs.num_bands, kwargs.rows_per_band)?;
+    let seen_pairs = bucket_pairs(&buckets);
 
     // Convert index pairs to name pairs
     let mut pairs_a: Vec<String> = Vec::with_capacity(seen_pairs.len());

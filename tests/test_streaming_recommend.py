@@ -243,7 +243,8 @@ def test_contract():
     assert out.to_arrow().num_rows == out.height
     assert out["column"].to_list() == describe_mixed(10).columns
     empty = StreamingRecommender().finish()
-    assert empty.height == 0 and list(empty.schema) == list(SCHEMA)
+    assert empty.height == 0
+    assert list(empty.schema) == list(SCHEMA)
 
 
 def test_ineligible_columns_are_listed():
@@ -252,8 +253,10 @@ def test_ineligible_columns_are_listed():
     )
     out = StreamingRecommender().add(frame).finish()
     rows = {r["column"]: r for r in out.iter_rows(named=True)}
-    assert rows["w"]["status"] == "ineligible" and rows["w"]["dtype"] == "Int128"
-    assert rows["w"]["n_null"] is None and rows["w"]["rec_arrow_type"] is None
+    assert rows["w"]["status"] == "ineligible"
+    assert rows["w"]["dtype"] == "Int128"
+    assert rows["w"]["n_null"] is None
+    assert rows["w"]["rec_arrow_type"] is None
     assert rows["n"]["status"] == "ineligible"  # still the Null type
     assert rows["a"]["status"] == "computed"
 
@@ -379,13 +382,15 @@ def test_a_null_typed_column_adopts_a_type():
         pl.DataFrame({"b": pl.Series([None, None], dtype=pl.Null)})
     )
     b = row(rec.add(pl.DataFrame({"b": ["x", "y"]})).finish(), "b")
-    assert b["status"] == "computed" and b["n_null"] == 2
+    assert b["status"] == "computed"
+    assert b["n_null"] == 2
 
 
 def test_a_type_change_is_rejected():
     rec = StreamingRecommender().add(pl.DataFrame({"a": [1]}))
+    changed = pl.DataFrame({"a": ["x"]})
     with pytest.raises(ValueError, match="type changed"):
-        rec.add(pl.DataFrame({"a": ["x"]}))
+        rec.add(changed)
     assert row(rec.finish(), "a")["n_rows"] == 1
 
 
@@ -417,18 +422,22 @@ def test_sampling_phase_estimates():
     out = stream(frame, 8_192)
     r = {row["column"]: row for row in out.iter_rows(named=True)}
     key = r["key"]
-    assert key["est_method"] == "hll" and key["unique"] is True
+    assert key["est_method"] == "hll"
+    assert key["unique"] is True
     assert abs(key["n_unique"] - n) <= 3 * 1.04 / 128 * n
-    assert key["n_unique"] <= n and key["est_high"] <= n
+    assert key["n_unique"] <= n
+    assert key["est_high"] <= n
     assert abs(key["sum_len_unique"] - 11 * n) <= 0.05 * 11 * n
     assert key["class"] == "discrete"
-    assert r["x"]["class"] == "ordinal" and r["x"]["n_unique"] == 7
+    assert r["x"]["class"] == "ordinal"
+    assert r["x"]["n_unique"] == 7
 
 
 def test_no_sample_means_no_zstd_sizes():
     out = stream(pl.DataFrame({"a": [1, 2, 3]}), 2, reservoir_rows=0)
     a = row(out, "a")
-    assert a["size_zstd_bytes"] is None and a["rec_arrow_size_zstd_bytes"] is None
+    assert a["size_zstd_bytes"] is None
+    assert a["rec_arrow_size_zstd_bytes"] is None
     assert (a["n_sampled_rows"], a["rec_arrow_type"]) == (0, "uint8")
 
 
@@ -436,7 +445,8 @@ def test_a_float_that_does_not_round_trip_fails_by_statistic():
     tiny = "0." + "0" * 400 + "1"
     s = row(stream(pl.DataFrame({"s": [tiny, "1"]}), 1), "s")
     c = by_rule(s)["string→float64"]
-    assert c["outcome"] == "failed" and c["reason"].startswith("n_f64_roundtrip_fail=")
+    assert c["outcome"] == "failed"
+    assert c["reason"].startswith("n_f64_roundtrip_fail=")
 
 
 def test_nanoseconds_out_of_range_fail_by_statistic():
@@ -444,7 +454,8 @@ def test_nanoseconds_out_of_range_fail_by_statistic():
         {"s": ["2300-01-01T00:00:00.123456789", "2024-01-01T00:00:00"]}
     )
     c = by_rule(row(stream(frame, 1), "s"))["string→timestamp"]
-    assert c["outcome"] == "failed" and "iso_instant" in c["reason"]
+    assert c["outcome"] == "failed"
+    assert "iso_instant" in c["reason"]
 
 
 @pytest.mark.parametrize(
@@ -462,8 +473,9 @@ def test_parameters_are_validated(params):
 
 
 def test_lazyframe_is_refused():
+    tech, data = StreamingRecommender(), pl.LazyFrame({"a": [1]})
     with pytest.raises(TypeError, match="LazyFrame"):
-        StreamingRecommender().add(pl.LazyFrame({"a": [1]}))
+        tech.add(data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -561,10 +573,14 @@ MALFORMED = [
     ids=["dictionary_keys", "utf8", "utf8_polars", "decimal256"],
 )
 def test_malformed_input_is_a_value_error(make, match):
+    data = make()
+    tech = StreamingRecommender()
     with pytest.raises(ValueError, match=match):
-        StreamingRecommender().add(make())
+        tech.add(data)
+    # One-shot refuses the same input in add() or, for Polars-built data, in result().
+    tech = RecommendRust()
     with pytest.raises(ValueError, match=match):
-        RecommendRust().add({"t": make()}).result()
+        tech.add({"t": data}).result()
 
 
 def test_an_unsupported_type_is_refused_even_with_no_rows():
@@ -575,9 +591,8 @@ def test_an_unsupported_type_is_refused_even_with_no_rows():
         col = pa.array([decimal.Decimal("1")], pa.decimal256(40, 2))
         return pa.table({"c": col}).slice(1, 0)
 
-    with pytest.raises(ValueError, match="Decimal256"):
-        StreamingRecommender().add(empty())
-    with pytest.raises(ValueError, match="Decimal256"):
-        RecommendRust().add({"t": empty()}).result()
-    with pytest.raises(ValueError, match="Decimal256"):
-        GcdRust().add({"t": empty()}).result()
+    data = empty()
+    for tech in (StreamingRecommender(), RecommendRust(), GcdRust()):
+        frames = data if isinstance(tech, StreamingRecommender) else {"t": data}
+        with pytest.raises(ValueError, match="Decimal256"):
+            tech.add(frames)

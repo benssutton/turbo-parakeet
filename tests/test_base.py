@@ -98,7 +98,8 @@ def test_enumerate_per_column():
 def test_enumerate_multi_set_spans_frames_and_includes_same_frame_pairs():
     combos = MultiSetToy.enumerate(FRAMES)
     assert len(combos) == 10
-    assert (F_A, G_A) in combos and (F_A, F_BB) in combos
+    assert (F_A, G_A) in combos
+    assert (F_A, F_BB) in combos
 
 
 def test_enumerate_ordered_triplets():
@@ -238,8 +239,9 @@ def test_collected_frames_are_available_during_compute():
 
 
 def test_result_before_add_raises():
+    toy = Toy()
     with pytest.raises(ValueError, match="before add"):
-        Toy().result()
+        toy.result()
 
 
 def test_duplicate_frame_name_raises():
@@ -250,20 +252,23 @@ def test_duplicate_frame_name_raises():
 
 @pytest.mark.parametrize("name", ["", 3])
 def test_bad_frame_name_raises(name):
+    tech, data = Toy(), {name: FRAMES["f"]}
     with pytest.raises(ValueError, match="non-empty strings"):
-        Toy().add({name: FRAMES["f"]})
+        tech.add(data)
 
 
 def test_non_frame_raises():
+    toy, data = Toy(), {"f": {"a": [1]}}
     with pytest.raises(
         TypeError, match="DataFrame or LazyFrame, or Arrow tabular data"
     ):
-        Toy().add({"f": {"a": [1]}})
+        toy.add(data)
 
 
 def test_non_tabular_arrow_raises():
+    tech, data = Toy(), {"f": pa.array([1, 2, 3])}
     with pytest.raises(TypeError, match="not Arrow tabular data"):
-        Toy().add({"f": pa.array([1, 2, 3])})
+        tech.add(data)
 
 
 @pytest.mark.parametrize("dtype", [pa.decimal32(5, 2), pa.decimal64(12, 2)])
@@ -280,15 +285,17 @@ def test_arrow_input_polars_cannot_read_is_a_type_error():
     union = pa.UnionArray.from_sparse(
         pa.array([0, 1], pa.int8()), [pa.array([1, 2]), pa.array(["a", "b"])]
     )
+    tech, data = Toy(), {"f": pa.table({"u": union})}
     with pytest.raises(TypeError, match="not Arrow tabular data"):
-        Toy().add({"f": pa.table({"u": union})})
+        tech.add(data)
 
 
 def test_malformed_arrow_input_is_a_value_error():
     keys = pa.array([0, 1, 5, 1], pa.int32())
     bad = pa.DictionaryArray.from_arrays(keys, pa.array(["x", "y"]), safe=False)
+    tech, data = Toy(), {"f": pa.table({"c": bad})}
     with pytest.raises(ValueError, match="out of bounds"):
-        Toy().add({"f": pa.table({"c": bad})})
+        tech.add(data)
 
 
 class _ArrayOnly:
@@ -306,8 +313,9 @@ def test_array_only_arrow_input_is_checked():
     assert t._frames["f"]["a"].to_list() == [1, 2]
     keys = pa.array([0, 1, 5, 1], pa.int32())
     bad = pa.DictionaryArray.from_arrays(keys, pa.array(["x", "y"]), safe=False)
+    tech, data = Toy(), {"f": _ArrayOnly(pa.record_batch({"c": bad}))}
     with pytest.raises(ValueError, match="out of bounds"):
-        Toy().add({"f": _ArrayOnly(pa.record_batch({"c": bad}))})
+        tech.add(data)
 
 
 def test_wrong_schema_from_compute_raises():
@@ -315,8 +323,9 @@ def test_wrong_schema_from_compute_raises():
         def _compute(self, frames, combos):
             return super()._compute(frames, combos).rename({"score": "oops"})
 
+    tech = Wrong().add(FRAMES)
     with pytest.raises(TypeError, match="Wrong._compute returned schema"):
-        Wrong().add(FRAMES).result()
+        tech.result()
 
 
 def test_missing_row_from_compute_raises():
@@ -324,8 +333,9 @@ def test_missing_row_from_compute_raises():
         def _compute(self, frames, combos):
             return super()._compute(frames, combos[:-1])
 
+    tech = Short().add(FRAMES)
     with pytest.raises(ValueError, match="rows for"):
-        Short().add(FRAMES).result()
+        tech.result()
 
 
 def test_row_for_wrong_combination_raises():
@@ -333,8 +343,9 @@ def test_row_for_wrong_combination_raises():
         def _compute(self, frames, combos):
             return super()._compute(frames, [(b, a) for a, b in combos])
 
+    tech = Swapped().add(FRAMES)
     with pytest.raises(ValueError, match="exactly one row per eligible combination"):
-        Swapped().add(FRAMES).result()
+        tech.result()
 
 
 def test_compute_may_not_claim_ineligible():
@@ -342,8 +353,9 @@ def test_compute_may_not_claim_ineligible():
         def _compute(self, frames, combos):
             return self.null_frame(combos, "ineligible")
 
+    tech = Claims().add(FRAMES)
     with pytest.raises(ValueError, match="'computed' or 'pruned'"):
-        Claims().add(FRAMES).result()
+        tech.result()
 
 
 def test_pruned_rows_are_allowed_and_null():
@@ -453,10 +465,9 @@ def test_value_family():
 
 
 def test_encodable_and_nested():
-    assert encodable(pl.List(pl.Int32)) and is_nested(pl.Array(pl.Int32, 2))
-    assert (
-        not encodable(pl.Struct({"a": pl.Int64}))
-        and not encodable(pl.Binary())
-        and not encodable(pl.Null())
-    )
+    assert encodable(pl.List(pl.Int32))
+    assert is_nested(pl.Array(pl.Int32, 2))
+    assert not encodable(pl.Struct({"a": pl.Int64}))
+    assert not encodable(pl.Binary())
+    assert not encodable(pl.Null())
     assert not is_nested(pl.Int64())

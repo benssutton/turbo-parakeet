@@ -25,7 +25,8 @@
 use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
 use crate::conclusions::Conclusions;
 use crate::describe::{
-    assemble, describe_one, fields, parse_decimal, parse_iso, Described, Profile, Row,
+    assemble, describe_one, fields, parse_decimal, parse_iso, Described, IsoValue, Profile, Row,
+    StringStats,
 };
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
 use arrow_array::builder::make_view;
@@ -1054,47 +1055,61 @@ impl Rules<'_, '_> {
                 &format!("n_numeric_int={n} n_leading_zero=0 "),
             );
         } else if st.n_numeric == n && st.n_leading_zero == 0 {
-            let (i, f) = (
-                st.max_int_digits.unwrap_or(0),
-                st.max_frac_digits.unwrap_or(0),
+            self.numeric_text(st, n);
+        } else {
+            self.iso_text(st, n, sig);
+        }
+        self.plain_and_dictionary(params);
+        Ok(())
+    }
+
+    /// Numeric strings: decimal, and float when the places vary and precision is high.
+    fn numeric_text(&mut self, st: &StringStats, n: u64) {
+        let (i, f) = (
+            st.max_int_digits.unwrap_or(0),
+            st.max_frac_digits.unwrap_or(0),
+        );
+        let (min_f, sig_d) = (
+            st.min_frac_digits.unwrap_or(0),
+            st.max_sig_digits.unwrap_or(0),
+        );
+        let prec = (i + f).max(1);
+        let ev = format!(
+            "n_numeric={n} n_leading_zero=0 numeric_max_int_digits={i} numeric_max_frac_digits={f} \
+             numeric_min_frac_digits={min_f} numeric_max_sig_digits={sig_d}"
+        );
+        if prec <= 38 {
+            self.push(
+                Target::Fixed(decimal_type(prec as u8, f as i8)),
+                Rank::Decimal,
+                "string→decimal",
+                format!("{ev} → p={prec} s={f}"),
             );
-            let (min_f, sig_d) = (
-                st.min_frac_digits.unwrap_or(0),
-                st.max_sig_digits.unwrap_or(0),
-            );
-            let prec = (i + f).max(1);
-            let ev = format!(
-                "n_numeric={n} n_leading_zero=0 numeric_max_int_digits={i} numeric_max_frac_digits={f} \
-                 numeric_min_frac_digits={min_f} numeric_max_sig_digits={sig_d}"
-            );
-            if prec <= 38 {
+        }
+        if min_f < f && prec > 18 {
+            let why = format!("{ev} → varying places, p={prec} > 18");
+            if sig_d <= 6 {
                 self.push(
-                    Target::Fixed(decimal_type(prec as u8, f as i8)),
-                    Rank::Decimal,
-                    "string→decimal",
-                    format!("{ev} → p={prec} s={f}"),
+                    Target::Fixed(AT::Float32),
+                    Rank::Float,
+                    "string→float32",
+                    why.clone(),
                 );
             }
-            if min_f < f && prec > 18 {
-                let why = format!("{ev} → varying places, p={prec} > 18");
-                if sig_d <= 6 {
-                    self.push(
-                        Target::Fixed(AT::Float32),
-                        Rank::Float,
-                        "string→float32",
-                        why.clone(),
-                    );
-                }
-                if sig_d <= 15 {
-                    self.push(
-                        Target::Fixed(AT::Float64),
-                        Rank::Float,
-                        "string→float64",
-                        why,
-                    );
-                }
+            if sig_d <= 15 {
+                self.push(
+                    Target::Fixed(AT::Float64),
+                    Rank::Float,
+                    "string→float64",
+                    why,
+                );
             }
-        } else if st.n_iso_date == n {
+        }
+    }
+
+    /// ISO 8601 strings: date, time, datetime or datetime with offset.
+    fn iso_text(&mut self, st: &StringStats, n: u64, sig: u32) {
+        if st.n_iso_date == n {
             self.push(
                 Target::Fixed(AT::Date32),
                 Rank::Date,
@@ -1144,8 +1159,6 @@ impl Rules<'_, '_> {
                 ),
             }
         }
-        self.plain_and_dictionary(params);
-        Ok(())
     }
 
     /// Step 2 for text (Spec B §4.3 "always", §5.2): Utf8 with 32-bit offsets, and the dictionary.
@@ -1576,6 +1589,80 @@ pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), Stri
     Ok(())
 }
 
+/// The error for text row `i` whose recast value renders as `got`.
+fn text_mismatch<T>(text: &LargeStringArray, i: usize, got: &str) -> Result<T, String> {
+    Err(format!(
+        "row {i}: {:?} round-trips to {got:?}",
+        text.value(i)
+    ))
+}
+
+fn iso(s: &str) -> Option<IsoValue> {
+    parse_iso(s.as_bytes())
+}
+
+/// Text → Boolean: every value matches the text of the recast bool (`1` / `0`, or the pair).
+fn verify_boolean_text(
+    t: &Target,
+    text: &LargeStringArray,
+    recast: &ArrayRef,
+) -> Result<(), String> {
+    let (tt, ff) = match t {
+        Target::BoolPair(a, b) => (a.as_str(), b.as_str()),
+        _ => ("1", "0"),
+    };
+    let b = recast.as_boolean_opt().ok_or("recast is not boolean")?;
+    for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
+        let want = if b.value(i) { tt } else { ff };
+        if !lower_eq(text.value(i), want) {
+            return text_mismatch(text, i, want);
+        }
+    }
+    Ok(())
+}
+
+/// Text → timestamp_with_offset: same instant, and the offset column is the text's offset.
+fn verify_offset_text(text: &LargeStringArray, recast: &ArrayRef) -> Result<(), String> {
+    let s = recast.as_struct_opt().ok_or("recast is not a struct")?;
+    let back = arrow_cast(s.column(0).as_ref(), &AT::Utf8)?;
+    let (back, off) = (
+        back.as_string::<i32>(),
+        s.column(1).as_primitive::<Int16Type>(),
+    );
+    for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
+        let (a, b) = (iso(text.value(i)), iso(back.value(i)));
+        let same = matches!((a, b), (Some(a), Some(b)) if a.epoch_ns() == b.epoch_ns() && a.offset_minutes == Some(off.value(i) as i32));
+        if !same {
+            return text_mismatch(text, i, back.value(i));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the text `a` and its recast rendering `b` hold the same value, for a recast to `to`.
+fn same_text_value(to: &AT, a: &str, b: &str) -> bool {
+    match to {
+        AT::Date32 => {
+            matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns())
+        }
+        // A fixed-offset target renders the same offset as the text only when
+        // every value actually had one; a naive target renders no offset at all
+        // ("Z" and "UTC" both parse back to offset_minutes = Some(0), so this
+        // must compare the *parsed* offsets, not the rendered strings).
+        AT::Timestamp(_, tz) => match (iso(a), iso(b)) {
+            (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns() => match tz {
+                Some(_) => x.offset_minutes.is_some() && x.offset_minutes == y.offset_minutes,
+                None => x.offset_minutes.is_none(),
+            },
+            _ => false,
+        },
+        AT::Time32(_) | AT::Time64(_) => {
+            matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.nanos == y.nanos)
+        }
+        _ => canon(a) == canon(b),
+    }
+}
+
 /// String sources: the recast values, rendered to text by arrow-cast, equal the
 /// original text by value (canonical digits; parse_iso components). Returns the
 /// LargeUtf8 rendering when it made one, so `lossy` need not render again.
@@ -1584,13 +1671,6 @@ pub(crate) fn verify_text(
     text: &LargeStringArray,
     recast: &ArrayRef,
 ) -> Result<Option<ArrayRef>, String> {
-    let bad = |i: usize, got: &str| {
-        Err(format!(
-            "row {i}: {:?} round-trips to {got:?}",
-            text.value(i)
-        ))
-    };
-    let iso = |s: &str| parse_iso(s.as_bytes());
     match t {
         Target::Dictionary(..) | Target::Plain(_) => first_mismatch(
             &(Arc::new(text.clone()) as ArrayRef),
@@ -1598,64 +1678,15 @@ pub(crate) fn verify_text(
         )
         .map(|_| None),
         Target::Boolean | Target::BoolPair(..) => {
-            let (tt, ff) = match t {
-                Target::BoolPair(a, b) => (a.as_str(), b.as_str()),
-                _ => ("1", "0"),
-            };
-            let b = recast.as_boolean_opt().ok_or("recast is not boolean")?;
-            for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
-                let want = if b.value(i) { tt } else { ff };
-                if !lower_eq(text.value(i), want) {
-                    return bad(i, want);
-                }
-            }
-            Ok(None)
+            verify_boolean_text(t, text, recast).map(|_| None)
         }
-        Target::TimestampWithOffset(_) => {
-            let s = recast.as_struct_opt().ok_or("recast is not a struct")?;
-            let back = arrow_cast(s.column(0).as_ref(), &AT::Utf8)?;
-            let (back, off) = (
-                back.as_string::<i32>(),
-                s.column(1).as_primitive::<Int16Type>(),
-            );
-            for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
-                let (a, b) = (iso(text.value(i)), iso(back.value(i)));
-                let same = matches!((a, b), (Some(a), Some(b)) if a.epoch_ns() == b.epoch_ns() && a.offset_minutes == Some(off.value(i) as i32));
-                if !same {
-                    return bad(i, back.value(i));
-                }
-            }
-            Ok(None)
-        }
+        Target::TimestampWithOffset(_) => verify_offset_text(text, recast).map(|_| None),
         Target::Fixed(to) => {
             let rendered = arrow_cast(recast.as_ref(), &AT::LargeUtf8)?;
             let back = rendered.as_string::<i64>();
             for i in (0..text.len()).filter(|&i| text.is_valid(i)) {
-                let (a, b) = (text.value(i), back.value(i));
-                let same = match to {
-                    AT::Date32 => {
-                        matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns())
-                    }
-                    // A fixed-offset target renders the same offset as the text only when
-                    // every value actually had one; a naive target renders no offset at all
-                    // ("Z" and "UTC" both parse back to offset_minutes = Some(0), so this
-                    // must compare the *parsed* offsets, not the rendered strings).
-                    AT::Timestamp(_, tz) => match (iso(a), iso(b)) {
-                        (Some(x), Some(y)) if x.epoch_ns() == y.epoch_ns() => match tz {
-                            Some(_) => {
-                                x.offset_minutes.is_some() && x.offset_minutes == y.offset_minutes
-                            }
-                            None => x.offset_minutes.is_none(),
-                        },
-                        _ => false,
-                    },
-                    AT::Time32(_) | AT::Time64(_) => {
-                        matches!((iso(a), iso(b)), (Some(x), Some(y)) if x.nanos == y.nanos)
-                    }
-                    _ => canon(a) == canon(b),
-                };
-                if !same {
-                    return bad(i, b);
+                if !same_text_value(to, text.value(i), back.value(i)) {
+                    return text_mismatch(text, i, back.value(i));
                 }
             }
             Ok(Some(rendered))

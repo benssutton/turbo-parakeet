@@ -92,7 +92,8 @@ def test_result_table_can_be_exported_twice():
 
 def test_bloom_bits_are_bytes():
     bits = rs.bloom_filter(pl.DataFrame({"a": [1, 2, 3]}), 3, 64)
-    assert isinstance(bits, bytes) and len(bits) == 8
+    assert isinstance(bits, bytes)
+    assert len(bits) == 8
     ratios = pl.DataFrame(
         rs.membership_ratio(pl.DataFrame({"a": [1, 2, 3]}), bits, 3, 64)
     )
@@ -100,25 +101,29 @@ def test_bloom_bits_are_bytes():
 
 
 def test_unknown_pair_column_is_value_error():
+    frame = pl.DataFrame({"a": [1, 2]})
     with pytest.raises(ValueError, match='unknown column "nope"'):
-        rs.pairwise_joint_entropy(pl.DataFrame({"a": [1, 2]}), [("a", "nope")])
+        rs.pairwise_joint_entropy(frame, [("a", "nope")])
 
 
 def test_wrong_bloom_length_is_value_error():
+    frame = pl.DataFrame({"a": [1]})
     with pytest.raises(ValueError, match="requires 8 bytes"):
-        rs.membership_ratio(pl.DataFrame({"a": [1]}), b"\x00", 3, 64)
+        rs.membership_ratio(frame, b"\x00", 3, 64)
 
 
 def test_wrong_column_type_is_value_error():
     # api.rs classifies kernel type errors (SchemaMismatch etc.) as InvalidInput; the
     # Compute → RuntimeError mapping is covered by api.rs's unit test of `compute`.
+    frame = pl.DataFrame({"qualified_name": ["a"], "minhash": [1]})
     with pytest.raises(ValueError):
-        rs.lsh_candidates(pl.DataFrame({"qualified_name": ["a"], "minhash": [1]}), 1, 1)
+        rs.lsh_candidates(frame, 1, 1)
 
 
 def test_zero_bloom_parameters_are_value_errors():
+    frame = pl.DataFrame({"a": [1]})
     with pytest.raises(ValueError):
-        rs.bloom_filter(pl.DataFrame({"a": [1]}), 0, 64)
+        rs.bloom_filter(frame, 0, 64)
 
 
 def test_non_arrow_input_is_type_error():
@@ -137,8 +142,9 @@ if hasattr(pl, "UInt128"):
 
 @pytest.mark.parametrize("s", WIDE, ids=lambda s: str(s.dtype))
 def test_128_bit_integers_are_rejected_at_the_binding(s):
+    frame = s.to_frame()
     with pytest.raises(ValueError, match='column "x" holds .*128-bit'):
-        rs.column_gcd(s.to_frame())
+        rs.column_gcd(frame)
 
 
 # ── Arrow inputs to the technique classes ─────────────────────────────────────

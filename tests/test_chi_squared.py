@@ -79,11 +79,9 @@ def test_nulls_dropped_and_constant_column_undefined(impl):
     assert rows[("a", "b")]["low_expected_count"] is True
     for pair in [("a", "c"), ("b", "c")]:
         r = rows[pair]
-        assert (
-            math.isnan(r["chi2_stat"])
-            and math.isnan(r["p_value"])
-            and math.isnan(r["cramers_v"])
-        )
+        assert math.isnan(r["chi2_stat"])
+        assert math.isnan(r["p_value"])
+        assert math.isnan(r["cramers_v"])
         assert r["low_expected_count"] is False
         assert r["associated"] is False
     assert rows[("a", "c")]["n_valid"] == 4

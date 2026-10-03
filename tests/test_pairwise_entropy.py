@@ -51,12 +51,11 @@ def _row(impl, a, b):
 def test_independent_columns(impl):
     r = _row(impl, [0, 0, 1, 1], [0, 1, 0, 1])
     assert (r["h_a"], r["h_b"], r["h_ab"]) == pytest.approx((1.0, 1.0, 2.0))
-    assert r["mi"] == pytest.approx(0.0, abs=1e-12) and r["nmi"] == pytest.approx(
-        0.0, abs=1e-12
-    )
-    assert (
-        r["redundant"] is False and r["near_unique"] is True
-    )  # 4 rows, 4 distinct pairs
+    assert r["mi"] == pytest.approx(0.0, abs=1e-12)
+    assert r["nmi"] == pytest.approx(0.0, abs=1e-12)
+    assert r["redundant"] is False
+    # 4 rows, 4 distinct pairs
+    assert r["near_unique"] is True
     assert r["n_rows"] == 4
 
 
@@ -66,18 +65,18 @@ def test_redundant_columns_and_null_category(impl):
         impl, [None, None, 1, 1], ["x", "x", "y", "y"]
     )  # null is a category: a determines b
     assert (r["h_a"], r["h_b"], r["h_ab"]) == pytest.approx((1.0, 1.0, 1.0))
-    assert (
-        r["nmi"] == pytest.approx(1.0)
-        and r["redundant"] is True
-        and r["near_unique"] is False
-    )
+    assert r["nmi"] == pytest.approx(1.0)
+    assert r["redundant"] is True
+    assert r["near_unique"] is False
 
 
 @pytest.mark.parametrize("impl", ALL)
 def test_constant_column_nmi_is_nan(impl):
     r = _row(impl, [1, 1, 1, 1], [0, 1, 0, 1])
     assert r["h_a"] == pytest.approx(0.0, abs=1e-12)
-    assert r["nmi"] != r["nmi"] and r["redundant"] is False  # NaN
+    # NaN
+    assert r["nmi"] != r["nmi"]
+    assert r["redundant"] is False
 
 
 def test_conclusions_default_override_and_nan():

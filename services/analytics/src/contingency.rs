@@ -39,6 +39,103 @@ thread_local! {
         RefCell::new(HashMap::with_hasher(FoldHashFast::default()));
 }
 
+/// Rows where neither column carries its null id: each adds to the marginals and
+/// passes its joint key (`a·kb + b`) to `count_pair`. Returns `n_valid`. The closure
+/// is inlined, so the hot loop is the same plain compare-and-count as a hand-written one.
+#[inline]
+fn tally(
+    a: &DenseColumn,
+    b: &DenseColumn,
+    n_rows: usize,
+    marg_a: &mut [u64],
+    marg_b: &mut [u64],
+    mut count_pair: impl FnMut(u64),
+) -> u64 {
+    let kb = b.card as u64;
+    // Dense ids run 0..card-1, so u32::MAX can never be a real id — it is a
+    // safe "no null id" sentinel that lets the hot loop use a plain compare.
+    let a_null = a.null_id.unwrap_or(u32::MAX);
+    let b_null = b.null_id.unwrap_or(u32::MAX);
+    let mut n_valid = 0u64;
+    for i in 0..n_rows {
+        let (ai, bi) = (a.ids[i], b.ids[i]);
+        if ai == a_null || bi == b_null {
+            continue;
+        }
+        marg_a[ai as usize] += 1;
+        marg_b[bi as usize] += 1;
+        n_valid += 1;
+        count_pair(ai as u64 * kb + bi as u64);
+    }
+    n_valid
+}
+
+/// Joint space small enough for flat-array counting (thread-local scratch array and a
+/// touched-slot list, so the reset is O(distinct), not O(space)).
+fn contingency_flat(
+    a: &DenseColumn,
+    b: &DenseColumn,
+    n_rows: usize,
+    space: usize,
+) -> ContingencyTable {
+    let kb = b.card as u64;
+    let mut marg_a = vec![0u64; a.card as usize];
+    let mut marg_b = vec![0u64; b.card as usize];
+    FLAT_COUNTS.with(|counts_cell| {
+        TOUCHED.with(|touched_cell| {
+            let mut counts = counts_cell.borrow_mut();
+            let mut touched = touched_cell.borrow_mut();
+            if counts.len() < space {
+                counts.resize(space, 0);
+            }
+            let n_valid = tally(a, b, n_rows, &mut marg_a, &mut marg_b, |key| {
+                let slot = &mut counts[key as usize];
+                if *slot == 0 {
+                    touched.push(key as u32);
+                }
+                *slot += 1;
+            });
+            let mut cells = Vec::with_capacity(touched.len());
+            for &t in touched.iter() {
+                let cnt = counts[t as usize] as u64;
+                cells.push(((t as u64 / kb) as u32, (t as u64 % kb) as u32, cnt));
+                counts[t as usize] = 0;
+            }
+            touched.clear();
+            ContingencyTable {
+                cells,
+                marg_a,
+                marg_b,
+                n_valid,
+            }
+        })
+    })
+}
+
+/// Joint space too large for a flat array: counts in a hash map.
+fn contingency_hashed(a: &DenseColumn, b: &DenseColumn, n_rows: usize) -> ContingencyTable {
+    let kb = b.card as u64;
+    let mut marg_a = vec![0u64; a.card as usize];
+    let mut marg_b = vec![0u64; b.card as usize];
+    FREQ.with(|freq_cell| {
+        let mut freq = freq_cell.borrow_mut();
+        freq.clear();
+        let n_valid = tally(a, b, n_rows, &mut marg_a, &mut marg_b, |key| {
+            *freq.entry(key).or_insert(0) += 1;
+        });
+        let cells = freq
+            .iter()
+            .map(|(&k, &c)| ((k / kb) as u32, (k % kb) as u32, c))
+            .collect();
+        ContingencyTable {
+            cells,
+            marg_a,
+            marg_b,
+            n_valid,
+        }
+    })
+}
+
 /// Build the drop-null contingency table for one column pair.
 ///
 /// Rows where either column carries its null id are excluded from cells,
@@ -48,81 +145,11 @@ pub(crate) fn build_contingency(
     b: &DenseColumn,
     n_rows: usize,
 ) -> ContingencyTable {
-    let kb = b.card as u64;
-    let mut marg_a = vec![0u64; a.card as usize];
-    let mut marg_b = vec![0u64; b.card as usize];
-    let mut n_valid = 0u64;
-
-    // Dense ids run 0..card-1, so u32::MAX can never be a real id — it is a
-    // safe "no null id" sentinel that lets the hot loop use a plain compare.
-    let a_null = a.null_id.unwrap_or(u32::MAX);
-    let b_null = b.null_id.unwrap_or(u32::MAX);
-
-    let space = (a.card as u64) * kb; // fits u64: both factors are u32
-
+    let space = (a.card as u64) * (b.card as u64); // fits u64: both factors are u32
     if space <= FLAT_MAX {
-        FLAT_COUNTS.with(|counts_cell| {
-            TOUCHED.with(|touched_cell| {
-                let mut counts = counts_cell.borrow_mut();
-                let mut touched = touched_cell.borrow_mut();
-                if counts.len() < space as usize {
-                    counts.resize(space as usize, 0);
-                }
-                for i in 0..n_rows {
-                    let (ai, bi) = (a.ids[i], b.ids[i]);
-                    if ai == a_null || bi == b_null {
-                        continue;
-                    }
-                    marg_a[ai as usize] += 1;
-                    marg_b[bi as usize] += 1;
-                    n_valid += 1;
-                    let key = (ai as u64 * kb + bi as u64) as usize;
-                    let slot = &mut counts[key];
-                    if *slot == 0 {
-                        touched.push(key as u32);
-                    }
-                    *slot += 1;
-                }
-                let mut cells = Vec::with_capacity(touched.len());
-                for &t in touched.iter() {
-                    let cnt = counts[t as usize] as u64;
-                    cells.push(((t as u64 / kb) as u32, (t as u64 % kb) as u32, cnt));
-                    counts[t as usize] = 0;
-                }
-                touched.clear();
-                ContingencyTable {
-                    cells,
-                    marg_a,
-                    marg_b,
-                    n_valid,
-                }
-            })
-        })
+        contingency_flat(a, b, n_rows, space as usize)
     } else {
-        FREQ.with(|freq_cell| {
-            let mut freq = freq_cell.borrow_mut();
-            freq.clear();
-            for i in 0..n_rows {
-                let (ai, bi) = (a.ids[i], b.ids[i]);
-                if ai == a_null || bi == b_null {
-                    continue;
-                }
-                marg_a[ai as usize] += 1;
-                marg_b[bi as usize] += 1;
-                n_valid += 1;
-                *freq.entry(ai as u64 * kb + bi as u64).or_insert(0) += 1;
-            }
-            let cells = freq
-                .iter()
-                .map(|(&k, &c)| ((k / kb) as u32, (k % kb) as u32, c))
-                .collect();
-            ContingencyTable {
-                cells,
-                marg_a,
-                marg_b,
-                n_valid,
-            }
-        })
+        contingency_hashed(a, b, n_rows)
     }
 }
 

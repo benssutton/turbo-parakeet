@@ -17,7 +17,8 @@ def test_time_call_warms_up_then_times_every_run():
 
 def test_time_call_skips_when_warmup_exceeds_budget():
     times, result = time_call(lambda: time.sleep(0.05), runs=3, budget_s=0.01)
-    assert times is None and result is None
+    assert times is None
+    assert result is None
 
 
 def _row(impl, threads, median, status="ok"):

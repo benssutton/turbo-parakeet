@@ -32,7 +32,8 @@ def test_mixed_dtypes_is_deterministic_per_seed():
 
 def test_low_cardinality():
     df = low_cardinality(1_000, 10, cardinality=5)
-    assert df.shape == (1_000, 10) and df.columns[0] == "c000"
+    assert df.shape == (1_000, 10)
+    assert df.columns[0] == "c000"
     assert df["c000"].drop_nulls().n_unique() <= 5
     assert 0 < df["c000"].null_count() < 200
 
@@ -62,7 +63,8 @@ def test_similar_frames():
 
 def test_integer_generators():
     m = integer_multiples(1_000, 3, 12)
-    assert m.columns == ["c0", "c1", "c2"] and (m["c0"] % 12 == 0).all()
+    assert m.columns == ["c0", "c1", "c2"]
+    assert (m["c0"] % 12 == 0).all()
     assert integer_random(1_000, 2).shape == (1_000, 2)
 
 
@@ -113,12 +115,11 @@ def test_stringified_casts_only_castable_columns():
 
 def test_describe_benchmark_shapes():
     narrow = describe_narrow(1_000)
-    assert (
-        narrow.columns == ["int", "float", "num_str", "iso_str"]
-        and narrow.height == 1_000
-    )
+    assert narrow.columns == ["int", "float", "num_str", "iso_str"]
+    assert narrow.height == 1_000
     wide = describe_wide(100, 8)
-    assert wide.width == 8 and [str(dt) for dt in wide.dtypes[:4]] == [
+    assert wide.width == 8
+    assert [str(dt) for dt in wide.dtypes[:4]] == [
         "Int64",
         "Float64",
         "String",

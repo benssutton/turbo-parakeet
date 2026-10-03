@@ -45,7 +45,8 @@ def test_known_answers(impl):
     df = pl.DataFrame({"a": [0, 0, 1, 1], "b": [0, 1, 0, 1], "c": [0, 0, 0, None]})
     r = run(load(impl), {"t": df}).row(0, named=True)
     assert r["h_abc"] == pytest.approx(2.0)  # 4 distinct triples
-    assert r["n_rows"] == 4 and r["near_unique"] is True
+    assert r["n_rows"] == 4
+    assert r["near_unique"] is True
 
 
 def test_conclusions():

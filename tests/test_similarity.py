@@ -143,7 +143,8 @@ def test_pipe_and_shared_names(impl):
     }
     r = run(load(impl), frames).row(0, named=True)
     assert (r["df_a"], r["col_a"], r["df_b"], r["col_b"]) == ("x|y", "a|b", "z", "a|b")
-    assert r["status"] == "computed" and (r["jaccard"], r["overlap"]) == (1.0, 1.0)
+    assert r["status"] == "computed"
+    assert (r["jaccard"], r["overlap"]) == (1.0, 1.0)
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -161,8 +162,10 @@ def test_empty_column(impl):
     }
     ev, ee = rows[("e", "v")], rows[("e", "e2")]
     assert ev["status"] == ee["status"] == "computed"
-    assert ev["jaccard"] == 0.0 and math.isnan(ev["overlap"])
-    assert math.isnan(ee["jaccard"]) and math.isnan(ee["overlap"])
+    assert ev["jaccard"] == 0.0
+    assert math.isnan(ev["overlap"])
+    assert math.isnan(ee["jaccard"])
+    assert math.isnan(ee["overlap"])
     assert not any(r["passes_jaccard"] or r["passes_overlap"] for r in rows.values())
 
 
@@ -220,7 +223,9 @@ def test_lru_is_per_instance_and_cleared_on_add():
     # result() clears the cache once it's done (see test_lru_cleared_after_result), so
     # hits/misses from the run just finished are observed via the snapshot it leaves.
     info = a.last_cache_info
-    assert info.currsize == 6 and info.hits == 24  # 15 pairs × 2 lookups, 6 misses
+    # 15 pairs × 2 lookups, 6 misses
+    assert info.currsize == 6
+    assert info.hits == 24
     assert a._distinct.cache_info().currsize == 0
     a.add({"df3": pl.DataFrame({"A": [1]})})
     assert a._distinct.cache_info().currsize == 0
@@ -230,10 +235,12 @@ def test_lru_cleared_after_result():
     t = SimilarityExactLRU()
     t.add(SMALL).result()
     assert t._distinct.cache_info().currsize == 0
-    assert t._distinct.cache_info().hits == 0 and t._distinct.cache_info().misses == 0
+    assert t._distinct.cache_info().hits == 0
+    assert t._distinct.cache_info().misses == 0
     # a second result() must not see a warm/stale cache from the first run
     t.result()
-    assert t.last_cache_info.hits == 24 and t.last_cache_info.misses == 6
+    assert t.last_cache_info.hits == 24
+    assert t.last_cache_info.misses == 6
     assert t._distinct.cache_info().currsize == 0
 
 
