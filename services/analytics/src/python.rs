@@ -37,13 +37,13 @@ fn with_stream<T>(
         )));
     }
     let capsule = data.call_method0("__arrow_c_stream__")?;
-    let capsule = capsule.downcast::<PyCapsule>()?;
-    if capsule.name()? != Some(c"arrow_array_stream") {
+    let capsule = capsule.cast::<PyCapsule>()?;
+    if !capsule.is_valid_checked(Some(c"arrow_array_stream")) {
         return Err(value_error(
             "__arrow_c_stream__ did not return an arrow_array_stream capsule",
         ));
     }
-    let stream = capsule.pointer() as *mut FFI_ArrowArrayStream;
+    let stream = capsule.pointer_checked(Some(c"arrow_array_stream"))?.as_ptr() as *mut FFI_ArrowArrayStream;
     // SAFETY: an "arrow_array_stream" capsule holds a valid, unreleased ArrowArrayStream.
     unsafe { reject_wide_integers(stream.cast())? };
     f(stream)
@@ -137,12 +137,12 @@ impl ArrowTable {
         let _ = requested_schema;
         let reader = RecordBatchIterator::new([Ok(self.0.clone())], self.0.schema());
         let stream = FFI_ArrowArrayStream::new(Box::new(reader));
-        PyCapsule::new(py, stream, Some(c"arrow_array_stream".to_owned()))
+        PyCapsule::new_with_value(py, stream, c"arrow_array_stream")
     }
 }
 
 fn run<T: Send>(py: Python<'_>, f: impl FnOnce() -> api::Result<T> + Send) -> PyResult<T> {
-    py.allow_threads(f).map_err(|e| match e {
+    py.detach(f).map_err(|e| match e {
         api::Error::InvalidInput(m) => PyValueError::new_err(m),
         api::Error::Compute(m) => PyRuntimeError::new_err(m),
     })
