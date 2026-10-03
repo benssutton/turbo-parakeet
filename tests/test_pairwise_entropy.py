@@ -6,6 +6,8 @@ Reference: PairwiseEntropyPolars (value_counts → entropy(base=2)); null is its
 category. mixed_dtypes: all 18 columns eligible → C(18,2) = 153 pairs.
 """
 
+import math
+
 import polars as pl
 import pytest
 
@@ -74,8 +76,7 @@ def test_redundant_columns_and_null_category(impl):
 def test_constant_column_nmi_is_nan(impl):
     r = _row(impl, [1, 1, 1, 1], [0, 1, 0, 1])
     assert r["h_a"] == pytest.approx(0.0, abs=1e-12)
-    # NaN
-    assert r["nmi"] != r["nmi"]
+    assert math.isnan(r["nmi"])
     assert r["redundant"] is False
 
 
