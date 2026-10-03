@@ -114,6 +114,27 @@ class Membership(Technique):
         )
 
 
+def _side_problems(
+    side: str, got_all: list, want_all: list, counts: list
+) -> tuple[list[str], float, float]:
+    """One containment ratio against the exact reference: the problems found (a value
+    where the reference is null / NaN, a false negative) and the expected false-positive
+    and negative counts it contributes (ratio error × distinct values)."""
+    problems: list[str] = []
+    false_pos = negatives = 0.0
+    for got, want, n in zip(got_all, want_all, counts):
+        if want is None or math.isnan(want):
+            if not same_value(got, want, 0.0, 0.0):
+                problems.append(f"{side}: {got!r} where the reference has {want!r}")
+            continue
+        if got is None or got < want - 1e-12:
+            problems.append(f"{side}: false negative ({got!r} < exact {want!r})")
+            continue
+        false_pos += (got - want) * n
+        negatives += (1.0 - want) * n
+    return problems, false_pos, negatives
+
+
 class BloomMembership(Membership):
     """Shared by the Bloom-filter implementations: `fp_rate` and the probabilistic
     agreement bound (no false negatives; aggregate FP rate ≤ FP_TOLERANCE × fp_rate)."""
@@ -138,24 +159,15 @@ class BloomMembership(Membership):
             ("ratio_a_in_b", "n_distinct_a"),
             ("ratio_b_in_a", "n_distinct_b"),
         ):
-            for got, want, n in zip(
+            found, fp, neg = _side_problems(
+                side,
                 result[side].to_list(),
                 reference[side].to_list(),
                 reference[n_col].to_list(),
-            ):
-                if want is None or math.isnan(want):
-                    if not same_value(got, want, 0.0, 0.0):
-                        problems.append(
-                            f"{side}: {got!r} where the reference has {want!r}"
-                        )
-                    continue
-                if got is None or got < want - 1e-12:
-                    problems.append(
-                        f"{side}: false negative ({got!r} < exact {want!r})"
-                    )
-                    continue
-                false_pos += (got - want) * n
-                negatives += (1.0 - want) * n
+            )
+            problems += found
+            false_pos += fp
+            negatives += neg
         # Below ~100 negatives, a single false positive can push the observed rate well
         # past FP_TOLERANCE x fp_rate by chance (e.g. 1/14 = 0.071 vs a 3% bound) — not
         # evidence the filter is miscalibrated. The no-false-negative check above still
