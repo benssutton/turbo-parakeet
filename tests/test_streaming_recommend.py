@@ -194,8 +194,20 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         want = candidates(o, original_sizes, not overflowed)
         assert got == want, name
         exact_cols = [
-            "n_rows", "n_null", "min", "max", "min_len", "max_len", "sum_len", "gcd", "n_midnight",
-            "n_nan", "n_inf", "n_fractional", "max_frac_digits", "n_f32_inexact",
+            "n_rows",
+            "n_null",
+            "min",
+            "max",
+            "min_len",
+            "max_len",
+            "sum_len",
+            "gcd",
+            "n_midnight",
+            "n_nan",
+            "n_inf",
+            "n_fractional",
+            "max_frac_digits",
+            "n_f32_inexact",
             *[
                 c
                 for c in VALUE_BLOCK

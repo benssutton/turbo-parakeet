@@ -43,7 +43,9 @@ fn with_stream<T>(
             "__arrow_c_stream__ did not return an arrow_array_stream capsule",
         ));
     }
-    let stream = capsule.pointer_checked(Some(c"arrow_array_stream"))?.as_ptr() as *mut FFI_ArrowArrayStream;
+    let stream = capsule
+        .pointer_checked(Some(c"arrow_array_stream"))?
+        .as_ptr() as *mut FFI_ArrowArrayStream;
     // SAFETY: an "arrow_array_stream" capsule holds a valid, unreleased ArrowArrayStream.
     unsafe { reject_wide_integers(stream.cast())? };
     f(stream)

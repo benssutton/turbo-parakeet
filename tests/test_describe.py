@@ -104,14 +104,14 @@ def test_estimate_rule():
 
 
 def test_estimates_disagree_under_heavy_skew():
-    e = estimators.estimate(10, 40, 8, 0, HISTORY_10)  # Chao1 [17.47, 114.95] vs Schnabel [6.47, 16.38]
+    e = estimators.estimate(
+        10, 40, 8, 0, HISTORY_10
+    )  # Chao1 [17.47, 114.95] vs Schnabel [6.47, 16.38]
     assert e["estimates_agree"] is False
 
 
 def test_unique_flag():
-    assert (
-        estimators.estimate(5, 5, 5, 0, [5, 0, 0, 0, 0, 0, 0])["unique"] is True
-    )
+    assert estimators.estimate(5, 5, 5, 0, [5, 0, 0, 0, 0, 0, 0])["unique"] is True
     assert estimators.estimate(0, 0, 0, 0, [0] * 7)["unique"] is False
 
 
