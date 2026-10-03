@@ -14,7 +14,7 @@ pytest-cov>=7.1
 # Baseline implementations
 # (datasketch: analytics/similarity/datasketch.py; polars-ds: analytics/chi_squared/polars_ds.py)
 datasketch>=1.6
-polars-ds>=0.5
+polars-ds>=0.13.0
 
 # Benchmark alternatives — optional; benchmarks degrade gracefully if absent
 scipy>=1.11
