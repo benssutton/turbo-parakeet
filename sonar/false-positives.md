@@ -27,13 +27,22 @@ sees names bound statically.
 | `threeway_entropy/__init__.py` | `ThreewayEntropyPolars` |
 | `adjusted_rand/__init__.py` | `AdjustedRandSklearn` |
 
-## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (accepted, not marked)
+## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (5, CRITICAL)
 
-Left as is: no natural seam to split, and splitting would cost readability for one or two
-points. These stay open in Sonar.
+Not false positives in the strict sense: the scores are right, but the functions were judged
+not worth splitting (no natural seam; splitting costs readability for one or two points).
+Marked *False positive* in Sonar so the dashboard is clean; do not refactor to chase the score.
 
 - `distinct_sample.rs` `DistinctSample::absorb` (16)
 - `streaming.rs` `Streaming::add` (16)
 - `recommend.rs` `Rules::float` (16)
 - `gcd.rs` `gcd_slice` (17): generic closures on a hot path inflate the score
 - `shared.rs` `encode_series` (17): a flat dtype dispatch, one arm per type
+
+## `python:S5778` — more than one call that can raise inside `pytest.raises` (1, MAJOR)
+
+`tests/test_streaming_recommend.py`, `test_malformed_input_is_a_value_error`: the one-shot
+check is `tech.add({"t": data}).result()` because Polars-built malformed data is refused in
+`result()` while the rest is refused in `add()`. Both calls are the pipeline under test;
+the operands are already built outside the block. Marked *False positive*; the other
+`S5778` findings were fixed by building operands outside the block.
