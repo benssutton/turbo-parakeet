@@ -59,9 +59,9 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 
 # Checks, CI and local tooling
 `python scripts/check.py <step|group>` (run with the p312 Python) runs exactly what CI runs: `fast` (rustfmt, black, clippy for both
-feature sets, ruff), `check` (fast + build + `cargo test --lib` + pytest), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
+feature sets, ruff), `check` (fast + build + `cargo test --lib` + pytest on 4 pytest-xdist workers, `-n 4`), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
 `lint`, `build`, `test-rust`, `test-py`, `test-java`, `coverage-rust`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
-Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin) and `rust-toolchain.toml` (compiler, rustfmt, clippy);
+Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin, pytest-xdist) and `rust-toolchain.toml` (compiler, rustfmt, clippy);
 `Cargo.lock` is committed. Optional git hooks: `.pre-commit-config.yaml` (commit: rustfmt + black; push: clippy + ruff + Rust tests).
 `.github/workflows/ci-cd.yml`: lint, Rust coverage, Python tests (Linux + Windows), Java, CodeQL (public repos only), Semgrep, and a
 `status` gate job; actions are pinned by SHA; the only schedule is weekly. `.github/dependabot.yml`: weekly, grouped, never more often.

@@ -7,7 +7,7 @@
 2. My Account → Security → generate a **user token**; set it for your user, e.g.
    PowerShell: `[Environment]::SetEnvironmentVariable("SONARQUBE_TOKEN", "<token>", "User")`
    (restart the terminal / VS Code afterwards). Never commit the token.
-3. Analyse: `python scripts/check.py sonar` (runs the Python tests with coverage, then the
+3. Analyse: `python scripts/check.py sonar` (runs the Python tests with coverage on 4 pytest-xdist workers, then the
    `sonarsource/sonar-scanner-cli` container against `sonar-project.properties`).
    Run `python scripts/check.py test-java` first if you want the Java bytecode analysed
    (the Java tests only compile it; no Java coverage is imported).
