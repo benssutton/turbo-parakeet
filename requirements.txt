@@ -1,5 +1,5 @@
 # Build — Rust extension via pyo3/maturin
-maturin>=1.0
+maturin>=1.15.0
 
 # Data / columnar format
 polars>=1.0
