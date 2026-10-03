@@ -12,8 +12,10 @@ requirements-dev.txt and the Rust toolchain in rust-toolchain.toml.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,9 +33,9 @@ def _env() -> dict[str, str]:
     return env
 
 
-def _run(cmd: list[str], cwd: Path = ROOT) -> None:
+def _run(cmd: list[str], cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
     print(f"\n$ ({cwd.relative_to(ROOT) or '.'}) {' '.join(cmd)}", flush=True)
-    done = subprocess.run(cmd, cwd=cwd, env=_env())
+    done = subprocess.run(cmd, cwd=cwd, env=env or _env())
     if done.returncode:
         sys.exit(done.returncode)
 
@@ -119,6 +121,66 @@ def coverage_rust() -> None:
     )
 
 
+COVERAGE_TARGET = CRATE / "target" / "llvm-cov-target"
+
+
+def _llvm_cov_env() -> dict[str, str]:
+    """cargo-llvm-cov's environment (its `show-env`) for builds and test runs made outside
+    `cargo llvm-cov`. Its wrapper instruments the crate without changing cargo's
+    fingerprint, so a dedicated target directory keeps instrumented and normal artifacts
+    apart (otherwise cargo reuses the uninstrumented ones)."""
+    shown = subprocess.run(
+        ["cargo", "llvm-cov", "show-env"],
+        cwd=CRATE,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    env = _env()
+    for line in shown.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            env[key] = value.strip("'")
+    target = COVERAGE_TARGET.as_posix()
+    env["CARGO_TARGET_DIR"] = target
+    env["CARGO_LLVM_COV_TARGET_DIR"] = target
+    env["CARGO_LLVM_COV_BUILD_DIR"] = target
+    env["LLVM_PROFILE_FILE"] = f"{target}/analytics-%p-%4m.profraw"
+    return env
+
+
+def coverage_rust_full() -> None:
+    """Rust coverage from the unit tests AND the Python tests, merged (what CI uploads to
+    Codecov; needs cargo-llvm-cov). The pytest run drives an instrumented build of the
+    extension, which covers python.rs and the rest of what only Python reaches. The
+    normal extension in the working tree is put back afterwards."""
+    env = _llvm_cov_env()
+    for stale in COVERAGE_TARGET.glob("*.profraw"):
+        stale.unlink()
+    ext = [
+        f
+        for pattern in ("analytics.*pyd", "analytics*.so")
+        for f in (CRATE / "analytics").glob(pattern)
+    ]
+    backup = Path(tempfile.mkdtemp(prefix="analytics-ext-"))
+    for f in ext:
+        shutil.copy2(f, backup / f.name)
+    try:
+        _run(["cargo", "test", "--lib", "--profile", "coverage"], CRATE, env)
+        _run([PY, "-m", "maturin", "develop", "--profile", "coverage"], CRATE, env)
+        _run([PY, "-m", "pytest", "-q"], ROOT, env)
+    finally:
+        # The instrumented extension would write profile data on every later Python run.
+        for f in ext:
+            shutil.copy2(backup / f.name, f)
+        shutil.rmtree(backup, ignore_errors=True)
+    report = ["cargo", "llvm-cov", "report", "--profile", "coverage"]
+    _run([*report, "--lcov", "--output-path", "lcov.info"], CRATE, env)
+    _run([*report, "--html", "--output-dir", "coverage-html"], CRATE, env)
+    _run(report, CRATE, env)
+
+
 def coverage_py() -> None:
     _run([PY, "-m", "pytest", "--cov=.", "--cov-report=xml", "--cov-report=html", "-q"])
 
@@ -187,6 +249,7 @@ STEPS = {
     "test-py": test_py,
     "test-java": test_java,
     "coverage-rust": coverage_rust,
+    "coverage-rust-full": coverage_rust_full,  # unit + pytest, merged
     "coverage-py": coverage_py,
     "sonar": sonar,  # needs the local SonarQube running
 }

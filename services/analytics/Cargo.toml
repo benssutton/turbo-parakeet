@@ -63,3 +63,16 @@ opt-level = 3
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+# Instrumented builds for coverage (scripts/check.py coverage-rust-full): no LTO and many
+# codegen units, so building is fast; dependencies stay optimised (and cached) so the
+# pytest run against the instrumented extension is not slowed down by unoptimised Polars.
+[profile.coverage]
+inherits = "dev"
+opt-level = 1
+debug = false
+incremental = false
+
+[profile.coverage.package."*"]
+opt-level = 3
+debug = false

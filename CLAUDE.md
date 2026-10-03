@@ -60,11 +60,15 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 # Checks, CI and local tooling
 `python scripts/check.py <step|group>` (run with the p312 Python) runs exactly what CI runs: `fast` (rustfmt, black, clippy for both
 feature sets, ruff), `check` (fast + build + `cargo test --lib` + pytest; `pytest.ini` runs it on 4 pytest-xdist workers, `-n 0` for serial), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
-`lint`, `build`, `test-rust`, `test-py`, `test-java`, `coverage-rust`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
+`lint`, `build`, `test-rust`, `test-py`, `test-java`, `coverage-rust`, `coverage-rust-full`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
 Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin, pytest-xdist) and `rust-toolchain.toml` (compiler, rustfmt, clippy);
 `Cargo.lock` is committed. Optional git hooks: `.pre-commit-config.yaml` (commit: rustfmt + black; push: clippy + ruff + Rust tests).
 `.github/workflows/ci-cd.yml`: lint, Rust coverage, Python tests (Linux + Windows), Java, CodeQL (public repos only), Semgrep, and a
 `status` gate job; actions are pinned by SHA; the only schedule is weekly. `.github/dependabot.yml`: weekly, grouped, never more often.
+Rust coverage (`coverage-rust-full`, what CI uploads to Codecov) merges the unit tests with the Python tests run against an
+instrumented build of the extension (Cargo profile `coverage`: no LTO; dedicated target dir `target/llvm-cov-target`), because
+python.rs is reachable only from Python; the step restores the normal extension afterwards. Cold build ≈ 20 min (dependencies,
+cached in CI), warm ≈ 2.5 min. `coverage-rust` is the unit-tests-only variant.
 Local SonarQube Community Build + the official SonarQube MCP server (`.mcp.json`): see `sonar/README.md`.
 
 # Project Structure
