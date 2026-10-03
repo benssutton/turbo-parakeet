@@ -2,7 +2,7 @@
 maturin>=1.15.0
 
 # Data / columnar format
-polars>=1.0
+polars>=1.44.2
 pyarrow>=14.0
 numpy>=1.26
 datafusion>=54.0.0
