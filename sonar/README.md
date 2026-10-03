@@ -46,5 +46,9 @@ and ask it to re-check.
   (`scripts/check.py lint`) remains the Rust gate; Sonar adds extra rules on top.
 - **Java** (`services/analytics/bindings/java`).
 
+Findings already reviewed and rejected (false positives, accepted complexity) are listed in
+[false-positives.md](false-positives.md): check it before acting on a Sonar finding, and add
+to it when you reject one.
+
 Rules and exclusions: `sonar-project.properties`. The gate and rule set can be changed in
 the web UI (Quality Gates, Quality Profiles).
