@@ -11,6 +11,9 @@
    `sonarsource/sonar-scanner-cli` container against `sonar-project.properties`).
    Run `python scripts/check.py test-java` first if you want the Java bytecode analysed
    (the Java tests only compile it; no Java coverage is imported).
+   The scanner container joins SonarQube's Docker network and talks to `sonarqube:9000`
+   directly (not `localhost` / `host.docker.internal`), so the server must be running
+   (`docker compose -f sonar/compose.yml up -d`); the step fails fast if it is not.
 
 ## Seeing the results
 

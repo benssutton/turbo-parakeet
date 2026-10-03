@@ -123,11 +123,39 @@ def coverage_py() -> None:
     _run([PY, "-m", "pytest", "--cov=.", "--cov-report=xml", "--cov-report=html", "-q"])
 
 
+def _sonar_network() -> str:
+    """The Docker network of the running local SonarQube (sonar/compose.yml). The scanner
+    joins it and talks to `sonarqube:9000` directly: nothing on the Windows host (or a
+    flaky `host.docker.internal` route to it) is in the path."""
+    compose = ["docker", "compose", "-f", str(ROOT / "sonar" / "compose.yml")]
+    found = subprocess.run(
+        [*compose, "ps", "-q", "sonarqube"], capture_output=True, text=True
+    )
+    container = found.stdout.strip()
+    if not container:
+        sys.exit("SonarQube is not running: docker compose -f sonar/compose.yml up -d")
+    nets = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}",
+            container,
+        ],
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    if not nets:
+        sys.exit(f"cannot find the Docker network of container {container}")
+    return nets[0]
+
+
 def sonar() -> None:
     """Analyse with the local SonarQube (sonar/README.md): coverage first, then the scanner."""
     token = os.environ.get("SONARQUBE_TOKEN")
     if not token:
         sys.exit("SONARQUBE_TOKEN is not set (see sonar/README.md)")
+    network = _sonar_network()  # fail fast, before the coverage run
     coverage_py()
     # The scanner reads SONAR_TOKEN; `-e SONAR_TOKEN` forwards it from this environment
     # (keeps the token off the command line).
@@ -137,8 +165,10 @@ def sonar() -> None:
             "docker",
             "run",
             "--rm",
+            "--network",
+            network,
             "-e",
-            "SONAR_HOST_URL=http://host.docker.internal:9000",
+            "SONAR_HOST_URL=http://sonarqube:9000",
             "-e",
             "SONAR_TOKEN",
             "-v",
