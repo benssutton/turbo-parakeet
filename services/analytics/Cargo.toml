@@ -28,7 +28,7 @@ foldhash = "0.1"
 rayon = "1.10"
 
 #SIMD
-wide = "0.7"        # Portable SIMD operations
+wide = "1.7"        # Portable SIMD operations
 mimalloc = "0.1.48"
 
 #Statistics
