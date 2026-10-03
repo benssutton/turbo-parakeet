@@ -1,8 +1,13 @@
 # ToDo - A List of future enhancements to this project
 
-1. Run Dependabot, Secret Scanning, CodeQL, Semgrep, SonarQube community edition on this repo & address issues
+1. Increase test coverage to 95%+ accross Python, Java and Rust
 
-2. Increase both Python and Rust test coverage to 95%+ (currently Python at 91%, Rust at 89%)
+2. Make the interface for the one-shot recommender the same as the StreamingRecommender - i.e. expose as a class.
+
+3. Think about organising the Rust modules: classes such as StreamingRecommender and OneShotRecommender in different folders to the pure functions?
+
+4. Extend describe and the recommenders:
+- To return the top-5 items.  For OneShotRecommender this is deterministic based on frequency counts, StreamingRecommender should use the Heavy Keepers algorithm:  https://www.usenix.org/conference/atc18/presentation/gong
 
 3. Introduce a new function 'Shrink' (Unordered Single Column) that reduces each column to it's optimal data type (per the recommender function) and returns optimised columns.  This is an element-wise response rather than a table of rows & values.
 
