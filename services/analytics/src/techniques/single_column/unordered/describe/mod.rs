@@ -13,7 +13,7 @@ pub(crate) mod conclusions;
 // by name).
 
 use crate::common::encode::{encode_series, EncodedColumn};
-use crate::recommenders::engine::canon;
+use crate::common::text::canon;
 use crate::techniques::describe::conclusions::{conclude, Conclusions};
 use crate::techniques::hll::{hash_key, Hll};
 use foldhash::fast::FixedState;
@@ -1185,7 +1185,7 @@ pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profil
 fn render_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<String>> {
     let Some(i) = i else { return Ok(None) };
     let one = crate::common::ipc_sizes::classic_layout(&s.slice(i as i64, 1))?;
-    Ok(crate::recommenders::engine::render_value(one.as_ref()))
+    Ok(crate::common::text::render_value(one.as_ref()))
 }
 
 /// The values at rows `lo` / `hi` as f64, for integer, decimal and float dtypes.

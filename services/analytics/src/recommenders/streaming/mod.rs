@@ -20,9 +20,10 @@ use crate::common::arrow_io::{export_struct, import_array, import_batch};
 use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, sizes_of};
 use crate::recommenders::engine::{
     body_size, cast_to, enum_categories, list_parts, pa_name, pad, pick_by_stats,
-    pick_list_by_stats, pl_name, polars_layout, rec_row, recommender_fields, to_polars_layout,
-    validity, verify, wrap, Level, Params, Pick, Rec, Shape, Target,
+    pick_list_by_stats, pl_name, polars_layout, rec_row, to_polars_layout, validity, verify, wrap,
+    Level, Params, Pick, Rec, Shape, Target,
 };
+use crate::recommenders::schema::recommender_fields;
 use crate::recommenders::streaming::partial::{has_int_range, BatchStats, LevelStats, ViewSim};
 use crate::recommenders::streaming::reservoir::{Block, Reservoir};
 use crate::techniques::cardinality_estimators::Estimate;
@@ -808,7 +809,7 @@ pub(crate) mod tests {
     use arrow_select::concat::concat;
 
     use crate::common::arrow_io::export_series;
-    use crate::recommenders::engine::arrow_cast;
+    use crate::common::text::arrow_cast;
     use polars::prelude::{CompatLevel, IntoSeries, NamedFrom};
 
     use super::*;
@@ -1128,7 +1129,7 @@ pub(crate) mod tests {
             .iter()
             .map(|f| f.name().clone())
             .collect();
-        let want: Vec<String> = crate::recommenders::engine::recommender_fields(true)
+        let want: Vec<String> = crate::recommenders::schema::recommender_fields(true)
             .into_iter()
             .map(|(n, _)| n)
             .collect();

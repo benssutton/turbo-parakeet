@@ -13,8 +13,9 @@ use polars::prelude::*;
 use crate::common::arrow_io::export_series;
 use crate::common::encode::encode_series;
 use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes};
+use crate::common::text::render_value;
 use crate::recommenders::engine::{
-    body_size, is_text, render_value, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK,
+    body_size, is_text, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK,
 };
 use crate::recommenders::streaming::distinct_sample::{sample_size, DistinctSample};
 use crate::techniques::describe::{

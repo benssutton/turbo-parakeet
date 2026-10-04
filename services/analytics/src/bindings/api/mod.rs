@@ -289,8 +289,7 @@ pub fn render(batch: &RecordBatch) -> Result<RecordBatch> {
         .iter()
         .map(|c| {
             std::sync::Arc::new(arrow_array::StringArray::from_iter(
-                (0..c.len())
-                    .map(|i| crate::recommenders::engine::render_value(c.slice(i, 1).as_ref())),
+                (0..c.len()).map(|i| crate::common::text::render_value(c.slice(i, 1).as_ref())),
             )) as arrow_array::ArrayRef
         })
         .collect();

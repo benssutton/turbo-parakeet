@@ -15,7 +15,8 @@ use rayon::prelude::*;
 
 use crate::bindings::api::{compute, Error, Result};
 use crate::common::arrow_io::{export_struct, import_batch};
-use crate::recommenders::engine::{pa_name, prepare, recommender_fields, Params, Prepared};
+use crate::recommenders::engine::{pa_name, prepare, Params, Prepared};
+use crate::recommenders::schema::recommender_fields;
 use crate::recommenders::streaming::holds_nested_null;
 use crate::techniques::describe::{assemble, Row};
 

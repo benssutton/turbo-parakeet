@@ -4,3 +4,4 @@
 pub(crate) mod arrow_io;
 pub(crate) mod encode;
 pub(crate) mod ipc_sizes;
+pub(crate) mod text;

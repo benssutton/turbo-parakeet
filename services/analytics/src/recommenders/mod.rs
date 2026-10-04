@@ -3,4 +3,5 @@
 
 pub(crate) mod engine;
 pub(crate) mod oneshot;
+pub(crate) mod schema;
 pub(crate) mod streaming;
