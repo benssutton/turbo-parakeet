@@ -16,6 +16,7 @@ import pyarrow as pa
 import pytest
 
 from analytics.describe import _sizes
+from analytics.recommend import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, stringified
 from harness import assert_contract, load, run
 
@@ -44,6 +45,96 @@ def ineligible_frame() -> pl.DataFrame:
     return pl.DataFrame(cols)
 
 
+STREAMING_ONLY = ("first_row", "n_sampled_rows", "n_sampled_blocks")
+F64_KEPT = [3.3e200 / 7, 9.9e200 / 7]  # beyond float32, ~200 integer digits: kept
+
+
+def test_schema_is_streamings_without_the_streaming_columns():
+    frame = describe_mixed(300)
+    out = OneShotRecommender().add(frame).result()
+    streamed = StreamingRecommender().add(frame).result()
+    want = [(k, v) for k, v in streamed.schema.items() if k not in STREAMING_ONLY]
+    assert list(out.schema.items()) == want
+    assert out.to_arrow().num_rows == out.height
+    assert out["column"].to_list() == frame.columns
+    computed = out.filter(pl.col("status") == "computed")
+    assert computed["rec_arrow_type"].null_count() == 0
+    assert computed["rec_polars_type"].null_count() == 0
+
+
+def test_result_before_add_is_empty_with_the_full_schema():
+    empty = OneShotRecommender().result()
+    assert empty.height == 0
+    full = OneShotRecommender().add(pl.DataFrame({"a": [1]})).result()
+    assert empty.schema == full.schema
+
+
+def test_a_second_add_raises_and_keeps_the_first():
+    rec = OneShotRecommender().add(pl.DataFrame({"a": [1, 2]}))
+    with pytest.raises(ValueError, match="already been added"):
+        rec.add(pl.DataFrame({"a": [3]}))
+    with pytest.raises(ValueError, match="already been added"):
+        rec.add(pl.DataFrame({"w": pl.Series([1], dtype=pl.Int128)}))
+    assert rec.result()["n_rows"].to_list() == [2]
+
+
+def test_result_is_repeatable():
+    rec = OneShotRecommender().add(describe_mixed(100))
+    assert rec.result().equals(rec.result())
+
+
+@pytest.mark.parametrize(
+    "convert",
+    [
+        lambda f: f.lazy(),
+        lambda f: f.to_arrow(),
+        lambda f: pa.RecordBatchReader.from_batches(
+            f.to_arrow().schema, f.to_arrow().to_batches(max_chunksize=2)
+        ),
+    ],
+    ids=["lazy", "pyarrow_table", "record_batch_reader"],
+)
+def test_inputs(convert):
+    frame = pl.DataFrame({"a": [0, 5, 7, 9], "s": ["x", "y", "x", None]})
+    want = OneShotRecommender().add(frame).result()
+    out = OneShotRecommender().add(convert(frame)).result()
+    assert out["n_rows"].to_list() == [4, 4]
+    assert out["rec_arrow_type"].to_list() == want["rec_arrow_type"].to_list()
+
+
+def test_ineligible_columns_are_listed():
+    frame = pl.DataFrame(
+        {
+            "w": pl.Series([1, 2], dtype=pl.Int128),
+            "a": [1, 2],
+            "n": [None, None],
+            "obj": pl.Series([object(), object()], dtype=pl.Object),
+        }
+    )
+    rows = {
+        r["column"]: r
+        for r in OneShotRecommender().add(frame).result().iter_rows(named=True)
+    }
+    w = rows["w"]
+    assert (w["status"], w["dtype"], w["n_rows"], w["n_null"]) == (
+        "ineligible",
+        "Int128",
+        2,
+        None,
+    )
+    assert w["rec_arrow_type"] is None
+    assert (rows["obj"]["status"], rows["obj"]["dtype"]) == ("ineligible", "Object")
+    n = rows["n"]
+    assert (n["status"], n["dtype"], n["n_null"]) == ("ineligible", "null", 2)
+    assert (rows["a"]["status"], rows["a"]["dtype"]) == ("computed", "int64")
+
+
+def test_kept_original_names_its_polars_type():
+    out = OneShotRecommender().add(pl.DataFrame({"f": F64_KEPT})).result()
+    r = out.row(0, named=True)
+    assert (r["rec_arrow_type"], r["rec_polars_type"]) == ("double", "Float64")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Contract
 
@@ -64,11 +155,10 @@ def test_contract():
 
 
 def test_constructor_validates_boolean_pairs():
-    cls = impl()
     with pytest.raises(ValueError):
-        cls(boolean_pairs=(("yes", "YES"),))
+        OneShotRecommender(boolean_pairs=(("yes", "YES"),))
     with pytest.raises(ValueError):
-        cls(boolean_pairs=(("y",),))
+        OneShotRecommender(boolean_pairs=(("y",),))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

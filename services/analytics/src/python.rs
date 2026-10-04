@@ -155,9 +155,7 @@ fn run<T: Send>(py: Python<'_>, f: impl FnOnce() -> api::Result<T> + Send) -> Py
 #[pyclass(frozen, module = "analytics.analytics")]
 struct StreamingRecommender(Mutex<api::StreamingRecommender>);
 
-fn locked(
-    m: &Mutex<api::StreamingRecommender>,
-) -> api::Result<std::sync::MutexGuard<'_, api::StreamingRecommender>> {
+fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
     m.lock()
         .map_err(|_| api::Error::Compute("recommender poisoned by an earlier panic".into()))
 }
@@ -208,6 +206,58 @@ impl StreamingRecommender {
                 rec.add(&batch.map_err(|e| api::Error::InvalidInput(e.to_string()))?)?;
             }
             Ok(())
+        })
+    }
+
+    fn result(&self, py: Python<'_>) -> PyResult<ArrowTable> {
+        let rec = &self.0;
+        run(py, move || locked(rec)?.result()).map(ArrowTable)
+    }
+}
+
+/// The one-shot recommender (api::OneShotRecommender): add one frame, `result` any
+/// number of times. A mutex serialises callers; the work runs without the GIL.
+#[pyclass(frozen, module = "analytics.analytics")]
+struct OneShotRecommender(Mutex<api::OneShotRecommender>);
+
+#[pymethods]
+impl OneShotRecommender {
+    #[new]
+    #[pyo3(signature = (*, categorical_threshold, zstd_level, seed, boolean_pairs))]
+    fn new(
+        py: Python<'_>,
+        categorical_threshold: u64,
+        zstd_level: i32,
+        seed: u64,
+        boolean_pairs: Vec<(String, String)>,
+    ) -> PyResult<Self> {
+        let p = api::OneShotParams {
+            categorical_threshold,
+            zstd_level,
+            seed,
+            boolean_pairs,
+        };
+        run(py, || api::OneShotRecommender::new(p)).map(|r| Self(Mutex::new(r)))
+    }
+
+    /// Adds `data`, read whole as one batch. `ineligible`: (name, dtype) of columns the
+    /// caller dropped (Int128 / UInt128, Object, nested Null), marked first under the
+    /// same lock. A second call is ValueError.
+    #[pyo3(signature = (data, ineligible=Vec::new()))]
+    fn add(
+        &self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        ineligible: Vec<(String, String)>,
+    ) -> PyResult<()> {
+        let batch = read_batch(data)?;
+        let rec = &self.0;
+        run(py, move || {
+            let mut rec = locked(rec)?;
+            for (name, dtype) in &ineligible {
+                rec.mark_ineligible(name, dtype)?;
+            }
+            rec.add(&batch)
         })
     }
 
@@ -383,6 +433,7 @@ fn checked_table(data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
 fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ArrowTable>()?;
     m.add_class::<StreamingRecommender>()?;
+    m.add_class::<OneShotRecommender>()?;
     m.add_function(wrap_pyfunction!(column_gcd, m)?)?;
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_joint_entropy, m)?)?;
