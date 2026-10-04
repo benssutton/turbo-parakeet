@@ -66,7 +66,7 @@ Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin, p
 `.github/workflows/ci-cd.yml`: lint, Rust + Python coverage (one job: unit tests, then pytest on an instrumented extension), Java,
 CodeQL (public repos only), Semgrep, Windows Python tests, and a `status` gate job; actions are pinned by SHA. **Cost control** (private
 repo, limited Actions minutes; Windows bills 2x): the Windows job runs only on the weekly schedule / manual dispatch, Java not on
-pull requests, docs-only changes (`*.md`, docs/, sonar/, notebooks/) skip the pipeline, superseded runs are cancelled; a cold Rust
+pull requests, CodeQL not on pushes (pull requests, weekly, dispatch), the weekly run also tests the Java binding against the release (LTO) C library, docs-only changes (`*.md`, docs/, sonar/, notebooks/) skip the pipeline, superseded runs are cancelled; a cold Rust
 cache (any `Cargo.lock` change) makes a run ~3x dearer. `.github/dependabot.yml`: Rust / Python weekly, Java / Actions monthly,
 grouped, at most 2 open PRs per ecosystem.
 Rust coverage (`coverage-rust-full`, what CI uploads to Codecov) merges the unit tests with the Python tests run against an
@@ -116,8 +116,10 @@ turbo-parakeet/
 # Rust Extension (analytics)
 Build: `maturin develop --release` from `services/analytics/`. Python changes need no rebuild (editable install).
 Cargo feature `python` (default) gates pyo3 + python.rs; the Java build is Python-free:
-`cargo build --release --no-default-features --target-dir target/capi` (own target dir — maturin writes the
-Python-linked library to `target/release`), then `./mvnw test` in `services/analytics/bindings/java/` (JDK 25).
+`cargo build --profile ci --no-default-features --target-dir target/capi` (own target dir — maturin writes the
+Python-linked library to `target/release`; Cargo profile `ci` = release without fat LTO, fast to build; `CAPI_PROFILE=release`
+tests the shipped build), then `./mvnw test` in `services/analytics/bindings/java/` (JDK 25; JaCoCo coverage report in
+`target/site/jacoco/`; `python scripts/check.py test-java` does both).
 
 Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design.md, 2026-09-28-java-binding-design.md):
 - `src/api.rs` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown or duplicate column names, a malformed Bloom array or zero Bloom/LSH parameters, wrong column counts, an unimportable Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/`ShapeMismatch` error — a column of the wrong type for the kernel) / `Compute`. `StreamingRecommender` (new / add / mark_ineligible / finish) is the one stateful entry point.

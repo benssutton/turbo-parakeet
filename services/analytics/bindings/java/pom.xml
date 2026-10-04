@@ -6,18 +6,20 @@
 
   <!-- Java binding over the analytics C ABI (services/analytics/src/capi.rs).
        Build the native library first, from services/analytics:
-       cargo build -\-release -\-no-default-features -\-target-dir target/capi -->
+       cargo build -\-profile ci -\-no-default-features -\-target-dir target/capi
+       (or `python scripts/check.py test-java`, which also passes the library directory) -->
   <groupId>io.github.benssutton</groupId>
   <artifactId>analytics</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <properties>
+    <argLine></argLine>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <arrow.version>19.0.0</arrow.version>
     <junit.version>6.1.3</junit.version>
-    <analytics.library.dir>${project.basedir}/../../target/capi/release</analytics.library.dir>
+    <analytics.library.dir>${project.basedir}/../../target/capi/ci</analytics.library.dir>
   </properties>
 
   <dependencyManagement>
@@ -63,6 +65,21 @@
   <build>
     <plugins>
       <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>0.8.14</version>
+        <executions>
+          <execution>
+            <goals><goal>prepare-agent</goal></goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals><goal>report</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.16.0</version>
@@ -74,7 +91,7 @@
         <configuration>
           <!-- FFM downcalls and Arrow's C Data JNI need native access; Arrow's memory
                module reflects into java.nio. -->
-          <argLine>--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow</argLine>
+          <argLine>@{argLine} --enable-native-access=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow</argLine>
           <systemPropertyVariables>
             <analytics.library.dir>${analytics.library.dir}</analytics.library.dir>
           </systemPropertyVariables>

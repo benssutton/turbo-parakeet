@@ -21,14 +21,15 @@ final class Native {
 
     static final int INVALID_INPUT = 1;
 
-    private static final SymbolLookup LIBRARY = SymbolLookup.libraryLookup(libraryPath(), Arena.global());
+    private static final SymbolLookup LIBRARY = SymbolLookup.libraryLookup(
+        libraryPath(System.getProperty("analytics.library.dir")), Arena.global());
     private static final Linker LINKER = Linker.nativeLinker();
     private static final MethodHandle FREE_ERROR = handle("analytics_free_error", FunctionDescriptor.ofVoid(ADDRESS));
 
     private Native() {}
 
-    private static Path libraryPath() {
-        String dir = System.getProperty("analytics.library.dir");
+    /** The library file in {@code dir} (the value of the system property {@code analytics.library.dir}). */
+    static Path libraryPath(String dir) {
         if (dir == null) {
             throw new IllegalStateException("system property analytics.library.dir is not set");
         }
@@ -38,6 +39,36 @@ final class Native {
                 + "`cargo build --release --no-default-features --target-dir target/capi`");
         }
         return path;
+    }
+
+    /** A native call: the downcall handles throw {@link Throwable}. */
+    @FunctionalInterface
+    interface Call<T> {
+        T run() throws Throwable;
+    }
+
+    /** {@link Call} without a result. */
+    @FunctionalInterface
+    interface VoidCall {
+        void run() throws Throwable;
+    }
+
+    /** Runs {@code call}; runtime exceptions and errors pass through, anything else is wrapped. */
+    static <T> T call(Call<T> call) {
+        try {
+            return call.run();
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
+        }
+    }
+
+    static void run(VoidCall call) {
+        call(() -> {
+            call.run();
+            return null;
+        });
     }
 
     /** A downcall handle for the library function {@code name}. */

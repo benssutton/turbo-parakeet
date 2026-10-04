@@ -46,32 +46,30 @@ public final class Analytics {
      * @throws RuntimeException for a failure inside the Rust kernels
      */
     public static ArrowReader describeAndRecommend(ArrowReader input, Params params, BufferAllocator allocator) {
-        try (ArrowArrayStream in = ArrowArrayStream.allocateNew(allocator);
-             ArrowArrayStream out = ArrowArrayStream.allocateNew(allocator);
-             Arena arena = Arena.ofConfined()) {
-            Data.exportArrayStream(allocator, input, in);
-            List<Params.BooleanPair> pairs = params.booleanPairs();
-            MemorySegment trues = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::trueValue).toList());
-            MemorySegment falses = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::falseValue).toList());
-            MemorySegment error = arena.allocate(ADDRESS);  // zero-initialised: null
-            int code = (int) DESCRIBE_AND_RECOMMEND.invokeExact(
-                MemorySegment.ofAddress(in.memoryAddress()),
-                params.seed(),
-                params.zstdLevel(),
-                params.categoricalThreshold(),
-                trues,
-                falses,
-                (long) pairs.size(),
-                MemorySegment.ofAddress(out.memoryAddress()),
-                error);
-            if (code != 0) {
-                throw Native.failure(code, error.get(ADDRESS, 0));
+        return Native.call(() -> {
+            try (ArrowArrayStream in = ArrowArrayStream.allocateNew(allocator);
+                 ArrowArrayStream out = ArrowArrayStream.allocateNew(allocator);
+                 Arena arena = Arena.ofConfined()) {
+                Data.exportArrayStream(allocator, input, in);
+                List<Params.BooleanPair> pairs = params.booleanPairs();
+                MemorySegment trues = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::trueValue).toList());
+                MemorySegment falses = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::falseValue).toList());
+                MemorySegment error = arena.allocate(ADDRESS);  // zero-initialised: null
+                int code = (int) DESCRIBE_AND_RECOMMEND.invokeExact(
+                    MemorySegment.ofAddress(in.memoryAddress()),
+                    params.seed(),
+                    params.zstdLevel(),
+                    params.categoricalThreshold(),
+                    trues,
+                    falses,
+                    (long) pairs.size(),
+                    MemorySegment.ofAddress(out.memoryAddress()),
+                    error);
+                if (code != 0) {
+                    throw Native.failure(code, error.get(ADDRESS, 0));
+                }
+                return Data.importArrayStream(allocator, out);
             }
-            return Data.importArrayStream(allocator, out);
-        } catch (RuntimeException | Error e) {
-            throw e;
-        } catch (Throwable t) {
-            throw new RuntimeException(t);
-        }
+        });
     }
 }

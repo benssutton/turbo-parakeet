@@ -7,10 +7,10 @@
 2. My Account → Security → generate a **user token**; set it for your user, e.g.
    PowerShell: `[Environment]::SetEnvironmentVariable("SONARQUBE_TOKEN", "<token>", "User")`
    (restart the terminal / VS Code afterwards). Never commit the token.
-3. Analyse: `python scripts/check.py sonar` (runs the Python tests with coverage (4 pytest-xdist workers, set in `pytest.ini`), then the
-   `sonarsource/sonar-scanner-cli` container against `sonar-project.properties`).
-   Run `python scripts/check.py test-java` first if you want the Java bytecode analysed
-   (the Java tests only compile it; no Java coverage is imported).
+3. Analyse: `python scripts/check.py sonar` (runs the Python tests with coverage (4 pytest-xdist workers, set in `pytest.ini`) and the
+   Java tests with JaCoCo, then the `sonarsource/sonar-scanner-cli` container against
+   `sonar-project.properties`; Python coverage comes from `coverage.xml`, Java coverage from
+   `bindings/java/target/site/jacoco/jacoco.xml`; Rust coverage is not imported).
    The scanner container joins SonarQube's Docker network and talks to `sonarqube:9000`
    directly (not `localhost` / `host.docker.internal`), so the server must be running
    (`docker compose -f sonar/compose.yml up -d`); the step fails fast if it is not.

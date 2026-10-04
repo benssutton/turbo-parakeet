@@ -84,13 +84,19 @@ def test_py() -> None:
     _run([PY, "-m", "pytest", "-q"])
 
 
+# Cargo profile of the C ABI library the Java tests load: `ci` (release without fat LTO,
+# fast to build); CAPI_PROFILE=release tests the shipped build.
+CAPI_PROFILE = os.environ.get("CAPI_PROFILE", "ci")
+
+
 def build_capi() -> None:
     # Own target dir: maturin writes the Python-linked library to target/release.
     _run(
         [
             "cargo",
             "build",
-            "--release",
+            "--profile",
+            CAPI_PROFILE,
             "--no-default-features",
             "--target-dir",
             "target/capi",
@@ -100,8 +106,10 @@ def build_capi() -> None:
 
 
 def test_java() -> None:
+    """Java binding tests with JaCoCo (report: bindings/java/target/site/jacoco/jacoco.xml)."""
     build_capi()
-    _run([MVNW, "-B", "test"], JAVA)
+    library_dir = (CRATE / "target" / "capi" / CAPI_PROFILE).as_posix()
+    _run([MVNW, "-B", f"-Danalytics.library.dir={library_dir}", "test"], JAVA)
 
 
 def coverage_rust() -> None:
@@ -213,12 +221,13 @@ def _sonar_network() -> str:
 
 
 def sonar() -> None:
-    """Analyse with the local SonarQube (sonar/README.md): coverage first, then the scanner."""
+    """Analyse with the local SonarQube (sonar/README.md): Python and Java coverage first, then the scanner."""
     token = os.environ.get("SONARQUBE_TOKEN")
     if not token:
         sys.exit("SONARQUBE_TOKEN is not set (see sonar/README.md)")
     network = _sonar_network()  # fail fast, before the coverage run
     coverage_py()
+    test_java()  # the JaCoCo report and compiled classes the scanner reads
     # The scanner reads SONAR_TOKEN; `-e SONAR_TOKEN` forwards it from this environment
     # (keeps the token off the command line).
     os.environ["SONAR_TOKEN"] = token

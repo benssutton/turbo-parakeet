@@ -7,7 +7,10 @@ name: Full CI Pipeline
 # Cost control (private repo: Linux minutes 1x, Windows 2x of a monthly allowance):
 #   - docs-only changes do not run the pipeline;
 #   - the Windows Python job runs only on the weekly schedule / manual dispatch;
-#   - Java runs on pushes to main, the schedule and dispatch, not on pull requests;
+#   - Java runs on pushes to main, the schedule and dispatch, not on pull requests, against a
+#     C library built without fat LTO (the schedule / dispatch also run the release build);
+#   - CodeQL (the slowest job, hence the longest pipeline) runs on pull requests, the schedule
+#     and dispatch, not on pushes to main;
 #   - the Python tests run once on Linux, inside the Rust coverage job.
 on:
   push:
@@ -219,8 +222,16 @@ jobs:
         with:
           workspaces: services/analytics
 
-      # Builds the C ABI library (no Python, own target dir), then ./mvnw test.
+      # Builds the C ABI library (no Python, own target dir, Cargo profile `ci`), then
+      # ./mvnw test (with JaCoCo).
       - name: Build the C ABI library and run the Java tests
+        run: python scripts/check.py test-java
+
+      # The shipped build (fat LTO), weekly only: it is the slow part of this job.
+      - name: Java tests against the release C library
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          CAPI_PROFILE: release
         run: python scripts/check.py test-java
 
       - name: Upload Surefire reports
@@ -237,9 +248,9 @@ jobs:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # CodeQL on private repos needs GitHub Advanced Security.
-    # Remove this line if you have it enabled (or the repo is public).
-    if: ${{ !github.event.repository.private }}
+    # CodeQL on private repos needs GitHub Advanced Security. It is the slowest job, so a push
+    # to main skips it (pull requests, the weekly schedule and dispatch run it).
+    if: ${{ !github.event.repository.private && github.event_name != 'push' }}
     permissions:
       contents: read
       security-events: write

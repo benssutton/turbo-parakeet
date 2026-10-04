@@ -67,11 +67,9 @@ public final class StreamingRecommender implements AutoCloseable {
     private record Free(MemorySegment handle) implements Runnable {
         @Override
         public void run() {
-            try {
+            Native.run(() -> {
                 FREE.invokeExact(handle);
-            } catch (Throwable t) {
-                throw new RuntimeException(t);
-            }
+            });
         }
     }
 
@@ -83,32 +81,30 @@ public final class StreamingRecommender implements AutoCloseable {
 
     /** @throws IllegalArgumentException for invalid parameters (e.g. {@code blockRows} 0) */
     public StreamingRecommender(StreamingParams params) {
-        try (Arena arena = Arena.ofConfined()) {
-            List<Params.BooleanPair> pairs = params.booleanPairs();
-            MemorySegment trues = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::trueValue).toList());
-            MemorySegment falses = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::falseValue).toList());
-            MemorySegment out = arena.allocate(ADDRESS);
-            MemorySegment error = arena.allocate(ADDRESS);  // zero-initialised: null
-            int code = (int) NEW.invokeExact(
-                params.reservoirRows(),
-                params.blockRows(),
-                params.categoricalThreshold(),
-                params.zstdLevel(),
-                params.seed(),
-                trues,
-                falses,
-                (long) pairs.size(),
-                out,
-                error);
-            if (code != 0) {
-                throw Native.failure(code, error.get(ADDRESS, 0));
+        handle = Native.call(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                List<Params.BooleanPair> pairs = params.booleanPairs();
+                MemorySegment trues = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::trueValue).toList());
+                MemorySegment falses = Native.cStrings(arena, pairs.stream().map(Params.BooleanPair::falseValue).toList());
+                MemorySegment out = arena.allocate(ADDRESS);
+                MemorySegment error = arena.allocate(ADDRESS);  // zero-initialised: null
+                int code = (int) NEW.invokeExact(
+                    params.reservoirRows(),
+                    params.blockRows(),
+                    params.categoricalThreshold(),
+                    params.zstdLevel(),
+                    params.seed(),
+                    trues,
+                    falses,
+                    (long) pairs.size(),
+                    out,
+                    error);
+                if (code != 0) {
+                    throw Native.failure(code, error.get(ADDRESS, 0));
+                }
+                return out.get(ADDRESS, 0);
             }
-            handle = out.get(ADDRESS, 0);
-        } catch (RuntimeException | Error e) {
-            throw e;
-        } catch (Throwable t) {
-            throw new RuntimeException(t);
-        }
+        });
         cleanable = CLEANER.register(this, new Free(handle));
     }
 
@@ -124,19 +120,19 @@ public final class StreamingRecommender implements AutoCloseable {
      */
     public void add(ArrowReader input, BufferAllocator allocator) {
         lock.readLock().lock();
-        try (ArrowArrayStream in = ArrowArrayStream.allocateNew(allocator);
-             Arena arena = Arena.ofConfined()) {
-            checkOpen();
-            Data.exportArrayStream(allocator, input, in);
-            MemorySegment error = arena.allocate(ADDRESS);
-            int code = (int) ADD.invokeExact(handle, MemorySegment.ofAddress(in.memoryAddress()), error);
-            if (code != 0) {
-                throw Native.failure(code, error.get(ADDRESS, 0));
-            }
-        } catch (RuntimeException | Error e) {
-            throw e;
-        } catch (Throwable t) {
-            throw new RuntimeException(t);
+        try {
+            Native.run(() -> {
+                try (ArrowArrayStream in = ArrowArrayStream.allocateNew(allocator);
+                     Arena arena = Arena.ofConfined()) {
+                    checkOpen();
+                    Data.exportArrayStream(allocator, input, in);
+                    MemorySegment error = arena.allocate(ADDRESS);
+                    int code = (int) ADD.invokeExact(handle, MemorySegment.ofAddress(in.memoryAddress()), error);
+                    if (code != 0) {
+                        throw Native.failure(code, error.get(ADDRESS, 0));
+                    }
+                }
+            });
         } finally {
             lock.readLock().unlock();
         }
@@ -154,19 +150,19 @@ public final class StreamingRecommender implements AutoCloseable {
      */
     public ArrowReader finish(BufferAllocator allocator) {
         lock.readLock().lock();
-        try (ArrowArrayStream out = ArrowArrayStream.allocateNew(allocator);
-             Arena arena = Arena.ofConfined()) {
-            checkOpen();
-            MemorySegment error = arena.allocate(ADDRESS);
-            int code = (int) FINISH.invokeExact(handle, MemorySegment.ofAddress(out.memoryAddress()), error);
-            if (code != 0) {
-                throw Native.failure(code, error.get(ADDRESS, 0));
-            }
-            return Data.importArrayStream(allocator, out);
-        } catch (RuntimeException | Error e) {
-            throw e;
-        } catch (Throwable t) {
-            throw new RuntimeException(t);
+        try {
+            return Native.call(() -> {
+                try (ArrowArrayStream out = ArrowArrayStream.allocateNew(allocator);
+                     Arena arena = Arena.ofConfined()) {
+                    checkOpen();
+                    MemorySegment error = arena.allocate(ADDRESS);
+                    int code = (int) FINISH.invokeExact(handle, MemorySegment.ofAddress(out.memoryAddress()), error);
+                    if (code != 0) {
+                        throw Native.failure(code, error.get(ADDRESS, 0));
+                    }
+                    return Data.importArrayStream(allocator, out);
+                }
+            });
         } finally {
             lock.readLock().unlock();
         }

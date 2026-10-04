@@ -60,6 +60,14 @@ codegen-units = 1
 panic = "abort"
 opt-level = 3
 
+# The C ABI library for the Java tests (scripts/check.py test-java): release without the fat
+# LTO, which dominates its build time; the tests check behaviour, not speed. The weekly
+# pipeline also runs them against the release profile (CAPI_PROFILE=release).
+[profile.ci]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 [profile.bench]
 lto = "thin"
 codegen-units = 1
