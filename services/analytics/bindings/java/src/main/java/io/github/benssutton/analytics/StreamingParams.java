@@ -13,7 +13,7 @@ import java.util.List;
  *                      k = max(categoricalThreshold, 1000), ≈ 50 bytes per sampled value
  */
 public record StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
-                              int zstdLevel, long seed, List<Params.BooleanPair> booleanPairs) {
+                              int zstdLevel, long seed, List<BooleanPair> booleanPairs) {
 
     public StreamingParams {
         booleanPairs = List.copyOf(booleanPairs);
@@ -22,6 +22,6 @@ public record StreamingParams(long reservoirRows, long blockRows, long categoric
     /** 524 288 reservoir rows in blocks of 65 536, threshold 10 000, ZSTD 1, seed 0, ("true", "false"). */
     public static StreamingParams defaults() {
         return new StreamingParams(524_288, 65_536, 10_000, 1, 0,
-            List.of(new Params.BooleanPair("true", "false")));
+            List.of(new BooleanPair("true", "false")));
     }
 }

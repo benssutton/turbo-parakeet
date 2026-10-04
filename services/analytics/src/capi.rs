@@ -89,7 +89,8 @@ pub unsafe extern "C" fn analytics_free_error(error: *mut c_char) {
 // Handles cross as `void *` pointing to a `Mutex<R>` (R: api::StreamingRecommender or
 // api::OneShotRecommender): a pointer to a Rust type in an `extern "C"` signature trips
 // `improper_ctypes_definitions`. Concurrent `_add` / `_result` calls on one handle are
-// serialised by the lock; `_free` is not (see the `_free` functions).
+// serialised by the lock; `_free` is not (see the `_free` functions). Passing a handle of one
+// recommender kind to the other kind's functions is undefined behaviour.
 
 // Handles are shared across caller threads: checked in the C-only build too.
 const _: () = {
@@ -537,7 +538,7 @@ mod tests {
         assert!(released(&mut input));
     }
 
-    /// `finish`'s `n_rows` for the first column.
+    /// `result`'s `n_rows` for the first column.
     unsafe fn result_rows(h: *mut c_void) -> u64 {
         let mut output = FFI_ArrowArrayStream::empty();
         let mut error = ptr::null_mut();
@@ -643,6 +644,38 @@ mod tests {
         assert!(m.contains("offset"), "{m}");
         assert!(released(&mut input));
         unsafe { analytics_streaming_recommender_free(h) };
+    }
+
+    #[test]
+    fn oneshot_recommender_rejects_a_malformed_stream() {
+        let data = unsafe {
+            ArrayData::builder(DataType::Utf8)
+                .len(2)
+                .add_buffer(Buffer::from_vec(vec![0i32, 2, 1]))
+                .add_buffer(Buffer::from_vec(b"ab".to_vec()))
+                .build_unchecked()
+        };
+        let mut input = stream(vec![("s", Arc::new(StringArray::from(data)) as ArrayRef)]);
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_oneshot(1, &mut error) };
+        assert_eq!(code, OK);
+        let code = unsafe { analytics_oneshot_recommender_add(h, &mut input, &mut error) };
+        assert_eq!(code, INVALID_INPUT);
+        let m = message(error);
+        assert!(m.contains("offset"), "{m}");
+        assert!(released(&mut input));
+        unsafe { analytics_oneshot_recommender_free(h) };
+    }
+
+    #[test]
+    fn oneshot_recommender_null_handle_is_invalid_input() {
+        let mut input = stream(vec![("a", ints(&[1]))]);
+        let mut error = ptr::null_mut();
+        let code =
+            unsafe { analytics_oneshot_recommender_add(ptr::null_mut(), &mut input, &mut error) };
+        assert_eq!(code, INVALID_INPUT);
+        assert!(message(error).contains("handle"));
+        assert!(released(&mut input));
     }
 
     #[test]

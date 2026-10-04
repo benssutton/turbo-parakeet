@@ -10,25 +10,21 @@ import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 
 /**
- * Recommend's dtype recommendations from batches added over time; all state stays in Rust
- * (services/analytics/src/streaming.rs, through the C ABI's {@code analytics_streaming_recommender_*}).
- * Spec: docs/superpowers/specs/2026-09-29-streaming-recommender-design.md.
+ * The narrowest value-preserving Arrow type per column of one frame, from exact statistics,
+ * each candidate cast, verified on every row and measured (services/analytics/src/oneshot.rs,
+ * through the C ABI's {@code analytics_oneshot_recommender_*}). Spec:
+ * docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md.
  *
- * <p>{@link #add} any number of times — columns may appear, disappear (their rows count as
- * null) or start as the Null type; any other type change is an {@link IllegalArgumentException}.
- * {@link #result} at any point returns one row per column and keeps the state.
- *
- * <p>Memory per eligible level (a column, or a list's inner values), every dtype: ≈ 16 KB of
- * HyperLogLog plus a distinct sample of up to ≈ 50 bytes × k, k = max(categoricalThreshold,
- * 1000) — ≈ 0.5 MB at the default 10 000, so ≈ 0.5 GB for 1 000 high-cardinality columns.
+ * <p>{@link #add} once (its batches are concatenated; a second call is an
+ * {@link IllegalArgumentException}); {@link #result} any number of times returns the same
+ * table: the streaming recommender's columns without {@code first_row},
+ * {@code n_sampled_rows} and {@code n_sampled_blocks}.
  */
-public final class StreamingRecommender extends NativeRecommender {
+public final class OneShotRecommender extends NativeRecommender {
 
-    private static final Functions FUNCTIONS = Functions.of("analytics_streaming_recommender");
-    private static final MethodHandle NEW = Native.handle("analytics_streaming_recommender_new",
+    private static final Functions FUNCTIONS = Functions.of("analytics_oneshot_recommender");
+    private static final MethodHandle NEW = Native.handle("analytics_oneshot_recommender_new",
         FunctionDescriptor.of(JAVA_INT,
-            JAVA_LONG,  // uint64_t reservoir_rows
-            JAVA_LONG,  // uint64_t block_rows
             JAVA_LONG,  // uint64_t categorical_threshold
             JAVA_INT,   // int32_t zstd_level
             JAVA_LONG,  // uint64_t seed
@@ -38,20 +34,18 @@ public final class StreamingRecommender extends NativeRecommender {
             ADDRESS,    // void **out
             ADDRESS));  // char **error
 
-    /** @throws IllegalArgumentException for invalid parameters (e.g. {@code blockRows} 0) */
-    public StreamingRecommender(StreamingParams params) {
+    /** @throws IllegalArgumentException for invalid parameters (e.g. a ZSTD level out of range) */
+    public OneShotRecommender(OneShotParams params) {
         super(FUNCTIONS, create(params));
     }
 
-    private static MemorySegment create(StreamingParams params) {
+    private static MemorySegment create(OneShotParams params) {
         return Native.call(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment[] pairs = booleanPairs(arena, params.booleanPairs());
                 MemorySegment out = arena.allocate(ADDRESS);
                 MemorySegment error = arena.allocate(ADDRESS);  // zero-initialised: null
                 int code = (int) NEW.invokeExact(
-                    params.reservoirRows(),
-                    params.blockRows(),
                     params.categoricalThreshold(),
                     params.zstdLevel(),
                     params.seed(),

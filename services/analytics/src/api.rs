@@ -379,7 +379,7 @@ impl OneShotRecommender {
 
     /// Marks a column the caller cannot send (Int128 / UInt128, Object) as ineligible;
     /// before `add` only.
-    #[allow(dead_code)] // until python.rs uses it (task 6); the C ABI does not expose it
+    #[allow(dead_code)] // until python.rs uses it (task 7); the C ABI does not expose it
     pub fn mark_ineligible(&mut self, name: &str, dtype: &str) -> Result<()> {
         self.0.mark_ineligible(name, dtype)
     }

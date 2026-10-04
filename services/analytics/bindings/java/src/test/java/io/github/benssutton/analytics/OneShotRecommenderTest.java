@@ -1,7 +1,6 @@
 package io.github.benssutton.analytics;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -25,7 +24,7 @@ import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.junit.jupiter.api.Test;
 
-class StreamingRecommenderTest {
+class OneShotRecommenderTest {
 
     private static BigIntVector ints(BufferAllocator allocator, String name, long... values) {
         BigIntVector v = new BigIntVector(name, allocator);
@@ -66,8 +65,7 @@ class StreamingRecommenderTest {
         return reader(allocator, ints(allocator, "a", 0, 5, 7), strings(allocator, "s", "x", "y", "x"));
     }
 
-    /** Reads the one-batch result of `rec` with `read`. */
-    private static <T> T result(StreamingRecommender rec, BufferAllocator allocator,
+    private static <T> T result(OneShotRecommender rec, BufferAllocator allocator,
                                 Function<VectorSchemaRoot, T> read) throws IOException {
         try (ArrowReader output = rec.result(allocator)) {
             assertTrue(output.loadNextBatch());
@@ -83,98 +81,80 @@ class StreamingRecommenderTest {
     }
 
     @Test
-    void recommendsFromBatchesAddedOverTime() throws IOException {
+    void recommendsToyData() throws IOException {
         try (BufferAllocator allocator = new RootAllocator();
-             StreamingRecommender rec = new StreamingRecommender(StreamingParams.defaults())) {
-            rec.add(toyData(allocator), allocator);
+             OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
             rec.add(toyData(allocator), allocator);
             result(rec, allocator, root -> {
                 assertEquals(List.of("a", "s"), column(root, "column"));
                 assertEquals(List.of("computed", "computed"), column(root, "status"));
-                assertEquals(List.of("6", "6"), column(root, "n_rows"));
-                assertEquals("uint8", column(root, "rec_arrow_type").get(0));
-                assertEquals(List.of("ordinal", "boolean"), column(root, "class"));
+                assertEquals(List.of("uint8", "string"), column(root, "rec_arrow_type"));
+                assertEquals(List.of("categorical", "boolean"), column(root, "class"));
                 assertEquals(List.of("0", "x"), column(root, "min"));
-                // a: 3 distinct of 6 (≥ half) → observed; s: 2 of 6 → an estimator
-                // (Schnabel), as one-shot picks.
-                assertEquals(List.of("observed", "schnabel"), column(root, "est_method"));
+                assertEquals(List.of("7", "y"), column(root, "max"));
+                assertEquals(List.of("observed", "observed"), column(root, "est_method"));
+                assertEquals(null, root.getVector("first_row"));
                 return null;
             });
         }
     }
 
     @Test
-    void aColumnAppearingLaterIsBackfilledWithNulls() throws IOException {
+    void resultIsRepeatable() throws IOException {
         try (BufferAllocator allocator = new RootAllocator();
-             StreamingRecommender rec = new StreamingRecommender(StreamingParams.defaults())) {
-            rec.add(reader(allocator, ints(allocator, "a", 1, 2, 3)), allocator);
-            rec.add(reader(allocator, ints(allocator, "a", 4), strings(allocator, "b", "x")), allocator);
-            result(rec, allocator, root -> {
-                assertEquals(List.of("a", "b"), column(root, "column"));
-                assertEquals(List.of("0", "3"), column(root, "first_row"));
-                assertEquals(List.of("0", "3"), column(root, "n_null"));
-                assertEquals("true", column(root, "rec_nullable").get(1));
-                return null;
-            });
+             OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
+            rec.add(toyData(allocator), allocator);
+            List<String> first = result(rec, allocator, root -> column(root, "rec_arrow_type"));
+            assertEquals(first, result(rec, allocator, root -> column(root, "rec_arrow_type")));
         }
     }
 
     @Test
-    void aTypeChangeIsIllegalArgumentAndChangesNothing() throws IOException {
+    void aSecondAddIsIllegalArgumentAndKeepsTheFirst() throws IOException {
         try (BufferAllocator allocator = new RootAllocator();
-             StreamingRecommender rec = new StreamingRecommender(StreamingParams.defaults())) {
-            rec.add(reader(allocator, ints(allocator, "a", 1, 2)), allocator);
-            ArrowReader wrong = reader(allocator, strings(allocator, "a", "x"));
+             OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
+            rec.add(toyData(allocator), allocator);
+            ArrowReader again = toyData(allocator);
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> rec.add(wrong, allocator));
-            assertTrue(e.getMessage().contains("type changed"), e.getMessage());
-            assertEquals(List.of("2"), result(rec, allocator, root -> column(root, "n_rows")));
+                () -> rec.add(again, allocator));
+            assertTrue(e.getMessage().contains("already been added"), e.getMessage());
+            assertEquals(List.of("3", "3"), result(rec, allocator, root -> column(root, "n_rows")));
         }
     }
 
     @Test
-    void resultKeepsTheStateSoAddingCanContinue() throws IOException {
+    void duplicateColumnIsIllegalArgument() throws IOException {
         try (BufferAllocator allocator = new RootAllocator();
-             StreamingRecommender rec = new StreamingRecommender(StreamingParams.defaults())) {
-            rec.add(toyData(allocator), allocator);
-            assertEquals(List.of("3", "3"), result(rec, allocator, root -> column(root, "n_rows")));
-            assertEquals(List.of("3", "3"), result(rec, allocator, root -> column(root, "n_rows")));
-            rec.add(toyData(allocator), allocator);
-            assertEquals(List.of("6", "6"), result(rec, allocator, root -> column(root, "n_rows")));
+             OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
+            ArrowReader dup = reader(allocator, ints(allocator, "a", 1), strings(allocator, "a", "x"));
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> rec.add(dup, allocator));
+            assertTrue(e.getMessage().contains("duplicate column \"a\""), e.getMessage());
         }
     }
 
     @Test
     void anEmptyRecommenderHasNoRows() throws IOException {
         try (BufferAllocator allocator = new RootAllocator();
-             StreamingRecommender rec = new StreamingRecommender(StreamingParams.defaults());
-             ArrowReader output = rec.result(allocator)) {
-            assertTrue(output.loadNextBatch());
-            assertEquals(0, output.getVectorSchemaRoot().getRowCount());
+             OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
+            assertEquals(0, (int) result(rec, allocator, VectorSchemaRoot::getRowCount));
         }
     }
 
     @Test
     void invalidParametersAreIllegalArguments() {
-        StreamingParams d = StreamingParams.defaults();
-        List<StreamingParams> bad = List.of(
-            new StreamingParams(d.reservoirRows(), 0, d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs()),
-            new StreamingParams(10, 100, d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs()),
-            new StreamingParams(d.reservoirRows(), d.blockRows(), d.categoricalThreshold(), 99, d.seed(), d.booleanPairs()),
-            new StreamingParams(d.reservoirRows(), d.blockRows(), d.categoricalThreshold(), d.zstdLevel(), d.seed(),
-                List.of(new BooleanPair("Y", "y"))));
-        for (StreamingParams p : bad) {
-            assertThrows(IllegalArgumentException.class, () -> new StreamingRecommender(p), p.toString());
-        }
-        assertDoesNotThrow(() -> new StreamingRecommender(
-            new StreamingParams(0, d.blockRows(), d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs()))
-            .close());
+        OneShotParams d = OneShotParams.defaults();
+        assertThrows(IllegalArgumentException.class, () -> new OneShotRecommender(
+            new OneShotParams(d.categoricalThreshold(), 99, d.seed(), d.booleanPairs())));
+        assertThrows(IllegalArgumentException.class, () -> new OneShotRecommender(
+            new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(),
+                List.of(new BooleanPair("Y", "y")))));
     }
 
     @Test
     void aClosedRecommenderRefusesWork() throws IOException {
         try (BufferAllocator allocator = new RootAllocator()) {
-            StreamingRecommender rec = new StreamingRecommender(StreamingParams.defaults());
+            OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults());
             rec.close();
             rec.close(); // idempotent
             try (ArrowReader input = toyData(allocator)) {
