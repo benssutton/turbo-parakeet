@@ -11,8 +11,8 @@
 // deletion, via the shared contingency builder) — a null row belongs to no
 // cluster, so it must not vote on partition agreement.
 
-use crate::contingency::{build_contingency, ContingencyTable};
-use crate::shared::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
+use crate::common::encode::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
+use crate::techniques::contingency::{build_contingency, ContingencyTable};
 use polars::prelude::*;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};

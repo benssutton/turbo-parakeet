@@ -1,5 +1,5 @@
-use crate::contingency::{build_contingency, ContingencyTable};
-use crate::shared::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
+use crate::common::encode::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
+use crate::techniques::contingency::{build_contingency, ContingencyTable};
 use polars::prelude::*;
 use rayon::prelude::*;
 use statrs::distribution::{ChiSquared, ContinuousCDF};

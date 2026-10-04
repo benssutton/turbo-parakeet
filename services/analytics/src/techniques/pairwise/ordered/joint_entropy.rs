@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use wide::f64x4;
 
-use crate::shared::*;
+use crate::common::encode::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Thread-local scratch buffers

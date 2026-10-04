@@ -14,8 +14,8 @@ use std::sync::Mutex;
 use arrow_array::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::{RecordBatch, RecordBatchIterator};
 
-use crate::api::{self, Error};
-use crate::arrow_io::{read_stream, CheckedReader};
+use crate::bindings::api::{self, Error};
+use crate::common::arrow_io::{read_stream, CheckedReader};
 
 const OK: c_int = 0;
 const INVALID_INPUT: c_int = 1;
@@ -356,7 +356,7 @@ mod tests {
     }
 
     fn released(s: &mut FFI_ArrowArrayStream) -> bool {
-        let raw = (s as *mut FFI_ArrowArrayStream).cast::<crate::arrow_io::RawStream>();
+        let raw = (s as *mut FFI_ArrowArrayStream).cast::<crate::common::arrow_io::RawStream>();
         unsafe { (*raw).release }.is_none()
     }
 
@@ -683,7 +683,7 @@ mod tests {
         assert_eq!(
             unsafe {
                 report(
-                    Err(crate::api::Error::Compute("boom".into())),
+                    Err(crate::bindings::api::Error::Compute("boom".into())),
                     ptr::null_mut(),
                 )
             },

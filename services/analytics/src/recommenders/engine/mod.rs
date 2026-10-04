@@ -22,13 +22,13 @@
 // ("007.50") is unlikely to be an identifier, so only numeric equivalence
 // matters for it; differing leading or trailing zeros set rec_lossy_formatting.
 
-use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
-use crate::conclusions::Conclusions;
-use crate::describe::{
+use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
+use crate::techniques::cardinality_estimators::{pick_estimate, Count, Estimate};
+use crate::techniques::describe::conclusions::Conclusions;
+use crate::techniques::describe::{
     describe_one, parse_decimal, parse_iso, value_fields, Described, IsoValue, Profile, Row,
     StringStats,
 };
-use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
 use arrow_array::builder::make_view;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int16Type};
@@ -2705,7 +2705,7 @@ impl Prepared {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sizes::ipc_body_bytes;
+    use crate::common::ipc_sizes::ipc_body_bytes;
     use arrow_array::{
         builder::StringDictionaryBuilder, types::UInt8Type, DictionaryArray, StringArray,
     };
@@ -2937,12 +2937,12 @@ mod tests {
         assert_eq!(offset_tz(-210), "-03:30");
     }
 
-    use crate::arrow_io::export_series;
+    use crate::common::arrow_io::export_series;
 
     /// Describe with the streaming proof statistics on: these tests also build statistics
     /// Levels from the profile (`prove` / `lossy_by_stats` read them).
     pub(super) fn describe_one(s: &Series, seed: u64) -> PolarsResult<Described> {
-        crate::describe::describe_one(s, seed, true)
+        crate::techniques::describe::describe_one(s, seed, true)
     }
     use polars::prelude::{
         CompatLevel, DataType as PT, IntoSeries, NamedFrom, NewChunkedArray, Series,
@@ -3311,7 +3311,7 @@ mod tests {
                 est_cardinality: 1.0,
                 est_low: Some(1.0),
                 est_high: Some(1.0),
-                method: crate::cardinality_estimators::Method::Chao1,
+                method: crate::techniques::cardinality_estimators::Method::Chao1,
             },
             "",
         )
@@ -3531,7 +3531,7 @@ mod tests {
         assert!(verify(&target, &lvl, &recast).is_err());
     }
 
-    use crate::sizes::sizes;
+    use crate::common::ipc_sizes::sizes;
 
     fn rec(s: Series) -> Rec {
         let d = describe_one(&s, 0).unwrap();

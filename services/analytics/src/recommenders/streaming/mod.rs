@@ -4,6 +4,9 @@
 //! (reservoir.rs) are kept; `result` recommends from them at any point. Its output
 //! shares Describe's value columns and conclusions (parity spec
 //! docs/superpowers/specs/2026-10-01-recommender-parity-design.md, §7).
+pub(crate) mod distinct_sample;
+pub(crate) mod partial;
+pub(crate) mod reservoir;
 
 use std::collections::{HashMap, HashSet};
 
@@ -12,19 +15,19 @@ use arrow_schema::{DataType as AT, Field};
 use polars::prelude::{polars_err, AnyValue, DataType as PT, PolarsResult, Series};
 use rayon::prelude::*;
 
-use crate::api::{Error, Result};
-use crate::arrow_io::{export_struct, import_array, import_batch};
-use crate::cardinality_estimators::Estimate;
-use crate::conclusions::conclude;
-use crate::describe::{assemble, flatten, value_fields, Profile, Row};
-use crate::partial::{has_int_range, BatchStats, LevelStats, ViewSim};
-use crate::recommend::{
+use crate::bindings::api::{Error, Result};
+use crate::common::arrow_io::{export_struct, import_array, import_batch};
+use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, sizes_of};
+use crate::recommenders::engine::{
     body_size, cast_to, enum_categories, list_parts, pa_name, pad, pick_by_stats,
     pick_list_by_stats, pl_name, polars_layout, rec_row, recommender_fields, to_polars_layout,
     validity, verify, wrap, Level, Params, Pick, Rec, Shape, Target,
 };
-use crate::reservoir::{Block, Reservoir};
-use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of};
+use crate::recommenders::streaming::partial::{has_int_range, BatchStats, LevelStats, ViewSim};
+use crate::recommenders::streaming::reservoir::{Block, Reservoir};
+use crate::techniques::cardinality_estimators::Estimate;
+use crate::techniques::describe::conclusions::conclude;
+use crate::techniques::describe::{assemble, flatten, value_fields, Profile, Row};
 
 /// One column's state.
 pub(crate) struct Column {
@@ -804,8 +807,8 @@ pub(crate) mod tests {
     use arrow_schema::DataType as AT;
     use arrow_select::concat::concat;
 
-    use crate::arrow_io::export_series;
-    use crate::recommend::arrow_cast;
+    use crate::common::arrow_io::export_series;
+    use crate::recommenders::engine::arrow_cast;
     use polars::prelude::{CompatLevel, IntoSeries, NamedFrom};
 
     use super::*;
@@ -954,7 +957,7 @@ pub(crate) mod tests {
     }
 
     fn one_shot(b: &RecordBatch) -> RecordBatch {
-        let mut r = crate::oneshot::OneShot::new(params());
+        let mut r = crate::recommenders::oneshot::OneShot::new(params());
         r.add(b).unwrap();
         r.result().unwrap()
     }
@@ -1125,7 +1128,7 @@ pub(crate) mod tests {
             .iter()
             .map(|f| f.name().clone())
             .collect();
-        let want: Vec<String> = crate::recommend::recommender_fields(true)
+        let want: Vec<String> = crate::recommenders::engine::recommender_fields(true)
             .into_iter()
             .map(|(n, _)| n)
             .collect();

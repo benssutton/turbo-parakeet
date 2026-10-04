@@ -1,3 +1,5 @@
+pub(crate) mod conclusions;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // describe — per-column profile (entry points `describe_columns`, `column_sizes`)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10,10 +12,10 @@
 // min / max. Field names match analytics/describe/base.py (DescribeRust maps them
 // by name).
 
-use crate::conclusions::{conclude, Conclusions};
-use crate::hll::{hash_key, Hll};
-use crate::recommend::canon;
-use crate::shared::{encode_series, EncodedColumn};
+use crate::common::encode::{encode_series, EncodedColumn};
+use crate::recommenders::engine::canon;
+use crate::techniques::describe::conclusions::{conclude, Conclusions};
+use crate::techniques::hll::{hash_key, Hll};
 use foldhash::fast::FixedState;
 use polars::prelude::*;
 use polars_arrow::array::Array;
@@ -1170,7 +1172,7 @@ pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profil
         range,
         floats: float_stats(s)?,
         strings: strings(s, proof)?,
-        gcd: crate::gcd::series_gcd(s)?,
+        gcd: crate::techniques::gcd::series_gcd(s)?,
         sum_len: lengths.map(|l| l.iter().sum()),
         is_f32: s.dtype() == &DataType::Float32,
         min,
@@ -1182,8 +1184,8 @@ pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profil
 /// Row `i` rendered as arrow-rs text (spec 2026-10-01 §13.1).
 fn render_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<String>> {
     let Some(i) = i else { return Ok(None) };
-    let one = crate::sizes::classic_layout(&s.slice(i as i64, 1))?;
-    Ok(crate::recommend::render_value(one.as_ref()))
+    let one = crate::common::ipc_sizes::classic_layout(&s.slice(i as i64, 1))?;
+    Ok(crate::recommenders::engine::render_value(one.as_ref()))
 }
 
 /// The values at rows `lo` / `hi` as f64, for integer, decimal and float dtypes.

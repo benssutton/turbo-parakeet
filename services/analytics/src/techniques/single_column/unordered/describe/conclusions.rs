@@ -4,8 +4,8 @@
 
 use polars::prelude::DataType as PT;
 
-use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
-use crate::describe::{FloatStats, Profile, StringStats};
+use crate::techniques::cardinality_estimators::{pick_estimate, Count, Estimate};
+use crate::techniques::describe::{FloatStats, Profile, StringStats};
 
 /// (min, max) when every non-null value is a whole number: integers, Decimal with
 /// scale 0, floats with no fraction / NaN / infinity, and strings that are all integers
@@ -245,7 +245,7 @@ mod tests {
     fn conclude_on_a_profile() {
         use polars::prelude::*;
         let s = Series::new("x".into(), &[0i64, 4, 1, 2, 3]);
-        let p = crate::describe::profile(&s, 0, false).unwrap();
+        let p = crate::techniques::describe::profile(&s, 0, false).unwrap();
         let c = conclude(s.dtype(), 5, 0, &p, 10_000);
         assert_eq!(
             (c.class, c.unique, c.est.method.name()),

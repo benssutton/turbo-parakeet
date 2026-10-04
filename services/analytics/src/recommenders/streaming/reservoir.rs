@@ -7,7 +7,7 @@
 use arrow_array::ArrayRef;
 use arrow_schema::FieldRef;
 
-use crate::partial::copy_rows;
+use crate::recommenders::streaming::partial::copy_rows;
 
 /// Algorithm L's state, `Copy` so that `feed` can plan on a copy and commit only
 /// once every copy of the batch's rows has succeeded.

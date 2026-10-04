@@ -16,11 +16,11 @@ use std::fmt;
 use arrow_array::RecordBatch;
 use polars::prelude::{IntoSeries, PolarsError, PolarsResult, Series, StructChunked};
 
-use crate::arrow_io::{export_struct, import_batch};
-use crate::bloomfilter::{BloomFilterKwargs, MembershipKwargs};
-use crate::minhash::{LSHKwargs, MinHashKwargs};
-use crate::recommend::Params;
-use crate::shared::{PairwiseKwargs, ThreewayKwargs};
+use crate::common::arrow_io::{export_struct, import_batch};
+use crate::common::encode::{PairwiseKwargs, ThreewayKwargs};
+use crate::recommenders::engine::Params;
+use crate::techniques::bloomfilter::{BloomFilterKwargs, MembershipKwargs};
+use crate::techniques::minhash::{LSHKwargs, MinHashKwargs};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -100,12 +100,14 @@ fn pairwise(batch: &RecordBatch, pairs: Option<&[(String, String)]>) -> Result<P
 
 /// `column`, `dtype`, `gcd: decimal128(38, 0)` per column.
 pub fn column_gcd(batch: &RecordBatch) -> Result<RecordBatch> {
-    table(crate::gcd::column_gcd_impl(&columns(batch)?))
+    table(crate::techniques::gcd::column_gcd_impl(&columns(batch)?))
 }
 
 /// `col_name`, `entropy` per column.
 pub fn marginal_entropy(batch: &RecordBatch) -> Result<RecordBatch> {
-    table(crate::entropy::marginal_entropy_impl(&columns(batch)?))
+    table(crate::techniques::joint_entropy::marginal_entropy_impl(
+        &columns(batch)?,
+    ))
 }
 
 /// `col_a`, `col_b`, `entropy` per pair; every pair when `pairs` is None.
@@ -114,10 +116,7 @@ pub fn pairwise_joint_entropy(
     pairs: Option<&[(String, String)]>,
 ) -> Result<RecordBatch> {
     let kwargs = pairwise(batch, pairs)?;
-    table(crate::entropy::pairwise_joint_entropy_impl(
-        &columns(batch)?,
-        kwargs,
-    ))
+    table(crate::techniques::joint_entropy::pairwise_joint_entropy_impl(&columns(batch)?, kwargs))
 }
 
 /// `col_a`, `col_b`, `col_c`, `entropy` per triplet; every triplet when None.
@@ -135,10 +134,7 @@ pub fn threeway_joint_entropy(
                 .collect()
         }),
     };
-    table(crate::entropy::threeway_joint_entropy_impl(
-        &columns(batch)?,
-        kwargs,
-    ))
+    table(crate::techniques::joint_entropy::threeway_joint_entropy_impl(&columns(batch)?, kwargs))
 }
 
 /// `col_a`, `col_b`, `chi2_stat`, `p_value`, `cramers_v`, `low_expected_count`, `n_valid`.
@@ -147,7 +143,7 @@ pub fn pairwise_chi_squared(
     pairs: Option<&[(String, String)]>,
 ) -> Result<RecordBatch> {
     let kwargs = pairwise(batch, pairs)?;
-    table(crate::chi_squared::pairwise_chi_squared_impl(
+    table(crate::techniques::chi_squared::pairwise_chi_squared_impl(
         &columns(batch)?,
         kwargs,
     ))
@@ -159,7 +155,7 @@ pub fn pairwise_adjusted_rand(
     pairs: Option<&[(String, String)]>,
 ) -> Result<RecordBatch> {
     let kwargs = pairwise(batch, pairs)?;
-    table(crate::ari::pairwise_adjusted_rand_impl(
+    table(crate::techniques::ari::pairwise_adjusted_rand_impl(
         &columns(batch)?,
         kwargs,
     ))
@@ -179,7 +175,7 @@ pub fn bloom_filter(batch: &RecordBatch, k: usize, m: usize) -> Result<Vec<u8>> 
             cols.len()
         )));
     };
-    crate::bloomfilter::bloom_filter_impl(
+    crate::techniques::bloomfilter::bloom_filter_impl(
         s,
         BloomFilterKwargs {
             bit_array_bytes: Vec::new(),
@@ -214,7 +210,7 @@ pub fn membership_ratio(
         k,
         m,
     };
-    table(crate::bloomfilter::membership_ratio_multi_impl(
+    table(crate::techniques::bloomfilter::membership_ratio_multi_impl(
         &columns(batch)?,
         &kwargs,
     ))
@@ -226,7 +222,7 @@ pub fn minhash(batch: &RecordBatch, df_name: &str, num_perm: usize) -> Result<Re
     let packed = StructChunked::from_series("frame".into(), batch.num_rows(), cols.iter())
         .map_err(compute)?
         .into_series();
-    table(crate::minhash::minhash_impl(
+    table(crate::techniques::minhash::minhash_impl(
         &[packed],
         &MinHashKwargs {
             df_name: df_name.to_owned(),
@@ -253,7 +249,7 @@ pub fn lsh_candidates(
             cols.len()
         )));
     }
-    table(crate::minhash::lsh_candidates_impl(
+    table(crate::techniques::minhash::lsh_candidates_impl(
         &cols,
         &LSHKwargs {
             num_bands,
@@ -269,7 +265,7 @@ pub fn describe_columns(
     seed: u64,
     categorical_threshold: u64,
 ) -> Result<RecordBatch> {
-    table(crate::describe::describe_columns_impl(
+    table(crate::techniques::describe::describe_columns_impl(
         &columns(batch)?,
         seed,
         categorical_threshold,
@@ -278,7 +274,7 @@ pub fn describe_columns(
 
 /// `column`, `size_bytes`, `size_zstd_bytes`, `size_polars_bytes`, `size_polars_zstd_bytes`.
 pub fn column_sizes(batch: &RecordBatch, zstd_level: i32) -> Result<RecordBatch> {
-    table(crate::sizes::column_sizes_impl(
+    table(crate::common::ipc_sizes::column_sizes_impl(
         &columns(batch)?,
         zstd_level,
     ))
@@ -293,7 +289,8 @@ pub fn render(batch: &RecordBatch) -> Result<RecordBatch> {
         .iter()
         .map(|c| {
             std::sync::Arc::new(arrow_array::StringArray::from_iter(
-                (0..c.len()).map(|i| crate::recommend::render_value(c.slice(i, 1).as_ref())),
+                (0..c.len())
+                    .map(|i| crate::recommenders::engine::render_value(c.slice(i, 1).as_ref())),
             )) as arrow_array::ArrayRef
         })
         .collect();
@@ -340,12 +337,12 @@ pub struct OneShotParams {
 
 /// Recommends dtypes for one frame from exact statistics, each candidate verified on
 /// every row; all state stays in Rust.
-pub struct OneShotRecommender(crate::oneshot::OneShot);
+pub struct OneShotRecommender(crate::recommenders::oneshot::OneShot);
 
 impl OneShotRecommender {
     pub fn new(p: OneShotParams) -> Result<Self> {
         validate_common(p.zstd_level, &p.boolean_pairs)?;
-        Ok(Self(crate::oneshot::OneShot::new(Params {
+        Ok(Self(crate::recommenders::oneshot::OneShot::new(Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
             categorical_threshold: p.categorical_threshold,
@@ -385,7 +382,7 @@ pub struct StreamingParams {
 }
 
 /// Recommends dtypes from record batches added over time; all state stays in Rust.
-pub struct StreamingRecommender(crate::streaming::Streaming);
+pub struct StreamingRecommender(crate::recommenders::streaming::Streaming);
 
 impl StreamingRecommender {
     pub fn new(p: StreamingParams) -> Result<Self> {
@@ -405,7 +402,7 @@ impl StreamingRecommender {
             categorical_threshold: p.categorical_threshold,
             boolean_pairs: p.boolean_pairs,
         };
-        Ok(Self(crate::streaming::Streaming::new(
+        Ok(Self(crate::recommenders::streaming::Streaming::new(
             params,
             p.reservoir_rows,
             p.block_rows,

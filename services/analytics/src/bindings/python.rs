@@ -13,10 +13,10 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule};
 
-use crate::api;
+use crate::bindings::api;
 // `RawStream` lets `reject_wide_integers` call `get_schema` before the stream is
 // imported (a stream may be asked for its schema repeatedly).
-use crate::arrow_io::{read_stream, CheckedReader, RawStream};
+use crate::common::arrow_io::{read_stream, CheckedReader, RawStream};
 
 fn value_error(e: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(e.to_string())

@@ -13,11 +13,11 @@ use arrow_schema::DataType as AT;
 use polars::prelude::{AnyValue, DataType as PT, PolarsResult};
 use rayon::prelude::*;
 
-use crate::api::{compute, Error, Result};
-use crate::arrow_io::{export_struct, import_batch};
-use crate::describe::{assemble, Row};
-use crate::recommend::{pa_name, prepare, recommender_fields, Params, Prepared};
-use crate::streaming::holds_nested_null;
+use crate::bindings::api::{compute, Error, Result};
+use crate::common::arrow_io::{export_struct, import_batch};
+use crate::recommenders::engine::{pa_name, prepare, recommender_fields, Params, Prepared};
+use crate::recommenders::streaming::holds_nested_null;
+use crate::techniques::describe::{assemble, Row};
 
 const ADDED: &str = "a frame has already been added: create a new OneShotRecommender";
 
@@ -179,7 +179,7 @@ mod tests {
     use arrow_schema::DataType as AT;
 
     use super::*;
-    use crate::streaming::tests::{batch, ints, params, strs, texts};
+    use crate::recommenders::streaming::tests::{batch, ints, params, strs, texts};
 
     fn toy() -> RecordBatch {
         let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![

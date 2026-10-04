@@ -16,7 +16,7 @@
 // sizes use CompatLevel::oldest() (LargeUtf8, LargeList); Polars sizes the plain
 // and ZSTD body of CompatLevel::newest() (view types).
 
-use crate::arrow_io::export_series;
+use crate::common::arrow_io::export_series;
 use arrow_array::Array;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, ToByteSlice};
 use arrow_data::ArrayData;
@@ -222,7 +222,7 @@ mod tests {
     use super::*;
 
     fn arrow(s: &Series) -> arrow_array::ArrayRef {
-        crate::arrow_io::export_series(s, CompatLevel::oldest()).unwrap()
+        crate::common::arrow_io::export_series(s, CompatLevel::oldest()).unwrap()
     }
 
     #[test]

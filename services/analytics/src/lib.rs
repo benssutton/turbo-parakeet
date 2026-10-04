@@ -1,31 +1,11 @@
-// Without the `python` feature only the C ABI (capi.rs) consumes api.rs, and it binds a
-// single entry point so far: the other kernels are unused until they are bound too.
+// Without the `python` feature only the C ABI (bindings/capi.rs) consumes the API, and it binds
+// the recommenders only: the other kernels are unused until they are bound too.
 #![cfg_attr(not(feature = "python"), allow(dead_code))]
 
-mod api;
-mod ari;
-mod arrow_io;
-mod bloomfilter;
-mod capi;
-mod cardinality_estimators;
-mod chi_squared;
-mod conclusions;
-mod contingency;
-mod describe;
-mod distinct_sample;
-mod entropy;
-mod gcd;
-mod hll;
-mod minhash;
-mod oneshot;
-mod partial;
-#[cfg(feature = "python")]
-mod python;
-mod recommend;
-mod reservoir;
-mod shared;
-mod sizes;
-mod streaming;
+mod bindings;
+mod common;
+mod recommenders;
+mod techniques;
 
 use mimalloc::MiMalloc;
 

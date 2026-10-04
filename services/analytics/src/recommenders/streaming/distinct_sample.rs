@@ -11,7 +11,7 @@ use std::collections::{BinaryHeap, HashMap};
 
 use foldhash::fast::FixedState;
 
-use crate::partial::{KeyStat, ViewSim};
+use crate::recommenders::streaming::partial::{KeyStat, ViewSim};
 
 /// Sample size for a `categorical_threshold`: at least 1000, so the estimators have
 /// data however low the threshold.
@@ -163,7 +163,7 @@ impl DistinctSample {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hll::hash_key;
+    use crate::techniques::hll::hash_key;
 
     fn ks(key: u64, count: u64, mask: u8, text: Option<&str>) -> KeyStat {
         KeyStat {

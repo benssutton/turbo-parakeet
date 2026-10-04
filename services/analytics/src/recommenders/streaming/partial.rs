@@ -10,18 +10,18 @@ use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::DataType as AT;
 use polars::prelude::*;
 
-use crate::arrow_io::export_series;
-use crate::describe::{
+use crate::common::arrow_io::export_series;
+use crate::common::encode::encode_series;
+use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes};
+use crate::recommenders::engine::{
+    body_size, is_text, render_value, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK,
+};
+use crate::recommenders::streaming::distinct_sample::{sample_size, DistinctSample};
+use crate::techniques::describe::{
     arg_extremes, byte_lengths, float_stats, frequency_map, frequency_map_below, lengths,
     n_midnight, strings, FloatStats, Frequencies, Profile, Range, StringStats,
 };
-use crate::distinct_sample::{sample_size, DistinctSample};
-use crate::hll::{hash_key, Hll};
-use crate::recommend::{
-    body_size, is_text, render_value, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK,
-};
-use crate::shared::encode_series;
-use crate::sizes::{classic_layout, ipc_body_bytes};
+use crate::techniques::hll::{hash_key, Hll};
 
 /// HyperLogLog precision: 2^14 registers, 16 KB, relative standard error ≈ 0.8%.
 const HLL_P: u8 = 14;
@@ -397,7 +397,7 @@ impl BatchStats {
             hi,
             min_len,
             max_len,
-            gcd: crate::gcd::series_gcd(s)?,
+            gcd: crate::techniques::gcd::series_gcd(s)?,
             sum_len: lens.as_ref().map(|l| l.iter().sum()),
             floats: float_stats(s)?,
             strings: strings(s, true)?,
@@ -603,8 +603,8 @@ impl LevelStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::describe::frequencies;
-    use crate::recommend::polars_views;
+    use crate::recommenders::engine::polars_views;
+    use crate::techniques::describe::frequencies;
 
     fn absorbed(parts: &[Series], threshold: u64) -> LevelStats {
         let mut st = LevelStats::default();
@@ -762,7 +762,7 @@ mod tests {
 
     #[test]
     fn sampled_counts_stay_within_the_proven_bounds() {
-        use crate::conclusions::conclude;
+        use crate::techniques::describe::conclusions::conclude;
         for seed in 0..6u64 {
             // 50K rows, every 10th null; the rest distinct (seed 0..2), or each value
             // twice (seed 3..5).
@@ -934,7 +934,7 @@ mod tests {
 
     #[test]
     fn copied_categoricals_import_under_the_original_field() {
-        use crate::arrow_io::import_array;
+        use crate::common::arrow_io::import_array;
         let cats = Categories::global();
         let s = Series::new(
             "c".into(),
