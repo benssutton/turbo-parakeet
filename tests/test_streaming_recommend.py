@@ -599,3 +599,8 @@ def test_an_unsupported_type_is_refused_even_with_no_rows():
         frames = data if isinstance(tech, StreamingRecommender) else {"t": data}
         with pytest.raises(ValueError, match="Decimal256"):
             tech.add(frames)
+
+
+def test_boolean_pairs_must_be_pairs():
+    with pytest.raises(ValueError, match="boolean_pairs"):
+        StreamingRecommender(boolean_pairs=(("y",),))
