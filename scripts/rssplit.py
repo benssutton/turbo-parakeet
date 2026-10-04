@@ -128,11 +128,11 @@ def segments(lines, starts, indent=0):
         idxs.append(_find(cs, (kind, name), after))
         after = idxs[-1] + 1
     header = "".join(
-        l
+        ln
         for a, b, key in cs[: idxs[0]]
         if key[0] == "use"
-        for l in lines[a:b]
-        if not l.startswith(("//!", "#!["))
+        for ln in lines[a:b]
+        if not ln.startswith(("//!", "#!["))
     )
     header = header.strip("\n") + "\n" if header.strip() else ""
     out: dict[str, list[str]] = {}
@@ -183,10 +183,10 @@ def split(spec: dict) -> dict[str, str]:
         body_lines = lines[tests[0] : tests[1]]
         first = next(
             i
-            for i, l in enumerate(body_lines)
-            if re.match(r"(pub(\([a-z]+\))? )?mod tests\b", l)
+            for i, ln in enumerate(body_lines)
+            if re.match(r"(pub(\([a-z]+\))? )?mod tests\b", ln)
         )
-        last = max(i for i, l in enumerate(body_lines) if l.rstrip() == "}")
+        last = max(i for i, ln in enumerate(body_lines) if ln.rstrip() == "}")
         by_dest, t_uses = segments(
             body_lines[first + 1 : last], spec["tests"], indent=4
         )
@@ -195,7 +195,7 @@ def split(spec: dict) -> dict[str, str]:
             if dest.endswith("tests.rs"):
                 text = (t_uses + "\n" + body).splitlines(keepends=True)
                 files[dest] = "".join(
-                    l[4:] if l.startswith("    ") else l for l in text
+                    ln[4:] if ln.startswith("    ") else ln for ln in text
                 )
             else:
                 files[dest] = (
@@ -210,10 +210,10 @@ def split(spec: dict) -> dict[str, str]:
         files[dest] = f"//! {doc}\n\n" + files[dest]
     if "mod_header" in spec:
         inner = []
-        for l in lines:  # the source's leading `//!` block stays with mod.rs
-            if not l.startswith(("//!", "#![")):
+        for ln in lines:  # the source's leading `//!` block stays with mod.rs
+            if not ln.startswith(("//!", "#![")):
                 break
-            inner.append(l)
+            inner.append(ln)
         mod = files.get("mod.rs")
         files["mod.rs"] = (
             "".join(inner)
