@@ -32,7 +32,7 @@ wide = "1.7"        # Portable SIMD operations
 mimalloc = "0.1.48"
 
 #Statistics
-statrs = "0.18"
+statrs = "0.19"
 
 #GCD (Stein's binary algorithm)
 gcd = "2.3"
