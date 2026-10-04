@@ -16,7 +16,7 @@ pub fn column_gcd(batch: &RecordBatch) -> Result<RecordBatch> {
 
 /// `col_name`, `entropy` per column.
 pub fn marginal_entropy(batch: &RecordBatch) -> Result<RecordBatch> {
-    table(crate::techniques::joint_entropy::marginal_entropy_impl(
+    table(crate::techniques::marginal_entropy::marginal_entropy_impl(
         &columns(batch)?,
     ))
 }
