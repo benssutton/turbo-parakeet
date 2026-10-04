@@ -22,7 +22,9 @@ class OneShotRecommender:
     ValueError. Int128 / UInt128, Object, Null and nested-Null columns are listed as
     ineligible. `result()` returns one row per column — the streaming recommender's
     columns without `first_row`, `n_sampled_rows` and `n_sampled_blocks` — and may be
-    called any number of times.
+    called any number of times. `dtype` names the Arrow type the recommender received,
+    so it can differ by input form (e.g. string_view from Polars, large_string from
+    pyarrow).
 
     `rec_arrow_type` is pyarrow's spelling, `rec_polars_type` Python's `str(dtype)` of
     the equivalent Polars type; sizes are Arrow IPC bodies (Polars: its native layout),

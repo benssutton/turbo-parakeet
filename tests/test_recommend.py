@@ -81,17 +81,21 @@ def test_result_is_repeatable():
 
 
 @pytest.mark.parametrize(
-    "convert",
+    "convert, string_dtype",
     [
-        lambda f: f.lazy(),
-        lambda f: f.to_arrow(),
-        lambda f: pa.RecordBatchReader.from_batches(
-            f.to_arrow().schema, f.to_arrow().to_batches(max_chunksize=2)
+        (lambda f: f, "string_view"),
+        (lambda f: f.lazy(), "string_view"),
+        (lambda f: f.to_arrow(), "large_string"),
+        (
+            lambda f: pa.RecordBatchReader.from_batches(
+                f.to_arrow().schema, f.to_arrow().to_batches(max_chunksize=2)
+            ),
+            "large_string",
         ),
     ],
-    ids=["lazy", "pyarrow_table", "record_batch_reader"],
+    ids=["polars", "lazy", "pyarrow_table", "record_batch_reader"],
 )
-def test_inputs(convert):
+def test_inputs(convert, string_dtype):
     frame = pl.DataFrame({"a": [0, 5, 7, 9], "s": ["x", "y", "x", None]})
     want = OneShotRecommender().add(frame).result()
     out = OneShotRecommender().add(convert(frame)).result()
@@ -99,6 +103,19 @@ def test_inputs(convert):
     # `dtype` names the Arrow type received: py-polars exports String as string_view.
     assert out.drop("dtype").equals(want.drop("dtype"))
     assert out["dtype"][0] == "int64"
+    assert out["dtype"][1] == string_dtype
+
+
+def test_zero_row_frame():
+    frame = describe_mixed(50)
+    want = OneShotRecommender().add(frame).result()
+    out = OneShotRecommender().add(frame.clear()).result()
+    assert out.schema == want.schema
+    assert out.height == frame.width
+    assert out["n_rows"].to_list() == [0] * frame.width
+    # No column is ineligible for being empty: every one is computed and recommended.
+    assert out["status"].to_list() == ["computed"] * frame.width
+    assert out["rec_arrow_type"].null_count() == 0
 
 
 def test_lazy_input_with_an_ineligible_column():

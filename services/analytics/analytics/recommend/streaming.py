@@ -27,7 +27,9 @@ class StreamingRecommender:
     appear, disappear (their rows count as null) or start as the Null type. Int128 /
     UInt128, Object and nested-Null (List(Null), a Struct with a Null field, ...)
     columns are listed as ineligible. `result()` returns one row
-    per column and keeps the state, so adding can continue.
+    per column and keeps the state, so adding can continue. `dtype` names the Arrow type
+    the recommender received, so it can differ by input form (e.g. string_view from
+    Polars, large_string from pyarrow).
 
     Memory per eligible level (a column, or a list's inner values), every dtype:
     ≈ 16 KB of HyperLogLog plus a distinct sample of up to ≈ 50 bytes × k, where
