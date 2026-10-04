@@ -72,6 +72,10 @@ def lint() -> None:
     _run([PY, "-m", "ruff", "check", "."])
 
 
+def layering() -> None:
+    _run([PY, "scripts/check_layering.py"])
+
+
 def build() -> None:
     _run([PY, "-m", "maturin", "develop", "--release"], CRATE)
 
@@ -253,6 +257,7 @@ STEPS = {
     "fmt": fmt,  # rewrites files
     "fmt-check": fmt_check,
     "lint": lint,
+    "layering": layering,
     "build": build,
     "test-rust": test_rust,
     "test-py": test_py,
@@ -263,9 +268,17 @@ STEPS = {
     "sonar": sonar,  # needs the local SonarQube running
 }
 GROUPS = {
-    "fast": ["fmt-check", "lint"],
-    "check": ["fmt-check", "lint", "build", "test-rust", "test-py"],
-    "ci": ["fmt-check", "lint", "build", "test-rust", "test-py", "test-java"],
+    "fast": ["fmt-check", "lint", "layering"],
+    "check": ["fmt-check", "lint", "layering", "build", "test-rust", "test-py"],
+    "ci": [
+        "fmt-check",
+        "lint",
+        "layering",
+        "build",
+        "test-rust",
+        "test-py",
+        "test-java",
+    ],
 }
 
 
