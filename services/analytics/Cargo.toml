@@ -16,7 +16,7 @@ python = ["dep:pyo3"]
 
 [dependencies]
 #Polars (kernels) and pyo3 (python.rs)
-polars = { version = "0.51.0", features = ["lazy", "performant", "dtype-decimal", "dtype-struct", "dtype-array", "dtype-categorical", "timezones"] }
+polars = { version = "0.53.0", features = ["lazy", "performant", "dtype-decimal", "dtype-struct", "dtype-array", "dtype-categorical", "timezones"] }
 polars-arrow = { version = "0.51.0", default-features = false }
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py39"], optional = true }
 
