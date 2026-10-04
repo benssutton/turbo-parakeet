@@ -6,6 +6,12 @@ version: 2
 updates:
   - package-ecosystem: cargo
     directory: /services/analytics
+    ignore:
+      # Rust polars and polars-arrow move together (and with the Python polars the extension
+      # exchanges Arrow data with); 0.51 -> 0.53 breaks the build (polars-arrow types, the
+      # Decimal dtype). Migrate deliberately, not by PR.
+      - dependency-name: "polars"
+      - dependency-name: "polars-arrow"
     schedule:
       interval: weekly
       day: monday
