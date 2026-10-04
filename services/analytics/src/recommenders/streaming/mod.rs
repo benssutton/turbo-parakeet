@@ -15,8 +15,8 @@ use arrow_schema::{DataType as AT, Field};
 use polars::prelude::{polars_err, AnyValue, DataType as PT, PolarsResult, Series};
 use rayon::prelude::*;
 
-use crate::bindings::api::{Error, Result};
 use crate::common::arrow_io::{export_struct, import_array, import_batch};
+use crate::common::error::{Error, Result};
 use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, sizes_of};
 use crate::recommenders::engine::{
     body_size, cast_to, enum_categories, list_parts, pa_name, pad, pick_by_stats,

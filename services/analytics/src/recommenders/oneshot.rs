@@ -13,8 +13,8 @@ use arrow_schema::DataType as AT;
 use polars::prelude::{AnyValue, DataType as PT, PolarsResult};
 use rayon::prelude::*;
 
-use crate::bindings::api::{compute, Error, Result};
 use crate::common::arrow_io::{export_struct, import_batch};
+use crate::common::error::{compute, Error, Result};
 use crate::recommenders::engine::{pa_name, prepare, Params, Prepared};
 use crate::recommenders::schema::recommender_fields;
 use crate::recommenders::streaming::holds_nested_null;
