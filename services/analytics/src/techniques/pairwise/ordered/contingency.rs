@@ -17,7 +17,7 @@ use foldhash::fast::RandomState as FoldHashFast;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::common::encode::DenseColumn;
+use crate::common::DenseColumn;
 
 pub(crate) struct ContingencyTable {
     /// Observed non-zero cells: (a_id, b_id, count).
@@ -160,7 +160,7 @@ pub(crate) fn build_contingency(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::encode::{densify, encode_series};
+    use crate::common::{densify, encode_series};
     use polars::prelude::*;
     use std::collections::HashMap as StdHashMap;
 

@@ -11,7 +11,7 @@ use arrow_schema::DataType as AT;
 use polars::prelude::*;
 
 use crate::common::arrow_io::export_series;
-use crate::common::encode::encode_series;
+use crate::common::encode_series;
 use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes};
 use crate::common::text::render_value;
 use crate::recommenders::engine::{

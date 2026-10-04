@@ -1,4 +1,4 @@
-use crate::common::encode::{build_column_cache_par, encode_series, EncodedColumn};
+use crate::common::{build_column_cache_par, encode_series, EncodedColumn};
 use polars::prelude::*;
 use rayon::prelude::*;
 use std::collections::HashSet;

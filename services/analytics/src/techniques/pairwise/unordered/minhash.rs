@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 
-use crate::common::encode::encode_series;
+use crate::common::encode_series;
 
 /// Parameters for LSH candidate finding
 #[derive(Debug)]

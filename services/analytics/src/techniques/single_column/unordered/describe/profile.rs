@@ -1,7 +1,7 @@
 //! Column profile assembly: `Profile`, `Described`, `describe_one`, `assemble`.
 
 use super::*;
-use crate::common::encode::encode_series;
+use crate::common::encode_series;
 use crate::techniques::describe::conclusions::{conclude, Conclusions};
 use polars::prelude::*;
 use polars_arrow::array::Array;

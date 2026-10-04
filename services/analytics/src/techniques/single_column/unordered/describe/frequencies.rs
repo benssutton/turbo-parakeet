@@ -1,6 +1,6 @@
 //! Value frequencies: counts, the frequency map, capture histories (describe group A).
 
-use crate::common::encode::EncodedColumn;
+use crate::common::EncodedColumn;
 use crate::techniques::hll::{hash_key, Hll};
 use foldhash::fast::FixedState;
 use rayon::prelude::*;
@@ -187,7 +187,7 @@ pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::encode::encode_series;
+    use crate::common::encode_series;
     use polars::prelude::*;
 
     fn freq(s: Series) -> Frequencies {

@@ -26,7 +26,7 @@ use arrow_array::RecordBatch;
 use polars::prelude::{PolarsResult, Series};
 
 use crate::common::arrow_io::{export_struct, import_batch};
-use crate::common::encode::PairwiseKwargs;
+use crate::common::PairwiseKwargs;
 
 /// `batch`'s columns as Series. `batch` must be valid Arrow (see the module docs).
 fn columns(batch: &RecordBatch) -> Result<Vec<Series>> {

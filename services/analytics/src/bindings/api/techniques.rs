@@ -5,7 +5,7 @@ use super::*;
 use arrow_array::RecordBatch;
 use polars::prelude::{IntoSeries, StructChunked};
 
-use crate::common::encode::ThreewayKwargs;
+use crate::common::ThreewayKwargs;
 use crate::techniques::bloomfilter::{BloomFilterKwargs, MembershipKwargs};
 use crate::techniques::minhash::{LSHKwargs, MinHashKwargs};
 

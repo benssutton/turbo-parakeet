@@ -533,7 +533,7 @@ impl StringStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::encode::encode_series;
+    use crate::common::encode_series;
     use crate::techniques::describe::{byte_lengths, frequencies};
     use polars::prelude::*;
 

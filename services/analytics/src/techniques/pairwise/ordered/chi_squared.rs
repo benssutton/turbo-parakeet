@@ -1,4 +1,4 @@
-use crate::common::encode::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
+use crate::common::{build_dense_cache_par, resolve_pairs, PairwiseKwargs};
 use crate::techniques::contingency::{build_contingency, ContingencyTable};
 use polars::prelude::*;
 use rayon::prelude::*;
