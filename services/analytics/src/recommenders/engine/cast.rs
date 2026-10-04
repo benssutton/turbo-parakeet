@@ -72,7 +72,7 @@ pub(crate) fn parsed<T>(
         .collect()
 }
 
-/// A string column recast to `t`, built from describe.rs's exact parsers.
+/// A string column recast to `t`, built from describe/scanners.rs's exact parsers.
 pub(crate) fn from_text(t: &Target, text: &LargeStringArray) -> Result<ArrayRef, String> {
     match t {
         Target::Boolean | Target::BoolPair(..) => {

@@ -39,7 +39,7 @@ pub(crate) fn enum_categories(dtype: &PT) -> Option<Vec<String>> {
 }
 
 /// The recommendation for one column.
-/// `values` is `s` in the classic layout (sizes.rs's `classic_layout`); `(oc, ic)` is
+/// `values` is `s` in the classic layout (common/ipc_sizes.rs's `classic_layout`); `(oc, ic)` is
 /// `d.conclusions(params.categorical_threshold)`.
 pub(crate) fn recommend(
     s: &Series,

@@ -1,7 +1,7 @@
 //! Streaming recommender (spec
 //! docs/superpowers/specs/2026-09-29-streaming-recommender-design.md): record batches
-//! are added over time; per-column statistics (partial.rs) and a block reservoir
-//! (reservoir.rs) are kept; `result` recommends from them at any point. Its output
+//! are added over time; per-column statistics (streaming/partial.rs) and a block reservoir
+//! (streaming/reservoir.rs) are kept; `result` recommends from them at any point. Its output
 //! shares Describe's value columns and conclusions (parity spec
 //! docs/superpowers/specs/2026-10-01-recommender-parity-design.md, §7).
 

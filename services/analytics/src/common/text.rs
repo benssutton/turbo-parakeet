@@ -10,7 +10,7 @@ use arrow_schema::DataType as AT;
 /// canonical forms regardless of formatting ("1.50" ≡ "1.5", "0.00120" ≡ "1.2e-3").
 /// The digits borrow the input (`head` then `tail`, the dot skipped): no allocation.
 ///
-/// Precondition: `s` is a numeric literal already validated by describe.rs's
+/// Precondition: `s` is a numeric literal already validated by describe/scanners.rs's
 /// `scan_numeric` (or produced by Rust's own float formatter, e.g. ryu) — an
 /// optional leading `-`, ASCII digits, at most one `.`, and an optional
 /// `e`/`E`-led exponent. `canon` does not re-validate this; a non-conforming

@@ -10,12 +10,12 @@ crate-type = ["cdylib"] # dynamic system library with a C-compatible Foreign Fun
 
 [features]
 default = ["python"]
-# The pyo3 binding (python.rs). Off for the C ABI build used by Java:
+# The pyo3 binding (bindings/python.rs). Off for the C ABI build used by Java:
 # cargo build --release --no-default-features --target-dir target/capi
 python = ["dep:pyo3"]
 
 [dependencies]
-#Polars (kernels) and pyo3 (python.rs)
+#Polars (kernels) and pyo3 (bindings/python.rs)
 polars = { version = "0.51.0", features = ["lazy", "performant", "dtype-decimal", "dtype-struct", "dtype-array", "dtype-categorical", "timezones"] }
 polars-arrow = { version = "0.51.0", default-features = false }
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py39"], optional = true }

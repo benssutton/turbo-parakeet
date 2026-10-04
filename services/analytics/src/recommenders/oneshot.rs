@@ -1,9 +1,9 @@
 //! One-shot recommender (spec
 //! docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md): one frame. `add`
-//! collects each column's exact statistics and sizes (recommend.rs `prepare`); `result`
+//! collects each column's exact statistics and sizes (recommenders/engine `prepare`); `result`
 //! recommends from them — every candidate cast, verified on the actual rows and
 //! measured — once, and caches the table. Same output as the streaming recommender,
-//! without its `first_row` and sample columns (recommend.rs `recommender_fields`).
+//! without its `first_row` and sample columns (recommenders/schema.rs `recommender_fields`).
 
 use std::collections::HashSet;
 use std::sync::OnceLock;

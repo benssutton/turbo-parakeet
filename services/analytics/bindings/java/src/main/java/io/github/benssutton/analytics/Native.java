@@ -13,7 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * The analytics native library (services/analytics/src/capi.rs), shared by the bindings: the
+ * The analytics native library (services/analytics/src/bindings/capi.rs), shared by the bindings: the
  * library lookup, downcall handles, and the C ABI's error convention (0 ok, 1 invalid input,
  * 2 compute failure, with a message the caller frees).
  */

@@ -1,12 +1,12 @@
 //! The language-neutral core: every entry point takes an Arrow RecordBatch plus
 //! plain parameters and returns an Arrow RecordBatch (Bloom: bytes). No pyo3 and no
-//! Polars type appears in any signature — bindings (python.rs; later Java / C) wrap
+//! Polars type appears in any signature — bindings (bindings/python.rs; later Java / C) wrap
 //! exactly this module. Kernels compute on Polars Series behind arrow_io.
 //!
 //! Input batches must be valid Arrow: the entry points do not re-check them (an O(n)
 //! pass over every value). A RecordBatch built with arrow-rs's safe constructors is
 //! valid by construction; one imported through the C Data Interface is not, so callers
-//! import with `arrow_io::read_stream` / `CheckedReader` (python.rs and capi.rs do), or
+//! import with `arrow_io::read_stream` / `CheckedReader` (bindings/python.rs and bindings/capi.rs do), or
 //! check with `arrow_io::validate_batch`, before calling in — arrow-rs and Polars may
 //! panic or read out of bounds on a malformed batch.
 
@@ -15,7 +15,7 @@ mod techniques;
 
 pub use crate::common::error::{Error, Result};
 pub use recommenders::*;
-#[allow(unused_imports)] // used by python.rs only
+#[allow(unused_imports)] // used by bindings/python.rs only
 pub use techniques::*;
 
 use crate::common::error::compute;

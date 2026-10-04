@@ -34,7 +34,7 @@ def holds_wide_integer(dtype: pl.DataType) -> bool:
     return False
 
 
-# Dtypes the Rust encoder (src/shared.rs::encode_series) accepts. Anything else
+# Dtypes the Rust encoder (src/common/encode.rs::encode_series) accepts. Anything else
 # (Struct, Binary, Null, Object, 128-bit integers) makes the extension raise.
 ENCODABLE = (
     *INTEGERS_64,

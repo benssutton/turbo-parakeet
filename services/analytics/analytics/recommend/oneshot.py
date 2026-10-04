@@ -1,7 +1,7 @@
 """OneShotRecommender: the narrowest value-preserving Arrow type per column of one frame.
 
 Spec: docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md. All state lives
-in Rust (src/oneshot.rs): `add` collects each column's exact statistics and sizes;
+in Rust (src/recommenders/oneshot.rs): `add` collects each column's exact statistics and sizes;
 `result` casts every candidate type, verifies it row by row and measures it (Arrow and
 Polars layouts, plain and ZSTD) — once; later calls return the same table.
 """

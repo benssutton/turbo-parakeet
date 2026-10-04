@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// sizes — Arrow IPC body sizes (Describe group E; recast sizes for recommend.rs)
+// sizes — Arrow IPC body sizes (Describe group E; recast sizes for recommenders/engine/)
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Mirrors pyarrow's IPC writer (checked against pyarrow 24; the Python oracle is

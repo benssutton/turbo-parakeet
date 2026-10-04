@@ -1,4 +1,4 @@
-//! Arrow ↔ Polars for the core (api.rs). Both directions are zero-copy through the
+//! Arrow ↔ Polars for the core (bindings/api/). Both directions are zero-copy through the
 //! Arrow C Data Interface: arrow-rs and polars-arrow bind the same C ABI structs.
 
 use std::ffi::{c_char, c_int, c_void, CStr};

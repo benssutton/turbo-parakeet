@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <!-- Java binding over the analytics C ABI (services/analytics/src/capi.rs).
+  <!-- Java binding over the analytics C ABI (services/analytics/src/bindings/capi.rs).
        Build the native library first, from services/analytics:
        cargo build -\-profile ci -\-no-default-features -\-target-dir target/capi
        (or `python scripts/check.py test-java`, which also passes the library directory) -->

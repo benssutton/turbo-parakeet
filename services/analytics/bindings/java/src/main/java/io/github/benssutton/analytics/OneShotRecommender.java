@@ -11,7 +11,7 @@ import java.lang.invoke.MethodHandle;
 
 /**
  * The narrowest value-preserving Arrow type per column of one frame, from exact statistics,
- * each candidate cast, verified on every row and measured (services/analytics/src/oneshot.rs,
+ * each candidate cast, verified on every row and measured (services/analytics/src/recommenders/oneshot.rs,
  * through the C ABI's {@code analytics_oneshot_recommender_*}). Spec:
  * docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md.
  *

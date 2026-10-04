@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Ports of analytics/describe/estimators.py (the Python reference that feeds
-// Describe's conclusions); recommend.rs uses them to size dictionaries. Picked by
+// Describe's conclusions); recommenders/engine uses them to size dictionaries. Picked by
 // rule, never averaged. 95% closed-form intervals (z = 1.96).
 
 pub(crate) const Z: f64 = 1.96;

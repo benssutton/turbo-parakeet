@@ -1,4 +1,4 @@
-//! C ABI over api.rs, for Java (Panama FFM) and any other language that can call C.
+//! C ABI over bindings/api/, for Java (Panama FFM) and any other language that can call C.
 //! Tables cross as Arrow C Streams; parameters as plain C values. Every entry point
 //! returns 0 on success, 1 on invalid input or 2 on a compute failure (mirroring
 //! `api::Error`); on failure `*error` holds a message the caller frees with

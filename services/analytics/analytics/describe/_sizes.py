@@ -4,7 +4,7 @@ A column's size is the body length of the IPC messages that carry it (dictionary
 batches + record batch). pyarrow pads every buffer to 8 bytes, writes a validity
 buffer only when the array has nulls, and gives an empty buffer no space. With
 ZSTD, each non-empty buffer is an 8-byte uncompressed-length prefix plus one ZSTD
-frame — pyarrow never falls back to raw bytes. src/sizes.rs mirrors this.
+frame — pyarrow never falls back to raw bytes. src/common/ipc_sizes.rs mirrors this.
 
 Arrow sizes use the classic layout (CompatLevel.oldest(): LargeUtf8, LargeList);
 Polars sizes are the IPC body of its native layout, plain and ZSTD

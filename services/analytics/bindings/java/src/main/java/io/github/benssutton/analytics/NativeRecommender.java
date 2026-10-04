@@ -18,7 +18,7 @@ import org.apache.arrow.vector.ipc.ArrowReader;
 
 /**
  * A recommender whose state lives in Rust behind an opaque handle of the C ABI
- * ({@code <prefix>_new / _add / _result / _free}, services/analytics/src/capi.rs): the
+ * ({@code <prefix>_new / _add / _result / _free}, services/analytics/src/bindings/capi.rs): the
  * lifecycle {@link OneShotRecommender} and {@link StreamingRecommender} share.
  *
  * <p>Thread safety: {@code add} and {@code result} may be called from several threads (the

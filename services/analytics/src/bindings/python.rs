@@ -1,4 +1,4 @@
-//! Python binding over api.rs. Tables arrive as any object implementing the Arrow
+//! Python binding over bindings/api/. Tables arrive as any object implementing the Arrow
 //! PyCapsule interface (`__arrow_c_stream__`: Polars and pyarrow frames and readers)
 //! and leave as `ArrowTable`, which implements it too. Errors: invalid input →
 //! ValueError, kernel failure → RuntimeError.

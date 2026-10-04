@@ -1,7 +1,7 @@
 """StreamingRecommender: Recommend's dtype recommendations from batches added over time.
 
 Spec: docs/superpowers/specs/2026-09-29-streaming-recommender-design.md. All state lives
-in Rust (src/streaming.rs): exact running statistics prove each recommendation on every
+in Rust (src/recommenders/streaming/): exact running statistics prove each recommendation on every
 row; a sample of contiguous row blocks (`reservoir_rows`, in blocks of `block_rows`)
 gives ZSTD sizes — those of an IPC file written in `block_rows` batches — and a
 cross-check. Not a technique on the uniform contract: add batches, result at any time.

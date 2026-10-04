@@ -149,7 +149,7 @@ pub(crate) struct Profile {
     pub range: Range,
     pub floats: Option<FloatStats>,
     pub strings: Option<StringStats>,
-    /// GCD of the physical values (gcd.rs); None for non-integer dtypes.
+    /// GCD of the physical values (unordered/gcd.rs); None for non-integer dtypes.
     pub gcd: Option<i128>,
     /// Total byte length of the non-null values (String, Categorical, Enum or Binary columns).
     pub sum_len: Option<u64>,
@@ -298,7 +298,7 @@ pub(crate) struct Inner {
     pub profile: Profile,
 }
 
-/// Everything Describe measures on one column (sizes excepted — sizes.rs).
+/// Everything Describe measures on one column (sizes excepted — common/ipc_sizes.rs).
 pub(crate) struct Described {
     pub name: PlSmallStr,
     pub dtype: DataType,

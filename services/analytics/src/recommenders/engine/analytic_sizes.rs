@@ -46,7 +46,7 @@ pub(crate) fn validity(n: f64, nulls: f64) -> f64 {
 }
 
 /// Uncompressed Arrow IPC body bytes of a scalar type `t` holding values shaped
-/// like `s`, exactly as sizes.rs measures it. Lists are sized by the caller; a type
+/// like `s`, exactly as common/ipc_sizes.rs measures it. Lists are sized by the caller; a type
 /// with no analytic size is an error (its candidate fails), never a wrong size.
 pub(crate) fn body_size(t: &AT, s: &Shape) -> Result<f64, String> {
     let v = validity(s.n, s.nulls);

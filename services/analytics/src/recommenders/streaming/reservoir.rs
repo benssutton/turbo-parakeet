@@ -27,7 +27,7 @@ struct Cursor {
 }
 
 impl Cursor {
-    /// SplitMix64, the same finaliser as describe.rs `subset`.
+    /// SplitMix64, the same finaliser as describe/frequencies.rs `subset`.
     fn next_u64(&mut self) -> u64 {
         self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.rng;

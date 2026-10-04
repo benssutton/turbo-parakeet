@@ -7,7 +7,7 @@
 // plus the two marginals. This module builds that table once so the two
 // consumers cannot drift apart on counting or null policy.
 //
-// Counting reuses the dense-id strategy from entropy.rs: the joint key is
+// Counting reuses the dense-id strategy from joint_entropy.rs: the joint key is
 // a_id·Kb + b_id (a single integer, no tuple hashing). Joint spaces ≤ FLAT_MAX
 // are counted in a flat thread-local array with a touched-slot list for
 // O(distinct) reset; larger spaces fall back to a u64-keyed hash map. The pair

@@ -131,7 +131,7 @@ def streaming_recommender(
     seed: int,
     boolean_pairs: tuple[tuple[str, str], ...],
 ):
-    """The Rust streaming recommender (src/streaming.rs): .add(data, ineligible), .result()."""
+    """The Rust streaming recommender (src/recommenders/streaming/): .add(data, ineligible), .result()."""
     return _rs.StreamingRecommender(
         reservoir_rows=reservoir_rows,
         block_rows=block_rows,
@@ -149,7 +149,7 @@ def oneshot_recommender(
     seed: int,
     boolean_pairs: tuple[tuple[str, str], ...],
 ):
-    """The Rust one-shot recommender (src/oneshot.rs): .add(data, ineligible), .result()."""
+    """The Rust one-shot recommender (src/recommenders/oneshot.rs): .add(data, ineligible), .result()."""
     return _rs.OneShotRecommender(
         categorical_threshold=categorical_threshold,
         zstd_level=zstd_level,

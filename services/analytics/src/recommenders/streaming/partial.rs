@@ -1,8 +1,8 @@
 //! Mergeable per-level statistics for the streaming recommender (spec
 //! docs/superpowers/specs/2026-09-29-streaming-recommender-design.md §4). Each batch
 //! is profiled per level (a column, or a list's inner values) into a `BatchStats` with
-//! describe.rs's kernels; batches are absorbed in stream order into a `LevelStats`,
-//! which finishes into the `Profile` recommend.rs's rules read.
+//! the describe kernels; batches are absorbed in stream order into a `LevelStats`,
+//! which finishes into the `Profile` the recommenders/engine rules read.
 
 use std::collections::HashMap;
 
@@ -164,7 +164,7 @@ fn compact(a: ArrayRef) -> Result<ArrayRef, arrow_schema::ArrowError> {
     })
 }
 
-/// Polars' view-array data blocks (recommend.rs `polars_views`) replayed on value
+/// Polars' view-array data blocks (recommenders/engine/polars_layout.rs `polars_views`) replayed on value
 /// lengths alone: values of ≤ 12 bytes are inline; longer ones fill blocks whose
 /// capacity doubles from 8 KiB to 16 MiB (or grows to fit one value). `bytes` is the
 /// IPC body of those blocks, each padded to 8.

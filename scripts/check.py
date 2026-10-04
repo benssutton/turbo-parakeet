@@ -165,7 +165,7 @@ def _llvm_cov_env() -> dict[str, str]:
 def coverage_rust_full() -> None:
     """Rust coverage from the unit tests AND the Python tests, merged (what CI uploads to
     Codecov; needs cargo-llvm-cov, and also writes coverage.xml for Python). The pytest run drives an instrumented build of the
-    extension, which covers python.rs and the rest of what only Python reaches. The
+    extension, which covers bindings/python.rs and the rest of what only Python reaches. The
     normal extension in the working tree is put back afterwards."""
     env = _llvm_cov_env()
     for stale in COVERAGE_TARGET.glob("*.profraw"):
