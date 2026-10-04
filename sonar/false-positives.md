@@ -46,3 +46,19 @@ check is `tech.add({"t": data}).result()` because Polars-built malformed data is
 `result()` while the rest is refused in `add()`. Both calls are the pipeline under test;
 the operands are already built outside the block. Marked *False positive*; the other
 `S5778` findings were fixed by building operands outside the block.
+
+## `java:S1602` — "useless curly braces" around a lambda body (1, MINOR)
+
+`StreamingRecommender.java`, `Free.run`: `Native.run(() -> { FREE.invokeExact(handle); })`. The
+braces are required: as an expression lambda, `FREE.invokeExact(handle)` links as returning
+`Object` and throws `WrongMethodTypeException` (the handle returns `void`). A comment in the
+code says so. Marked *False positive*; do not remove the braces.
+
+## `java:S112` — generic `Throwable` in a `throws` clause (2, MAJOR)
+
+`Native.java`, `Call.run` and `VoidCall.run` (`throws Throwable`). `MethodHandle.invokeExact`
+is declared `throws Throwable`, and these two interfaces exist to carry that from the
+downcalls to one place, `Native.call`, which rethrows runtime exceptions and errors and wraps
+anything else in `AnalyticsException`. A narrower clause does not compile. Marked *False
+positive*; do not narrow it. (The `RuntimeException`s thrown by the binding were separately
+replaced by `AnalyticsException`.)

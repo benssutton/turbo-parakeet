@@ -67,6 +67,7 @@ public final class StreamingRecommender implements AutoCloseable {
     private record Free(MemorySegment handle) implements Runnable {
         @Override
         public void run() {
+            // A block body: as an expression lambda, invokeExact would link as returning Object.
             Native.run(() -> {
                 FREE.invokeExact(handle);
             });
@@ -115,7 +116,7 @@ public final class StreamingRecommender implements AutoCloseable {
      *
      * @throws IllegalArgumentException for invalid input (a type change, a duplicate or
      *                                  malformed column)
-     * @throws RuntimeException         for a failure inside the Rust kernels
+     * @throws AnalyticsException       for a failure inside the Rust kernels
      * @throws IllegalStateException    when closed
      */
     public void add(ArrowReader input, BufferAllocator allocator) {
@@ -145,7 +146,7 @@ public final class StreamingRecommender implements AutoCloseable {
      * {@code rec_*}, {@code n_sampled_rows, n_sampled_blocks}); the state is kept, so adding can
      * continue. The returned reader holds one batch; the caller closes it.
      *
-     * @throws RuntimeException      for a failure inside the Rust kernels
+     * @throws AnalyticsException    for a failure inside the Rust kernels
      * @throws IllegalStateException when closed
      */
     public ArrowReader finish(BufferAllocator allocator) {

@@ -43,7 +43,7 @@ public final class Analytics {
      * caller closes it.
      *
      * @throws IllegalArgumentException for invalid input (e.g. duplicate column names)
-     * @throws RuntimeException for a failure inside the Rust kernels
+     * @throws AnalyticsException for a failure inside the Rust kernels
      */
     public static ArrowReader describeAndRecommend(ArrowReader input, Params params, BufferAllocator allocator) {
         return Native.call(() -> {

@@ -46,14 +46,14 @@ class NativeTest {
         assertEquals("analytics error code 1", invalid.getMessage());
 
         RuntimeException compute = Native.failure(2, MemorySegment.NULL);
-        assertEquals(RuntimeException.class, compute.getClass());
+        assertEquals(AnalyticsException.class, compute.getClass());
         assertEquals("analytics error code 2", compute.getMessage());
     }
 
     @Test
     void callWrapsCheckedFailuresAndPassesRuntimeOnesThrough() {
         Exception checked = new IOException("boom");
-        RuntimeException wrapped = assertThrows(RuntimeException.class, () -> Native.call(() -> {
+        RuntimeException wrapped = assertThrows(AnalyticsException.class, () -> Native.call(() -> {
             throw checked;
         }));
         assertSame(checked, wrapped.getCause());

@@ -128,7 +128,7 @@ Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design
 - `src/capi.rs` — C ABI (`extern "C"`, no pyo3): `analytics_describe_and_recommend` (Arrow C Stream in, one-batch
   stream out, plain C parameters; no `population_rows`) and `analytics_free_error`. Returns 0 / 1 InvalidInput /
   2 Compute with a message in `*error`. Wrapped by `io.github.benssutton.analytics.Analytics` (Java 25 FFM + Arrow Java
-  `arrow-c-data`), which maps 1 → IllegalArgumentException, 2 → RuntimeException. Also `analytics_recommender_{new,add,finish,free}`
+  `arrow-c-data`), which maps 1 → IllegalArgumentException, 2 → AnalyticsException (a RuntimeException). Also `analytics_recommender_{new,add,finish,free}`
   (opaque `void *` handle; `add` consumes the stream), wrapped by `io.github.benssutton.analytics.StreamingRecommender`
   (AutoCloseable; `StreamingParams`; a read/write lock keeps `close` from racing `add`/`finish`, a Cleaner frees an
   unclosed handle). `Native` holds the shared library lookup and error mapping.

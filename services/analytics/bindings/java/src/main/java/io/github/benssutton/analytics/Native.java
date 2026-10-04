@@ -60,7 +60,7 @@ final class Native {
         } catch (RuntimeException | Error e) {
             throw e;
         } catch (Throwable t) {
-            throw new RuntimeException(t);
+            throw new AnalyticsException(t);
         }
     }
 
@@ -82,7 +82,7 @@ final class Native {
             ? "analytics error code " + code
             : message.reinterpret(Long.MAX_VALUE).getString(0);
         FREE_ERROR.invokeExact(message);
-        return code == INVALID_INPUT ? new IllegalArgumentException(text) : new RuntimeException(text);
+        return code == INVALID_INPUT ? new IllegalArgumentException(text) : new AnalyticsException(text);
     }
 
     /** A native array of NUL-terminated UTF-8 strings, or NULL when empty. */
