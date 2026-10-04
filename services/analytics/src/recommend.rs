@@ -25,8 +25,8 @@
 use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
 use crate::conclusions::Conclusions;
 use crate::describe::{
-    assemble, describe_one, fields, parse_decimal, parse_iso, Described, IsoValue, Profile, Row,
-    StringStats,
+    assemble, describe_one, fields, parse_decimal, parse_iso, value_fields, Described, IsoValue,
+    Profile, Row, StringStats,
 };
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
 use arrow_array::builder::make_view;
@@ -2551,6 +2551,37 @@ pub(crate) fn rec_fields() -> Vec<(String, PT)> {
     .into_iter()
     .map(|(n, d)| (n.to_string(), d))
     .collect()
+}
+
+/// The recommenders' output columns (spec 2026-10-04 §4), one definition for both:
+/// `streaming` adds `first_row` after `dtype` and the sample counts at the end.
+pub(crate) fn recommender_fields(streaming: bool) -> Vec<(String, PT)> {
+    let mut f: Vec<(String, PT)> = vec![
+        ("column".into(), PT::String),
+        ("status".into(), PT::String),
+        ("dtype".into(), PT::String),
+    ];
+    if streaming {
+        f.push(("first_row".into(), PT::UInt64));
+    }
+    f.push(("n_rows".into(), PT::UInt64));
+    f.push(("n_null".into(), PT::UInt64));
+    f.extend(value_fields().into_iter().map(|(n, d)| (n.to_string(), d)));
+    f.push(("n_midnight".into(), PT::UInt64));
+    f.extend(SIZE_FIELDS.iter().map(|n| (n.to_string(), PT::UInt64)));
+    f.push(("inner_n_values".into(), PT::UInt64));
+    f.push(("inner_n_null".into(), PT::UInt64));
+    f.extend(
+        value_fields()
+            .into_iter()
+            .map(|(n, d)| (format!("inner_{n}"), d)),
+    );
+    f.extend(rec_fields());
+    if streaming {
+        f.push(("n_sampled_rows".into(), PT::UInt64));
+        f.push(("n_sampled_blocks".into(), PT::UInt64));
+    }
+    f
 }
 
 fn output_fields() -> Vec<(String, PT)> {

@@ -20,8 +20,8 @@ use crate::describe::{assemble, flatten, value_fields, Profile, Row};
 use crate::partial::{has_int_range, BatchStats, LevelStats, ViewSim};
 use crate::recommend::{
     body_size, cast_to, list_parts, pa_name, pad, pick_by_stats, pick_list_by_stats, pl_name,
-    polars_layout, rec_fields, rec_row, to_polars_layout, validity, verify, wrap, Level, Params,
-    Pick, Rec, Shape, Target,
+    polars_layout, rec_row, recommender_fields, to_polars_layout, validity, verify, wrap, Level,
+    Params, Pick, Rec, Shape, Target,
 };
 use crate::reservoir::{Block, Reservoir};
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of};
@@ -79,36 +79,6 @@ fn same_type(a: &PT, b: &PT) -> bool {
         (PT::Array(x, w), PT::Array(y, v)) => w == v && same_type(x, y),
         _ => a == b,
     }
-}
-
-/// Output columns (spec 2026-10-01 §7), in order: the streaming head, Describe's value
-/// block (describe.rs `value_fields`), n_midnight, the size columns, Recommend's, the sample.
-fn output_fields() -> Vec<(String, PT)> {
-    let mut f: Vec<(String, PT)> = [
-        ("column", PT::String),
-        ("status", PT::String),
-        ("dtype", PT::String),
-        ("first_row", PT::UInt64),
-        ("n_rows", PT::UInt64),
-        ("n_null", PT::UInt64),
-    ]
-    .into_iter()
-    .map(|(n, d)| (n.to_string(), d))
-    .collect();
-    f.extend(value_fields().into_iter().map(|(n, d)| (n.to_string(), d)));
-    f.push(("n_midnight".into(), PT::UInt64));
-    for n in [
-        "size_bytes",
-        "size_zstd_bytes",
-        "size_polars_bytes",
-        "size_polars_zstd_bytes",
-    ] {
-        f.push((n.into(), PT::UInt64));
-    }
-    f.extend(rec_fields());
-    f.push(("n_sampled_rows".into(), PT::UInt64));
-    f.push(("n_sampled_blocks".into(), PT::UInt64));
-    f
 }
 
 /// A Level built from statistics: the rules read its counts, extremes and few distinct
@@ -659,7 +629,7 @@ impl Streaming {
             .map(|c| self.row(c, &blocks, sampled))
             .collect::<std::result::Result<Vec<Row>, String>>()
             .map_err(Error::Compute)?;
-        assemble("streaming_recommend", &output_fields(), &rows)
+        assemble("streaming_recommend", &recommender_fields(true), &rows)
             .and_then(|s| export_struct(&s))
             .map_err(|e| Error::Compute(e.to_string()))
     }
@@ -685,7 +655,7 @@ impl Streaming {
             },
         ];
         let Some(dtype) = dtype else {
-            row.resize(output_fields().len(), AnyValue::Null);
+            row.resize(recommender_fields(true).len(), AnyValue::Null);
             return Ok(row);
         };
         let t = self.params.categorical_threshold;
@@ -705,13 +675,15 @@ impl Streaming {
             _ => None,
         };
         let ip = inner.map(|(i, it)| i.profile(it));
-        let ilvl = match (inner, &ip) {
-            (Some((i, it)), Some(ip)) => {
+        let ic = inner
+            .zip(ip.as_ref())
+            .map(|((i, it), ip)| conclude(it, i.n, i.n_null, ip, t));
+        let ilvl = match (inner, &ip, &ic) {
+            (Some((i, it)), Some(ip), Some(ic)) => {
                 let iclassic = i
                     .classic
                     .clone()
                     .ok_or("an inner level has absorbed no batch")?;
-                let ic = conclude(it, i.n, i.n_null, ip, t);
                 let mut l = level(it, &iclassic, ip, i, ic.est, "inner: ");
                 let iv = view_shape(&l, i, c.views_input.1);
                 (l.size_bytes, l.size_note) = original_size(&iclassic, &iv, None, i);
@@ -810,6 +782,14 @@ impl Streaming {
             AnyValue::UInt64(original_polars),
             u(scale(z[1])),
         ]);
+        match (inner, &ip, &ic) {
+            (Some((i, _)), Some(ip), Some(ic)) => {
+                row.push(AnyValue::UInt64(i.n));
+                row.push(AnyValue::UInt64(i.n_null));
+                row.extend(ip.row(ic));
+            }
+            _ => row.extend(vec![AnyValue::Null; 2 + value_fields().len()]),
+        }
         row.extend(rec_row(&rec));
         row.extend([
             AnyValue::UInt64(sampled),
@@ -1144,6 +1124,55 @@ pub(crate) mod tests {
             Some(rows.to_string()),
             "{label}"
         );
+    }
+
+    #[test]
+    fn output_is_the_shared_streaming_schema() {
+        let mut s = streaming();
+        s.add(&mixed()).unwrap();
+        let out = s.finish().unwrap();
+        let names: Vec<String> = out
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        let want: Vec<String> = crate::recommend::recommender_fields(true)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(names, want);
+    }
+
+    #[test]
+    fn inner_columns_match_one_shot() {
+        let whole = mixed();
+        let reference = one_shot(&whole);
+        let mut s = streaming();
+        s.add(&whole.slice(0, 4)).unwrap();
+        s.add(&whole.slice(4, 2)).unwrap();
+        let out = s.finish().unwrap();
+        for name in [
+            "inner_n_values",
+            "inner_n_null",
+            "inner_n_unique",
+            "inner_unique",
+            "inner_class",
+            "inner_min",
+            "inner_max",
+            "inner_min_len",
+            "inner_max_len",
+            "inner_sum_len",
+            "inner_gcd",
+        ] {
+            assert_eq!(texts(&out, name), texts(&reference, name), "{name}");
+        }
+        let columns = texts(&out, "column");
+        let l = columns
+            .iter()
+            .position(|c| c.as_deref() == Some("l"))
+            .unwrap();
+        assert_eq!(texts(&out, "inner_n_values")[l].as_deref(), Some("5"));
     }
 
     #[test]
