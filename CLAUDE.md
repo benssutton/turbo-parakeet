@@ -173,10 +173,12 @@ This encoding is entropy/chi²-only — it's value-relabeling and has no cross-c
 
 # Next Steps
 
-## Implementation cleanups
+## ToDo
 
-**[bloomfilter.rs](services/analytics/src/techniques/pairwise/unordered/bloomfilter.rs)**
-- ~~silent state discard on `existing_filter` length mismatch~~ **Fixed**: wrong-sized bit arrays are rejected by `api::membership_ratio` as `InvalidInput` (→ ValueError); `validate_bit_array` still guards the unchecked bit reads.
+See ./ToDo.md for a list of future planned enhancements
+
+
+## Implementation cleanups
 
 **[minhash.rs](services/analytics/src/techniques/pairwise/unordered/minhash.rs)**
 - [minhash.rs:75-92](services/analytics/src/techniques/pairwise/unordered/minhash.rs#L75-L92): bucket-pair generation is O(|bucket|²) per band. Acceptable at typical scales; document as a known scaling concern for pathologically dense buckets.
