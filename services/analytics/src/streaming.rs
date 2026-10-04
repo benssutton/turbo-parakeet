@@ -19,9 +19,9 @@ use crate::conclusions::conclude;
 use crate::describe::{assemble, flatten, value_fields, Profile, Row};
 use crate::partial::{has_int_range, BatchStats, LevelStats, ViewSim};
 use crate::recommend::{
-    body_size, cast_to, list_parts, pa_name, pad, pick_by_stats, pick_list_by_stats, pl_name,
-    polars_layout, rec_row, recommender_fields, to_polars_layout, validity, verify, wrap, Level,
-    Params, Pick, Rec, Shape, Target,
+    body_size, cast_to, enum_categories, list_parts, pa_name, pad, pick_by_stats,
+    pick_list_by_stats, pl_name, polars_layout, rec_row, recommender_fields, to_polars_layout,
+    validity, verify, wrap, Level, Params, Pick, Rec, Shape, Target,
 };
 use crate::reservoir::{Block, Reservoir};
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of};
@@ -343,15 +343,6 @@ fn nullable(t: &Target, o: &LevelStats, inner: Option<&LevelStats>) -> bool {
     }
 }
 
-/// An Enum's categories, found through lists and arrays.
-fn enum_categories(dtype: &PT) -> Option<Vec<String>> {
-    match dtype {
-        PT::Enum(fc, _) => Some(fc.categories().values_iter().map(str::to_owned).collect()),
-        PT::List(it) | PT::Array(it, _) => enum_categories(it),
-        _ => None,
-    }
-}
-
 /// Column `name`'s rows in block `b` as one Series of `dtype` (absent pieces: nulls),
 /// with compact buffers: appending keeps each piece's view buffers, so the block is
 /// rebuilt as one-shot's Series is built from its input — through its classic layout
@@ -420,7 +411,7 @@ fn recast(
 
 /// `t` holds the Null type below its top level (a List(Null), a Struct with a Null
 /// field, ...).
-fn holds_nested_null(t: &PT) -> bool {
+pub(crate) fn holds_nested_null(t: &PT) -> bool {
     let is_or_holds = |t: &PT| t == &PT::Null || holds_nested_null(t);
     match t {
         PT::List(i) | PT::Array(i, _) => is_or_holds(i),
@@ -813,8 +804,8 @@ pub(crate) mod tests {
     use arrow_schema::DataType as AT;
     use arrow_select::concat::concat;
 
-    use crate::arrow_io::{export_series, export_struct};
-    use crate::recommend::{arrow_cast, describe_and_recommend_impl};
+    use crate::arrow_io::export_series;
+    use crate::recommend::arrow_cast;
     use polars::prelude::{CompatLevel, IntoSeries, NamedFrom};
 
     use super::*;
@@ -963,11 +954,12 @@ pub(crate) mod tests {
     }
 
     fn one_shot(b: &RecordBatch) -> RecordBatch {
-        let out = describe_and_recommend_impl(&import_batch(b).unwrap(), &params()).unwrap();
-        export_struct(&out).unwrap()
+        let mut r = crate::oneshot::OneShot::new(params());
+        r.add(b).unwrap();
+        r.result().unwrap()
     }
 
-    fn texts(b: &RecordBatch, name: &str) -> Vec<Option<String>> {
+    pub(crate) fn texts(b: &RecordBatch, name: &str) -> Vec<Option<String>> {
         let a = arrow_cast(b.column_by_name(name).unwrap().as_ref(), &AT::Utf8).unwrap();
         a.as_string::<i32>()
             .iter()
@@ -1111,10 +1103,6 @@ pub(crate) mod tests {
         for name in REC.into_iter().filter(|n| !skip.contains(n)) {
             let (got, want) = (texts(&out, name), texts(&reference, name));
             for (row, (g, w)) in got.iter().zip(&want).enumerate() {
-                // One-shot leaves rec_polars_type null when the original is kept.
-                if name == "rec_polars_type" && w.is_none() {
-                    continue;
-                }
                 assert_eq!(g, w, "{label} {:?} {name}", columns[row]);
             }
         }

@@ -25,8 +25,8 @@
 use crate::cardinality_estimators::{pick_estimate, Count, Estimate};
 use crate::conclusions::Conclusions;
 use crate::describe::{
-    assemble, describe_one, fields, parse_decimal, parse_iso, value_fields, Described, IsoValue,
-    Profile, Row, StringStats,
+    describe_one, parse_decimal, parse_iso, value_fields, Described, IsoValue, Profile, Row,
+    StringStats,
 };
 use crate::sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes, SIZE_FIELDS};
 use arrow_array::builder::make_view;
@@ -46,7 +46,6 @@ use polars::prelude::{
     polars_err, AnyValue, DataType as PT, Field as PField, Float64Chunked, IntoSeries,
     NewChunkedArray, PolarsResult, Series, StringChunked, StructChunked, UInt64Chunked,
 };
-use rayon::prelude::*;
 use std::cell::OnceCell;
 use std::sync::Arc;
 
@@ -2427,7 +2426,7 @@ pub(crate) struct Rec {
     pub arrow_size: u64,
     /// None when nothing was sampled (streaming, reservoir_rows = 0).
     pub arrow_zstd: Option<u64>,
-    /// None when the original type is kept: Python fills in `str(dtype)`.
+    /// The Polars type (pl_name); always set by both recommenders.
     pub polars_type: Option<String>,
     pub polars_size: u64,
     /// None when nothing was sampled (streaming, reservoir_rows = 0).
@@ -2439,6 +2438,15 @@ pub(crate) struct Rec {
 /// The recommendation for one column.
 /// `values` is `s` in the classic layout (sizes.rs's `classic_layout`); `(oc, ic)` is
 /// `d.conclusions(params.categorical_threshold)`.
+/// An Enum's categories, found through lists and arrays.
+pub(crate) fn enum_categories(dtype: &PT) -> Option<Vec<String>> {
+    match dtype {
+        PT::Enum(fc, _) => Some(fc.categories().values_iter().map(str::to_owned).collect()),
+        PT::List(it) | PT::Array(it, _) => enum_categories(it),
+        _ => None,
+    }
+}
+
 pub(crate) fn recommend(
     s: &Series,
     values: &ArrayRef,
@@ -2490,7 +2498,13 @@ pub(crate) fn recommend(
     };
     let t = chosen.array.data_type().clone();
     let (polars_type, polars_size, polars_zstd) = if matches!(chosen.target, Target::Original(_)) {
-        (None, polars_bytes, Some(polars_zstd))
+        // The original's Polars type, spelled as the streaming recommender spells it.
+        let enum_values = enum_categories(s.dtype());
+        (
+            Some(pl_name(&t, name, enum_values.as_deref(), &AT::UInt32)),
+            polars_bytes,
+            Some(polars_zstd),
+        )
     } else {
         let key = chosen.target.polars_key().unwrap_or(AT::UInt32);
         let layout = to_polars_layout(&chosen.array, &key).map_err(err)?;
@@ -2584,13 +2598,6 @@ pub(crate) fn recommender_fields(streaming: bool) -> Vec<(String, PT)> {
     f
 }
 
-fn output_fields() -> Vec<(String, PT)> {
-    let mut f = fields();
-    f.extend(SIZE_FIELDS.iter().map(|n| (n.to_string(), PT::UInt64)));
-    f.extend(rec_fields());
-    f
-}
-
 fn candidates_series(c: &[Candidate]) -> Series {
     let text = |name: &str, v: Vec<Option<String>>| {
         StringChunked::from_iter_options(name.into(), v.into_iter()).into_series()
@@ -2642,25 +2649,57 @@ pub(crate) fn rec_row(r: &Rec) -> Row {
     ]
 }
 
-pub(crate) fn describe_and_recommend_impl(
-    inputs: &[Series],
-    params: &Params,
-) -> PolarsResult<Series> {
-    let rows: Vec<Row> = inputs
-        .par_iter()
-        .map(|s| {
-            let d = describe_one(s, params.seed, false)?;
-            let classic = classic_layout(s)?;
-            let sz = sizes_of(s, &classic, params.zstd_level)?;
-            let (oc, ic) = d.conclusions(params.categorical_threshold);
-            let rec = recommend(s, &classic, &d, (oc, ic), &sz, params)?;
-            let mut row = d.row_with(&oc, ic.as_ref());
-            row.extend(sz.iter().map(|&v| AnyValue::UInt64(v)));
-            row.extend(rec_row(&rec));
-            Ok(row)
-        })
-        .collect::<PolarsResult<_>>()?;
-    assemble("recommend", &output_fields(), &rows)
+/// One column's statistics, collected by the one-shot recommender's `add` (spec
+/// 2026-10-04 §3.1); `row` recommends from them on the column's actual values.
+pub(crate) struct Prepared {
+    series: Series,
+    classic: ArrayRef,
+    described: Described,
+    sizes: Sizes,
+    /// pyarrow spelling of the input type.
+    dtype: String,
+}
+
+/// `s`'s Describe statistics, classic layout and sizes; `input_type` is its Arrow type.
+pub(crate) fn prepare(s: Series, input_type: &AT, params: &Params) -> PolarsResult<Prepared> {
+    let described = describe_one(&s, params.seed, false)?;
+    let classic = classic_layout(&s)?;
+    let sizes = sizes_of(&s, &classic, params.zstd_level)?;
+    Ok(Prepared {
+        series: s,
+        classic,
+        described,
+        sizes,
+        dtype: pa_name(input_type),
+    })
+}
+
+impl Prepared {
+    /// The column's `recommender_fields(false)` row.
+    pub(crate) fn row(&self, params: &Params) -> PolarsResult<Row> {
+        let d = &self.described;
+        let (oc, ic) = d.conclusions(params.categorical_threshold);
+        let rec = recommend(
+            &self.series,
+            &self.classic,
+            d,
+            (oc, ic),
+            &self.sizes,
+            params,
+        )?;
+        // Describe's row: column, n_rows, n_null, value block, n_midnight, then the
+        // inner block (inner_n_values, inner_n_null, inner value block).
+        let mut base = d.row_with(&oc, ic.as_ref()).into_iter();
+        let mut row: Row = Vec::with_capacity(recommender_fields(false).len());
+        row.extend(base.next()); // column
+        row.push(AnyValue::StringOwned("computed".into()));
+        row.push(AnyValue::StringOwned(self.dtype.as_str().into()));
+        row.extend(base.by_ref().take(3 + value_fields().len())); // through n_midnight
+        row.extend(self.sizes.iter().map(|&v| AnyValue::UInt64(v)));
+        row.extend(base); // the inner block
+        row.extend(rec_row(&rec));
+        Ok(row)
+    }
 }
 
 #[cfg(test)]
@@ -3536,8 +3575,8 @@ mod tests {
         );
         let kept = rec(Series::new("x".into(), &[0.1f64, f64::NAN]));
         assert_eq!(
-            (kept.arrow_type.as_str(), kept.polars_type.clone()),
-            ("double", None)
+            (kept.arrow_type.as_str(), kept.polars_type.as_deref()),
+            ("double", Some("Float64"))
         );
     }
 
@@ -3895,48 +3934,5 @@ mod tests {
         assert_eq!(r.arrow_type, "fixed_size_list<item: uint8>[2]");
         assert_eq!(chosen(&r).predicted, r.arrow_size);
         assert_eq!(r.polars_type.as_deref(), Some("Array(UInt8, shape=(2,))"));
-    }
-
-    #[test]
-    fn output_matches_declared_schema() {
-        let nested = Series::new(
-            "n".into(),
-            [
-                Some(Series::new("".into(), &[1i64])),
-                None,
-                Some(Series::new("".into(), &[2i64])),
-            ],
-        );
-        let inputs = [
-            Series::new("a".into(), &[Some(0i64), Some(5), None]),
-            Series::new("s".into(), &["x", "y", "x"]),
-            nested,
-        ];
-        let out = describe_and_recommend_impl(&inputs, &params()).unwrap();
-        let declared = PT::Struct(
-            output_fields()
-                .into_iter()
-                .map(|(n, d)| PField::new(n.into(), d))
-                .collect(),
-        );
-        assert_eq!(out.dtype(), &declared);
-        assert_eq!(out.len(), 3);
-        let ca = out.struct_().unwrap();
-        let fields = ca.fields_as_series();
-        let get = |n: &str| {
-            fields
-                .iter()
-                .find(|f| f.name().as_str() == n)
-                .unwrap()
-                .clone()
-        };
-        let types = get("rec_arrow_type");
-        assert_eq!(types.str().unwrap().get(0), Some("uint8"));
-        assert_eq!(types.str().unwrap().get(2), Some("uint8"));
-        assert_eq!(types.null_count(), 0);
-        let cands = get("rec_candidates");
-        let first = cands.list().unwrap().get_as_series(0).unwrap();
-        assert!(first.len() >= 2);
-        assert!(cands.list().unwrap().get_as_series(2).is_some());
     }
 }

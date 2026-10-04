@@ -44,7 +44,7 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-fn compute(e: PolarsError) -> Error {
+pub(crate) fn compute(e: PolarsError) -> Error {
     let msg = e.to_string();
     match e {
         PolarsError::ColumnNotFound(_)
@@ -318,16 +318,14 @@ pub fn describe_and_recommend(
     categorical_threshold: u64,
     boolean_pairs: Vec<(String, String)>,
 ) -> Result<RecordBatch> {
-    let params = Params {
+    let mut r = crate::oneshot::OneShot::new(Params {
         seed,
         zstd_level,
         categorical_threshold,
         boolean_pairs,
-    };
-    table(crate::recommend::describe_and_recommend_impl(
-        &columns(batch)?,
-        &params,
-    ))
+    });
+    r.add(batch)?;
+    r.result()
 }
 
 /// Keywords of the streaming recommender (spec 2026-09-29 §7.1).

@@ -17,6 +17,7 @@ mod entropy;
 mod gcd;
 mod hll;
 mod minhash;
+mod oneshot;
 mod partial;
 #[cfg(feature = "python")]
 mod python;
