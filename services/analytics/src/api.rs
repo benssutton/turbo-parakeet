@@ -349,7 +349,6 @@ fn validate_common(zstd_level: i32, boolean_pairs: &[(String, String)]) -> Resul
 
 /// Keywords of the one-shot recommender (spec 2026-10-04 §3.4).
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // until the bindings use it (tasks 4-6)
 pub struct OneShotParams {
     pub categorical_threshold: u64,
     pub zstd_level: i32,
@@ -359,10 +358,8 @@ pub struct OneShotParams {
 
 /// Recommends dtypes for one frame from exact statistics, each candidate verified on
 /// every row; all state stays in Rust.
-#[allow(dead_code)] // until the bindings use it (tasks 4-6)
 pub struct OneShotRecommender(crate::oneshot::OneShot);
 
-#[allow(dead_code)] // until the bindings use it (tasks 4-6)
 impl OneShotRecommender {
     pub fn new(p: OneShotParams) -> Result<Self> {
         validate_common(p.zstd_level, &p.boolean_pairs)?;
@@ -382,6 +379,7 @@ impl OneShotRecommender {
 
     /// Marks a column the caller cannot send (Int128 / UInt128, Object) as ineligible;
     /// before `add` only.
+    #[allow(dead_code)] // until python.rs uses it (task 6); the C ABI does not expose it
     pub fn mark_ineligible(&mut self, name: &str, dtype: &str) -> Result<()> {
         self.0.mark_ineligible(name, dtype)
     }
