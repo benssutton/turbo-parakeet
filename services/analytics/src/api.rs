@@ -310,24 +310,6 @@ pub fn render(batch: &RecordBatch) -> Result<RecordBatch> {
     .map_err(|e| Error::Compute(e.to_string()))
 }
 
-/// Describe's table, the size columns and the `rec_*` columns per column.
-pub fn describe_and_recommend(
-    batch: &RecordBatch,
-    seed: u64,
-    zstd_level: i32,
-    categorical_threshold: u64,
-    boolean_pairs: Vec<(String, String)>,
-) -> Result<RecordBatch> {
-    let mut r = crate::oneshot::OneShot::new(Params {
-        seed,
-        zstd_level,
-        categorical_threshold,
-        boolean_pairs,
-    });
-    r.add(batch)?;
-    r.result()
-}
-
 /// The checks both recommenders' constructors share.
 fn validate_common(zstd_level: i32, boolean_pairs: &[(String, String)]) -> Result<()> {
     let levels = zstd::compression_level_range();
@@ -707,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn describe_sizes_and_recommend_one_row_per_column() {
+    fn describe_and_sizes_one_row_per_column() {
         let b = batch(vec![
             ("a", ints(&[0, 5, 7])),
             (
@@ -717,15 +699,6 @@ mod tests {
         ]);
         assert_eq!(describe_columns(&b, 0, 10_000).unwrap().num_rows(), 2);
         assert_eq!(column_sizes(&b, 1).unwrap().num_rows(), 2);
-        let rec = describe_and_recommend(&b, 0, 1, 10_000, vec![("true".into(), "false".into())])
-            .unwrap();
-        assert_eq!(
-            rec.column_by_name("rec_arrow_type")
-                .unwrap()
-                .as_string_view()
-                .value(0),
-            "uint8"
-        );
     }
 
     fn streaming_params() -> StreamingParams {

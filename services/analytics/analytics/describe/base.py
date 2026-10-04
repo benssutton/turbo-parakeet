@@ -3,8 +3,7 @@ docs/superpowers/specs/2026-09-26-describe-technique-design.md).
 
 Implementations fill METRICS and the private INPUTS (first-occurrence argmin / argmax,
 f1, f2, capture history); the base renders min / max (arrow-rs text, `_plugin.render`),
-picks the estimate and classifies each column. Rust-backed implementations may supply
-the conclusions themselves (`_supplied`).
+picks the estimate and classifies each column.
 """
 
 from __future__ import annotations
@@ -161,14 +160,8 @@ class Describe(Technique):
         self.categorical_threshold = categorical_threshold
         self.zstd_level = zstd_level
         self.seed = seed
-        # Conclusions computed by the implementation itself (RecommendRust), keyed by
-        # (frame, column); cleared after every result().
-        self._supplied: dict[tuple[str, str], dict] = {}
 
     # ── technique hooks ───────────────────────────────────────────────────────
-
-    def _on_result_end(self) -> None:
-        self._supplied = {}
 
     def eligible(self, series: pl.Series) -> bool:
         return not _unsupported(series.dtype)
@@ -218,9 +211,6 @@ class Describe(Technique):
     # ── conclusions for one computed row ─────────────────────────────────────
 
     def _conclusions(self, r: dict) -> dict:
-        supplied = self._supplied.get((r["df_a"], r["col_a"]))
-        if supplied is not None:
-            return supplied
         s = self._collected[r["df_a"]][r["col_a"]]
         out = self._one_level(s, r, "", r["n_rows"])
         if r["inner_n_values"] is not None:

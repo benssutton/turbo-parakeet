@@ -25,9 +25,7 @@ def boolean_pairs(pairs) -> tuple[tuple[str, str], ...]:
     """`pairs` as tuples of two strings, else ValueError (Rust checks the values)."""
     out = tuple(tuple(p) for p in pairs)
     if any(len(p) != 2 or not all(isinstance(v, str) for v in p) for p in out):
-        raise ValueError(
-            f"boolean_pairs must be pairs of distinct non-empty strings, got {pairs!r}"
-        )
+        raise ValueError(f"boolean_pairs must be pairs of two strings, got {pairs!r}")
     return out
 
 

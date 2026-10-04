@@ -4,8 +4,9 @@ Tables cross the boundary as Arrow: the Polars frames given here are passed as t
 are (they implement the Arrow PyCapsule interface, zero-copy) and results come back
 as Arrow tables, read into flat Polars frames. Callers: the *Rust implementation
 classes, analytics.base (`checked_table`, imported lazily when Arrow input is added)
-and analytics.recommend.streaming (`streaming_recommender`); the public API is the
-technique classes in analytics.<technique>.
+and analytics.recommend's recommenders (`streaming_recommender`,
+`oneshot_recommender`); the public API is the technique classes in
+analytics.<technique> and the two recommenders.
 """
 
 from collections.abc import Sequence
@@ -119,27 +120,6 @@ def render(s: pl.Series) -> list[str | None]:
     """`s`'s values as text, rendered by arrow-rs's cast to Utf8 — the one format of
     Describe's / Recommend's min and max (recommend.rs `render_value`)."""
     return pl.DataFrame(_rs.render(s.to_frame())).to_series().to_list()
-
-
-def describe_and_recommend(
-    df: pl.DataFrame,
-    *,
-    seed: int,
-    zstd_level: int,
-    categorical_threshold: int,
-    boolean_pairs: tuple[tuple[str, str], ...],
-) -> pl.DataFrame:
-    """column, every Describe metric and Rust's conclusions (min / max, estimates,
-    class), the size metrics and the rec_* columns."""
-    return pl.DataFrame(
-        _rs.describe_and_recommend(
-            df,
-            seed=seed,
-            zstd_level=zstd_level,
-            categorical_threshold=categorical_threshold,
-            boolean_pairs=[tuple(p) for p in boolean_pairs],
-        )
-    )
 
 
 def streaming_recommender(

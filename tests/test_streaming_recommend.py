@@ -1,5 +1,5 @@
 """
-StreamingRecommender accuracy tests. Oracles: one-shot RecommendRust on the batches
+StreamingRecommender accuracy tests. Oracles: OneShotRecommender on the batches
 concatenated diagonally (parity, spec §6); the pyarrow IPC oracle (_sizes) for ZSTD
 sizes; a complete sample for the sampled ZSTD estimate; hand-worked known answers.
 Accuracy only — nothing here is timed.
@@ -14,7 +14,7 @@ import pytest
 
 from analytics.describe import _sizes
 from analytics.gcd import GcdRust
-from analytics.recommend import RecommendRust, StreamingRecommender
+from analytics.recommend import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, stringified
 
 LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
@@ -107,8 +107,8 @@ def stream(frame: pl.DataFrame, batch_rows: int, **params) -> pl.DataFrame:
 
 
 def one_shot(frame: pl.DataFrame) -> dict[str, dict]:
-    out = RecommendRust().add({"t": frame}).result()
-    return {r["col_a"]: r for r in out.iter_rows(named=True)}
+    out = OneShotRecommender().add(frame).result()
+    return {r["column"]: r for r in out.iter_rows(named=True)}
 
 
 def kept_original(r: dict) -> bool:
@@ -189,8 +189,7 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
             keys += ["rec_arrow_size_zstd_bytes", "rec_polars_size_zstd_bytes"]
         if original_sizes:
             keys += ["size_bytes", "size_polars_bytes"]
-        if not kept_original(o):
-            assert r["rec_polars_type"] == o["rec_polars_type"], name
+        assert r["rec_polars_type"] == o["rec_polars_type"], name
         for k in keys:
             assert r[k] == o[k], (name, k, r[k], o[k])
         got = candidates(r, original_sizes, not overflowed)
@@ -231,6 +230,27 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         else:
             for k in ["n_unique", "unique", "class", "sum_len_unique"]:
                 assert r[k] == o[k], (name, k, r[k], o[k])
+        if r["inner_n_values"] is not None:
+            for k in [
+                "inner_n_values",
+                "inner_n_null",
+                "inner_min",
+                "inner_max",
+                "inner_min_len",
+                "inner_max_len",
+                "inner_sum_len",
+                "inner_gcd",
+            ]:
+                assert r[k] == o[k], (name, k, r[k], o[k])
+            if r["inner_est_method"] == "hll":
+                sigma = 3 * 1.04 / 128  # p = 14
+                assert (
+                    abs(r["inner_n_unique"] - o["inner_n_unique"])
+                    <= sigma * o["inner_n_unique"] + 1
+                ), name
+            else:
+                for k in ["inner_n_unique", "inner_unique", "inner_class"]:
+                    assert r[k] == o[k], (name, k, r[k], o[k])
         assert r["est_low"] <= r["est_cardinality"] <= r["est_high"], name
         checked += 1
     assert checked > 0
@@ -271,7 +291,7 @@ def test_result_keeps_the_state():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. Parity with one-shot RecommendRust (spec §6)
+# 2. Parity with OneShotRecommender (spec §6)
 
 
 @pytest.mark.parametrize("batch_rows", [1, 7, 60, 200])
@@ -283,6 +303,21 @@ def test_result_keeps_the_state():
 def test_parity_with_one_shot(make, batch_rows):
     frame = make()
     assert_parity(stream(frame, batch_rows), frame, batch_rows >= frame.height)
+
+
+@pytest.mark.parametrize("batch_rows", [7, 100])
+def test_parity_with_list_columns(batch_rows):
+    frame = pl.DataFrame(
+        {
+            "l": [[1, 2], None, [3], [None, 4], [5, 5, 6]] * 20,
+            "a": pl.Series(
+                [[1.5, 2.0], [0.5, None]] * 50, dtype=pl.Array(pl.Float64, 2)
+            ),
+        }
+    )
+    streamed = stream(frame, batch_rows)
+    assert streamed["inner_n_values"].null_count() == 0
+    assert_parity(streamed, frame, batch_rows >= frame.height)
 
 
 @pytest.mark.slow
@@ -581,9 +616,9 @@ def test_malformed_input_is_a_value_error(make, match):
     with pytest.raises(ValueError, match=match):
         tech.add(data)
     # One-shot refuses the same input in add() or, for Polars-built data, in result().
-    tech = RecommendRust()
+    tech = OneShotRecommender()
     with pytest.raises(ValueError, match=match):
-        tech.add({"t": data}).result()
+        tech.add(data).result()
 
 
 def test_an_unsupported_type_is_refused_even_with_no_rows():
@@ -595,12 +630,13 @@ def test_an_unsupported_type_is_refused_even_with_no_rows():
         return pa.table({"c": col}).slice(1, 0)
 
     data = empty()
-    for tech in (StreamingRecommender(), RecommendRust(), GcdRust()):
-        frames = data if isinstance(tech, StreamingRecommender) else {"t": data}
+    for tech in (StreamingRecommender(), OneShotRecommender(), GcdRust()):
+        frames = data if not isinstance(tech, GcdRust) else {"t": data}
         with pytest.raises(ValueError, match="Decimal256"):
             tech.add(frames)
 
 
-def test_boolean_pairs_must_be_pairs():
-    with pytest.raises(ValueError, match="boolean_pairs"):
-        StreamingRecommender(boolean_pairs=(("y",),))
+@pytest.mark.parametrize("pairs", [(("y",),), ((1, 2),), (("a", "b", "c"),)])
+def test_boolean_pairs_must_be_pairs(pairs):
+    with pytest.raises(ValueError, match="boolean_pairs must be pairs of two strings"):
+        StreamingRecommender(boolean_pairs=pairs)

@@ -18,7 +18,6 @@ from harness import load, run
 PACKAGES = (
     "analytics.gcd",
     "analytics.describe",
-    "analytics.recommend",
     "analytics.membership",
     "analytics.similarity",
     "analytics.chi_squared",

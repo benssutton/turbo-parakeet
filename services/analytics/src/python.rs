@@ -398,29 +398,6 @@ fn render(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     run(py, || api::render(&batch)).map(ArrowTable)
 }
 
-#[pyfunction]
-#[pyo3(signature = (data, *, seed, zstd_level, categorical_threshold, boolean_pairs))]
-fn describe_and_recommend(
-    py: Python<'_>,
-    data: &Bound<'_, PyAny>,
-    seed: u64,
-    zstd_level: i32,
-    categorical_threshold: u64,
-    boolean_pairs: Vec<(String, String)>,
-) -> PyResult<ArrowTable> {
-    let batch = read_batch(data)?;
-    run(py, || {
-        api::describe_and_recommend(
-            &batch,
-            seed,
-            zstd_level,
-            categorical_threshold,
-            boolean_pairs,
-        )
-    })
-    .map(ArrowTable)
-}
-
 /// Arrow tabular data read and checked (arrow_io's checked import) into one table,
 /// for a caller about to hand it to Polars: py-polars trusts Arrow input and panics
 /// on malformed values (dictionary keys out of range) or a Decimal256.
@@ -447,7 +424,6 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(describe_columns, m)?)?;
     m.add_function(wrap_pyfunction!(column_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(render, m)?)?;
-    m.add_function(wrap_pyfunction!(describe_and_recommend, m)?)?;
     m.add_function(wrap_pyfunction!(checked_table, m)?)?;
     Ok(())
 }

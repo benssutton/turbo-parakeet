@@ -1,5 +1,5 @@
 """
-recommend accuracy tests — RecommendRust, the only implementation.
+recommend accuracy tests — OneShotRecommender.
 
 Oracles: hand-worked known answers; the pyarrow and Polars casts of each column to
 the recommended types, measured by the pyarrow IPC oracle; predicted = measured;
@@ -18,32 +18,29 @@ import pytest
 from analytics.describe import _sizes
 from analytics.recommend import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, stringified
-from harness import assert_contract, load, run
 
-PKG = "analytics.recommend"
 LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
-
-
-def impl():
-    return load(f"{PKG}:RecommendRust")
 
 
 def rec(s: pl.Series, **params) -> dict:
     """recommend one Series; its result row as a dict."""
-    return run(impl(), {"t": s.to_frame()}, **params).row(0, named=True)
+    return OneShotRecommender(**params).add(s.to_frame()).result().row(0, named=True)
+
+
+def recommend_frames(frames: dict, **params) -> pl.DataFrame:
+    """Each frame recommended on its own; `frame` names its source."""
+    return pl.concat(
+        OneShotRecommender(**params).add(f).result().with_columns(frame=pl.lit(name))
+        for name, f in frames.items()
+    )
 
 
 def by_type(r: dict) -> dict:
     return {c["arrow_type"]: c for c in r["rec_candidates"]}
 
 
-def ineligible_frame() -> pl.DataFrame:
-    cols = [
-        pl.Series("obj", [object(), object()], dtype=pl.Object),
-        pl.Series("nul", [None, None], dtype=pl.Null),
-    ]
-    return pl.DataFrame(cols)
-
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Contract
 
 STREAMING_ONLY = ("first_row", "n_sampled_rows", "n_sampled_blocks")
 F64_KEPT = [3.3e200 / 7, 9.9e200 / 7]  # beyond float32, ~200 integer digits: kept
@@ -99,7 +96,25 @@ def test_inputs(convert):
     want = OneShotRecommender().add(frame).result()
     out = OneShotRecommender().add(convert(frame)).result()
     assert out["n_rows"].to_list() == [4, 4]
-    assert out["rec_arrow_type"].to_list() == want["rec_arrow_type"].to_list()
+    # `dtype` names the Arrow type received: py-polars exports String as string_view.
+    assert out.drop("dtype").equals(want.drop("dtype"))
+    assert out["dtype"][0] == "int64"
+
+
+def test_lazy_input_with_an_ineligible_column():
+    frame = pl.DataFrame(
+        {
+            "a": [0, 5, 7, 9],
+            "w": pl.Series([1, 2, 3, 4], dtype=pl.Int128),
+            "s": ["x", "y", "x", None],
+        }
+    )
+    want = OneShotRecommender().add(frame).result()
+    out = OneShotRecommender().add(frame.lazy()).result()
+    assert out.equals(want)
+    # Ineligible columns come first (spec §3), as in streaming.
+    assert out["column"].to_list() == ["w", "a", "s"]
+    assert out["status"].to_list() == ["ineligible", "computed", "computed"]
 
 
 def test_ineligible_columns_are_listed():
@@ -135,30 +150,15 @@ def test_kept_original_names_its_polars_type():
     assert (r["rec_arrow_type"], r["rec_polars_type"]) == ("double", "Float64")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Contract
-
-
-def test_contract():
-    frames = {
-        "mixed": describe_mixed(300),
-        "empty": describe_mixed(50).clear(),
-        "bad": ineligible_frame(),
-    }
-    cls = impl()
-    result = run(cls, frames)
-    assert_contract(cls, result, frames)
-    computed = result.filter(pl.col("status") == "computed")
-    assert computed["rec_arrow_type"].null_count() == 0
-    assert computed["rec_polars_type"].null_count() == 0
-    assert set(result.filter(pl.col("df_a") == "bad")["status"]) == {"ineligible"}
-
-
 def test_constructor_validates_boolean_pairs():
     with pytest.raises(ValueError):
         OneShotRecommender(boolean_pairs=(("yes", "YES"),))
-    with pytest.raises(ValueError):
-        OneShotRecommender(boolean_pairs=(("y",),))
+
+
+@pytest.mark.parametrize("pairs", [(("y",),), ((1, 2),), (("a", "b", "c"),)])
+def test_boolean_pairs_must_be_pairs(pairs):
+    with pytest.raises(ValueError, match="boolean_pairs must be pairs of two strings"):
+        OneShotRecommender(boolean_pairs=pairs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -755,12 +755,12 @@ ORACLE_FRAMES = [
 @pytest.mark.parametrize("make", ORACLE_FRAMES)
 def test_sizes_match_pyarrow_and_polars_casts(make):
     frames = make()
-    result = run(impl(), frames)
+    result = recommend_frames(frames)
     checked = 0
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
-        s = frames[r["df_a"]][r["col_a"]].rechunk()
+        s = frames[r["frame"]][r["column"]].rechunk()
         chosen = _outer_chosen(r)
-        assert chosen["predicted_bytes"] == r["rec_arrow_size_bytes"], r["col_a"]
+        assert chosen["predicted_bytes"] == r["rec_arrow_size_bytes"], r["column"]
         original = chosen["rule"].endswith("original")
         if original:
             assert (r["rec_arrow_size_bytes"], r["rec_polars_size_bytes"]) == (
@@ -768,7 +768,7 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
                 r["size_polars_bytes"],
             )
             assert r["rec_polars_type"] == str(s.dtype), r[
-                "col_a"
+                "column"
             ]  # the Polars side is an identity cast
             # Kept-original columns go through the same identity cast and measurement below. The only skip is a
             # type pa_type cannot spell (e.g. a generic struct<...>), where there is no pyarrow type to cast to.
@@ -799,23 +799,23 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
         ):
             assert (
                 skippable
-            ), f"{r['col_a']}: pyarrow/Polars cannot cast a non-string column to {r['rec_arrow_type']}"
+            ), f"{r['column']}: pyarrow/Polars cannot cast a non-string column to {r['rec_arrow_type']}"
             continue
         if arrow.null_count != s.null_count() or polars.null_count() != s.null_count():
-            assert skippable, f"{r['col_a']}: the library cast lost values"
+            assert skippable, f"{r['column']}: the library cast lost values"
             continue
         level = 1
         assert _sizes.ipc_body_bytes(arrow, None) == r["rec_arrow_size_bytes"], r[
-            "col_a"
+            "column"
         ]
         assert _sizes.ipc_body_bytes(arrow, level) == pytest.approx(
             r["rec_arrow_size_zstd_bytes"], rel=0.01, abs=16
-        ), r["col_a"]
+        ), r["column"]
         native = _sizes.column_sizes(polars, level)
-        assert native["size_polars_bytes"] == r["rec_polars_size_bytes"], r["col_a"]
+        assert native["size_polars_bytes"] == r["rec_polars_size_bytes"], r["column"]
         assert native["size_polars_zstd_bytes"] == pytest.approx(
             r["rec_polars_size_zstd_bytes"], rel=0.01, abs=16
-        ), r["col_a"]
+        ), r["column"]
         checked += 1
     assert checked >= min(10, result.height)
 
@@ -827,7 +827,7 @@ def test_dictionary_evidence_reads_est_high():
         "mixed": describe_mixed(2_000),
         "strings": stringified(describe_mixed(500)),
     }
-    result = run(impl(), frames)
+    result = recommend_frames(frames)
     checked = 0
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
         for c in r["rec_candidates"]:
@@ -840,7 +840,7 @@ def test_dictionary_evidence_reads_est_high():
             # Rust floors the cardinality at the observed distinct count.
             expected = max(r[f"{prefix}{m[2]}"], r[f"{prefix}n_unique"])
             assert float(m[1]) == pytest.approx(expected, rel=1e-9), (
-                r["col_a"],
+                r["column"],
                 c["rule"],
             )
             checked += 1
@@ -851,7 +851,7 @@ def test_rust_conclusions_match_describe():
     from analytics.describe import CONCLUSIONS, DescribeRust
 
     frame = describe_mixed(2_000)
-    a = run(impl(), {"t": frame})
+    a = OneShotRecommender().add(frame).result()
     b = DescribeRust().add({"t": frame}).result()
     # Same rule; float operation order may differ by an ulp.
     for c in CONCLUSIONS:

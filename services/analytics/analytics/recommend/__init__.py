@@ -1,18 +1,8 @@
-"""Narrowest value-preserving Arrow type per column, cast, verified and measured. See Recommend."""
+"""Narrowest value-preserving Arrow type per column: OneShotRecommender (one frame,
+exact) and StreamingRecommender (batches over time). Not techniques on the uniform
+contract (spec docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md)."""
 
-from analytics.recommend.base import Recommend
 from analytics.recommend.oneshot import OneShotRecommender
-from analytics.recommend.rust import RecommendRust
 from analytics.recommend.streaming import StreamingRecommender
 
-REFERENCE = "RecommendRust"
-IMPLEMENTATIONS = ("RecommendRust",)
-
-__all__ = [
-    "OneShotRecommender",
-    "Recommend",
-    "RecommendRust",
-    "StreamingRecommender",
-    "REFERENCE",
-    "IMPLEMENTATIONS",
-]
+__all__ = ["OneShotRecommender", "StreamingRecommender"]
