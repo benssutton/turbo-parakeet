@@ -39,7 +39,7 @@ class StreamingRecommender:
     (`__arrow_c_stream__`); its batches are processed one at a time. Columns may
     appear, disappear (their rows count as null) or start as the Null type. Int128 /
     UInt128, Object and nested-Null (List(Null), a Struct with a Null field, ...)
-    columns are listed as ineligible. `finish()` returns one row
+    columns are listed as ineligible. `result()` returns one row
     per column and keeps the state, so adding can continue.
 
     Memory per eligible level (a column, or a list's inner values), every dtype:
