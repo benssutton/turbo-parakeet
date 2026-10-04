@@ -1,7 +1,8 @@
 # Version updates (security updates are separate and immediate). This repo changes slowly
 # and CI minutes are limited (every Cargo.lock change invalidates the Rust build cache, so a
 # run costs ~3x more): Rust and Python weekly, Java and Actions monthly; updates are grouped
-# and at most 2 PRs per ecosystem are open at once.
+# and at most 2 PRs per ecosystem are open at once. A 7-day cooldown skips freshly published
+# releases (supply-chain hygiene; security updates ignore it).
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -16,6 +17,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
     groups:
       rust:
         patterns: ["*"]
@@ -27,6 +30,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
     groups:
       python:
         patterns: ["*"]
@@ -37,6 +42,8 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
     groups:
       java:
         patterns: ["*"]
@@ -47,6 +54,8 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]

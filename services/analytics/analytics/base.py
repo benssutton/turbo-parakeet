@@ -441,7 +441,11 @@ def lazy_attributes(package: str, modules: dict[str, str]) -> Callable[[str], ty
 
     def __getattr__(name: str) -> type:
         if name in modules:
-            return getattr(importlib.import_module(modules[name], package), name)
+            # `modules` is a hard-coded name -> module map in each package's __init__; the
+            # name is only looked up in it, never imported directly.
+            # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+            module = importlib.import_module(modules[name], package)
+            return getattr(module, name)
         raise AttributeError(f"module {package!r} has no attribute {name!r}")
 
     return __getattr__
