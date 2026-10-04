@@ -248,7 +248,7 @@ pub unsafe extern "C" fn analytics_recommender_add(
     unsafe { finish(result, error) }
 }
 
-/// The recommendation so far (see `api::StreamingRecommender::finish`); the state is
+/// The recommendation so far (see `api::StreamingRecommender::result`); the state is
 /// kept. On success `*out` holds a one-batch stream the caller owns and must release.
 ///
 /// # Safety
@@ -264,7 +264,7 @@ pub unsafe extern "C" fn analytics_recommender_finish(
         if out.is_null() {
             return Err(Error::InvalidInput("output stream is null".into()));
         }
-        let batch = locked(unsafe { recommender(h) }?)?.finish()?;
+        let batch = locked(unsafe { recommender(h) }?)?.result()?;
         let schema = batch.schema();
         let stream =
             FFI_ArrowArrayStream::new(Box::new(RecordBatchIterator::new([Ok(batch)], schema)));

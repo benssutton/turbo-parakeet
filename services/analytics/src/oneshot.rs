@@ -56,7 +56,6 @@ impl OneShot {
 
     /// Lists a column the caller cannot send as ineligible; before `add` only. Marking
     /// the same (name, dtype) again is a no-op, so a failed `add` can be retried.
-    #[allow(dead_code)] // until api::OneShotRecommender calls it
     pub(crate) fn mark_ineligible(&mut self, name: &str, dtype: &str) -> Result<()> {
         if self.entries.is_some() {
             return Err(Error::InvalidInput(ADDED.into()));

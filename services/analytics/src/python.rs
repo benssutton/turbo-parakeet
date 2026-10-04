@@ -151,7 +151,7 @@ fn run<T: Send>(py: Python<'_>, f: impl FnOnce() -> api::Result<T> + Send) -> Py
 }
 
 /// The streaming recommender (api::StreamingRecommender): add batches over time,
-/// `finish` at any point. A mutex serialises callers; the work runs without the GIL.
+/// `result` at any point. A mutex serialises callers; the work runs without the GIL.
 #[pyclass(frozen, module = "analytics.analytics")]
 struct StreamingRecommender(Mutex<api::StreamingRecommender>);
 
@@ -211,9 +211,9 @@ impl StreamingRecommender {
         })
     }
 
-    fn finish(&self, py: Python<'_>) -> PyResult<ArrowTable> {
+    fn result(&self, py: Python<'_>) -> PyResult<ArrowTable> {
         let rec = &self.0;
-        run(py, move || locked(rec)?.finish()).map(ArrowTable)
+        run(py, move || locked(rec)?.result()).map(ArrowTable)
     }
 }
 

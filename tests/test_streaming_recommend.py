@@ -103,7 +103,7 @@ def stream(frame: pl.DataFrame, batch_rows: int, **params) -> pl.DataFrame:
     rec = StreamingRecommender(**params)
     for off in range(0, max(frame.height, 1), batch_rows):
         rec.add(frame.slice(off, batch_rows))
-    return rec.finish()
+    return rec.result()
 
 
 def one_shot(frame: pl.DataFrame) -> dict[str, dict]:
@@ -245,7 +245,7 @@ def test_contract():
     assert list(out.schema.items()) == list(SCHEMA.items())
     assert out.to_arrow().num_rows == out.height
     assert out["column"].to_list() == describe_mixed(10).columns
-    empty = StreamingRecommender().finish()
+    empty = StreamingRecommender().result()
     assert empty.height == 0
     assert list(empty.schema) == list(SCHEMA)
 
@@ -254,7 +254,7 @@ def test_ineligible_columns_are_listed():
     frame = pl.DataFrame(
         {"w": pl.Series([1, 2], dtype=pl.Int128), "a": [1, 2], "n": [None, None]}
     )
-    out = StreamingRecommender().add(frame).finish()
+    out = StreamingRecommender().add(frame).result()
     rows = {r["column"]: r for r in out.iter_rows(named=True)}
     assert rows["w"]["status"] == "ineligible"
     assert rows["w"]["dtype"] == "Int128"
@@ -264,10 +264,10 @@ def test_ineligible_columns_are_listed():
     assert rows["a"]["status"] == "computed"
 
 
-def test_finish_keeps_the_state():
+def test_result_keeps_the_state():
     rec = StreamingRecommender().add(pl.DataFrame({"a": [1, 2]}))
-    assert rec.finish()["n_rows"].to_list() == [2]
-    assert rec.add(pl.DataFrame({"a": [3]})).finish()["n_rows"].to_list() == [3]
+    assert rec.result()["n_rows"].to_list() == [2]
+    assert rec.add(pl.DataFrame({"a": [3]})).result()["n_rows"].to_list() == [3]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -301,7 +301,7 @@ def test_parity_with_columns_appearing_and_disappearing():
     rec = StreamingRecommender()
     for p in parts:
         rec.add(p)
-    assert_parity(rec.finish(), pl.concat(parts, how="diagonal"), single_batch=False)
+    assert_parity(rec.result(), pl.concat(parts, how="diagonal"), single_batch=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,7 +351,7 @@ def by_rule(r: dict) -> dict:
 
 def test_a_new_column_is_backfilled():
     rec = StreamingRecommender().add(pl.DataFrame({"a": [1, 2]}))
-    out = rec.add(pl.DataFrame({"a": [3], "b": ["x"]})).finish()
+    out = rec.add(pl.DataFrame({"a": [3], "b": ["x"]})).result()
     b = row(out, "b")
     assert (b["first_row"], b["n_rows"], b["n_null"], b["rec_nullable"]) == (
         2,
@@ -363,7 +363,7 @@ def test_a_new_column_is_backfilled():
 
 def test_an_absent_column_counts_as_null():
     rec = StreamingRecommender().add(pl.DataFrame({"a": [1], "b": [1]}))
-    out = rec.add(pl.DataFrame({"a": [2, 3]})).finish()
+    out = rec.add(pl.DataFrame({"a": [2, 3]})).result()
     assert row(out, "b")["n_null"] == 2
 
 
@@ -373,7 +373,7 @@ def test_an_all_ineligible_frame_keeps_its_rows():
         .add(pl.DataFrame({"k": [1]}))
         .add(pl.DataFrame({"w": pl.Series([1, 2, 3], dtype=pl.Int128)}))
         .add(pl.DataFrame({"k": [2]}))
-        .finish()
+        .result()
     )
     k = row(out, "k")
     assert (k["n_rows"], k["n_null"]) == (5, 3)
@@ -384,7 +384,7 @@ def test_a_null_typed_column_adopts_a_type():
     rec = StreamingRecommender().add(
         pl.DataFrame({"b": pl.Series([None, None], dtype=pl.Null)})
     )
-    b = row(rec.add(pl.DataFrame({"b": ["x", "y"]})).finish(), "b")
+    b = row(rec.add(pl.DataFrame({"b": ["x", "y"]})).result(), "b")
     assert b["status"] == "computed"
     assert b["n_null"] == 2
 
@@ -394,7 +394,7 @@ def test_a_type_change_is_rejected():
     changed = pl.DataFrame({"a": ["x"]})
     with pytest.raises(ValueError, match="type changed"):
         rec.add(changed)
-    assert row(rec.finish(), "a")["n_rows"] == 1
+    assert row(rec.result(), "a")["n_rows"] == 1
 
 
 def test_exact_count_past_the_threshold_rejects_the_dictionary():
@@ -497,7 +497,7 @@ def test_lazyframe_is_refused():
 )
 def test_a_nested_null_column_is_ineligible_like_one_shot(dtype, value):
     frame = pl.DataFrame({"c": pl.Series([value, None], dtype=dtype), "k": [1, 2]})
-    out = StreamingRecommender().add(frame).finish()
+    out = StreamingRecommender().add(frame).result()
     ref = one_shot(frame)
     for r in out.iter_rows(named=True):
         assert r["status"] == ref[r["column"]]["status"], r["column"]
@@ -508,7 +508,7 @@ def test_a_nested_null_column_is_ineligible_like_one_shot(dtype, value):
 
 def test_a_nested_null_arrow_column_is_ineligible():
     table = pa.table({"c": pa.array([[None], None], pa.list_(pa.null())), "k": [1, 2]})
-    out = StreamingRecommender().add(table).finish()
+    out = StreamingRecommender().add(table).result()
     assert row(out, "c")["status"] == "ineligible"
     assert row(out, "k")["status"] == "computed"
 
@@ -536,7 +536,7 @@ SLICED = {
 def test_a_sliced_nested_column_streams_like_one_shot(name, offset):
     # Repeated so the slice at offsets 8 and 16 (validity offset a multiple of 8) is in range.
     frame = pl.DataFrame({"c": pl.concat([SLICED[name]] * 6)}).slice(offset, 2)
-    out = StreamingRecommender().add(frame).finish()
+    out = StreamingRecommender().add(frame).result()
     assert row(out, "c")["n_null"] == frame["c"].null_count()
     assert_parity(out, frame, single_batch=True)
 

@@ -2435,9 +2435,6 @@ pub(crate) struct Rec {
     pub candidates: Vec<Candidate>,
 }
 
-/// The recommendation for one column.
-/// `values` is `s` in the classic layout (sizes.rs's `classic_layout`); `(oc, ic)` is
-/// `d.conclusions(params.categorical_threshold)`.
 /// An Enum's categories, found through lists and arrays.
 pub(crate) fn enum_categories(dtype: &PT) -> Option<Vec<String>> {
     match dtype {
@@ -2447,6 +2444,9 @@ pub(crate) fn enum_categories(dtype: &PT) -> Option<Vec<String>> {
     }
 }
 
+/// The recommendation for one column.
+/// `values` is `s` in the classic layout (sizes.rs's `classic_layout`); `(oc, ic)` is
+/// `d.conclusions(params.categorical_threshold)`.
 pub(crate) fn recommend(
     s: &Series,
     values: &ArrayRef,
@@ -2690,7 +2690,7 @@ impl Prepared {
         // Describe's row: column, n_rows, n_null, value block, n_midnight, then the
         // inner block (inner_n_values, inner_n_null, inner value block).
         let mut base = d.row_with(&oc, ic.as_ref()).into_iter();
-        let mut row: Row = Vec::with_capacity(recommender_fields(false).len());
+        let mut row: Row = Vec::with_capacity(base.len() + self.sizes.len() + 11);
         row.extend(base.next()); // column
         row.push(AnyValue::StringOwned("computed".into()));
         row.push(AnyValue::StringOwned(self.dtype.as_str().into()));

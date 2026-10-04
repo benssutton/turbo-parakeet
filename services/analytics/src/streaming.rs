@@ -1,7 +1,7 @@
 //! Streaming recommender (spec
 //! docs/superpowers/specs/2026-09-29-streaming-recommender-design.md): record batches
 //! are added over time; per-column statistics (partial.rs) and a block reservoir
-//! (reservoir.rs) are kept; `finish` recommends from them at any point. Its output
+//! (reservoir.rs) are kept; `result` recommends from them at any point. Its output
 //! shares Describe's value columns and conclusions (parity spec
 //! docs/superpowers/specs/2026-10-01-recommender-parity-design.md, §7).
 
@@ -116,7 +116,7 @@ fn level<'a>(
 /// category of the dtype's mapping, in id order (`CategoricalMapping::to_arrow`) — for
 /// an Enum its categories, for a Categorical every value its Categories object has
 /// seen (other columns' included when it is shared, e.g. the global one). Read at
-/// `finish`: the mapping only grows.
+/// `result`: the mapping only grows.
 #[derive(Clone, Copy, Debug, Default)]
 struct Cats {
     n: f64,
@@ -611,7 +611,7 @@ impl Streaming {
     }
 
     /// One row per column, first-seen order (spec §6). The state is kept.
-    pub(crate) fn finish(&self) -> Result<RecordBatch> {
+    pub(crate) fn result(&self) -> Result<RecordBatch> {
         let blocks = self.reservoir.blocks();
         let sampled: u64 = blocks.iter().map(|b| b.rows).sum();
         let rows = self
@@ -937,7 +937,7 @@ pub(crate) mod tests {
         assert!(n.ineligible);
         assert_eq!(n.input_type, "list<item: null>");
         assert_eq!(col(&s, "a").outer.n, 4);
-        let out = s.finish().unwrap();
+        let out = s.result().unwrap();
         assert_eq!(
             texts(&out, "status"),
             vec![Some("ineligible".into()), Some("computed".into())]
@@ -1097,7 +1097,7 @@ pub(crate) mod tests {
         let reference = one_shot(whole);
         let mut s = streaming();
         batches.iter().for_each(|b| s.add(b).unwrap());
-        let out = s.finish().unwrap();
+        let out = s.result().unwrap();
         let columns = texts(&out, "column");
         assert_eq!(columns, texts(&reference, "column"), "{label}");
         for name in REC.into_iter().filter(|n| !skip.contains(n)) {
@@ -1118,7 +1118,7 @@ pub(crate) mod tests {
     fn output_is_the_shared_streaming_schema() {
         let mut s = streaming();
         s.add(&mixed()).unwrap();
-        let out = s.finish().unwrap();
+        let out = s.result().unwrap();
         let names: Vec<String> = out
             .schema()
             .fields()
@@ -1139,7 +1139,7 @@ pub(crate) mod tests {
         let mut s = streaming();
         s.add(&whole.slice(0, 4)).unwrap();
         s.add(&whole.slice(4, 2)).unwrap();
-        let out = s.finish().unwrap();
+        let out = s.result().unwrap();
         for name in [
             "inner_n_values",
             "inner_n_null",
@@ -1296,7 +1296,7 @@ pub(crate) mod tests {
             assert_like_one_shot(&batches, &whole, &format!("dictionary k={k}"));
             let mut s = streaming();
             batches.iter().for_each(|b| s.add(b).unwrap());
-            let out = s.finish().unwrap();
+            let out = s.result().unwrap();
             assert_eq!(
                 original_predicted(&out),
                 original_predicted(&reference),
@@ -1339,7 +1339,7 @@ pub(crate) mod tests {
         let mut st = streaming();
         st.add(&whole.slice(0, 40)).unwrap();
         st.add(&whole.slice(40, 60)).unwrap();
-        let out = st.finish().unwrap();
+        let out = st.result().unwrap();
         assert_eq!(
             texts(&out, "rec_arrow_type"),
             texts(&reference, "rec_arrow_type")
@@ -1428,7 +1428,7 @@ pub(crate) mod tests {
     fn no_sample_means_no_zstd_sizes() {
         let mut s = Streaming::new(params(), 0, 1 << 16);
         s.add(&mixed()).unwrap();
-        let out = s.finish().unwrap();
+        let out = s.result().unwrap();
         assert!(texts(&out, "rec_arrow_size_zstd_bytes")
             .iter()
             .all(Option::is_none));
@@ -1442,7 +1442,7 @@ pub(crate) mod tests {
         p.categorical_threshold = 3;
         let mut s = Streaming::new(p, 1 << 20, 1 << 16);
         s.add(&batch(vec![("s", strs(v))])).unwrap();
-        s.finish().unwrap()
+        s.result().unwrap()
     }
 
     /// The first row's string→dictionary candidate outcome.
@@ -1502,7 +1502,7 @@ pub(crate) mod tests {
             ints(&[Some(0), Some(5), Some(7), Some(0), Some(5), Some(7)]),
         )]))
         .unwrap();
-        let out = s.finish().unwrap();
+        let out = s.result().unwrap();
         let some = |v: &[&str]| v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>();
         assert_eq!(texts(&out, "class"), some(&["ordinal"])); // 7 ≤ 2·6
         assert_eq!(texts(&out, "min"), some(&["0"]));
@@ -1514,7 +1514,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ineligible_null_typed_and_empty() {
-        assert_eq!(streaming().finish().unwrap().num_rows(), 0);
+        assert_eq!(streaming().result().unwrap().num_rows(), 0);
         let mut s = streaming();
         s.mark_ineligible("w", "Int128").unwrap();
         s.add(&batch(vec![
@@ -1522,7 +1522,7 @@ pub(crate) mod tests {
             ("n", Arc::new(NullArray::new(2)) as ArrayRef),
         ]))
         .unwrap();
-        let out = s.finish().unwrap();
+        let out = s.result().unwrap();
         let some = |v: &[&str]| v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>();
         assert_eq!(texts(&out, "column"), some(&["w", "a", "n"]));
         assert_eq!(

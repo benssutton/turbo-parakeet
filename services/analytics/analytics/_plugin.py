@@ -151,7 +151,7 @@ def streaming_recommender(
     seed: int,
     boolean_pairs: tuple[tuple[str, str], ...],
 ):
-    """The Rust streaming recommender (src/streaming.rs): .add(data, ineligible), .finish()."""
+    """The Rust streaming recommender (src/streaming.rs): .add(data, ineligible), .result()."""
     return _rs.StreamingRecommender(
         reservoir_rows=reservoir_rows,
         block_rows=block_rows,

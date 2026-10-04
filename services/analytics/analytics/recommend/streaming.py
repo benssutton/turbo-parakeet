@@ -4,7 +4,7 @@ Spec: docs/superpowers/specs/2026-09-29-streaming-recommender-design.md. All sta
 in Rust (src/streaming.rs): exact running statistics prove each recommendation on every
 row; a sample of contiguous row blocks (`reservoir_rows`, in blocks of `block_rows`)
 gives ZSTD sizes — those of an IPC file written in `block_rows` batches — and a
-cross-check. Not a technique on the uniform contract: add batches, finish at any time.
+cross-check. Not a technique on the uniform contract: add batches, result at any time.
 
 Distinct counts (spec docs/superpowers/specs/2026-10-01-recommender-parity-design.md):
 every eligible level, every dtype, keeps a HyperLogLog and a bottom-k distinct sample
@@ -101,5 +101,5 @@ class StreamingRecommender:
         self._rs.add(frame, ineligible)
         return self
 
-    def finish(self) -> pl.DataFrame:
-        return pl.DataFrame(self._rs.finish())
+    def result(self) -> pl.DataFrame:
+        return pl.DataFrame(self._rs.result())

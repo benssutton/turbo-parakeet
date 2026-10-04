@@ -1,5 +1,5 @@
 """
-Streaming recommender speed: add throughput (rows/s) and finish time, beside one-shot
+Streaming recommender speed: add throughput (rows/s) and result time, beside one-shot
 RecommendRust on the same data. Standalone — the shared harness assumes IMPLEMENTATIONS.
 
 Run: /c/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_streaming_recommend.py
@@ -51,7 +51,7 @@ def stream(frame: pl.DataFrame, batch_rows: int) -> tuple[float, float]:
     for off in range(0, frame.height, batch_rows):
         rec.add(frame.slice(off, batch_rows))
     t1 = time.perf_counter()
-    rec.finish()
+    rec.result()
     return t1 - t0, time.perf_counter() - t1
 
 
