@@ -4,11 +4,11 @@ maturin>=1.15.0
 # Data / columnar format
 polars>=1.44.2
 pyarrow>=14.0
-numpy>=1.26
+numpy>=2.5.3
 datafusion>=54.0.0
 
 # Testing
-pytest>=7.4
+pytest>=9.1.1
 pytest-cov>=7.1
 
 # Baseline implementations
