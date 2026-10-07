@@ -49,7 +49,7 @@ pub(crate) fn recommend(
     sz: &Sizes,
     params: &Params,
 ) -> PolarsResult<Rec> {
-    let [size_bytes, _, polars_bytes, polars_zstd] = *sz;
+    let [size_bytes, ..] = *sz;
     let name = s.name().as_str();
     let err = |e: String| polars_err!(ComputeError: "recommend {}: {}", name, e);
     let outer = Level::of_values(
@@ -94,15 +94,10 @@ pub(crate) fn recommend(
     let (polars_type, sizes) = if matches!(chosen.target, Target::Original(_)) {
         // The original's Polars type, spelled as the streaming recommender spells it.
         let enum_values = enum_categories(s.dtype());
-        let a = chosen.array.as_ref();
+        // The kept original is `values`, which `sz` measured.
         (
             Some(pl_name(&t, name, enum_values.as_deref(), &AT::UInt32)),
-            [
-                ipc_body_bytes(a, None)?,
-                ipc_body_bytes(a, Some(params.zstd_level))?,
-                polars_bytes,
-                polars_zstd,
-            ],
+            *sz,
         )
     } else {
         let key = chosen.target.polars_key().unwrap_or(AT::UInt32);

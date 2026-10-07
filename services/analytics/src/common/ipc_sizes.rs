@@ -190,9 +190,10 @@ pub(crate) fn sizes_of(
     layout_sizes(classic.as_ref(), native.as_ref(), level)
 }
 
-/// Plain and ZSTD body bytes of `arrow` and of `polars` (the same values in Polars'
-/// layout) as `[arrow, arrow ZSTD, polars, polars ZSTD]`. A fixed-width type exports
-/// the same buffers in both layouts, so its bodies are measured (and compressed) once.
+/// Plain and ZSTD body bytes of `arrow` and of `polars` — `arrow` in Polars' layout, sharing
+/// its buffers when the type is unchanged — as `[arrow, arrow ZSTD, polars, polars ZSTD]`.
+/// A fixed-width or boolean type keeps its buffers (equal values would not do: the bytes
+/// under nulls affect ZSTD), so its bodies are measured (and compressed) once.
 pub(crate) fn layout_sizes(
     arrow: &dyn Array,
     polars: &dyn Array,
@@ -202,7 +203,9 @@ pub(crate) fn layout_sizes(
         ipc_body_bytes(arrow, None)?,
         ipc_body_bytes(arrow, Some(level))?,
     );
-    if arrow.data_type() == polars.data_type() && arrow.data_type().is_primitive() {
+    if arrow.data_type() == polars.data_type()
+        && (arrow.data_type().is_primitive() || arrow.data_type() == &AT::Boolean)
+    {
         return Ok([plain, zstd, plain, zstd]);
     }
     Ok([
@@ -332,12 +335,24 @@ mod tests {
                 .collect::<Vec<_>>(),
         )
         .slice(3, 900);
+        assert_eq!(arrow(&ints).data_type(), native(&ints).data_type());
         check(arrow(&ints).as_ref(), native(&ints).as_ref());
         // Different layouts (LargeUtf8 vs Utf8View): measured separately.
         let text = Series::new(
             "x".into(),
             &[Some("a value longer than twelve bytes"), None, Some("b")],
         );
+        assert_ne!(arrow(&text).data_type(), native(&text).data_type());
         check(arrow(&text).as_ref(), native(&text).as_ref());
+        // Boolean: the same bit buffer in both layouts, nullable and sliced.
+        let bools = Series::new(
+            "x".into(),
+            (0..100)
+                .map(|i| (i % 5 != 0).then_some(i % 3 == 0))
+                .collect::<Vec<_>>(),
+        )
+        .slice(3, 80);
+        assert_eq!(arrow(&bools).data_type(), native(&bools).data_type());
+        check(arrow(&bools).as_ref(), native(&bools).as_ref());
     }
 }
