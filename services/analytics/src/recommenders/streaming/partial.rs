@@ -294,6 +294,27 @@ pub(crate) struct KeyStat {
     pub text: Option<String>,
 }
 
+/// A text level's values in one batch, read at a value's first row when the distinct sample
+/// admits it (exact phase only; spec 2026-10-07 §4).
+pub(crate) struct TextSource {
+    values: Series,
+    /// The level's global index of `values`' first row.
+    offset: u64,
+}
+
+impl TextSource {
+    pub(crate) fn new(values: Series, offset: u64) -> Self {
+        TextSource { values, offset }
+    }
+
+    /// The value at global index `first`, as text (one-row slice; Categorical / Enum by label).
+    pub(crate) fn at(&self, first: u64) -> Option<String> {
+        let row = i64::try_from(first.checked_sub(self.offset)?).ok()?;
+        let one = self.values.slice(row, 1).cast(&DataType::String).ok()?;
+        one.str().ok()?.get(0).map(str::to_owned)
+    }
+}
+
 /// One batch's statistics of one level.
 pub(crate) struct BatchStats {
     n: u64,
@@ -309,6 +330,8 @@ pub(crate) struct BatchStats {
     n_midnight: Option<u64>,
     /// Every distinct value, first-occurrence order.
     keys: Option<Vec<KeyStat>>,
+    /// Text levels in the exact phase: where the sample reads newly admitted values' text.
+    text_source: Option<TextSource>,
     /// HyperLogLog of the batch's distinct values (merged into the level's).
     sketch: Hll,
     /// Text / binary levels: lengths of the values over 12 bytes, row order.
@@ -404,6 +427,8 @@ impl BatchStats {
             strings: strings(s, true)?,
             n_midnight: n_midnight(s)?,
             keys,
+            text_source: (top.is_none() && is_text(s.dtype()))
+                .then(|| TextSource::new(s.clone(), offset)),
             sketch,
             long_lens: lens.map(|l| l.into_iter().filter(|&x| x > 12).collect()),
             size_bytes,
@@ -481,7 +506,7 @@ impl LevelStats {
                 .merge(&b.sketch);
             self.sample
                 .get_or_insert_with(|| DistinctSample::new(sample_size(threshold)))
-                .absorb(keys);
+                .absorb_with_text(keys, b.text_source.as_ref());
         }
         if let Some(lens) = b.long_lens {
             let v = self.views.get_or_insert_with(Default::default);
@@ -572,7 +597,15 @@ impl LevelStats {
                 .as_ref()
                 .and_then(|e| render_value(e.value.as_ref())),
             numeric,
-            ranking: None,
+            // Text levels: the exact phase's ranking (None once sampling); no sample yet
+            // means no non-null value.
+            ranking: if is_text(dtype) {
+                self.sample
+                    .as_ref()
+                    .map_or(Some(Vec::new()), DistinctSample::ranking)
+            } else {
+                None
+            },
         }
     }
 

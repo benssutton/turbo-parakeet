@@ -1,17 +1,19 @@
 //! Bottom-k sample of distinct values (spec 2026-10-01 §3.2): the k values with the
-//! smallest `hll::hash_key`, each with its count (capped at 3: enough for f1 / f2), its
-//! capture mask and its length. A value is admitted on its first occurrence when its
-//! hash is below the largest kept one; that bound only falls, so every value still
-//! held has been counted since its first row and its count and mask are exact.
+//! smallest `hll::hash_key`, each with its count, first row, capture mask and length. A
+//! value is admitted on its first occurrence when its hash is below the largest kept one;
+//! that bound only falls, so every value still held has been counted since its first row
+//! and its count, first row and mask are exact.
 //!
 //! Until the first eviction the sample holds every distinct value (the exact phase) and
-//! also keeps what the dictionary rules need: `few`, `views` and `sum_len_unique`.
+//! also keeps what the dictionary rules need: `few`, `views`, `sum_len_unique` and, for text
+//! levels, each value's text (`ranking`, spec 2026-10-07 §4).
 
 use std::collections::{BinaryHeap, HashMap};
 
 use foldhash::fast::FixedState;
 
-use crate::recommenders::streaming::partial::{KeyStat, ViewSim};
+use crate::recommenders::streaming::partial::{KeyStat, TextSource, ViewSim};
+use crate::techniques::describe::Ranking;
 
 /// Sample size for a `categorical_threshold`: at least 1000, so the estimators have
 /// data however low the threshold.
@@ -21,9 +23,12 @@ pub(crate) fn sample_size(threshold: u64) -> usize {
 
 #[derive(Clone, Copy, Debug)]
 struct Slot {
-    /// Bits 0–1: count capped at 3; bits 2–4: capture mask.
-    v: u8,
+    count: u64,
+    /// Global row of the value's first occurrence.
+    first: u64,
     len: u64,
+    /// Capture subsets the value occurred in (bits 0–2).
+    mask: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +44,8 @@ pub(crate) struct DistinctSample {
     pub views: ViewSim,
     /// Exact phase: total byte length of the distinct values.
     pub sum_len_unique: u64,
+    /// Exact phase, text levels: every held value's text, read once on admission.
+    texts: HashMap<u64, Box<str>, FixedState>,
 }
 
 impl DistinctSample {
@@ -52,12 +59,19 @@ impl DistinctSample {
             few: Vec::new(),
             views: ViewSim::default(),
             sum_len_unique: 0,
+            texts: HashMap::default(),
         }
     }
 
     /// `keys`: one batch's distinct values; in first-occurrence order while exact on a
     /// text / binary level (`few` and `views` read it), any order otherwise.
     pub(crate) fn absorb(&mut self, keys: Vec<KeyStat>) {
+        self.absorb_with_text(keys, None);
+    }
+
+    /// As `absorb`; `text` (a text level in the exact phase) gives each newly admitted
+    /// value's text, read once at its first row.
+    pub(crate) fn absorb_with_text(&mut self, keys: Vec<KeyStat>, text: Option<&TextSource>) {
         for k in keys {
             // Sampling: every held value hashes at or below the top, so one above it is
             // neither held nor admitted; skip it before the map lookup.
@@ -65,8 +79,8 @@ impl DistinctSample {
                 continue;
             }
             if let Some(s) = self.map.get_mut(&k.key) {
-                let count = ((s.v & 3) as u64 + k.count).min(3) as u8;
-                s.v = count | (s.v & !3) | (k.mask << 2);
+                s.count += k.count;
+                s.mask |= k.mask;
                 continue;
             }
             let h = k.hash;
@@ -82,12 +96,17 @@ impl DistinctSample {
             self.map.insert(
                 k.key,
                 Slot {
-                    v: k.count.min(3) as u8 | (k.mask << 2),
+                    count: k.count,
+                    first: k.first,
                     len: k.len,
+                    mask: k.mask,
                 },
             );
             self.heap.push((h, k.key));
             if !self.sampling {
+                if let Some(t) = text.and_then(|src| src.at(k.first)) {
+                    self.texts.insert(k.key, t.into_boxed_str());
+                }
                 self.sum_len_unique += k.len;
                 self.views.push(k.len);
                 match k.text {
@@ -105,6 +124,7 @@ impl DistinctSample {
             self.few.clear();
             self.views = ViewSim::default();
             self.sum_len_unique = 0;
+            self.texts = HashMap::default();
         }
     }
 
@@ -131,16 +151,34 @@ impl DistinctSample {
     pub(crate) fn counts(&self) -> (u64, u64, [u64; 7]) {
         let (mut f1, mut f2, mut h) = (0, 0, [0u64; 7]);
         for s in self.map.values() {
-            f1 += (s.v & 3 == 1) as u64;
-            f2 += (s.v & 3 == 2) as u64;
-            h[(s.v >> 2) as usize - 1] += 1;
+            f1 += (s.count == 1) as u64;
+            f2 += (s.count == 2) as u64;
+            h[s.mask as usize - 1] += 1;
         }
         (f1, f2, h)
     }
 
     /// Every held value occurred exactly once.
     pub(crate) fn all_once(&self) -> bool {
-        self.map.values().all(|s| s.v & 3 == 1)
+        self.map.values().all(|s| s.count == 1)
+    }
+
+    /// Exact phase: every held value by frequency (count descending, ties to the earlier
+    /// first row), as one-shot's `Profile.ranking`. None in the sampling phase, or when a held
+    /// value has no text (not a text level).
+    pub(crate) fn ranking(&self) -> Option<Ranking> {
+        if self.sampling {
+            return None;
+        }
+        let mut held: Vec<(u64, u64, u64)> = self
+            .map
+            .iter()
+            .map(|(&key, s)| (s.count, s.first, key))
+            .collect();
+        held.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        held.into_iter()
+            .map(|(count, _, key)| self.texts.get(&key).map(|t| (t.to_string(), count)))
+            .collect()
     }
 
     /// Mean byte length of the held values (0 when empty).
@@ -163,7 +201,9 @@ impl DistinctSample {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recommenders::streaming::partial::TextSource;
     use crate::techniques::hll::hash_key;
+    use polars::prelude::{NamedFrom, Series};
 
     fn ks(key: u64, count: u64, mask: u8, text: Option<&str>) -> KeyStat {
         KeyStat {
@@ -193,12 +233,73 @@ mod tests {
     }
 
     #[test]
-    fn counts_cap_at_three_and_masks_accumulate() {
+    fn counts_accumulate_and_masks_merge() {
         let mut d = DistinctSample::new(1_000);
         d.absorb(vec![ks(1, 1, 1, None)]);
         d.absorb(vec![ks(1, 5, 2, None)]);
         assert_eq!(d.counts(), (0, 0, [0, 0, 1, 0, 0, 0, 0]));
         assert!(!d.all_once());
+    }
+
+    #[test]
+    fn counts_and_first_rows_are_exact_across_batches() {
+        let at = |key, count, first| KeyStat {
+            first,
+            ..ks(key, count, 1, None)
+        };
+        let mut d = DistinctSample::new(1_000);
+        d.absorb(vec![at(1, 2, 5), at(2, 1, 7)]);
+        d.absorb(vec![at(2, 4, 9), at(3, 1, 10)]);
+        let slot = |k: u64| (d.map[&k].count, d.map[&k].first);
+        assert_eq!((slot(1), slot(2), slot(3)), ((2, 5), (5, 7), (1, 10)));
+        assert_eq!(d.counts().0, 1); // f1: only key 3 occurred once
+    }
+
+    #[test]
+    fn texts_are_read_once_on_admission_and_dropped_on_overflow() {
+        // Global rows 100..103 hold "x", "y", "x".
+        let src = TextSource::new(Series::new("s".into(), &["x", "y", "x"]), 100);
+        let mut d = DistinctSample::new(1_000);
+        d.absorb_with_text(
+            vec![
+                KeyStat {
+                    first: 100,
+                    ..ks(1, 2, 1, None)
+                },
+                KeyStat {
+                    first: 101,
+                    ..ks(2, 1, 1, None)
+                },
+            ],
+            Some(&src),
+        );
+        assert_eq!(
+            d.ranking(),
+            Some(vec![("x".to_string(), 2), ("y".into(), 1)])
+        );
+        // Later occurrences only add counts: no text source is needed.
+        d.absorb_with_text(
+            vec![KeyStat {
+                first: 500,
+                ..ks(2, 3, 1, None)
+            }],
+            None,
+        );
+        assert_eq!(
+            d.ranking(),
+            Some(vec![("y".to_string(), 4), ("x".into(), 2)])
+        );
+        d.absorb(batch(10..2_000)); // past k: sampling
+        assert_eq!(d.ranking(), None);
+        assert!(d.texts.is_empty());
+    }
+
+    #[test]
+    fn a_held_value_without_text_means_no_ranking() {
+        let mut d = DistinctSample::new(1_000);
+        d.absorb(batch(0..3));
+        assert_eq!(d.ranking(), None);
+        assert_eq!(DistinctSample::new(1_000).ranking(), Some(vec![]));
     }
 
     #[test]

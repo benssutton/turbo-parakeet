@@ -750,3 +750,50 @@ fn an_enum_is_named_by_its_categories() {
         "Enum(categories=['b', 'a'])"
     );
 }
+
+#[test]
+fn text_levels_rank_like_one_shot() {
+    use arrow_array::builder::{ListBuilder, StringBuilder};
+    let v = [
+        Some("b"),
+        Some("a"),
+        Some("b"),
+        None,
+        Some("c"),
+        Some("a"),
+        Some("b"),
+    ];
+    let mut lb = ListBuilder::new(StringBuilder::new());
+    for row in [Some(vec!["q", "p"]), None, Some(vec!["p"])] {
+        match row {
+            Some(items) => {
+                items.iter().for_each(|x| lb.values().append_value(x));
+                lb.append(true);
+            }
+            None => lb.append(false),
+        }
+    }
+    let lists: ArrayRef = Arc::new(lb.finish());
+    let mut s = streaming();
+    // One row per batch: every value is admitted from its own batch.
+    for i in 0..v.len() {
+        s.add(&batch(vec![("s", strs(&v[i..i + 1]))])).unwrap();
+    }
+    for i in 0..lists.len() {
+        s.add(&batch(vec![("l", lists.slice(i, 1))])).unwrap();
+    }
+    let want = Some(vec![("b".to_string(), 3), ("a".into(), 2), ("c".into(), 1)]);
+    assert_eq!(col(&s, "s").outer.profile(&PT::String).ranking, want);
+    let inner = col(&s, "l").inner.as_ref().unwrap();
+    assert_eq!(
+        inner.profile(&PT::String).ranking,
+        Some(vec![("p".to_string(), 2), ("q".into(), 1)])
+    );
+    assert_eq!(
+        col(&s, "l")
+            .outer
+            .profile(&PT::List(Box::new(PT::String)))
+            .ranking,
+        None
+    );
+}
