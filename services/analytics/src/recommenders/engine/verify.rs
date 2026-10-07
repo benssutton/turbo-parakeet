@@ -3,7 +3,7 @@
 use super::*;
 use crate::techniques::describe::{parse_iso, IsoValue};
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float32Type, Float64Type, Int16Type};
+use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int16Type};
 use arrow_array::{Array, ArrayRef, LargeStringArray};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType as AT, TimeUnit};
@@ -58,8 +58,61 @@ pub(crate) fn parse_back(s: &str, f32_src: bool) -> Result<f64, String> {
     .map_err(|_| format!("{s:?} does not parse as a float"))
 }
 
+/// Exact powers of ten: 10^s is a float exactly while 5^s fits the mantissa —
+/// s ≤ 22 in f64 (5^22 < 2^53), s ≤ 10 in f32 (5^10 < 2^24).
+const POW10_F64: [f64; 23] = [
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+    1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+];
+const POW10_F32: [f32; 11] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10];
+
+/// The decimal `unscaled × 10^-scale` as the float its text parses to (`parse_back`),
+/// without the text: when the unscaled value and 10^scale are both exact floats, one
+/// IEEE division rounds the exact quotient correctly, as the parse does. None outside
+/// that range (the caller falls back to the text).
+pub(crate) fn decimal_to_float(unscaled: i128, scale: i8, f32_src: bool) -> Option<f64> {
+    let s = usize::try_from(scale).ok()?;
+    if f32_src {
+        let p = *POW10_F32.get(s)?;
+        (unscaled.unsigned_abs() <= 1 << 24).then(|| f64::from(unscaled as f32 / p))
+    } else {
+        let p = *POW10_F64.get(s)?;
+        (unscaled.unsigned_abs() <= 1 << 53).then(|| unscaled as f64 / p)
+    }
+}
+
+/// A decimal recast's values as floats: by `decimal_to_float` when every value is in
+/// its exact range, else through the text (`parse_back`).
+fn decimal_back(recast: &ArrayRef, f32_src: bool) -> Result<Vec<Option<f64>>, String> {
+    let s = match recast.data_type() {
+        AT::Decimal32(_, s) | AT::Decimal64(_, s) | AT::Decimal128(_, s) => *s,
+        t => return Err(format!("{t} is not a decimal")),
+    };
+    let wide = arrow_cast(recast.as_ref(), &AT::Decimal128(38, s))?;
+    let fast: Option<Vec<Option<f64>>> = wide
+        .as_primitive::<Decimal128Type>()
+        .iter()
+        .map(|v| match v {
+            None => Some(None),
+            Some(u) => decimal_to_float(u, s, f32_src).map(Some),
+        })
+        .collect();
+    if let Some(back) = fast {
+        return Ok(back);
+    }
+    let t = arrow_cast(recast.as_ref(), &AT::Utf8)?;
+    t.as_string::<i32>()
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            v.map(|s| parse_back(s, f32_src).map_err(|e| format!("row {i}: {e}")))
+                .transpose()
+        })
+        .collect()
+}
+
 /// Float sources: every recast value converts back to the original float (NaN = NaN,
-/// -0.0 = 0.0). Decimals come back through their text (correctly rounded parse).
+/// -0.0 = 0.0). Decimals come back as the float their text parses to (`decimal_back`).
 pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), String> {
     let f32_src = src.data_type() == &AT::Float32;
     let decimal = matches!(
@@ -67,15 +120,7 @@ pub(crate) fn verify_float(src: &ArrayRef, recast: &ArrayRef) -> Result<(), Stri
         AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..)
     );
     let back: Vec<Option<f64>> = if decimal {
-        let t = arrow_cast(recast.as_ref(), &AT::Utf8)?;
-        t.as_string::<i32>()
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                v.map(|s| parse_back(s, f32_src).map_err(|e| format!("row {i}: {e}")))
-                    .transpose()
-            })
-            .collect::<Result<_, _>>()?
+        decimal_back(recast, f32_src)?
     } else if f32_src {
         arrow_cast(recast.as_ref(), &AT::Float32)?
             .as_primitive::<Float32Type>()
@@ -406,6 +451,71 @@ mod tests {
     use polars::prelude::{CompatLevel, DataType as PT, NamedFrom, Series, TimeUnit as PTimeUnit};
 
     use crate::common::ipc_sizes::ipc_body_bytes;
+    use arrow_array::Float64Array;
+
+    /// A decimal's text as `verify_float`'s text path renders it.
+    fn decimal_text(u: i128, scale: i8) -> String {
+        let d = decimal_array(vec![Some(u)], scale).unwrap();
+        arrow_cast(d.as_ref(), &AT::Utf8)
+            .unwrap()
+            .as_string::<i32>()
+            .value(0)
+            .to_owned()
+    }
+
+    #[test]
+    fn decimal_to_float_matches_the_text_parse() {
+        // Every in-range (unscaled, scale) gives exactly what its text parses to.
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..20_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17; // xorshift64
+            let scale = (x % 23) as i8;
+            for f32_src in [false, true] {
+                let bound: i128 = if f32_src { 1 << 24 } else { 1 << 53 };
+                let sign = if x & 1 == 0 { 1 } else { -1 };
+                let u = ((x >> 8) as i128 % (bound + 1)) * sign;
+                let Some(fast) = decimal_to_float(u, scale, f32_src) else {
+                    assert!(f32_src && scale > 10, "u={u} scale={scale}");
+                    continue;
+                };
+                let text = decimal_text(u, scale);
+                assert_eq!(
+                    fast,
+                    parse_back(&text, f32_src).unwrap(),
+                    "{text} f32={f32_src}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decimal_to_float_refuses_inexact_operands() {
+        assert_eq!(decimal_to_float((1 << 53) + 1, 0, false), None);
+        assert_eq!(decimal_to_float(1, 23, false), None);
+        assert_eq!(decimal_to_float((1 << 24) + 1, 0, true), None);
+        assert_eq!(decimal_to_float(1, 11, true), None);
+        assert_eq!(decimal_to_float(1, -1, false), None);
+        assert_eq!(decimal_to_float(-2_500, 3, false), Some(-2.5));
+    }
+
+    #[test]
+    fn verify_float_checks_decimals_on_both_paths() {
+        let dec = |v: Vec<Option<i128>>, p: u8, s: i8| {
+            arrow_cast(decimal_array(v, s).unwrap().as_ref(), &decimal_type(p, s)).unwrap()
+        };
+        let src: ArrayRef = Arc::new(Float64Array::from(vec![Some(0.1), Some(-2.5), None]));
+        assert!(verify_float(&src, &dec(vec![Some(100), Some(-2_500), None], 9, 3)).is_ok());
+        let err = verify_float(&src, &dec(vec![Some(100), Some(-2_501), None], 9, 3)).unwrap_err();
+        assert!(err.starts_with("row 1"), "{err}");
+        // Unscaled 10^19 > 2^53: the text path.
+        let big: ArrayRef = Arc::new(Float64Array::from(vec![Some(1e17)]));
+        assert!(verify_float(&big, &dec(vec![Some(10i128.pow(19))], 21, 2)).is_ok());
+        // 1e17 + 100 rounds to 1e17 + 96 (ulp 16), not 1e17.
+        let err = verify_float(&big, &dec(vec![Some(10i128.pow(19) + 10_000)], 21, 2)).unwrap_err();
+        assert!(err.starts_with("row 0"), "{err}");
+    }
 
     #[test]
     fn verification_reports_the_first_mismatch() {

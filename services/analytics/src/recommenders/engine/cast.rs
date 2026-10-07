@@ -193,11 +193,11 @@ pub(crate) fn float_to_decimal(src: &ArrayRef, to: &AT) -> Result<ArrayRef, Stri
                     return Err(format!("row {i}: {x} is not finite"));
                 }
                 let repr = if f32_src {
-                    buf.format_finite(x as f32).to_string()
+                    buf.format_finite(x as f32)
                 } else {
-                    buf.format_finite(x).to_string()
+                    buf.format_finite(x)
                 };
-                decimal_from_repr(&repr, *s as u32)
+                decimal_from_repr(repr, *s as u32)
                     .ok_or_else(|| format!("row {i}: {repr} does not fit scale {s}"))
             })
             .transpose()
