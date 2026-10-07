@@ -65,6 +65,7 @@ impl DistinctSample {
 
     /// `keys`: one batch's distinct values; in first-occurrence order while exact on a
     /// text / binary level (`few` and `views` read it), any order otherwise.
+    #[cfg(test)]
     pub(crate) fn absorb(&mut self, keys: Vec<KeyStat>) {
         self.absorb_with_text(keys, None);
     }
