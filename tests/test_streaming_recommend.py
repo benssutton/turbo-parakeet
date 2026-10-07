@@ -197,6 +197,9 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         got = candidates(r, original_sizes, not overflowed)
         want = candidates(o, original_sizes, not overflowed)
         assert got == want, name
+        # Both rank by exact counts while the dictionary is a candidate (spec 2026-10-07 §4).
+        for k in ("top_k", "inner_top_k"):
+            assert r[k] == o[k], (name, k, r[k], o[k])
         exact_cols = [
             "n_rows",
             "n_null",
@@ -648,3 +651,30 @@ def test_top_k_over_batches():
     frame = pl.DataFrame({"s": ["b", "a", "b", None, "c", "a", "b"]})
     out = stream(frame, 3, top_k=1)
     assert out["top_k"].to_list() == [[{"key": "b", "value": 3}]]
+
+
+def test_top_k_streams_exactly_like_one_shot():
+    frame = pl.DataFrame(
+        {
+            "s": ["b", "a", "b", None, "c", "a", "b"] * 30,
+            "l": pl.Series([["b", "a"], None, ["c"], [], ["a"], None, ["b"]] * 30),
+            "c": pl.Series(
+                ["q", "p", "q", None, "r", "p", "q"] * 30, dtype=pl.Categorical
+            ),
+        }
+    )
+    want = (
+        OneShotRecommender()
+        .add(frame)
+        .result()
+        .select("column", "top_k", "inner_top_k")
+    )
+    assert want["top_k"][0].to_list()[0] == {"key": "b", "value": 90}
+    for batch_rows in (1, 7, 210):
+        got = stream(frame, batch_rows).select("column", "top_k", "inner_top_k")
+        assert got.equals(want), batch_rows
+
+
+def test_top_k_is_null_past_the_sample():
+    frame = pl.DataFrame({"s": [f"v{i}" for i in range(12_000)]})
+    assert stream(frame, 4_000)["top_k"].to_list() == [None]
