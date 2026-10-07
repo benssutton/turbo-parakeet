@@ -1,7 +1,7 @@
 //! The recommendation for one column: `recommend`, `Rec`, `Prepared`.
 
 use super::*;
-use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, sizes_of, Sizes};
+use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, layout_sizes, sizes_of, Sizes};
 use crate::techniques::describe::conclusions::Conclusions;
 use crate::techniques::describe::{describe_one, value_fields, Described, Row};
 use arrow_array::{Array, ArrayRef};
@@ -91,13 +91,18 @@ pub(crate) fn recommend(
         _ => choose(&outer, params).map_err(err)?,
     };
     let t = chosen.array.data_type().clone();
-    let (polars_type, polars_size, polars_zstd) = if matches!(chosen.target, Target::Original(_)) {
+    let (polars_type, sizes) = if matches!(chosen.target, Target::Original(_)) {
         // The original's Polars type, spelled as the streaming recommender spells it.
         let enum_values = enum_categories(s.dtype());
+        let a = chosen.array.as_ref();
         (
             Some(pl_name(&t, name, enum_values.as_deref(), &AT::UInt32)),
-            polars_bytes,
-            Some(polars_zstd),
+            [
+                ipc_body_bytes(a, None)?,
+                ipc_body_bytes(a, Some(params.zstd_level))?,
+                polars_bytes,
+                polars_zstd,
+            ],
         )
     } else {
         let key = chosen.target.polars_key().unwrap_or(AT::UInt32);
@@ -110,21 +115,18 @@ pub(crate) fn recommend(
         .map_err(|e| err(format!("Polars layout: {e}")))?;
         (
             Some(pl_name(&t, name, None, &key)),
-            ipc_body_bytes(layout.as_ref(), None)?,
-            Some(ipc_body_bytes(layout.as_ref(), Some(params.zstd_level))?),
+            layout_sizes(chosen.array.as_ref(), layout.as_ref(), params.zstd_level)?,
         )
     };
+    let [arrow_size, arrow_zstd, polars_size, polars_zstd] = sizes;
     Ok(Rec {
         nullable: chosen.array.logical_null_count() > 0,
         arrow_type: pa_name(&t),
-        arrow_size: ipc_body_bytes(chosen.array.as_ref(), None)?,
-        arrow_zstd: Some(ipc_body_bytes(
-            chosen.array.as_ref(),
-            Some(params.zstd_level),
-        )?),
+        arrow_size,
+        arrow_zstd: Some(arrow_zstd),
         polars_type,
         polars_size,
-        polars_zstd,
+        polars_zstd: Some(polars_zstd),
         lossy: chosen.lossy,
         candidates: chosen.candidates,
     })

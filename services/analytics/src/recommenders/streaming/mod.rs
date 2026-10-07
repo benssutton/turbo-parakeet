@@ -24,7 +24,7 @@ use rayon::prelude::*;
 
 use crate::common::arrow_io::{export_struct, import_batch};
 use crate::common::error::{Error, Result};
-use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, sizes_of};
+use crate::common::ipc_sizes::{classic_layout, layout_sizes, sizes_of};
 use crate::recommenders::engine::{
     enum_categories, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row,
     to_polars_layout, top_k_cell, Params, Rec, Target,
@@ -394,7 +394,6 @@ impl Streaming {
         };
 
         // ZSTD sizes and the cross-check on the sampled blocks.
-        let z_level = Some(self.params.zstd_level);
         let mut z = [0u64; 4]; // original Arrow, original Polars, recommended Arrow, recommended Polars
         for b in blocks {
             let s = block_series(b, &c.name, dtype, c.views_input).map_err(err)?;
@@ -421,8 +420,11 @@ impl Streaming {
                     pa_name(&pick.target.arrow_type())
                 )
             })?;
-            z[2] += ipc_body_bytes(a.as_ref(), z_level).map_err(err)?;
-            z[3] += ipc_body_bytes(to_polars_layout(&a, &key)?.as_ref(), z_level).map_err(err)?;
+            let polars = to_polars_layout(&a, &key)?;
+            let rz =
+                layout_sizes(a.as_ref(), polars.as_ref(), self.params.zstd_level).map_err(err)?;
+            z[2] += rz[1];
+            z[3] += rz[3];
         }
         let scale = |x: u64| {
             (sampled > 0).then(|| (x as f64 * self.n_rows as f64 / sampled as f64).round() as u64)

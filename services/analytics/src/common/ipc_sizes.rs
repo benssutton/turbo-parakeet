@@ -187,11 +187,29 @@ pub(crate) fn sizes_of(
     level: i32,
 ) -> PolarsResult<Sizes> {
     let native = export_series(s, CompatLevel::newest())?;
+    layout_sizes(classic.as_ref(), native.as_ref(), level)
+}
+
+/// Plain and ZSTD body bytes of `arrow` and of `polars` (the same values in Polars'
+/// layout) as `[arrow, arrow ZSTD, polars, polars ZSTD]`. A fixed-width type exports
+/// the same buffers in both layouts, so its bodies are measured (and compressed) once.
+pub(crate) fn layout_sizes(
+    arrow: &dyn Array,
+    polars: &dyn Array,
+    level: i32,
+) -> PolarsResult<Sizes> {
+    let (plain, zstd) = (
+        ipc_body_bytes(arrow, None)?,
+        ipc_body_bytes(arrow, Some(level))?,
+    );
+    if arrow.data_type() == polars.data_type() && arrow.data_type().is_primitive() {
+        return Ok([plain, zstd, plain, zstd]);
+    }
     Ok([
-        ipc_body_bytes(classic.as_ref(), None)?,
-        ipc_body_bytes(classic.as_ref(), Some(level))?,
-        ipc_body_bytes(native.as_ref(), None)?,
-        ipc_body_bytes(native.as_ref(), Some(level))?,
+        plain,
+        zstd,
+        ipc_body_bytes(polars, None)?,
+        ipc_body_bytes(polars, Some(level))?,
     ])
 }
 
@@ -290,5 +308,36 @@ mod tests {
             .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
             .unwrap();
         assert_eq!(sizes(&cat, 1).unwrap()[0], 48); // pyarrow: keys 16 + dictionary 32 (see test_describe.py)
+    }
+
+    #[test]
+    fn layout_sizes_match_separate_measurements() {
+        let check = |a: &dyn Array, p: &dyn Array| {
+            assert_eq!(
+                layout_sizes(a, p, 1).unwrap(),
+                [
+                    ipc_body_bytes(a, None).unwrap(),
+                    ipc_body_bytes(a, Some(1)).unwrap(),
+                    ipc_body_bytes(p, None).unwrap(),
+                    ipc_body_bytes(p, Some(1)).unwrap(),
+                ]
+            );
+        };
+        let native = |s: &Series| export_series(s, CompatLevel::newest()).unwrap();
+        // Same type in both layouts (measured once), with nulls and a slice offset.
+        let ints = Series::new(
+            "x".into(),
+            (0..1_000i64)
+                .map(|i| (i % 7 != 0).then_some(i * 31))
+                .collect::<Vec<_>>(),
+        )
+        .slice(3, 900);
+        check(arrow(&ints).as_ref(), native(&ints).as_ref());
+        // Different layouts (LargeUtf8 vs Utf8View): measured separately.
+        let text = Series::new(
+            "x".into(),
+            &[Some("a value longer than twelve bytes"), None, Some("b")],
+        );
+        check(arrow(&text).as_ref(), native(&text).as_ref());
     }
 }
