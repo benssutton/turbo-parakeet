@@ -70,7 +70,7 @@ const POW10_F32: [f32; 11] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 
 /// without the text: when the unscaled value and 10^scale are both exact floats, one
 /// IEEE division rounds the exact quotient correctly, as the parse does. None outside
 /// that range (the caller falls back to the text).
-pub(crate) fn decimal_to_float(unscaled: i128, scale: i8, f32_src: bool) -> Option<f64> {
+fn decimal_to_float(unscaled: i128, scale: i8, f32_src: bool) -> Option<f64> {
     let s = usize::try_from(scale).ok()?;
     if f32_src {
         let p = *POW10_F32.get(s)?;
@@ -451,7 +451,7 @@ mod tests {
     use polars::prelude::{CompatLevel, DataType as PT, NamedFrom, Series, TimeUnit as PTimeUnit};
 
     use crate::common::ipc_sizes::ipc_body_bytes;
-    use arrow_array::Float64Array;
+    use arrow_array::{Float32Array, Float64Array};
 
     /// A decimal's text as `verify_float`'s text path renders it.
     fn decimal_text(u: i128, scale: i8) -> String {
@@ -466,6 +466,26 @@ mod tests {
     #[test]
     fn decimal_to_float_matches_the_text_parse() {
         // Every in-range (unscaled, scale) gives exactly what its text parses to.
+        let (b53, b24) = (1i128 << 53, 1i128 << 24);
+        let fixed = [
+            (b53, 0, false),
+            (-b53, 0, false),
+            (b53, 22, false),
+            (-b53, 22, false),
+            (b24, 0, true),
+            (-b24, 0, true),
+            (b24, 10, true),
+            (-b24, 10, true),
+            (1, 22, false),
+            (1, 10, true),
+            (0, 0, false),
+            (0, 22, false),
+            (0, 10, true),
+        ];
+        for (u, s, f32_src) in fixed {
+            let want = parse_back(&decimal_text(u, s), f32_src).unwrap();
+            assert_eq!(decimal_to_float(u, s, f32_src), Some(want), "u={u} s={s}");
+        }
         let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
         for _ in 0..20_000 {
             x ^= x << 13;
@@ -508,6 +528,12 @@ mod tests {
         let src: ArrayRef = Arc::new(Float64Array::from(vec![Some(0.1), Some(-2.5), None]));
         assert!(verify_float(&src, &dec(vec![Some(100), Some(-2_500), None], 9, 3)).is_ok());
         let err = verify_float(&src, &dec(vec![Some(100), Some(-2_501), None], 9, 3)).unwrap_err();
+        assert!(err.starts_with("row 1"), "{err}");
+        // Float32 source against a Decimal64 recast (precision 12).
+        let src32: ArrayRef = Arc::new(Float32Array::from(vec![Some(0.1f32), Some(-2.5), None]));
+        assert!(verify_float(&src32, &dec(vec![Some(100), Some(-2_500), None], 12, 3)).is_ok());
+        let err =
+            verify_float(&src32, &dec(vec![Some(100), Some(-2_501), None], 12, 3)).unwrap_err();
         assert!(err.starts_with("row 1"), "{err}");
         // Unscaled 10^19 > 2^53: the text path.
         let big: ArrayRef = Arc::new(Float64Array::from(vec![Some(1e17)]));
