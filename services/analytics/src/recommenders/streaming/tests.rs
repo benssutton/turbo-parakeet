@@ -894,18 +894,54 @@ fn top_k_streams_like_one_shot() {
         Some("b"),
     ]
     .repeat(3);
-    let whole = batch(vec![("s", strs(&v)), ("i", ints(&vec![Some(1); v.len()]))]);
+    // Lists with ties (p, q), whose first occurrences fall in different batches, null and
+    // empty lists.
+    let lists = [
+        Some(vec!["p"]),
+        None,
+        Some(vec![]),
+        Some(vec!["q"]),
+        Some(vec!["q", "p"]),
+        None,
+        Some(vec!["r"]),
+    ];
+    let mut lb = arrow_array::builder::ListBuilder::new(arrow_array::builder::StringBuilder::new());
+    for row in lists.iter().cycle().take(v.len()) {
+        match row {
+            Some(items) => {
+                items.iter().for_each(|x| lb.values().append_value(x));
+                lb.append(true);
+            }
+            None => lb.append(false),
+        }
+    }
+    let dict: arrow_array::DictionaryArray<arrow_array::types::Int32Type> =
+        v.iter().copied().collect();
+    let whole = batch(vec![
+        ("s", strs(&v)),
+        ("i", ints(&vec![Some(1); v.len()])),
+        ("l", Arc::new(lb.finish()) as ArrayRef),
+        ("d", Arc::new(dict) as ArrayRef),
+    ]);
     let reference = one_shot(&whole);
-    for k in [1, 5, v.len()] {
+    for rows in [1, 5, v.len()] {
         let mut s = streaming();
         (0..v.len())
-            .step_by(k)
-            .for_each(|off| s.add(&whole.slice(off, k.min(v.len() - off))).unwrap());
+            .step_by(rows)
+            .for_each(|off| s.add(&whole.slice(off, rows.min(v.len() - off))).unwrap());
         let out = s.result().unwrap();
-        assert_eq!(top_k(&out, "top_k"), top_k(&reference, "top_k"), "k={k}");
+        for name in ["top_k", "inner_top_k"] {
+            assert_eq!(
+                top_k(&out, name),
+                top_k(&reference, name),
+                "{name} rows={rows}"
+            );
+        }
+        let words = pairs(&[("b", 9), ("a", 6), ("c", 3)]);
+        assert_eq!(top_k(&out, "top_k"), [words.clone(), None, None, words]);
         assert_eq!(
-            top_k(&out, "top_k"),
-            [pairs(&[("b", 9), ("a", 6), ("c", 3)]), None]
+            top_k(&out, "inner_top_k"),
+            [None, None, pairs(&[("p", 6), ("q", 6), ("r", 3)]), None]
         );
     }
 }

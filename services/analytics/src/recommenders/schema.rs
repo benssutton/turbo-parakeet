@@ -116,13 +116,10 @@ fn to_map(c: &ArrayRef) -> Result<ArrayRef, ArrowError> {
                 .map_err(|_| ArrowError::ComputeError("top_k: over 2^31 entries".into()))?;
             (l.values().as_struct().clone(), o, l.nulls().cloned())
         }
-        _ => {
-            let l = c.as_list::<i32>();
-            (
-                l.values().as_struct().clone(),
-                l.offsets().to_vec(),
-                l.nulls().cloned(),
-            )
+        t => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "top_k: expected a large list, got {t}"
+            )))
         }
     };
     let keys = ::arrow_cast::cast(entries.column(0).as_ref(), &AT::Utf8)?;
@@ -144,4 +141,73 @@ fn to_map(c: &ArrayRef) -> Result<ArrayRef, ArrowError> {
         false,
     )?;
     Ok(Arc::new(map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{Int64Array, LargeListArray, StringViewArray, UInt64Array};
+
+    #[test]
+    fn with_maps_rewraps_a_sliced_list_with_nulls() {
+        let entry = Fields::from(vec![
+            Field::new("key", AT::Utf8View, true),
+            Field::new("value", AT::UInt64, true),
+        ]);
+        let entries = StructArray::new(
+            entry.clone(),
+            vec![
+                Arc::new(StringViewArray::from(vec!["a", "b", "c"])) as ArrayRef,
+                Arc::new(UInt64Array::from(vec![1, 2, 3])) as ArrayRef,
+            ],
+            None,
+        );
+        // Rows: [a, b], null, [c]; sliced to the last two (first offset 2).
+        let list = LargeListArray::new(
+            Arc::new(Field::new("item", AT::Struct(entry), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i64, 2, 2, 3])),
+            Arc::new(entries),
+            Some(vec![true, false, true].into()),
+        )
+        .slice(1, 2);
+        let other: ArrayRef = Arc::new(Int64Array::from(vec![7, 8]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("top_k", list.data_type().clone(), true),
+            Field::new("x", AT::Int64, false),
+        ]));
+        let b = RecordBatch::try_new(schema, vec![Arc::new(list), other.clone()]).unwrap();
+        let out = with_maps(b).unwrap();
+        let kv = Fields::from(vec![
+            Field::new("key", AT::Utf8, false),
+            Field::new("value", AT::UInt64, false),
+        ]);
+        let want = AT::Map(
+            Arc::new(Field::new("entries", AT::Struct(kv), false)),
+            false,
+        );
+        assert_eq!(out.schema().field(0).data_type(), &want);
+        let m = out.column(0).as_map();
+        assert!(m.is_null(0));
+        let e = m.value(1);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e.column(0).as_string::<i32>().value(0), "c");
+        assert_eq!(
+            e.column(1)
+                .as_primitive::<arrow_array::types::UInt64Type>()
+                .value(0),
+            3
+        );
+        assert_eq!(out.column(1), &other);
+        assert_eq!(out.schema().field(1).name(), "x");
+    }
+
+    #[test]
+    fn with_maps_refuses_other_types() {
+        let b = RecordBatch::try_from_iter([(
+            "top_k",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        assert!(with_maps(b).is_err());
+    }
 }

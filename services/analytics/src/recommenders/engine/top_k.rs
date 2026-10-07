@@ -88,10 +88,9 @@ pub(crate) fn top_k_cell(
     prefix: &str,
     k: u64,
 ) -> AnyValue<'static> {
-    let rule = format!("{prefix}string→dictionary");
-    let candidate = candidates
-        .iter()
-        .any(|c| c.rule == rule && c.outcome != Outcome::Rejected);
+    let candidate = candidates.iter().any(|c| {
+        c.rule.strip_prefix(prefix) == Some("string→dictionary") && c.outcome != Outcome::Rejected
+    });
     let Some(r) = ranking.filter(|_| k > 0 && candidate) else {
         return AnyValue::Null;
     };
