@@ -32,6 +32,8 @@ pub struct OneShotParams {
     pub zstd_level: i32,
     pub seed: u64,
     pub boolean_pairs: Vec<(String, String)>,
+    /// Entries per `top_k` / `inner_top_k` cell: 0 none, u64::MAX every ranked value.
+    pub top_k: u64,
 }
 
 /// Recommends dtypes for one frame from exact statistics, each candidate verified on
@@ -46,7 +48,7 @@ impl OneShotRecommender {
             zstd_level: p.zstd_level,
             categorical_threshold: p.categorical_threshold,
             boolean_pairs: p.boolean_pairs,
-            top_k: 256, // Task 5: the caller's parameter
+            top_k: p.top_k,
         })))
     }
 
@@ -79,6 +81,8 @@ pub struct StreamingParams {
     pub zstd_level: i32,
     pub seed: u64,
     pub boolean_pairs: Vec<(String, String)>,
+    /// Entries per `top_k` / `inner_top_k` cell: 0 none, u64::MAX every ranked value.
+    pub top_k: u64,
 }
 
 /// Recommends dtypes from record batches added over time; all state stays in Rust.
@@ -101,7 +105,7 @@ impl StreamingRecommender {
             zstd_level: p.zstd_level,
             categorical_threshold: p.categorical_threshold,
             boolean_pairs: p.boolean_pairs,
-            top_k: 256, // Task 5: the caller's parameter
+            top_k: p.top_k,
         };
         Ok(Self(crate::recommenders::streaming::Streaming::new(
             params,
@@ -152,6 +156,7 @@ mod tests {
             zstd_level: 1,
             seed: 0,
             boolean_pairs: vec![("true".into(), "false".into())],
+            top_k: 256,
         }
     }
 
@@ -202,6 +207,7 @@ mod tests {
             zstd_level: 1,
             seed: 0,
             boolean_pairs: vec![("true".into(), "false".into())],
+            top_k: 256,
         }
     }
 

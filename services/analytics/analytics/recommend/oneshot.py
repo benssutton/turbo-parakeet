@@ -31,6 +31,13 @@ class OneShotRecommender:
     plain and ZSTD. `rec_candidates` lists every candidate with its rule, the metric
     values it tested, its predicted / projected size and its outcome.
 
+    `top_k` / `inner_top_k` (dictionary candidates only, else null): the level's
+    values by count, highest first, ties to the value seen first — at most `top_k`
+    entries (None: all); key them 0, 1, 2, … in that order for the most compressible
+    dictionary. The dictionary candidate is measured with keys in that order. Polars
+    holds them as lists of key / value structs; `analytics.recommend.to_arrow` gives
+    Arrow maps.
+
     `boolean_pairs`: (true text, false text) pairs a two-valued string column may map
     to Boolean, compared case-insensitively.
     """
@@ -39,12 +46,14 @@ class OneShotRecommender:
         self,
         *,
         categorical_threshold: int = 10_000,
+        top_k: int | None = 256,
         zstd_level: int = 1,
         seed: int = 0,
         boolean_pairs: tuple[tuple[str, str], ...] = (("true", "false"),),
     ) -> None:
         self._rs = _plugin.oneshot_recommender(
             categorical_threshold=categorical_threshold,
+            top_k=_input.top_k(top_k),
             zstd_level=zstd_level,
             seed=seed,
             boolean_pairs=_input.boolean_pairs(boolean_pairs),

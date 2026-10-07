@@ -85,6 +85,8 @@ SCHEMA = {
     "inner_n_values": pl.UInt64,
     "inner_n_null": pl.UInt64,
     **{f"inner_{k}": v for k, v in VALUE_BLOCK.items()},
+    "top_k": pl.List(pl.Struct({"key": pl.String, "value": pl.UInt64})),
+    "inner_top_k": pl.List(pl.Struct({"key": pl.String, "value": pl.UInt64})),
     "rec_nullable": pl.Boolean,
     "rec_arrow_type": pl.String,
     "rec_arrow_size_bytes": pl.UInt64,

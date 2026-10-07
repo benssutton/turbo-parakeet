@@ -148,6 +148,8 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 /// A streaming recommender (see `api::StreamingRecommender`). On success `*out` holds a
 /// handle the caller frees with `analytics_streaming_recommender_free`.
 ///
+/// `top_k`: entries per `top_k` / `inner_top_k` cell (0 none, `UINT64_MAX` every ranked value).
+///
 /// # Safety
 /// `out` is null or valid for one pointer write. When `n_bool_pairs > 0`, `bool_true`
 /// and `bool_false` each point to `n_bool_pairs` NUL-terminated UTF-8 strings. `error`
@@ -158,6 +160,7 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
     reservoir_rows: u64,
     block_rows: u64,
     categorical_threshold: u64,
+    top_k: u64,
     zstd_level: i32,
     seed: u64,
     bool_true: *const *const c_char,
@@ -174,6 +177,7 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
             reservoir_rows,
             block_rows,
             categorical_threshold,
+            top_k,
             zstd_level,
             seed,
             boolean_pairs: unsafe { boolean_pairs(bool_true, bool_false, n_bool_pairs) }?,
@@ -250,12 +254,15 @@ pub unsafe extern "C" fn analytics_streaming_recommender_free(h: *mut c_void) {
 /// A one-shot recommender (see `api::OneShotRecommender`). On success `*out` holds a
 /// handle the caller frees with `analytics_oneshot_recommender_free`.
 ///
+/// `top_k`: entries per `top_k` / `inner_top_k` cell (0 none, `UINT64_MAX` every ranked value).
+///
 /// # Safety
 /// As for `analytics_streaming_recommender_new`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn analytics_oneshot_recommender_new(
     categorical_threshold: u64,
+    top_k: u64,
     zstd_level: i32,
     seed: u64,
     bool_true: *const *const c_char,
@@ -270,6 +277,7 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
         }
         let r = api::OneShotRecommender::new(api::OneShotParams {
             categorical_threshold,
+            top_k,
             zstd_level,
             seed,
             boolean_pairs: unsafe { boolean_pairs(bool_true, bool_false, n_bool_pairs) }?,
@@ -375,6 +383,7 @@ mod tests {
         let code = unsafe {
             analytics_oneshot_recommender_new(
                 10_000,
+                256,
                 zstd_level,
                 0,
                 trues.as_ptr(),
@@ -480,6 +489,7 @@ mod tests {
                 1 << 20,
                 block_rows,
                 10_000,
+                256,
                 1,
                 0,
                 trues.as_ptr(),
@@ -566,6 +576,7 @@ mod tests {
                 1 << 20,
                 1 << 16,
                 10_000,
+                256,
                 1,
                 0,
                 trues.as_ptr(),

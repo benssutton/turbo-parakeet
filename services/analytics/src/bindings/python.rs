@@ -163,12 +163,14 @@ fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
 #[pymethods]
 impl StreamingRecommender {
     #[new]
-    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, zstd_level, seed, boolean_pairs))]
+    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         reservoir_rows: u64,
         block_rows: u64,
         categorical_threshold: u64,
+        top_k: Option<u64>,
         zstd_level: i32,
         seed: u64,
         boolean_pairs: Vec<(String, String)>,
@@ -180,6 +182,8 @@ impl StreamingRecommender {
             zstd_level,
             seed,
             boolean_pairs,
+            // None: every ranked value.
+            top_k: top_k.unwrap_or(u64::MAX),
         };
         run(py, || api::StreamingRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }
@@ -223,10 +227,11 @@ struct OneShotRecommender(Mutex<api::OneShotRecommender>);
 #[pymethods]
 impl OneShotRecommender {
     #[new]
-    #[pyo3(signature = (*, categorical_threshold, zstd_level, seed, boolean_pairs))]
+    #[pyo3(signature = (*, categorical_threshold, top_k, zstd_level, seed, boolean_pairs))]
     fn new(
         py: Python<'_>,
         categorical_threshold: u64,
+        top_k: Option<u64>,
         zstd_level: i32,
         seed: u64,
         boolean_pairs: Vec<(String, String)>,
@@ -236,6 +241,8 @@ impl OneShotRecommender {
             zstd_level,
             seed,
             boolean_pairs,
+            // None: every ranked value.
+            top_k: top_k.unwrap_or(u64::MAX),
         };
         run(py, || api::OneShotRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }

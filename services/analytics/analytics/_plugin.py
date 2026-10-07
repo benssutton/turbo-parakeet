@@ -127,6 +127,7 @@ def streaming_recommender(
     reservoir_rows: int,
     block_rows: int,
     categorical_threshold: int,
+    top_k: int | None,
     zstd_level: int,
     seed: int,
     boolean_pairs: tuple[tuple[str, str], ...],
@@ -136,6 +137,7 @@ def streaming_recommender(
         reservoir_rows=reservoir_rows,
         block_rows=block_rows,
         categorical_threshold=categorical_threshold,
+        top_k=top_k,
         zstd_level=zstd_level,
         seed=seed,
         boolean_pairs=[tuple(p) for p in boolean_pairs],
@@ -145,6 +147,7 @@ def streaming_recommender(
 def oneshot_recommender(
     *,
     categorical_threshold: int,
+    top_k: int | None,
     zstd_level: int,
     seed: int,
     boolean_pairs: tuple[tuple[str, str], ...],
@@ -152,6 +155,7 @@ def oneshot_recommender(
     """The Rust one-shot recommender (src/recommenders/oneshot.rs): .add(data, ineligible), .result()."""
     return _rs.OneShotRecommender(
         categorical_threshold=categorical_threshold,
+        top_k=top_k,
         zstd_level=zstd_level,
         seed=seed,
         boolean_pairs=[tuple(p) for p in boolean_pairs],

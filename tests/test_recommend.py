@@ -937,3 +937,136 @@ def test_rust_conclusions_match_describe():
             assert got == pytest.approx(b[c].to_list(), rel=1e-12, nan_ok=True), c
         else:
             assert a[c].to_list() == b[c].to_list(), c
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# top_k (spec docs/superpowers/specs/2026-10-07-top-k-frequencies-design.md)
+
+WORDS = ["b", "a", "b", None, "c", "a", "b"]
+
+
+def top_k(r: dict, column: str = "top_k") -> list | None:
+    """A top_k cell as ordered (value, count) pairs."""
+    cell = r[column]
+    return None if cell is None else [(e["key"], e["value"]) for e in cell]
+
+
+def test_top_k_column_type():
+    out = OneShotRecommender().add(pl.DataFrame({"s": WORDS})).result()
+    entry = pl.Struct({"key": pl.String, "value": pl.UInt64})
+    assert out.schema["top_k"] == pl.List(entry)
+    assert out.schema["inner_top_k"] == pl.List(entry)
+
+
+@pytest.mark.parametrize(
+    "dtype", [pl.String, pl.Categorical, pl.Enum(["c", "a", "b"])], ids=str
+)
+def test_top_k_known_answer(dtype):
+    r = rec(pl.Series("s", WORDS, dtype=dtype))
+    assert top_k(r) == [("b", 3), ("a", 2), ("c", 1)]
+
+
+def test_top_k_ties_go_to_the_value_seen_first():
+    assert top_k(rec(pl.Series("s", ["y", "x", "x", "y", "z"]))) == [
+        ("y", 2),
+        ("x", 2),
+        ("z", 1),
+    ]
+
+
+@pytest.mark.parametrize(
+    "k, want",
+    [
+        (1, [("b", 3)]),
+        (2, [("b", 3), ("a", 2)]),
+        (None, [("b", 3), ("a", 2), ("c", 1)]),
+        (0, None),
+    ],
+)
+def test_top_k_is_limited(k, want):
+    assert top_k(rec(pl.Series("s", WORDS), top_k=k)) == want
+
+
+def test_top_k_is_null_off_dictionary_candidates():
+    frame = pl.DataFrame(
+        {
+            "s": WORDS,
+            "i": list(range(7)),
+            "n": pl.Series([None] * 7, dtype=pl.String),
+        }
+    )
+    out = OneShotRecommender().add(frame).result()
+    assert [c is None for c in out["top_k"].to_list()] == [False, True, True]
+    gated = OneShotRecommender(categorical_threshold=2).add(frame).result()
+    assert gated["top_k"].null_count() == 3
+
+
+def test_inner_top_k_counts_list_values():
+    s = pl.Series("l", [["b", "a"], None, ["b", None], [], ["c", "b"]])
+    r = rec(s)
+    assert r["top_k"] is None
+    assert top_k(r, "inner_top_k") == [("b", 3), ("a", 1), ("c", 1)]
+
+
+@pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
+@pytest.mark.parametrize("k", [-1, 1.5, True])
+def test_top_k_must_be_a_non_negative_integer(cls, k):
+    with pytest.raises(ValueError, match="top_k"):
+        cls(top_k=k)
+
+
+def test_to_arrow_restores_the_map_type():
+    from analytics.recommend import to_arrow
+
+    frame = pl.DataFrame(
+        {"s": WORDS, "l": [["x"], None, ["y", "x"], [], None, None, None]}
+    )
+    t = to_arrow(OneShotRecommender().add(frame).result())
+    for name in ("top_k", "inner_top_k"):
+        assert t.schema.field(name).type == pa.map_(pa.string(), pa.uint64())
+    assert t.column("top_k").to_pylist() == [[("b", 3), ("a", 2), ("c", 1)], None]
+    assert t.column("inner_top_k").to_pylist() == [None, [("x", 2), ("y", 1)]]
+
+
+def polars_top_k(s: pl.Series, k: int | None) -> list:
+    """The oracle: non-null values (a list's: its items) by count descending, ties to
+    the first occurrence."""
+    if isinstance(s.dtype, pl.List):
+        s = s.drop_nulls().explode()
+    elif isinstance(s.dtype, pl.Array):
+        s = s.drop_nulls().arr.explode()
+    ranked = (
+        s.cast(pl.String)
+        .to_frame("v")
+        .with_row_index("row")
+        .drop_nulls("v")
+        .group_by("v")
+        .agg(n=pl.len(), first=pl.col("row").min())
+        .sort(["n", "first"], descending=[True, False])
+    )
+    if k is not None:
+        ranked = ranked.head(k)
+    return list(zip(ranked["v"].to_list(), ranked["n"].to_list()))
+
+
+@pytest.mark.parametrize("make", ORACLE_FRAMES)
+def test_top_k_matches_polars(make):
+    frames = make()
+    result = recommend_frames(frames)
+    checked = 0
+    for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
+        s = frames[r["frame"]][r["column"]]
+        for column, prefix in (("top_k", ""), ("inner_top_k", "inner: ")):
+            dictionary = [
+                c
+                for c in r["rec_candidates"]
+                if c["rule"] == f"{prefix}string→dictionary"
+            ]
+            expected = bool(dictionary) and dictionary[0]["outcome"] != "rejected"
+            assert (r[column] is not None) == expected, (r["column"], column)
+            if expected:
+                assert top_k(r, column) == polars_top_k(s, 256), (r["column"], column)
+                checked += 1
+    # large_dataset's strings all exceed categorical_threshold: no dictionary candidate
+    # is tried, so every top_k is null (asserted above).
+    assert checked > 0 or "large" in frames

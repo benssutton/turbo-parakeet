@@ -31,6 +31,13 @@ class StreamingRecommender:
     the recommender received, so it can differ by input form (e.g. string_view from
     Polars, large_string from pyarrow).
 
+    `top_k` / `inner_top_k` (dictionary candidates only, else null): the level's
+    values by count, highest first, ties to the value seen first — at most `top_k`
+    entries (None: all); key them 0, 1, 2, … in that order for the most compressible
+    dictionary. The dictionary candidate is measured with keys in that order. Polars
+    holds them as lists of key / value structs; `analytics.recommend.to_arrow` gives
+    Arrow maps.
+
     Memory per eligible level (a column, or a list's inner values), every dtype:
     ≈ 16 KB of HyperLogLog plus a distinct sample of up to ≈ 50 bytes × k, where
     k = max(categorical_threshold, 1000) — ≈ 0.5 MB at the default 10 000, so
@@ -43,6 +50,7 @@ class StreamingRecommender:
         reservoir_rows: int = 524_288,
         block_rows: int = 65_536,
         categorical_threshold: int = 10_000,
+        top_k: int | None = 256,
         zstd_level: int = 1,
         seed: int = 0,
         boolean_pairs: tuple[tuple[str, str], ...] = (("true", "false"),),
@@ -51,6 +59,7 @@ class StreamingRecommender:
             reservoir_rows=reservoir_rows,
             block_rows=block_rows,
             categorical_threshold=categorical_threshold,
+            top_k=_input.top_k(top_k),
             zstd_level=zstd_level,
             seed=seed,
             boolean_pairs=_input.boolean_pairs(boolean_pairs),

@@ -29,6 +29,15 @@ def boolean_pairs(pairs) -> tuple[tuple[str, str], ...]:
     return out
 
 
+def top_k(k) -> int | None:
+    """`k` checked: a non-negative int, or None for every ranked value."""
+    if k is None:
+        return None
+    if isinstance(k, bool) or not isinstance(k, int) or k < 0:
+        raise ValueError(f"top_k must be a non-negative integer or None, got {k!r}")
+    return k
+
+
 def prepare(frame) -> tuple[object, list[tuple[str, str]]]:
     """`frame` as the Rust side reads it, and (name, dtype) of the columns dropped
     from it as ineligible: Int128 / UInt128, Object and nested-Null. Arrow objects
