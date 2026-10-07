@@ -3,6 +3,7 @@ package io.github.benssutton.analytics;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -185,7 +186,7 @@ class OneShotRecommenderTest {
              OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
             rec.add(toyData(allocator), allocator);
             result(rec, allocator, root -> {
-                assertEquals(null, topK(root, 0)); // a: integers
+                assertNull(topK(root, 0)); // a: integers
                 assertEquals(List.of(Map.entry("x", 2L), Map.entry("y", 1L)), topK(root, 1));
                 return null;
             });
@@ -196,13 +197,22 @@ class OneShotRecommenderTest {
     void topKIsLimitedAndEmptyMeansEveryValue() throws IOException {
         OneShotParams d = OneShotParams.defaults();
         assertEquals(OptionalLong.of(256), d.topK());
-        for (OptionalLong k : List.of(OptionalLong.of(1), OptionalLong.empty())) {
+        for (OptionalLong k : List.of(OptionalLong.of(0), OptionalLong.of(1), OptionalLong.empty())) {
             try (BufferAllocator allocator = new RootAllocator();
                  OneShotRecommender rec = new OneShotRecommender(
                      new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs(), k))) {
                 rec.add(toyData(allocator), allocator);
-                int size = result(rec, allocator, root -> topK(root, 1).size());
-                assertEquals(k.isPresent() ? 1 : 2, size);
+                result(rec, allocator, root -> {
+                    List<Map.Entry<String, Long>> cell = topK(root, 1);
+                    if (k.isPresent() && k.getAsLong() == 0) {
+                        assertNull(cell);
+                    } else if (k.isPresent()) {
+                        assertEquals(List.of(Map.entry("x", 2L)), cell);
+                    } else {
+                        assertEquals(List.of(Map.entry("x", 2L), Map.entry("y", 1L)), cell);
+                    }
+                    return null;
+                });
             }
         }
         assertThrows(IllegalArgumentException.class, () ->

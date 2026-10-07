@@ -204,4 +204,24 @@ class StreamingRecommenderTest {
             });
         }
     }
+
+    @Test
+    void topKLimitReachesTheNativeConstructor() throws IOException {
+        StreamingParams d = StreamingParams.defaults();
+        StreamingParams params = new StreamingParams(d.reservoirRows(), d.blockRows(), d.categoricalThreshold(),
+            d.zstdLevel(), d.seed(), d.booleanPairs(), OptionalLong.of(1));
+        try (BufferAllocator allocator = new RootAllocator();
+             StreamingRecommender rec = new StreamingRecommender(params)) {
+            rec.add(toyData(allocator), allocator);
+            rec.add(toyData(allocator), allocator);
+            result(rec, allocator, root -> {
+                MapVector v = (MapVector) root.getVector("top_k");
+                assertEquals(1, v.getObject(1).size());
+                Map<?, ?> only = (Map<?, ?>) v.getObject(1).get(0);
+                assertEquals("x", only.get("key").toString());
+                assertEquals(4L, ((Number) only.get("value")).longValue());
+                return null;
+            });
+        }
+    }
 }

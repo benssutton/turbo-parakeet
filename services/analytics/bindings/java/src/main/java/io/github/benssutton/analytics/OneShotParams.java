@@ -1,19 +1,21 @@
 package io.github.benssutton.analytics;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.OptionalLong;
 
 /**
  * Keyword parameters of the one-shot recommender; {@link #defaults()} matches the Python
- * {@code analytics.recommend.OneShotRecommender}. Validated by the native constructor.
+ * {@code analytics.recommend.OneShotRecommender}. The native constructor validates the other parameters; {@code topK} is validated here.
  *
- * @param topK entries per {@code top_k} / {@code inner_top_k} map (0 none; empty: every ranked value)
+ * @param topK entries per {@code top_k} / {@code inner_top_k} map (0: null cells; empty: every ranked value)
  */
 public record OneShotParams(long categoricalThreshold, int zstdLevel, long seed, List<BooleanPair> booleanPairs,
                             OptionalLong topK) {
 
     public OneShotParams {
         booleanPairs = List.copyOf(booleanPairs);
+        Objects.requireNonNull(topK, "topK");
         if (topK.isPresent() && topK.getAsLong() < 0) {
             throw new IllegalArgumentException("topK must be non-negative, got " + topK.getAsLong());
         }
