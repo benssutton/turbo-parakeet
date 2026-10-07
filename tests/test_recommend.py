@@ -1,4 +1,4 @@
-﻿"""
+"""
 recommend accuracy tests — OneShotRecommender.
 
 Oracles: hand-worked known answers; the pyarrow and Polars casts of each column to
@@ -999,6 +999,18 @@ def test_top_k_is_null_off_dictionary_candidates():
     assert [c is None for c in out["top_k"].to_list()] == [False, True, True]
     gated = OneShotRecommender(categorical_threshold=2).add(frame).result()
     assert gated["top_k"].null_count() == 3
+
+
+def test_top_k_default_limit_is_a_prefix_of_the_full_order():
+    values = [f"v{i:03d}" for i in range(600) for _ in range((600 - i) % 37 + 1)]
+    s = pl.Series("s", np.random.default_rng(0).permutation(np.array(values)))
+    r = rec(s)
+    assert r["rec_arrow_type"] == "dictionary<values=string, indices=uint16, ordered=0>"
+    full = top_k(rec(s, top_k=None))
+    assert len(full) == 600
+    assert len({v for v, _ in full}) == 600
+    assert len(top_k(r)) == 256
+    assert top_k(r) == full[:256]
 
 
 def test_inner_top_k_counts_list_values():

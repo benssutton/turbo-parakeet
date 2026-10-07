@@ -2,7 +2,7 @@
 Recommender speed: OneShotRecommender (add, result) and StreamingRecommender (add
 throughput in rows/s, result time) on the same data. Standalone — the shared harness
 assumes IMPLEMENTATIONS.
-Also, per dataset: one-shot at top_k=0 (the top-k overhead), the Polars top-k oracle's time
+Also, per dataset: one-shot at top_k=0 (the cost of building the top_k maps; the ranking and frequency-ordered dictionary run regardless), the Polars top-k oracle's time
 (the deterministic baseline), and per dictionary column the Arrow ZSTD size of the
 frequency-ordered dictionary against pyarrow's first-seen dictionary_encode
 (→ results/recommend_dictionary_order.parquet).
@@ -170,7 +170,7 @@ def main() -> None:
                     "result_s": statistics.median(r[1] for r in runs),
                     "one_shot_add_s": statistics.median(one_shot_add),
                     "one_shot_result_s": statistics.median(one_shot_result),
-                    "one_shot_top_k_0_s": no_top_k,
+                    "one_shot_no_maps_s": no_top_k,
                     "polars_top_k_s": polars_s,
                     "peak_mb": peak_mb(),
                 }
