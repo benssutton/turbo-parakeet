@@ -585,7 +585,7 @@ impl Rules<'_, '_> {
         let low = est
             .est_low
             .map_or(String::new(), |l| format!(" est_low={l:?}"));
-        let order = if self.lvl.p.ranking.is_some() {
+        let order = if self.lvl.p.ranking.is_some() && c <= threshold as f64 {
             " key_order=frequency"
         } else {
             ""
@@ -852,6 +852,33 @@ mod tests {
         assert!(got
             .iter()
             .any(|(t, o)| t.starts_with("dictionary") && *o == Outcome::Rejected));
+    }
+
+    #[test]
+    fn a_rejected_dictionary_claims_no_key_order() {
+        let s = Series::new("x".into(), &["a", "b", "a", "b"]);
+        let d = describe_one(&s, 0).unwrap();
+        let lvl = Level::of_values(
+            s.dtype(),
+            export_series(&s, CompatLevel::oldest()).unwrap(),
+            &d.outer,
+            None,
+            0,
+            d.conclusions(1).0.est,
+            "",
+        )
+        .unwrap();
+        let p = Params {
+            categorical_threshold: 1,
+            ..params()
+        };
+        let c = candidates(&lvl, &p)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.rule == "string→dictionary")
+            .unwrap();
+        assert_eq!(c.outcome, Outcome::Rejected);
+        assert!(!c.evidence.contains("key_order"), "{}", c.evidence);
     }
 
     #[test]

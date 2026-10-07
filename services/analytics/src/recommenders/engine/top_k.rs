@@ -4,10 +4,14 @@
 use super::*;
 use crate::techniques::describe::Ranking;
 use arrow_array::cast::AsArray;
-use arrow_array::types::UInt32Type;
-use arrow_array::{Array, ArrayRef, DictionaryArray, UInt32Array};
+use arrow_array::types::ArrowDictionaryKeyType;
+use arrow_array::{
+    downcast_dictionary_array, Array, ArrayRef, DictionaryArray, PrimitiveArray, UInt32Array,
+};
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as AT;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// `a` (a dictionary) with its keys renumbered by `ranking`: the most frequent value takes
 /// key 0, the next key 1, and so on (spec §5). Values the ranking lacks (only those behind
@@ -39,21 +43,37 @@ pub(crate) fn frequency_order(a: &ArrayRef, ranking: &Ranking) -> Result<ArrayRe
     {
         return Ok(a.clone());
     }
-    let mut perm = vec![0u32; order.len()];
+    let array = a.as_ref();
+    downcast_dictionary_array!(
+        array => reorder(array, &order),
+        _ => unreachable!("checked above")
+    )
+}
+
+/// `d` with its values taken in `order` (new code → old code) and its keys remapped in one
+/// pass, in the dictionary's own key type.
+fn reorder<K: ArrowDictionaryKeyType>(
+    d: &DictionaryArray<K>,
+    order: &[u32],
+) -> Result<ArrayRef, String> {
+    let mut perm = vec![K::Native::default(); order.len()];
     for (new, &old) in order.iter().enumerate() {
-        perm[old as usize] = new as u32;
+        perm[old as usize] = K::Native::from_usize(new).ok_or("dictionary key overflow")?;
     }
-    let keys = arrow_cast(d.keys(), &AT::UInt32)?;
-    let keys: UInt32Array = keys
-        .as_primitive::<UInt32Type>()
+    // Not `take`: null slots must hold zero, as ZSTD sizes depend on those bytes.
+    let keys: PrimitiveArray<K> = d
+        .keys()
         .iter()
-        .map(|k| k.map(|k| perm[k as usize]))
+        .map(|k| k.map(|k| perm[k.as_usize()]))
         .collect();
-    let values = arrow_select::take::take(d.values().as_ref(), &UInt32Array::from(order), None)
-        .map_err(|e| e.to_string())?;
-    let dict = DictionaryArray::<UInt32Type>::try_new(keys, values).map_err(|e| e.to_string())?;
-    // A dictionary → dictionary cast changes only the key type, keeping the values' order.
-    arrow_cast(&dict, a.data_type())
+    let values = arrow_select::take::take(
+        d.values().as_ref(),
+        &UInt32Array::from(order.to_vec()),
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let dict = DictionaryArray::<K>::try_new(keys, values).map_err(|e| e.to_string())?;
+    Ok(Arc::new(dict))
 }
 
 #[cfg(test)]
@@ -109,6 +129,23 @@ mod tests {
         assert_eq!(
             d.keys().iter().collect::<Vec<_>>(),
             [Some(2), Some(0), None, Some(0), Some(1), Some(0), Some(1)]
+        );
+    }
+
+    #[test]
+    fn wider_keys_keep_their_type() {
+        let names: Vec<String> = (0..300).map(|i| format!("v{i}")).collect();
+        let mut v: Vec<Option<&str>> = names.iter().map(|s| Some(s.as_str())).collect();
+        v.extend([Some("v299"); 5]);
+        let s: ArrayRef = Arc::new(StringArray::from(v));
+        let t = AT::Dictionary(Box::new(AT::UInt16), Box::new(AT::Utf8));
+        let a = arrow_cast(s.as_ref(), &t).unwrap();
+        let out = frequency_order(&a, &ranking(&[("v299", 6)])).unwrap();
+        assert_eq!(out.data_type(), &t);
+        assert_eq!(decoded(&out), decoded(&a));
+        assert_eq!(
+            decoded(out.as_any_dictionary().values())[0].as_deref(),
+            Some("v299")
         );
     }
 

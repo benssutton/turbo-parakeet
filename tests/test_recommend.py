@@ -1,4 +1,4 @@
-"""
+﻿"""
 recommend accuracy tests — OneShotRecommender.
 
 Oracles: hand-worked known answers; the pyarrow and Polars casts of each column to
@@ -11,6 +11,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -621,6 +622,25 @@ def test_dictionary_key_widths(d, arrow_key):
     )
 
 
+def test_dictionary_keys_are_frequency_ordered():
+    # 300 values twice, then 20 000 draws from r230..r269: in first-seen order those hot
+    # values straddle key 256 (a random high key byte); by frequency they all sit below it.
+    hot = np.random.default_rng(0).integers(230, 270, 20_000)
+    s = pl.Series("x", [f"r{i}" for i in range(300)] * 2 + [f"r{i}" for i in hot])
+    r = rec(s)
+    assert r["rec_arrow_type"].startswith("dictionary")
+    chosen = next(c for c in r["rec_candidates"] if c["outcome"] == "chosen")
+    assert chosen["evidence"].endswith(" key_order=frequency")
+    arrow = s.to_arrow(compat_level=pl.CompatLevel.oldest()).cast(
+        pa_type(r["rec_arrow_type"]), safe=False
+    )
+    want = r["rec_arrow_size_zstd_bytes"]
+    assert _sizes.ipc_body_bytes(frequency_ordered(arrow), 1) == pytest.approx(
+        want, rel=0.01, abs=16
+    )
+    assert _sizes.ipc_body_bytes(arrow, 1) != pytest.approx(want, rel=0.01, abs=16)
+
+
 def test_dictionary_gate_rejects_above_threshold():
     r = rec(pl.Series("x", ["a", "b"] * 500), categorical_threshold=1)
     assert r["rec_arrow_type"] == "string"
@@ -729,6 +749,8 @@ def frequency_ordered(arr: pa.Array) -> pa.Array:
     (spec 2026-10-07 §5): the most frequent value takes key 0, ties go to the value seen
     first; values never seen follow. Lists are rebuilt around their reordered values."""
     t = arr.type
+    # The list branches assume compacted lists (no values behind null rows, not sliced), as
+    # Polars-built rechunked test frames are.
     if pa.types.is_list(t) or pa.types.is_large_list(t):
         return type(arr).from_arrays(
             arr.offsets, frequency_ordered(arr.values), mask=arr.is_null()
