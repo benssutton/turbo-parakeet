@@ -224,13 +224,26 @@ impl Prepared {
         // Describe's row: column, n_rows, n_null, value block, n_midnight, then the
         // inner block (inner_n_values, inner_n_null, inner value block).
         let mut base = d.row_with(&oc, ic.as_ref()).into_iter();
-        let mut row: Row = Vec::with_capacity(base.len() + self.sizes.len() + 11);
+        let mut row: Row = Vec::with_capacity(base.len() + self.sizes.len() + 13);
         row.extend(base.next()); // column
         row.push(AnyValue::StringOwned("computed".into()));
         row.push(AnyValue::StringOwned(self.dtype.as_str().into()));
         row.extend(base.by_ref().take(3 + value_fields().len())); // through n_midnight
         row.extend(self.sizes.iter().map(|&v| AnyValue::UInt64(v)));
         row.extend(base); // the inner block
+        let inner_ranking = d.inner.as_ref().and_then(|i| i.profile.ranking.as_ref());
+        row.push(top_k_cell(
+            d.outer.ranking.as_ref(),
+            &rec.candidates,
+            "",
+            params.top_k,
+        ));
+        row.push(top_k_cell(
+            inner_ranking,
+            &rec.candidates,
+            "inner: ",
+            params.top_k,
+        ));
         row.extend(rec_row(&rec));
         Ok(row)
     }

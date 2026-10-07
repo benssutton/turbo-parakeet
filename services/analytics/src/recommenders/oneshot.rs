@@ -16,7 +16,7 @@ use rayon::prelude::*;
 use crate::common::arrow_io::{export_struct, import_batch};
 use crate::common::error::{compute, Error, Result};
 use crate::recommenders::engine::{pa_name, prepare, Params, Prepared};
-use crate::recommenders::schema::recommender_fields;
+use crate::recommenders::schema::{recommender_fields, with_maps};
 use crate::recommenders::streaming::holds_nested_null;
 use crate::techniques::describe::{assemble, Row};
 
@@ -168,6 +168,7 @@ impl OneShot {
         assemble("recommend", &fields, &rows)
             .and_then(|s| export_struct(&s))
             .map_err(compute)
+            .and_then(|b| with_maps(b).map_err(|e| Error::Compute(e.to_string())))
     }
 }
 
@@ -180,7 +181,7 @@ mod tests {
     use arrow_schema::DataType as AT;
 
     use super::*;
-    use crate::recommenders::streaming::tests::{batch, ints, params, strs, texts};
+    use crate::recommenders::streaming::tests::{batch, ints, pairs, params, strs, texts, top_k};
 
     fn toy() -> RecordBatch {
         let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
@@ -321,5 +322,86 @@ mod tests {
         let out = added(&batch(vec![("f", f)])).result().unwrap();
         assert_eq!(texts(&out, "rec_arrow_type"), [text("double")]);
         assert_eq!(texts(&out, "rec_polars_type"), [text("Float64")]);
+    }
+
+    const WORDS: [Option<&str>; 7] = [
+        Some("b"),
+        Some("a"),
+        Some("b"),
+        None,
+        Some("c"),
+        Some("a"),
+        Some("b"),
+    ];
+
+    #[test]
+    fn top_k_maps_dictionary_candidates_by_frequency() {
+        use arrow_array::builder::{ListBuilder, StringBuilder};
+        let mut lb = ListBuilder::new(StringBuilder::new());
+        for row in [Some(vec!["x", "y"]), None, Some(vec!["y"]), Some(vec![])] {
+            match row {
+                Some(items) => {
+                    items.iter().for_each(|v| lb.values().append_value(v));
+                    lb.append(true);
+                }
+                None => lb.append(false),
+            }
+        }
+        (0..3).for_each(|_| lb.append(false));
+        let out = added(&batch(vec![
+            ("s", strs(&WORDS)),
+            ("i", ints(&[Some(1); 7])),
+            ("n", strs(&[None; 7])),
+            ("l", Arc::new(lb.finish()) as ArrayRef),
+        ]))
+        .result()
+        .unwrap();
+        let entries = arrow_schema::Fields::from(vec![
+            arrow_schema::Field::new("key", AT::Utf8, false),
+            arrow_schema::Field::new("value", AT::UInt64, false),
+        ]);
+        let map = AT::Map(
+            Arc::new(arrow_schema::Field::new(
+                "entries",
+                AT::Struct(entries),
+                false,
+            )),
+            false,
+        );
+        for name in ["top_k", "inner_top_k"] {
+            assert_eq!(
+                out.schema().field_with_name(name).unwrap().data_type(),
+                &map
+            );
+        }
+        // s: by count, then first row; i: not text; n: all null (no dictionary candidate); l: a list.
+        assert_eq!(
+            top_k(&out, "top_k"),
+            [pairs(&[("b", 3), ("a", 2), ("c", 1)]), None, None, None]
+        );
+        assert_eq!(
+            top_k(&out, "inner_top_k"),
+            [None, None, None, pairs(&[("y", 2), ("x", 1)])]
+        );
+    }
+
+    #[test]
+    fn top_k_is_limited_and_follows_the_dictionary_gate() {
+        let b = batch(vec![("s", strs(&WORDS))]);
+        let with = |f: fn(&mut Params)| {
+            let mut p = params();
+            f(&mut p);
+            let mut r = OneShot::new(p);
+            r.add(&b).unwrap();
+            top_k(&r.result().unwrap(), "top_k")
+        };
+        assert_eq!(with(|p| p.top_k = 1), [pairs(&[("b", 3)])]);
+        assert_eq!(with(|p| p.top_k = 0), [None]);
+        assert_eq!(
+            with(|p| p.top_k = u64::MAX),
+            [pairs(&[("b", 3), ("a", 2), ("c", 1)])]
+        );
+        // 3 distinct values > threshold 2: the dictionary is rejected.
+        assert_eq!(with(|p| p.categorical_threshold = 2), [None]);
     }
 }

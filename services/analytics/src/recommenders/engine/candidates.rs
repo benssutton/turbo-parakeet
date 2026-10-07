@@ -19,6 +19,8 @@ pub(crate) struct Params {
     pub zstd_level: i32,
     pub categorical_threshold: u64,
     pub boolean_pairs: Vec<(String, String)>,
+    /// Entries per `top_k` / `inner_top_k` cell: 0 none, u64::MAX every ranked value.
+    pub top_k: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

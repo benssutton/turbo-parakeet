@@ -46,6 +46,7 @@ impl OneShotRecommender {
             zstd_level: p.zstd_level,
             categorical_threshold: p.categorical_threshold,
             boolean_pairs: p.boolean_pairs,
+            top_k: 256, // Task 5: the caller's parameter
         })))
     }
 
@@ -100,6 +101,7 @@ impl StreamingRecommender {
             zstd_level: p.zstd_level,
             categorical_threshold: p.categorical_threshold,
             boolean_pairs: p.boolean_pairs,
+            top_k: 256, // Task 5: the caller's parameter
         };
         Ok(Self(crate::recommenders::streaming::Streaming::new(
             params,

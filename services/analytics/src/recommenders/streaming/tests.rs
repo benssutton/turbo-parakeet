@@ -22,6 +22,7 @@ pub(crate) fn params() -> Params {
         zstd_level: 1,
         categorical_threshold: 10_000,
         boolean_pairs: vec![("true".into(), "false".into())],
+        top_k: 256,
     }
 }
 
@@ -858,4 +859,60 @@ fn dictionary_batches_with_different_category_orders_rank_like_one_shot() {
     let dtype = col(&s, "d").dtype.clone().unwrap();
     assert_eq!(col(&s, "d").outer.profile(&dtype).ranking, want);
     assert_ranks_like_one_shot(&s, "d", &whole);
+}
+
+/// The `name` column's map cells as (key, value) lists.
+pub(crate) fn top_k(b: &RecordBatch, name: &str) -> Vec<Option<Vec<(String, u64)>>> {
+    let m = b.column_by_name(name).unwrap().as_map();
+    (0..m.len())
+        .map(|i| {
+            m.is_valid(i).then(|| {
+                let e = m.value(i);
+                let k = e.column(0).as_string::<i32>();
+                let v = e.column(1).as_primitive::<arrow_array::types::UInt64Type>();
+                (0..e.len())
+                    .map(|j| (k.value(j).to_string(), v.value(j)))
+                    .collect()
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn pairs(v: &[(&str, u64)]) -> Option<Vec<(String, u64)>> {
+    Some(v.iter().map(|&(s, n)| (s.to_string(), n)).collect())
+}
+
+#[test]
+fn top_k_streams_like_one_shot() {
+    let v: Vec<Option<&str>> = [
+        Some("b"),
+        Some("a"),
+        Some("b"),
+        None,
+        Some("c"),
+        Some("a"),
+        Some("b"),
+    ]
+    .repeat(3);
+    let whole = batch(vec![("s", strs(&v)), ("i", ints(&vec![Some(1); v.len()]))]);
+    let reference = one_shot(&whole);
+    for k in [1, 5, v.len()] {
+        let mut s = streaming();
+        (0..v.len())
+            .step_by(k)
+            .for_each(|off| s.add(&whole.slice(off, k.min(v.len() - off))).unwrap());
+        let out = s.result().unwrap();
+        assert_eq!(top_k(&out, "top_k"), top_k(&reference, "top_k"), "k={k}");
+        assert_eq!(
+            top_k(&out, "top_k"),
+            [pairs(&[("b", 9), ("a", 6), ("c", 3)]), None]
+        );
+    }
+}
+
+#[test]
+fn top_k_is_null_past_the_sample() {
+    let v: Vec<String> = (0..2_000).map(|i| format!("v{i}")).collect();
+    let v: Vec<Option<&str>> = v.iter().map(|x| Some(x.as_str())).collect();
+    assert_eq!(top_k(&threshold_3(&v), "top_k"), [None]);
 }

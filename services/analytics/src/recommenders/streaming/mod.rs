@@ -27,9 +27,9 @@ use crate::common::error::{Error, Result};
 use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, sizes_of};
 use crate::recommenders::engine::{
     enum_categories, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row,
-    to_polars_layout, Params, Rec, Target,
+    to_polars_layout, top_k_cell, Params, Rec, Target,
 };
-use crate::recommenders::schema::recommender_fields;
+use crate::recommenders::schema::{recommender_fields, with_maps};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
 use crate::recommenders::streaming::reservoir::{Block, Reservoir};
 use crate::techniques::describe::conclusions::conclude;
@@ -304,6 +304,7 @@ impl Streaming {
         assemble("streaming_recommend", &recommender_fields(true), &rows)
             .and_then(|s| export_struct(&s))
             .map_err(|e| Error::Compute(e.to_string()))
+            .and_then(|b| with_maps(b).map_err(|e| Error::Compute(e.to_string())))
     }
 
     fn row(&self, c: &Column, blocks: &[&Block], sampled: u64) -> std::result::Result<Row, String> {
@@ -462,6 +463,10 @@ impl Streaming {
             }
             _ => row.extend(vec![AnyValue::Null; 2 + value_fields().len()]),
         }
+        let k = self.params.top_k;
+        row.push(top_k_cell(p.ranking.as_ref(), &rec.candidates, "", k));
+        let inner_ranking = ip.as_ref().and_then(|ip| ip.ranking.as_ref());
+        row.push(top_k_cell(inner_ranking, &rec.candidates, "inner: ", k));
         row.extend(rec_row(&rec));
         row.extend([
             AnyValue::UInt64(sampled),

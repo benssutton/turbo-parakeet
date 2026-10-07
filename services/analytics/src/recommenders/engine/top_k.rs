@@ -10,6 +10,9 @@ use arrow_array::{
 };
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as AT;
+use polars::prelude::{
+    AnyValue, IntoSeries, NewChunkedArray, StringChunked, StructChunked, UInt64Chunked,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -74,6 +77,34 @@ fn reorder<K: ArrowDictionaryKeyType>(
     .map_err(|e| e.to_string())?;
     let dict = DictionaryArray::<K>::try_new(keys, values).map_err(|e| e.to_string())?;
     Ok(Arc::new(dict))
+}
+
+/// One `top_k` / `inner_top_k` cell (spec §3): the first `k` entries of the level's ranking
+/// when its dictionary candidate (`{prefix}string→dictionary`) was proposed and not rejected,
+/// else null. Built as a list of (key, value) structs; `schema::with_maps` makes it a map.
+pub(crate) fn top_k_cell(
+    ranking: Option<&Ranking>,
+    candidates: &[Candidate],
+    prefix: &str,
+    k: u64,
+) -> AnyValue<'static> {
+    let rule = format!("{prefix}string→dictionary");
+    let candidate = candidates
+        .iter()
+        .any(|c| c.rule == rule && c.outcome != Outcome::Rejected);
+    let Some(r) = ranking.filter(|_| k > 0 && candidate) else {
+        return AnyValue::Null;
+    };
+    let top = &r[..r.len().min(usize::try_from(k).unwrap_or(usize::MAX))];
+    let keys = StringChunked::from_iter_values("key".into(), top.iter().map(|(v, _)| v.as_str()))
+        .into_series();
+    let values =
+        UInt64Chunked::from_iter_values("value".into(), top.iter().map(|&(_, n)| n)).into_series();
+    AnyValue::List(
+        StructChunked::from_series("entry".into(), top.len(), [keys, values].iter())
+            .expect("equal-length fields")
+            .into_series(),
+    )
 }
 
 #[cfg(test)]
