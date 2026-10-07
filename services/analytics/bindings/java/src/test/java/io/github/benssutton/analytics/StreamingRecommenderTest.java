@@ -11,6 +11,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.OptionalLong;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 
@@ -20,6 +22,7 @@ import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
@@ -181,6 +184,24 @@ class StreamingRecommenderTest {
                 assertThrows(IllegalStateException.class, () -> rec.add(input, allocator));
             }
             assertThrows(IllegalStateException.class, () -> rec.result(allocator));
+        }
+    }
+
+    @Test
+    void topKCountsEveryBatch() throws IOException {
+        assertEquals(OptionalLong.of(256), StreamingParams.defaults().topK());
+        try (BufferAllocator allocator = new RootAllocator();
+             StreamingRecommender rec = new StreamingRecommender(StreamingParams.defaults())) {
+            rec.add(toyData(allocator), allocator);
+            rec.add(toyData(allocator), allocator);
+            result(rec, allocator, root -> {
+                MapVector v = (MapVector) root.getVector("top_k");
+                assertTrue(v.isNull(0));
+                Map<?, ?> first = (Map<?, ?>) v.getObject(1).get(0);
+                assertEquals("x", first.get("key").toString());
+                assertEquals(4L, ((Number) first.get("value")).longValue());
+                return null;
+            });
         }
     }
 }

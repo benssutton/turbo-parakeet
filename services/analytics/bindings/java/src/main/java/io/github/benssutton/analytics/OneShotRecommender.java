@@ -26,6 +26,7 @@ public final class OneShotRecommender extends NativeRecommender {
     private static final MethodHandle NEW = Native.handle("analytics_oneshot_recommender_new",
         FunctionDescriptor.of(JAVA_INT,
             JAVA_LONG,  // uint64_t categorical_threshold
+            JAVA_LONG,  // uint64_t top_k
             JAVA_INT,   // int32_t zstd_level
             JAVA_LONG,  // uint64_t seed
             ADDRESS,    // const char *const *bool_true
@@ -47,6 +48,7 @@ public final class OneShotRecommender extends NativeRecommender {
                 MemorySegment error = arena.allocate(ADDRESS);  // zero-initialised: null
                 int code = (int) NEW.invokeExact(
                     params.categoricalThreshold(),
+                    params.nativeTopK(),
                     params.zstdLevel(),
                     params.seed(),
                     pairs[0],

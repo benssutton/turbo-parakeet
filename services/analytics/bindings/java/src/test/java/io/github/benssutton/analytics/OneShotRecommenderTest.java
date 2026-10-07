@@ -10,6 +10,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.OptionalLong;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 
@@ -19,6 +21,7 @@ import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
@@ -162,5 +165,47 @@ class OneShotRecommenderTest {
             }
             assertThrows(IllegalStateException.class, () -> rec.result(allocator));
         }
+    }
+
+    /** The `top_k` cell of row `row` as (key, value) pairs; null for a null cell. */
+    private static List<Map.Entry<String, Long>> topK(VectorSchemaRoot root, int row) {
+        MapVector v = (MapVector) root.getVector("top_k");
+        if (v.isNull(row)) {
+            return null;
+        }
+        return v.getObject(row).stream()
+            .map(e -> (Map<?, ?>) e)
+            .map(e -> Map.entry(e.get("key").toString(), ((Number) e.get("value")).longValue()))
+            .toList();
+    }
+
+    @Test
+    void topKMapsTheDictionaryCandidatesValuesByFrequency() throws IOException {
+        try (BufferAllocator allocator = new RootAllocator();
+             OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
+            rec.add(toyData(allocator), allocator);
+            result(rec, allocator, root -> {
+                assertEquals(null, topK(root, 0)); // a: integers
+                assertEquals(List.of(Map.entry("x", 2L), Map.entry("y", 1L)), topK(root, 1));
+                return null;
+            });
+        }
+    }
+
+    @Test
+    void topKIsLimitedAndEmptyMeansEveryValue() throws IOException {
+        OneShotParams d = OneShotParams.defaults();
+        assertEquals(OptionalLong.of(256), d.topK());
+        for (OptionalLong k : List.of(OptionalLong.of(1), OptionalLong.empty())) {
+            try (BufferAllocator allocator = new RootAllocator();
+                 OneShotRecommender rec = new OneShotRecommender(
+                     new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs(), k))) {
+                rec.add(toyData(allocator), allocator);
+                int size = result(rec, allocator, root -> topK(root, 1).size());
+                assertEquals(k.isPresent() ? 1 : 2, size);
+            }
+        }
+        assertThrows(IllegalArgumentException.class, () ->
+            new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs(), OptionalLong.of(-1)));
     }
 }
