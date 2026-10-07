@@ -6,6 +6,7 @@
 
 use arrow_array::ArrayRef;
 use arrow_schema::FieldRef;
+use rayon::prelude::*;
 
 use crate::recommenders::streaming::partial::copy_rows;
 
@@ -132,7 +133,7 @@ impl Reservoir {
         for &(start, len, keep, _) in &segments {
             pieces.push(if keep {
                 let cols = cols
-                    .iter()
+                    .par_iter()
                     .map(|(f, a)| Ok((f.clone(), copy_rows(a, start as usize, len as usize)?)))
                     .collect::<Result<Vec<_>, String>>()?;
                 Some(Piece { rows: len, cols })
