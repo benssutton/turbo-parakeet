@@ -27,7 +27,7 @@ pub(crate) fn describe_columns_impl(
     let rows: Vec<Row> = inputs
         .par_iter()
         .map(|s| {
-            describe_one(s, seed, false).map(|d| {
+            describe_one(s, seed, false, None).map(|d| {
                 let mut row = d.row(threshold);
                 row.extend(d.input_row());
                 row

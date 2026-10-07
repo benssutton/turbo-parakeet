@@ -458,7 +458,7 @@ pub(in crate::recommenders::engine) mod tests {
         s: &Series,
         seed: u64,
     ) -> PolarsResult<Described> {
-        crate::techniques::describe::describe_one(s, seed, true)
+        crate::techniques::describe::describe_one(s, seed, true, Some(10_000))
     }
     use polars::prelude::{CompatLevel, DataType as PT, NamedFrom, Series, TimeUnit as PTimeUnit};
 

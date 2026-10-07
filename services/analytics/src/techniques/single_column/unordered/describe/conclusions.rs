@@ -245,7 +245,7 @@ mod tests {
     fn conclude_on_a_profile() {
         use polars::prelude::*;
         let s = Series::new("x".into(), &[0i64, 4, 1, 2, 3]);
-        let p = crate::techniques::describe::profile(&s, 0, false).unwrap();
+        let p = crate::techniques::describe::profile(&s, 0, false, None).unwrap();
         let c = conclude(s.dtype(), 5, 0, &p, 10_000);
         assert_eq!(
             (c.class, c.unique, c.est.method.name()),

@@ -550,6 +550,7 @@ impl LevelStats {
                 first_few: Vec::new(),
                 all_once,
                 hll,
+                ranked: None,
             },
             range: Range {
                 argmin: None,
@@ -571,6 +572,7 @@ impl LevelStats {
                 .as_ref()
                 .and_then(|e| render_value(e.value.as_ref())),
             numeric,
+            ranking: None,
         }
     }
 
@@ -726,7 +728,7 @@ mod tests {
     #[test]
     fn distinct_counts_match_describe() {
         let s = Series::new("s".into(), &["a", "b", "a", "c", "c", "c", "d"]);
-        let f = frequencies(&encode_series(&s).unwrap(), 7, None);
+        let f = frequencies(&encode_series(&s).unwrap(), 7, None, None);
         let st = absorbed(&chunks(&s, 2), 10_000);
         let d = st.sample.as_ref().unwrap();
         assert_eq!(d.len(), f.n_unique);

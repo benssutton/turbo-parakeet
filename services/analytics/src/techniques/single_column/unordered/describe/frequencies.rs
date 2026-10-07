@@ -31,6 +31,19 @@ pub(crate) type Map = HashMap<u64, Entry, FixedState>;
 /// (first row index, value) of the running extreme.
 pub(crate) type Ext<T> = (u64, T);
 
+/// Distinct values as (count, first row), count descending, ties to the earlier first row.
+pub(crate) type Ranked = Vec<(u64, u64)>;
+
+/// A text level's distinct non-null values as (text, count), in `Ranked` order: the
+/// recommenders' `top_k` and frequency-ordered dictionary (spec 2026-10-07 §4).
+pub(crate) type Ranking = Vec<(String, u64)>;
+
+/// Sorts (count, first row) pairs into `Ranked` order. First rows are unique per value, so the
+/// unstable sort is deterministic.
+pub(crate) fn sort_ranked(r: &mut [(u64, u64)]) {
+    r.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+}
+
 pub(crate) struct Frequencies {
     pub n_unique: u64,
     pub f1: u64,
@@ -46,6 +59,9 @@ pub(crate) struct Frequencies {
     pub capture_history: [u64; 7],
     /// Total byte length of the distinct values (`lengths` given: string / binary columns).
     pub sum_len_unique: Option<u64>,
+    /// Every distinct value in `Ranked` order, when `frequencies` was given a `rank_up_to`
+    /// and `n_unique` is within it.
+    pub ranked: Option<Ranked>,
 }
 
 /// Split subset (0, 1 or 2) of `row`: the SplitMix64 finaliser of `seed + row`.
@@ -153,10 +169,19 @@ pub(crate) fn frequency_map_below(
         )
 }
 
-pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]>) -> Frequencies {
+/// `rank_up_to`: also rank the distinct values (`Frequencies.ranked`) when there are at most
+/// that many (the recommenders' dictionary candidates; Describe passes None).
+pub(crate) fn frequencies(
+    col: &EncodedColumn,
+    seed: u64,
+    lengths: Option<&[u64]>,
+    rank_up_to: Option<u64>,
+) -> Frequencies {
     let map = frequency_map(col, seed, 0);
     let (mut f1, mut f2, mut history) = (0u64, 0u64, [0u64; 7]);
     let n_unique = map.len() as u64;
+    let rank = rank_up_to.is_some_and(|t| n_unique <= t);
+    let mut ranked: Ranked = Vec::with_capacity(if rank { map.len() } else { 0 });
     let mut first_few: Vec<u64> = if map.len() <= 5 {
         map.values().map(|e| e.first).collect()
     } else {
@@ -171,7 +196,14 @@ pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]
         if let Some(l) = lengths {
             unique_len += l[e.first as usize];
         }
+        if rank {
+            ranked.push((e.count, e.first));
+        }
     }
+    let ranked = rank.then(|| {
+        sort_ranked(&mut ranked);
+        ranked
+    });
     Frequencies {
         n_unique,
         f1,
@@ -181,6 +213,7 @@ pub(crate) fn frequencies(col: &EncodedColumn, seed: u64, lengths: Option<&[u64]
         hll: None,
         capture_history: history,
         sum_len_unique: lengths.map(|_| unique_len),
+        ranked,
     }
 }
 
@@ -191,7 +224,39 @@ mod tests {
     use polars::prelude::*;
 
     fn freq(s: Series) -> Frequencies {
-        frequencies(&encode_series(&s).unwrap(), 0, None)
+        frequencies(&encode_series(&s).unwrap(), 0, None, None)
+    }
+
+    #[test]
+    fn ranking_orders_by_count_then_first_row() {
+        let s = Series::new(
+            "x".into(),
+            &[
+                Some("b"),
+                Some("a"),
+                Some("b"),
+                None,
+                Some("c"),
+                Some("a"),
+                Some("b"),
+            ],
+        );
+        let enc = encode_series(&s).unwrap();
+        // (count, first row): b ×3 from row 0, a ×2 from row 1, c ×1 at row 4; the null is not counted.
+        assert_eq!(
+            frequencies(&enc, 0, None, Some(10)).ranked,
+            Some(vec![(3, 0), (2, 1), (1, 4)])
+        );
+        // 3 distinct values > 2: no ranking.
+        assert_eq!(frequencies(&enc, 0, None, Some(2)).ranked, None);
+        assert_eq!(frequencies(&enc, 0, None, None).ranked, None);
+    }
+
+    #[test]
+    fn ranking_ties_go_to_the_value_seen_first() {
+        let s = Series::new("x".into(), &["y", "x", "x", "y", "z"]);
+        let f = frequencies(&encode_series(&s).unwrap(), 0, None, Some(10));
+        assert_eq!(f.ranked, Some(vec![(2, 0), (2, 1), (1, 4)]));
     }
 
     #[test]
@@ -236,7 +301,7 @@ mod tests {
         let b = whole.values[1];
         assert_eq!((w[&b].first, t[&b].first), (1, 1));
         assert_eq!(w[&b].mask, t[&b].mask); // capture subsets use the global row
-        assert_eq!(frequencies(&whole, 7, None).n_unique, w.len() as u64);
+        assert_eq!(frequencies(&whole, 7, None, None).n_unique, w.len() as u64);
     }
 
     #[test]

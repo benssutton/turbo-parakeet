@@ -196,7 +196,7 @@ pub(crate) struct Prepared {
 
 /// `s`'s Describe statistics, classic layout and sizes; `input_type` is its Arrow type.
 pub(crate) fn prepare(s: Series, input_type: &AT, params: &Params) -> PolarsResult<Prepared> {
-    let described = describe_one(&s, params.seed, false)?;
+    let described = describe_one(&s, params.seed, false, Some(params.categorical_threshold))?;
     let classic = classic_layout(&s)?;
     let sizes = sizes_of(&s, &classic, params.zstd_level)?;
     Ok(Prepared {

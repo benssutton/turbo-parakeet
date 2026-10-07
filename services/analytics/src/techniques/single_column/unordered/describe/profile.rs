@@ -160,17 +160,41 @@ pub(crate) struct Profile {
     pub max: Option<String>,
     /// Numeric extremes as f64 (integer, decimal and float dtypes), for `ordinal`.
     pub numeric: Option<(f64, f64)>,
+    /// Text levels (String, Categorical, Enum) within `profile`'s `rank_up_to`: every distinct
+    /// value by frequency (spec 2026-10-07 §4); None otherwise.
+    pub ranking: Option<Ranking>,
 }
 
-/// `proof`: see `StringStats::proof` (false on the one-shot path).
-pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profile> {
+/// `proof`: see `StringStats::proof` (false on the one-shot path). `rank_up_to`: rank a text
+/// level's values when it has at most that many (`Profile.ranking`).
+pub(crate) fn profile(
+    s: &Series,
+    seed: u64,
+    proof: bool,
+    rank_up_to: Option<u64>,
+) -> PolarsResult<Profile> {
     let lengths = byte_lengths(s)?;
     let range = range(s, lengths.as_deref())?;
     // Nested dtypes have no argmin / argmax, hence no min / max.
     let (min, max) = (render_at(s, range.argmin)?, render_at(s, range.argmax)?);
     let numeric = numeric_extremes(s, range.argmin, range.argmax)?;
+    let text = matches!(
+        s.dtype(),
+        DataType::String | DataType::Categorical(..) | DataType::Enum(..)
+    );
+    let freq = frequencies(
+        &encode_series(s)?,
+        seed,
+        lengths.as_deref(),
+        rank_up_to.filter(|_| text),
+    );
+    let ranking = freq
+        .ranked
+        .as_deref()
+        .map(|r| ranked_values(s, r))
+        .transpose()?;
     Ok(Profile {
-        freq: frequencies(&encode_series(s)?, seed, lengths.as_deref()),
+        freq,
         range,
         floats: float_stats(s)?,
         strings: strings(s, proof)?,
@@ -180,7 +204,21 @@ pub(crate) fn profile(s: &Series, seed: u64, proof: bool) -> PolarsResult<Profil
         min,
         max,
         numeric,
+        ranking,
     })
+}
+
+/// The text of the values at the ranked first rows, with their counts: one `take_slice` of at
+/// most `rank_up_to` rows.
+fn ranked_values(s: &Series, ranked: &[(u64, u64)]) -> PolarsResult<Ranking> {
+    let idx: Vec<IdxSize> = ranked.iter().map(|&(_, first)| first as IdxSize).collect();
+    let values = s.take_slice(&idx)?.cast(&DataType::String)?;
+    Ok(values
+        .str()?
+        .into_iter()
+        .zip(ranked)
+        .map(|(v, &(count, _))| (v.unwrap_or_default().to_owned(), count))
+        .collect())
 }
 
 /// Row `i` rendered as arrow-rs text (spec 2026-10-01 §13.1).
@@ -436,11 +474,16 @@ pub(crate) fn flatten(s: &Series) -> PolarsResult<Option<Series>> {
     Ok(Some(inner.take_slice(&idx)?))
 }
 
-/// `proof`: see `StringStats::proof` (false on the one-shot path).
-pub(crate) fn describe_one(s: &Series, seed: u64, proof: bool) -> PolarsResult<Described> {
+/// `proof`: see `StringStats::proof` (false on the one-shot path); `rank_up_to`: see `profile`.
+pub(crate) fn describe_one(
+    s: &Series,
+    seed: u64,
+    proof: bool,
+    rank_up_to: Option<u64>,
+) -> PolarsResult<Described> {
     let inner = match flatten(s)? {
         Some(values) => {
-            let profile = profile(&values, seed, proof)?;
+            let profile = profile(&values, seed, proof, rank_up_to)?;
             Some(Inner { values, profile })
         }
         None => None,
@@ -450,7 +493,7 @@ pub(crate) fn describe_one(s: &Series, seed: u64, proof: bool) -> PolarsResult<D
         dtype: s.dtype().clone(),
         n_rows: s.len() as u64,
         n_null: s.null_count() as u64,
-        outer: profile(s, seed, proof)?,
+        outer: profile(s, seed, proof, rank_up_to)?,
         n_midnight: n_midnight(s)?,
         inner,
     })
@@ -483,10 +526,11 @@ mod tests {
             &Series::new("x".into(), &[Some(10i64), None, Some(30)]),
             0,
             false,
+            None,
         )
         .unwrap();
         assert_eq!((p.gcd, p.sum_len), (Some(10), None));
-        let s = profile(&Series::new("x".into(), &["ab", "ab", "c"]), 0, false).unwrap();
+        let s = profile(&Series::new("x".into(), &["ab", "ab", "c"]), 0, false, None).unwrap();
         assert_eq!(
             (s.gcd, s.sum_len, s.freq.sum_len_unique),
             (None, Some(5), Some(3))
@@ -496,7 +540,7 @@ mod tests {
     #[test]
     fn described_row_matches_fields() {
         let list = Series::new("x".into(), [Some(Series::new("".into(), &[1i64, 2])), None]);
-        let d = describe_one(&list, 0, false).unwrap();
+        let d = describe_one(&list, 0, false, None).unwrap();
         assert_eq!(d.row(10_000).len(), fields().len());
         assert_eq!(d.input_row().len(), input_fields().len());
         assert_eq!(d.inner.as_ref().unwrap().values.len(), 2);
@@ -510,7 +554,7 @@ mod tests {
             (inner.min.as_deref(), inner.max.as_deref()),
             (Some("1"), Some("2"))
         );
-        let floats = describe_one(&Series::new("y".into(), &[1.5f64]), 0, false).unwrap();
+        let floats = describe_one(&Series::new("y".into(), &[1.5f64]), 0, false, None).unwrap();
         assert_eq!(floats.row(10_000).len(), fields().len());
         assert!(floats.inner.is_none() && floats.outer.floats.is_some());
     }
@@ -520,7 +564,7 @@ mod tests {
         let ts = Series::new("t".into(), &[1_704_164_645_000_000i64, 0])
             .cast(&DataType::Datetime(TimeUnit::Microseconds, None))
             .unwrap();
-        let p = profile(&ts, 0, false).unwrap();
+        let p = profile(&ts, 0, false, None).unwrap();
         assert_eq!(
             (p.min.as_deref(), p.max.as_deref()),
             (Some("1970-01-01T00:00:00"), Some("2024-01-02T03:04:05"))
@@ -529,6 +573,7 @@ mod tests {
             &Series::new("f".into(), &[1.0f64, f64::NAN, -2.5]),
             0,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -536,10 +581,60 @@ mod tests {
             (Some("-2.5"), Some("1.0"))
         );
         assert_eq!(f.numeric, Some((-2.5, 1.0)));
-        let s = profile(&Series::new("s".into(), &["b", "a"]), 0, false).unwrap();
+        let s = profile(&Series::new("s".into(), &["b", "a"]), 0, false, None).unwrap();
         assert_eq!(
             (s.min.as_deref(), s.max.as_deref(), s.numeric),
             (Some("a"), Some("b"), None)
+        );
+    }
+
+    #[test]
+    fn text_levels_rank_their_values() {
+        let s = Series::new(
+            "x".into(),
+            &[
+                Some("b"),
+                Some("a"),
+                Some("b"),
+                None,
+                Some("c"),
+                Some("a"),
+                Some("b"),
+            ],
+        );
+        let want = Some(vec![("b".to_string(), 3), ("a".into(), 2), ("c".into(), 1)]);
+        assert_eq!(profile(&s, 0, false, Some(10)).unwrap().ranking, want);
+        let cats = Categories::new("rank-test".into(), "".into(), CategoricalPhysical::U32);
+        let cat = s
+            .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
+            .unwrap();
+        assert_eq!(profile(&cat, 0, false, Some(10)).unwrap().ranking, want);
+        let e = DataType::from_frozen_categories(FrozenCategories::new(["c", "a", "b"]).unwrap());
+        assert_eq!(
+            profile(&s.cast(&e).unwrap(), 0, false, Some(10))
+                .unwrap()
+                .ranking,
+            want
+        );
+        // Not text, no limit, or over the limit: no ranking.
+        let ints = Series::new("i".into(), &[1i64, 1, 2]);
+        assert_eq!(profile(&ints, 0, false, Some(10)).unwrap().ranking, None);
+        assert_eq!(profile(&s, 0, false, None).unwrap().ranking, None);
+        assert_eq!(profile(&s, 0, false, Some(2)).unwrap().ranking, None);
+        // A list's inner values are ranked too.
+        let l = Series::new(
+            "l".into(),
+            [
+                Some(Series::new("".into(), &["q", "p"])),
+                None,
+                Some(Series::new("".into(), &["p"])),
+            ],
+        );
+        let d = describe_one(&l, 0, false, Some(10)).unwrap();
+        assert_eq!(d.outer.ranking, None);
+        assert_eq!(
+            d.inner.unwrap().profile.ranking,
+            Some(vec![("p".to_string(), 2), ("q".into(), 1)])
         );
     }
 }

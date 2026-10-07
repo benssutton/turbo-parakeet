@@ -703,7 +703,7 @@ mod tests {
         let lens = byte_lengths(&s).unwrap().unwrap();
         assert_eq!(lens.iter().sum::<u64>(), 5);
         assert_eq!(
-            frequencies(&encode_series(&s).unwrap(), 0, Some(&lens)).sum_len_unique,
+            frequencies(&encode_series(&s).unwrap(), 0, Some(&lens), None).sum_len_unique,
             Some(3)
         );
     }
