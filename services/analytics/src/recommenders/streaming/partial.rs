@@ -308,10 +308,20 @@ impl TextSource {
     }
 
     /// The value at global index `first`, as text (one-row slice; Categorical / Enum by label).
-    pub(crate) fn at(&self, first: u64) -> Option<String> {
-        let row = i64::try_from(first.checked_sub(self.offset)?).ok()?;
-        let one = self.values.slice(row, 1).cast(&DataType::String).ok()?;
-        one.str().ok()?.get(0).map(str::to_owned)
+    pub(crate) fn at(&self, first: u64) -> String {
+        let row = first
+            .checked_sub(self.offset)
+            .and_then(|r| i64::try_from(r).ok())
+            .expect("admitted value's first row lies in this batch");
+        let one = self
+            .values
+            .slice(row, 1)
+            .cast(&DataType::String)
+            .expect("text levels cast to String");
+        let text = one
+            .str()
+            .expect("a String series is a string chunked array");
+        text.get(0).expect("a counted value is non-null").to_owned()
     }
 }
 
@@ -506,7 +516,7 @@ impl LevelStats {
                 .merge(&b.sketch);
             self.sample
                 .get_or_insert_with(|| DistinctSample::new(sample_size(threshold)))
-                .absorb_with_text(keys, b.text_source.as_ref());
+                .absorb(keys, b.text_source.as_ref());
         }
         if let Some(lens) = b.long_lens {
             let v = self.views.get_or_insert_with(Default::default);
@@ -598,7 +608,8 @@ impl LevelStats {
                 .and_then(|e| render_value(e.value.as_ref())),
             numeric,
             // Text levels: the exact phase's ranking (None once sampling); no sample yet
-            // means no non-null value.
+            // means no non-null value. Streaming ranks up to k = max(threshold, 1000) values,
+            // one-shot only ≤ threshold: gate on the dictionary candidate, not `is_some()`.
             ranking: if is_text(dtype) {
                 self.sample
                     .as_ref()

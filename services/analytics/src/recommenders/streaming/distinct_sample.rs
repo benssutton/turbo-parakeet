@@ -13,7 +13,7 @@ use std::collections::{BinaryHeap, HashMap};
 use foldhash::fast::FixedState;
 
 use crate::recommenders::streaming::partial::{KeyStat, TextSource, ViewSim};
-use crate::techniques::describe::Ranking;
+use crate::techniques::describe::{ranked_order, Ranking};
 
 /// Sample size for a `categorical_threshold`: at least 1000, so the estimators have
 /// data however low the threshold.
@@ -64,15 +64,10 @@ impl DistinctSample {
     }
 
     /// `keys`: one batch's distinct values; in first-occurrence order while exact on a
-    /// text / binary level (`few` and `views` read it), any order otherwise.
-    #[cfg(test)]
-    pub(crate) fn absorb(&mut self, keys: Vec<KeyStat>) {
-        self.absorb_with_text(keys, None);
-    }
-
-    /// As `absorb`; `text` (a text level in the exact phase) gives each newly admitted
-    /// value's text, read once at its first row.
-    pub(crate) fn absorb_with_text(&mut self, keys: Vec<KeyStat>, text: Option<&TextSource>) {
+    /// text / binary level (`few` and `views` read it), any order otherwise. `text` (a text
+    /// level in the exact phase) gives each newly admitted value's text, read once at its
+    /// first row.
+    pub(crate) fn absorb(&mut self, keys: Vec<KeyStat>, text: Option<&TextSource>) {
         for k in keys {
             // Sampling: every held value hashes at or below the top, so one above it is
             // neither held nor admitted; skip it before the map lookup.
@@ -105,8 +100,8 @@ impl DistinctSample {
             );
             self.heap.push((h, k.key));
             if !self.sampling {
-                if let Some(t) = text.and_then(|src| src.at(k.first)) {
-                    self.texts.insert(k.key, t.into_boxed_str());
+                if let Some(src) = text {
+                    self.texts.insert(k.key, src.at(k.first).into_boxed_str());
                 }
                 self.sum_len_unique += k.len;
                 self.views.push(k.len);
@@ -176,7 +171,7 @@ impl DistinctSample {
             .iter()
             .map(|(&key, s)| (s.count, s.first, key))
             .collect();
-        held.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        held.sort_unstable_by(|a, b| ranked_order(&(a.0, a.1), &(b.0, b.1)));
         held.into_iter()
             .map(|(count, _, key)| self.texts.get(&key).map(|t| (t.to_string(), count)))
             .collect()
@@ -225,7 +220,7 @@ mod tests {
     #[test]
     fn exact_phase_counts_every_value() {
         let mut d = DistinctSample::new(1_000);
-        d.absorb((0..100).map(|k| ks(k, k % 3 + 1, 1, None)).collect());
+        d.absorb((0..100).map(|k| ks(k, k % 3 + 1, 1, None)).collect(), None);
         assert!(d.is_exact());
         assert_eq!(d.len(), 100);
         let (f1, f2, h) = d.counts();
@@ -236,8 +231,8 @@ mod tests {
     #[test]
     fn counts_accumulate_and_masks_merge() {
         let mut d = DistinctSample::new(1_000);
-        d.absorb(vec![ks(1, 1, 1, None)]);
-        d.absorb(vec![ks(1, 5, 2, None)]);
+        d.absorb(vec![ks(1, 1, 1, None)], None);
+        d.absorb(vec![ks(1, 5, 2, None)], None);
         assert_eq!(d.counts(), (0, 0, [0, 0, 1, 0, 0, 0, 0]));
         assert!(!d.all_once());
     }
@@ -249,8 +244,8 @@ mod tests {
             ..ks(key, count, 1, None)
         };
         let mut d = DistinctSample::new(1_000);
-        d.absorb(vec![at(1, 2, 5), at(2, 1, 7)]);
-        d.absorb(vec![at(2, 4, 9), at(3, 1, 10)]);
+        d.absorb(vec![at(1, 2, 5), at(2, 1, 7)], None);
+        d.absorb(vec![at(2, 4, 9), at(3, 1, 10)], None);
         let slot = |k: u64| (d.map[&k].count, d.map[&k].first);
         assert_eq!((slot(1), slot(2), slot(3)), ((2, 5), (5, 7), (1, 10)));
         assert_eq!(d.counts().0, 1); // f1: only key 3 occurred once
@@ -261,7 +256,7 @@ mod tests {
         // Global rows 100..103 hold "x", "y", "x".
         let src = TextSource::new(Series::new("s".into(), &["x", "y", "x"]), 100);
         let mut d = DistinctSample::new(1_000);
-        d.absorb_with_text(
+        d.absorb(
             vec![
                 KeyStat {
                     first: 100,
@@ -279,7 +274,7 @@ mod tests {
             Some(vec![("x".to_string(), 2), ("y".into(), 1)])
         );
         // Later occurrences only add counts: no text source is needed.
-        d.absorb_with_text(
+        d.absorb(
             vec![KeyStat {
                 first: 500,
                 ..ks(2, 3, 1, None)
@@ -290,7 +285,7 @@ mod tests {
             d.ranking(),
             Some(vec![("y".to_string(), 4), ("x".into(), 2)])
         );
-        d.absorb(batch(10..2_000)); // past k: sampling
+        d.absorb(batch(10..2_000), None); // past k: sampling
         assert_eq!(d.ranking(), None);
         assert!(d.texts.is_empty());
     }
@@ -298,7 +293,7 @@ mod tests {
     #[test]
     fn a_held_value_without_text_means_no_ranking() {
         let mut d = DistinctSample::new(1_000);
-        d.absorb(batch(0..3));
+        d.absorb(batch(0..3), None);
         assert_eq!(d.ranking(), None);
         assert_eq!(DistinctSample::new(1_000).ranking(), Some(vec![]));
     }
@@ -306,16 +301,16 @@ mod tests {
     #[test]
     fn few_values_kept_while_exact() {
         let mut d = DistinctSample::new(1_000);
-        d.absorb(vec![ks(1, 1, 1, Some("a")), ks(2, 1, 1, Some("b"))]);
+        d.absorb(vec![ks(1, 1, 1, Some("a")), ks(2, 1, 1, Some("b"))], None);
         assert_eq!(d.few, ["a", "b"]);
-        d.absorb(batch(10..20));
+        d.absorb(batch(10..20), None);
         assert!(d.few.is_empty());
     }
 
     #[test]
     fn bounded_and_sampling_past_k() {
         let mut d = DistinctSample::new(1_000);
-        d.absorb(batch(0..50_000));
+        d.absorb(batch(0..50_000), None);
         assert_eq!(d.len(), 1_000);
         assert!(!d.is_exact() && d.all_once());
         assert_eq!((d.sum_len_unique, d.views.bytes()), (0, 0));
@@ -325,10 +320,10 @@ mod tests {
     #[test]
     fn keeps_the_smallest_hashes_whatever_the_order() {
         let (mut ab, mut ba) = (DistinctSample::new(1_000), DistinctSample::new(1_000));
-        ab.absorb(batch(0..30_000));
-        ab.absorb(batch(20_000..60_000));
-        ba.absorb(batch(20_000..60_000));
-        ba.absorb(batch(0..30_000));
+        ab.absorb(batch(0..30_000), None);
+        ab.absorb(batch(20_000..60_000), None);
+        ba.absorb(batch(20_000..60_000), None);
+        ba.absorb(batch(0..30_000), None);
         assert_eq!(ab.keys(), ba.keys());
         assert_eq!(ab.counts(), ba.counts());
         let held = ab.keys();
@@ -349,8 +344,11 @@ mod tests {
     fn sampled_fractions_estimate_the_population() {
         // 100 000 values seen once, 100 000 seen twice: half the population are singletons.
         let mut d = DistinctSample::new(10_000);
-        d.absorb((0..100_000).map(|k| ks(k, 1, 1, None)).collect());
-        d.absorb((100_000..200_000).map(|k| ks(k, 2, 1, None)).collect());
+        d.absorb((0..100_000).map(|k| ks(k, 1, 1, None)).collect(), None);
+        d.absorb(
+            (100_000..200_000).map(|k| ks(k, 2, 1, None)).collect(),
+            None,
+        );
         let (f1, f2, _) = d.counts();
         let n = d.len() as f64;
         assert!((f1 as f64 / n - 0.5).abs() < 0.03, "f1={f1}");
@@ -360,10 +358,10 @@ mod tests {
     #[test]
     fn boundary_at_exactly_k() {
         let mut d = DistinctSample::new(1_000);
-        d.absorb(batch(0..1_000));
+        d.absorb(batch(0..1_000), None);
         assert!(d.is_exact());
         assert_eq!(d.len(), 1_000);
-        d.absorb(batch(1_000..1_001));
+        d.absorb(batch(1_000..1_001), None);
         assert!(!d.is_exact());
         assert_eq!(d.len(), 1_000);
     }
@@ -371,11 +369,11 @@ mod tests {
     #[test]
     fn rejected_key_is_not_readmitted() {
         let mut d = DistinctSample::new(1_000);
-        d.absorb(batch(0..5_000));
+        d.absorb(batch(0..5_000), None);
         let held = d.keys();
         let gone = (0..5_000).find(|k| held.binary_search(k).is_err()).unwrap();
         let counts = d.counts();
-        d.absorb(vec![ks(gone, 1, 1, None)]);
+        d.absorb(vec![ks(gone, 1, 1, None)], None);
         assert_eq!(d.keys(), held);
         assert_eq!(d.counts(), counts);
     }
@@ -388,7 +386,7 @@ mod tests {
         a.len = 10;
         let mut b = ks(2, 1, 1, None);
         b.len = 30;
-        d.absorb(vec![a, b]);
+        d.absorb(vec![a, b], None);
         assert_eq!(d.mean_len(), 20.0);
     }
 
@@ -396,7 +394,7 @@ mod tests {
     fn full_mask_lands_in_last_history_bucket() {
         let mut d = DistinctSample::new(1_000);
         for m in [1, 2, 4] {
-            d.absorb(vec![ks(7, 1, m, None)]);
+            d.absorb(vec![ks(7, 1, m, None)], None);
         }
         assert_eq!(d.counts().2[6], 1);
     }

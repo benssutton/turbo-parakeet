@@ -751,6 +751,28 @@ fn an_enum_is_named_by_its_categories() {
     );
 }
 
+/// One-shot's rankings of `whole` (the column, then its list's inner values) vs the
+/// streaming `col`'s, which saw the same rows in any batch split.
+fn assert_ranks_like_one_shot(s: &Streaming, col_name: &str, whole: &ArrayRef) {
+    use crate::techniques::describe::describe_one;
+    let field = arrow_schema::Field::new(col_name, whole.data_type().clone(), true);
+    let series = crate::common::arrow_io::import_array(&field, whole).unwrap();
+    let one = describe_one(&series, 0, false, Some(10_000)).unwrap();
+    let c = col(s, col_name);
+    let dtype = series.dtype();
+    assert_eq!(c.outer.profile(dtype).ranking, one.outer.ranking);
+    if let Some(inner) = &one.inner {
+        let got = c
+            .inner
+            .as_ref()
+            .unwrap()
+            .profile(inner.values.dtype())
+            .ranking;
+        assert!(got.is_some());
+        assert_eq!(got, inner.profile.ranking);
+    }
+}
+
 #[test]
 fn text_levels_rank_like_one_shot() {
     use arrow_array::builder::{ListBuilder, StringBuilder};
@@ -763,8 +785,16 @@ fn text_levels_rank_like_one_shot() {
         Some("a"),
         Some("b"),
     ];
+    // Ties across batches: x and y both twice, x first.
+    let t = [Some("x"), Some("y"), Some("y"), Some("x"), Some("z")];
     let mut lb = ListBuilder::new(StringBuilder::new());
-    for row in [Some(vec!["q", "p"]), None, Some(vec!["p"])] {
+    for row in [
+        Some(vec!["q", "p"]),
+        None,
+        Some(vec!["p"]),
+        Some(vec!["r", "q"]),
+        Some(vec![]),
+    ] {
         match row {
             Some(items) => {
                 items.iter().for_each(|x| lb.values().append_value(x));
@@ -774,26 +804,58 @@ fn text_levels_rank_like_one_shot() {
         }
     }
     let lists: ArrayRef = Arc::new(lb.finish());
+    let (sv, st): (ArrayRef, ArrayRef) = (strs(&v), strs(&t));
     let mut s = streaming();
     // One row per batch: every value is admitted from its own batch.
     for i in 0..v.len() {
-        s.add(&batch(vec![("s", strs(&v[i..i + 1]))])).unwrap();
+        s.add(&batch(vec![("s", sv.slice(i, 1))])).unwrap();
+    }
+    for i in 0..t.len() {
+        s.add(&batch(vec![("t", st.slice(i, 1))])).unwrap();
     }
     for i in 0..lists.len() {
         s.add(&batch(vec![("l", lists.slice(i, 1))])).unwrap();
     }
     let want = Some(vec![("b".to_string(), 3), ("a".into(), 2), ("c".into(), 1)]);
     assert_eq!(col(&s, "s").outer.profile(&PT::String).ranking, want);
+    assert_ranks_like_one_shot(&s, "s", &sv);
+    assert_eq!(
+        col(&s, "t").outer.profile(&PT::String).ranking,
+        Some(vec![("x".to_string(), 2), ("y".into(), 2), ("z".into(), 1)])
+    );
+    assert_ranks_like_one_shot(&s, "t", &st);
     let inner = col(&s, "l").inner.as_ref().unwrap();
     assert_eq!(
         inner.profile(&PT::String).ranking,
-        Some(vec![("p".to_string(), 2), ("q".into(), 1)])
+        Some(vec![("q".to_string(), 2), ("p".into(), 2), ("r".into(), 1)])
     );
-    assert_eq!(
-        col(&s, "l")
-            .outer
-            .profile(&PT::List(Box::new(PT::String)))
-            .ranking,
-        None
-    );
+    assert_ranks_like_one_shot(&s, "l", &lists);
+    let list_type = PT::List(Box::new(PT::String));
+    assert_eq!(col(&s, "l").outer.profile(&list_type).ranking, None);
+}
+
+#[test]
+fn dictionary_batches_with_different_category_orders_rank_like_one_shot() {
+    use arrow_array::types::Int8Type;
+    use arrow_array::DictionaryArray;
+    let b1: DictionaryArray<Int8Type> = vec!["p", "q", "q"].into_iter().collect();
+    let b2: DictionaryArray<Int8Type> = vec!["q", "p", "q", "q"].into_iter().collect();
+    // Each batch's dictionary orders its categories by first appearance: [p, q] and [q, p].
+    let (a, b): (ArrayRef, ArrayRef) = (Arc::new(b1), Arc::new(b2));
+    let mut s = streaming();
+    s.add(&batch(vec![("d", a)])).unwrap();
+    s.add(&batch(vec![("d", b)])).unwrap();
+    let whole = strs(&[
+        Some("p"),
+        Some("q"),
+        Some("q"),
+        Some("q"),
+        Some("p"),
+        Some("q"),
+        Some("q"),
+    ]);
+    let want = Some(vec![("q".to_string(), 5), ("p".into(), 2)]);
+    let dtype = col(&s, "d").dtype.clone().unwrap();
+    assert_eq!(col(&s, "d").outer.profile(&dtype).ranking, want);
+    assert_ranks_like_one_shot(&s, "d", &whole);
 }

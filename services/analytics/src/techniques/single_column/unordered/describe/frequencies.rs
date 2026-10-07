@@ -38,10 +38,15 @@ pub(crate) type Ranked = Vec<(u64, u64)>;
 /// recommenders' `top_k` and frequency-ordered dictionary (spec 2026-10-07 §4).
 pub(crate) type Ranking = Vec<(String, u64)>;
 
+/// `Ranked` order: count descending, ties to the earlier first row.
+pub(crate) fn ranked_order(a: &(u64, u64), b: &(u64, u64)) -> std::cmp::Ordering {
+    b.0.cmp(&a.0).then(a.1.cmp(&b.1))
+}
+
 /// Sorts (count, first row) pairs into `Ranked` order. First rows are unique per value, so the
 /// unstable sort is deterministic.
 pub(crate) fn sort_ranked(r: &mut [(u64, u64)]) {
-    r.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    r.sort_unstable_by(ranked_order);
 }
 
 pub(crate) struct Frequencies {
