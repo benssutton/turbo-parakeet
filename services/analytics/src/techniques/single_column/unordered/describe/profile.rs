@@ -217,7 +217,7 @@ fn ranked_values(s: &Series, ranked: &[(u64, u64)]) -> PolarsResult<Ranking> {
         .str()?
         .into_iter()
         .zip(ranked)
-        .map(|(v, &(count, _))| (v.unwrap_or_default().to_owned(), count))
+        .map(|(v, &(count, _))| (v.expect("ranked first rows are non-null").to_owned(), count))
         .collect())
 }
 
