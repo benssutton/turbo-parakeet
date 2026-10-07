@@ -3,6 +3,8 @@ docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md §5.2)."""
 
 from __future__ import annotations
 
+import operator
+
 import polars as pl
 
 from analytics._dtypes import holds_wide_integer
@@ -33,9 +35,16 @@ def top_k(k) -> int | None:
     """`k` checked: a non-negative int, or None for every ranked value."""
     if k is None:
         return None
-    if isinstance(k, bool) or not isinstance(k, int) or k < 0:
-        raise ValueError(f"top_k must be a non-negative integer or None, got {k!r}")
-    return k
+    msg = f"top_k must be an integer in 0..2**64 - 1 or None, got {k!r}"
+    if isinstance(k, bool):
+        raise ValueError(msg)
+    try:
+        n = operator.index(k)
+    except TypeError:
+        raise ValueError(msg) from None
+    if not 0 <= n < 2**64:
+        raise ValueError(msg)
+    return n
 
 
 def prepare(frame) -> tuple[object, list[tuple[str, str]]]:

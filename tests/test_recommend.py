@@ -1009,10 +1009,15 @@ def test_inner_top_k_counts_list_values():
 
 
 @pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
-@pytest.mark.parametrize("k", [-1, 1.5, True])
+@pytest.mark.parametrize("k", [-1, 1.5, True, 2**64])
 def test_top_k_must_be_a_non_negative_integer(cls, k):
     with pytest.raises(ValueError, match="top_k"):
         cls(top_k=k)
+
+
+@pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
+def test_top_k_accepts_numpy_integers(cls):
+    cls(top_k=np.int64(2))
 
 
 def test_to_arrow_restores_the_map_type():
@@ -1024,6 +1029,7 @@ def test_to_arrow_restores_the_map_type():
     t = to_arrow(OneShotRecommender().add(frame).result())
     for name in ("top_k", "inner_top_k"):
         assert t.schema.field(name).type == pa.map_(pa.string(), pa.uint64())
+    assert t.schema.field("top_k").type.keys_sorted is False
     assert t.column("top_k").to_pylist() == [[("b", 3), ("a", 2), ("c", 1)], None]
     assert t.column("inner_top_k").to_pylist() == [None, [("x", 2), ("y", 1)]]
 
@@ -1032,9 +1038,9 @@ def polars_top_k(s: pl.Series, k: int | None) -> list:
     """The oracle: non-null values (a list's: its items) by count descending, ties to
     the first occurrence."""
     if isinstance(s.dtype, pl.List):
-        s = s.drop_nulls().explode()
+        s = s.drop_nulls().explode(empty_as_null=True)
     elif isinstance(s.dtype, pl.Array):
-        s = s.drop_nulls().arr.explode()
+        s = s.drop_nulls().arr.explode(empty_as_null=True)
     ranked = (
         s.cast(pl.String)
         .to_frame("v")
@@ -1052,7 +1058,8 @@ def polars_top_k(s: pl.Series, k: int | None) -> list:
 @pytest.mark.parametrize("make", ORACLE_FRAMES)
 def test_top_k_matches_polars(make):
     frames = make()
-    result = recommend_frames(frames)
+    params = {"categorical_threshold": 50_000} if "large" in frames else {}
+    result = recommend_frames(frames, **params)
     checked = 0
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
         s = frames[r["frame"]][r["column"]]
@@ -1067,6 +1074,4 @@ def test_top_k_matches_polars(make):
             if expected:
                 assert top_k(r, column) == polars_top_k(s, 256), (r["column"], column)
                 checked += 1
-    # large_dataset's strings all exceed categorical_threshold: no dictionary candidate
-    # is tried, so every top_k is null (asserted above).
-    assert checked > 0 or "large" in frames
+    assert checked > 0

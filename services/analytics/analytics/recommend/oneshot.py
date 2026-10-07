@@ -33,7 +33,7 @@ class OneShotRecommender:
 
     `top_k` / `inner_top_k` (dictionary candidates only, else null): the level's
     values by count, highest first, ties to the value seen first — at most `top_k`
-    entries (None: all); key them 0, 1, 2, … in that order for the most compressible
+    entries (None: all; 0: off — always null); key them 0, 1, 2, … in that order for the most compressible
     dictionary. The dictionary candidate is measured with keys in that order. Polars
     holds them as lists of key / value structs; `analytics.recommend.to_arrow` gives
     Arrow maps.

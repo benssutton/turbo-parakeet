@@ -642,3 +642,9 @@ def test_an_unsupported_type_is_refused_even_with_no_rows():
 def test_boolean_pairs_must_be_pairs(pairs):
     with pytest.raises(ValueError, match="boolean_pairs must be pairs of two strings"):
         StreamingRecommender(boolean_pairs=pairs)
+
+
+def test_top_k_over_batches():
+    frame = pl.DataFrame({"s": ["b", "a", "b", None, "c", "a", "b"]})
+    out = stream(frame, 3, top_k=1)
+    assert out["top_k"].to_list() == [[{"key": "b", "value": 3}]]
