@@ -1,6 +1,6 @@
 """
 Recommender speed: OneShotRecommender (add, result) and StreamingRecommender (add
-throughput in rows/s, result time) on the same data. Standalone â€” the shared harness
+throughput in rows/s, result time) on the same data. Standalone — the shared harness
 assumes IMPLEMENTATIONS.
 Also, per dataset: one-shot at top_k=0 (the top-k overhead), the Polars top-k oracle's time
 (the deterministic baseline), and per dictionary column the Arrow ZSTD size of the
@@ -9,7 +9,7 @@ frequency-ordered dictionary against pyarrow's first-seen dictionary_encode
 
 Run: /c/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_recommend.py
 
-Results â†’ tests/performance/results/recommend.parquet (git-ignored).
+Results → tests/performance/results/recommend.parquet (git-ignored).
 `peak_mb` is the process's peak memory so far (dataset included), where the OS reports it.
 """
 
@@ -137,6 +137,7 @@ def dictionary_order(name: str, frame: pl.DataFrame) -> list[dict]:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
     rows = []
     orders = []
     for name, make in DATASETS.items():
@@ -180,7 +181,8 @@ def main() -> None:
     pl.DataFrame(rows).write_parquet(out / "recommend.parquet")
     if orders:
         pl.DataFrame(orders).write_parquet(out / "recommend_dictionary_order.parquet")
-        print(pl.DataFrame(orders).sort("gain"))
+        with pl.Config(tbl_rows=-1):
+            print(pl.DataFrame(orders).sort("gain"))
 
 
 if __name__ == "__main__":
