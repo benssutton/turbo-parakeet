@@ -212,6 +212,13 @@ pub(crate) fn cast_to(t: &Target, lvl: &Level) -> Result<ArrayRef, String> {
     match t {
         Target::Original(_) => Ok(src.clone()),
         Target::Null => Ok(arrow_array::new_null_array(&AT::Null, src.len())),
+        Target::Dictionary(..) if is_text(lvl.dtype) => {
+            let a = from_text(t, lvl.text()?)?;
+            match &lvl.p.ranking {
+                Some(r) => frequency_order(&a, r),
+                None => Ok(a),
+            }
+        }
         _ if is_text(lvl.dtype) => from_text(t, lvl.text()?),
         Target::Fixed(to @ (AT::Decimal32(..) | AT::Decimal64(..) | AT::Decimal128(..)))
             if is_float(lvl.dtype) =>

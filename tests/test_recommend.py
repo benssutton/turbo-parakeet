@@ -13,6 +13,7 @@ from pathlib import Path
 
 import polars as pl
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 
 from analytics.describe import _sizes
@@ -723,6 +724,40 @@ def _unlist(s: pl.Series, target: str) -> pl.Series:
     return s
 
 
+def frequency_ordered(arr: pa.Array) -> pa.Array:
+    """`arr` with every dictionary's keys renumbered as the recommender measures them
+    (spec 2026-10-07 §5): the most frequent value takes key 0, ties go to the value seen
+    first; values never seen follow. Lists are rebuilt around their reordered values."""
+    t = arr.type
+    if pa.types.is_list(t) or pa.types.is_large_list(t):
+        return type(arr).from_arrays(
+            arr.offsets, frequency_ordered(arr.values), mask=arr.is_null()
+        )
+    if pa.types.is_fixed_size_list(t):
+        return pa.FixedSizeListArray.from_arrays(
+            frequency_ordered(arr.values), t.list_size, mask=arr.is_null()
+        )
+    if not pa.types.is_dictionary(t):
+        return arr
+    ranked = (
+        pl.Series("code", arr.indices.cast(pa.int64()))
+        .to_frame()
+        .with_row_index("row")
+        .drop_nulls("code")
+        .group_by("code")
+        .agg(n=pl.len(), first=pl.col("row").min())
+        .sort(["n", "first"], descending=[True, False])["code"]
+        .to_list()
+    )
+    seen = set(ranked)
+    order = ranked + [c for c in range(len(arr.dictionary)) if c not in seen]
+    new_code = [0] * len(order)
+    for new, old in enumerate(order):
+        new_code[old] = new
+    indices = pc.take(pa.array(new_code, t.index_type), arr.indices)
+    return pa.DictionaryArray.from_arrays(indices, arr.dictionary.take(pa.array(order)))
+
+
 def list_frame(n: int = 600) -> pl.DataFrame:
     """List / Array columns: single-item ones become scalars (checked through `_unlist`), the rest stay lists."""
     return pl.DataFrame(
@@ -825,14 +860,17 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
         assert _sizes.ipc_body_bytes(arrow, None) == r["rec_arrow_size_bytes"], r[
             "column"
         ]
-        assert _sizes.ipc_body_bytes(arrow, level) == pytest.approx(
+        assert _sizes.ipc_body_bytes(frequency_ordered(arrow), level) == pytest.approx(
             r["rec_arrow_size_zstd_bytes"], rel=0.01, abs=16
         ), r["column"]
         native = _sizes.column_sizes(polars, level)
         assert native["size_polars_bytes"] == r["rec_polars_size_bytes"], r["column"]
-        assert native["size_polars_zstd_bytes"] == pytest.approx(
-            r["rec_polars_size_zstd_bytes"], rel=0.01, abs=16
-        ), r["column"]
+        if "dictionary" not in r["rec_arrow_type"]:
+            # The recommender measures its Polars layout in frequency order too; a Polars
+            # cast assigns codes in first-seen order, so only other targets compare.
+            assert native["size_polars_zstd_bytes"] == pytest.approx(
+                r["rec_polars_size_zstd_bytes"], rel=0.01, abs=16
+            ), r["column"]
         checked += 1
     assert checked >= min(10, result.height)
 

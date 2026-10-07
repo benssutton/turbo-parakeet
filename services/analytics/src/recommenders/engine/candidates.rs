@@ -585,8 +585,13 @@ impl Rules<'_, '_> {
         let low = est
             .est_low
             .map_or(String::new(), |l| format!(" est_low={l:?}"));
+        let order = if self.lvl.p.ranking.is_some() {
+            " key_order=frequency"
+        } else {
+            ""
+        };
         let ev = format!(
-            "c={c:?} from {source} method={}{low} n_unique={} categorical_threshold={threshold}",
+            "c={c:?} from {source} method={}{low} n_unique={} categorical_threshold={threshold}{order}",
             est.method.name(),
             self.lvl.p.freq.n_unique
         );
