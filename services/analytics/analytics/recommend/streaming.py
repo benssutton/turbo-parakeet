@@ -39,9 +39,10 @@ class StreamingRecommender:
     Arrow maps.
 
     Memory per eligible level (a column, or a list's inner values), every dtype:
-    ≈ 16 KB of HyperLogLog plus a distinct sample of up to ≈ 50 bytes × k, where
-    k = max(categorical_threshold, 1000) — ≈ 0.5 MB at the default 10 000, so
-    ≈ 0.5 GB for 1 000 high-cardinality columns.
+    ≈ 16 KB of HyperLogLog plus a distinct sample of up to ≈ 65 bytes × k, where
+    k = max(categorical_threshold, 1000) — ≈ 0.65 MB at the default 10 000, so
+    ≈ 0.65 GB for 1 000 high-cardinality columns; text levels also keep their
+    distinct values' text while exact.
     """
 
     def __init__(
