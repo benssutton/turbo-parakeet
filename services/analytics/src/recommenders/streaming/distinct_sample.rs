@@ -100,16 +100,21 @@ impl DistinctSample {
             );
             self.heap.push((h, k.key));
             if !self.sampling {
-                if let Some(src) = text {
-                    self.texts.insert(k.key, src.at(k.first).into_boxed_str());
-                }
-                self.sum_len_unique += k.len;
-                self.views.push(k.len);
-                match k.text {
-                    Some(t) if self.map.len() <= 5 => self.few.push(t),
-                    _ => self.few.clear(),
-                }
+                self.admit_exact(k, text);
             }
+        }
+    }
+
+    /// Exact phase: a newly admitted value's text, length and `few` entry.
+    fn admit_exact(&mut self, k: KeyStat, text: Option<&TextSource>) {
+        if let Some(src) = text {
+            self.texts.insert(k.key, src.at(k.first).into_boxed_str());
+        }
+        self.sum_len_unique += k.len;
+        self.views.push(k.len);
+        match k.text {
+            Some(t) if self.map.len() <= 5 => self.few.push(t),
+            _ => self.few.clear(),
         }
     }
 

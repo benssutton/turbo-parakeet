@@ -70,10 +70,12 @@ def test_result_before_add_is_empty_with_the_full_schema():
 
 def test_a_second_add_raises_and_keeps_the_first():
     rec = OneShotRecommender().add(pl.DataFrame({"a": [1, 2]}))
+    second = pl.DataFrame({"a": [3]})
+    wide = pl.DataFrame({"w": pl.Series([1], dtype=pl.Int128)})
     with pytest.raises(ValueError, match="already been added"):
-        rec.add(pl.DataFrame({"a": [3]}))
+        rec.add(second)
     with pytest.raises(ValueError, match="already been added"):
-        rec.add(pl.DataFrame({"w": pl.Series([1], dtype=pl.Int128)}))
+        rec.add(wide)
     assert rec.result()["n_rows"].to_list() == [2]
 
 

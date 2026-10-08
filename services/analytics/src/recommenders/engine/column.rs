@@ -95,6 +95,7 @@ pub(crate) fn recommend(
         // The original's Polars type, spelled as the streaming recommender spells it.
         let enum_values = enum_categories(s.dtype());
         // The kept original is `values`, which `sz` measured.
+        debug_assert!(std::sync::Arc::ptr_eq(&chosen.array, values));
         (
             Some(pl_name(&t, name, enum_values.as_deref(), &AT::UInt32)),
             *sz,

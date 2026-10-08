@@ -33,9 +33,12 @@ Not false positives in the strict sense: the scores are right, but the functions
 not worth splitting (no natural seam; splitting costs readability for one or two points).
 Marked *False positive* in Sonar so the dashboard is clean; do not refactor to chase the score.
 
-- `distinct_sample.rs` `DistinctSample::absorb` (16)
-- `streaming.rs` `Streaming::add` (16)
-- `recommend.rs` `Rules::float` (16)
+- `recommenders/streaming/mod.rs` `Streaming::add` (16)
+- `recommenders/streaming/partial.rs` `BatchStats::of` (16): one pass per statistic, no seam
+- `recommenders/engine/candidates.rs` `Rules::float` (16)
+
+(`DistinctSample::absorb` reached 19 and was split instead: `admit_exact` holds the
+exact-phase bookkeeping.)
 - `gcd.rs` `gcd_slice` (17): generic closures on a hot path inflate the score
 - `shared.rs` `encode_series` (17): a flat dtype dispatch, one arm per type
 
@@ -49,7 +52,7 @@ the operands are already built outside the block. Marked *False positive*; the o
 
 ## `java:S1602` — "useless curly braces" around a lambda body (1, MINOR)
 
-`StreamingRecommender.java`, `Free.run`: `Native.run(() -> { FREE.invokeExact(handle); })`. The
+`NativeRecommender.java`, `Free.run`: `Native.run(() -> { free.invokeExact(handle); })`. The
 braces are required: as an expression lambda, `FREE.invokeExact(handle)` links as returning
 `Object` and throws `WrongMethodTypeException` (the handle returns `void`). A comment in the
 code says so. Marked *False positive*; do not remove the braces.

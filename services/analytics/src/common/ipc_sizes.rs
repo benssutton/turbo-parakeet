@@ -190,10 +190,11 @@ pub(crate) fn sizes_of(
     layout_sizes(classic.as_ref(), native.as_ref(), level)
 }
 
-/// Plain and ZSTD body bytes of `arrow` and of `polars` — `arrow` in Polars' layout, sharing
-/// its buffers when the type is unchanged — as `[arrow, arrow ZSTD, polars, polars ZSTD]`.
-/// A fixed-width or boolean type keeps its buffers (equal values would not do: the bytes
-/// under nulls affect ZSTD), so its bodies are measured (and compressed) once.
+/// Plain and ZSTD body bytes of `arrow` and of `polars`, as `[arrow, arrow ZSTD, polars,
+/// polars ZSTD]`. `polars` must be `arrow` converted to Polars' layout (`to_polars_layout`, or
+/// `export_series` of the same Series): a fixed-width or boolean type then keeps its buffers,
+/// so its bodies are measured (and compressed) once. Equal values would not do: the bytes
+/// under nulls affect ZSTD.
 pub(crate) fn layout_sizes(
     arrow: &dyn Array,
     polars: &dyn Array,
