@@ -36,11 +36,11 @@ Marked *False positive* in Sonar so the dashboard is clean; do not refactor to c
 - `recommenders/streaming/mod.rs` `Streaming::add` (16)
 - `recommenders/streaming/partial.rs` `BatchStats::of` (16): one pass per statistic, no seam
 - `recommenders/engine/candidates.rs` `Rules::float` (16)
+- `techniques/single_column/unordered/gcd.rs` `gcd_slice` (17): generic closures on a hot path inflate the score
+- `common/encode.rs` `encode_series` (17): a flat dtype dispatch, one arm per type
 
 (`DistinctSample::absorb` reached 19 and was split instead: `admit_exact` holds the
 exact-phase bookkeeping.)
-- `gcd.rs` `gcd_slice` (17): generic closures on a hot path inflate the score
-- `shared.rs` `encode_series` (17): a flat dtype dispatch, one arm per type
 
 ## `python:S5778` — more than one call that can raise inside `pytest.raises` (1, MAJOR)
 

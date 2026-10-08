@@ -196,7 +196,7 @@ Applies to string results (outer, or inner values of a List) and to Categorical/
    - Boolean from `boolean_pairs`; `timestamp_with_offset`; Timestamp with a fixed-offset zone: built from the ISO scanner.
    - Any unparsable or out-of-range value fails the cast (reason: first failing row and value).
 3. **Verify** row by row against an **exact reference** of the original, with nulls matched:
-   - numeric / temporal sources: the recast values cast back to the source type equal the originals (floats: `f64::from_str(decimal_text)` equals the original bits; `-0.0 = 0.0`);
+   - numeric / temporal sources: the recast values cast back to the source type equal the originals (floats: the decimal converts back to the original bits — as the float its text parses to: one exact division when the unscaled value and 10^scale are exact floats, else through the text; `-0.0 = 0.0`);
    - string sources: the recast values are rendered to text by `arrow-cast` and compared with the original text by value — canonical decimal digits for numbers, `parse_iso` components (days, time-of-day ns, UTC instant, offset) for temporals — so the check runs through code independent of the parser that built them;
    - dictionary: decoded values equal the originals;
    - list → scalar: verified structurally — the inner values are verified as above, and the scalar column is a `take` of each row's only item (a null list → a null row).
