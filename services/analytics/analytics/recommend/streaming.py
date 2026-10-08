@@ -17,6 +17,7 @@ import polars as pl
 
 from analytics import _plugin
 from analytics.recommend import _input
+from analytics.recommend._maps import from_arrow
 
 
 class StreamingRecommender:
@@ -83,4 +84,4 @@ class StreamingRecommender:
         return self
 
     def result(self) -> pl.DataFrame:
-        return pl.DataFrame(self._rs.result())
+        return from_arrow(self._rs.result())

@@ -6,6 +6,16 @@ from __future__ import annotations
 import polars as pl
 
 TOP_K_COLUMNS = ("top_k", "inner_top_k")
+_ENTRIES = pl.List(pl.Struct({"key": pl.String, "value": pl.UInt64}))
+
+
+def from_arrow(result) -> pl.DataFrame:
+    """A recommender's Arrow result as a Polars frame with `top_k` / `inner_top_k` as
+    lists of key / value structs on every Polars version (Polars 2 reads an Arrow map
+    as its own `Map` type, Polars 1 as exactly this list)."""
+    df = pl.DataFrame(result)
+    maps = [c for c in TOP_K_COLUMNS if c in df.columns and df.schema[c] != _ENTRIES]
+    return df.with_columns(pl.col(c).cast(_ENTRIES) for c in maps)
 
 
 def to_arrow(result: pl.DataFrame):

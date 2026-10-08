@@ -355,7 +355,7 @@ def _normalise(frame: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | pl.LazyFram
     buf = io.BytesIO()
     frame.select(cols).write_ipc(buf, compression="uncompressed")
     buf.seek(0)
-    return frame.with_columns(pl.read_ipc(buf, memory_map=False).get_columns())
+    return frame.with_columns(pl.read_ipc(buf).get_columns())
 
 
 def computed(expr: pl.Expr) -> pl.Expr:
