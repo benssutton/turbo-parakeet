@@ -119,8 +119,9 @@ Comparing each row against 2c samples would cost O(c) per row. Two devices remov
   `next_b` target; a B entry is also stale once its key is no longer the estimator's primary).
   Heap ties order by estimator index and key, so a seed always gives the same estimate.
 
-Randomness comes from a seeded generator per sketch (`seed`, mixed with the combination index so
-that combinations are independent and results do not depend on thread scheduling).
+Randomness comes from a seeded generator per sketch (derived from the user `seed`, a domain tag and the column names of the column or
+combination), so a combination's estimate depends neither on thread scheduling nor on which other
+combinations were requested in the same call.
 
 ### 2.3 Memory
 

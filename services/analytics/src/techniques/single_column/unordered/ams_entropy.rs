@@ -36,9 +36,15 @@ pub(crate) fn combine(a: u64, b: u64) -> u64 {
     mix64(a ^ mix64(b))
 }
 
-/// The seed of sketch `index` in `domain`: independent sketches, whatever the thread schedule.
-pub(crate) fn sketch_seed(seed: u64, domain: u64, index: usize) -> u64 {
-    mix64(mix64(seed ^ domain) ^ index as u64)
+/// The seed of the sketch of one column or combination, from the user seed, a domain tag and
+/// the identity of the columns: independent of thread schedule and of the other requests.
+pub(crate) fn sketch_seed(seed: u64, domain: u64, identity: u64) -> u64 {
+    mix64(mix64(mix64(seed) ^ domain) ^ identity)
+}
+
+/// A column name as a key: deterministic across runs and platforms.
+pub(crate) fn name_key(name: &str) -> u64 {
+    name.bytes().fold(0, |h, b| mix64(h ^ b as u64))
 }
 
 /// Row count shared by every input column; errors on no columns, zero rows or ragged input.
@@ -75,17 +81,12 @@ pub(crate) fn keyed_columns(
     let needed: HashSet<usize> = needed.into_iter().collect();
     let cache = build_column_cache_par(inputs, &needed)?;
     Ok(cache
-        .par_iter()
-        .map(|col| {
-            (0..col.len())
-                .map(|i| {
-                    if col.is_null[i] {
-                        NULL_KEY
-                    } else {
-                        mix64(col.values[i])
-                    }
-                })
-                .collect()
+        .into_par_iter()
+        .map(|mut col| {
+            for (v, &null) in col.values.iter_mut().zip(&col.is_null) {
+                *v = if null { NULL_KEY } else { mix64(*v) };
+            }
+            col.values
         })
         .collect())
 }
@@ -119,9 +120,10 @@ pub(crate) fn ams_marginal_entropy_impl(
     let keys = keyed_columns(inputs, 0..inputs.len())?;
     let entropy: Vec<f64> = keys
         .par_iter()
-        .enumerate()
-        .map(|(i, col)| {
-            let mut sketch = AmsEntropy::new(num_samples, sketch_seed(seed, MARGINAL, i));
+        .zip(inputs)
+        .map(|(col, s)| {
+            let id = name_key(s.name());
+            let mut sketch = AmsEntropy::new(num_samples, sketch_seed(seed, MARGINAL, id));
             for &k in col {
                 sketch.update(k);
             }
@@ -820,7 +822,26 @@ mod tests {
         assert_eq!(h[1], 0.0);
         assert_eq!(h[2], 0.0); // all null: one category
                                // Per-estimator sd ~ log2(e) = 1.44 bits, so se = 1.44/sqrt(4096) = 0.023; 0.1 is ~4.4 se.
-        assert!((h[3] - 1.0).abs() < 0.1, "{}", h[3]); // null vs 1, half each
+                               // null vs 1, half each:
+        assert!((h[3] - 1.0).abs() < 0.1, "{}", h[3]);
+    }
+
+    #[test]
+    fn marginal_estimate_does_not_depend_on_other_columns() {
+        let x = Series::new(
+            "x".into(),
+            (0..2000i64).map(|i| (i * 7919) % 13).collect::<Vec<_>>(),
+        );
+        let y = Series::new("y".into(), (0..2000i64).map(|i| i % 5).collect::<Vec<_>>());
+        let alone = entropies(
+            ams_marginal_entropy_impl(std::slice::from_ref(&x), 64, 0).unwrap(),
+            "marginal_entropy",
+        );
+        let with = entropies(
+            ams_marginal_entropy_impl(&[y, x], 64, 0).unwrap(),
+            "marginal_entropy",
+        );
+        assert_eq!(alone[0], with[1]);
     }
 
     #[test]
