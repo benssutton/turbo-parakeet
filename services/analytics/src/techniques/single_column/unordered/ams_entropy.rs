@@ -161,7 +161,7 @@ struct Tracked {
     /// first; entries not matching the estimator's `next_b` or primary key are stale.
     b: BinaryHeap<Reverse<(u64, u32)>>,
     /// Row at which `b` is next checked (an entry of `AmsEntropy::checks`), `u64::MAX` if none.
-    check: u64,
+    check_row: u64,
 }
 
 impl Tracked {
@@ -174,6 +174,18 @@ impl Tracked {
 fn b_valid(estimators: &[Estimator], key: u64, target: u64, e: u32) -> bool {
     let est = &estimators[e as usize];
     est.next_b == target && est.primary.is_some_and(|p| p.key == key)
+}
+
+/// The smallest valid (target, estimator) of `t.b` (the B heap of `key`), left at the top
+/// after popping stale entries.
+fn min_valid_b(estimators: &[Estimator], key: u64, t: &mut Tracked) -> Option<(u64, u32)> {
+    while let Some(&Reverse((target, e))) = t.b.peek() {
+        if b_valid(estimators, key, target, e) {
+            return Some((target, e));
+        }
+        t.b.pop();
+    }
+    None
 }
 
 /// Streaming Shannon-entropy sketch (bits) with `num_samples` estimators.
@@ -196,6 +208,9 @@ pub(crate) struct AmsEntropy {
     m: u64,
     #[cfg(test)]
     fired: u64,
+    /// Valid key checks processed (test builds): at most one wasted per row plus one per event.
+    #[cfg(test)]
+    checked: u64,
 }
 
 impl AmsEntropy {
@@ -220,6 +235,8 @@ impl AmsEntropy {
             m: 0,
             #[cfg(test)]
             fired: 0,
+            #[cfg(test)]
+            checked: 0,
         }
     }
 
@@ -241,7 +258,11 @@ impl AmsEntropy {
                 break;
             }
             self.checks.pop();
-            if self.tracked.get(&key).is_some_and(|t| t.check == row) {
+            if self.tracked.get(&key).is_some_and(|t| t.check_row == row) {
+                #[cfg(test)]
+                {
+                    self.checked += 1;
+                }
                 self.check(key, row, x);
             }
         }
@@ -337,19 +358,13 @@ impl AmsEntropy {
     /// Pop the next valid B entry of `key` if its target is `due`.
     fn pop_due(&mut self, key: u64, due: u64) -> Option<usize> {
         let t = self.tracked.get_mut(&key)?;
-        while let Some(&Reverse((target, e))) = t.b.peek() {
-            if !b_valid(&self.estimators, key, target, e) {
-                t.b.pop();
-                continue;
-            }
-            debug_assert!(target >= due, "missed B event");
-            if target != due {
-                return None;
-            }
-            t.b.pop();
-            return Some(e as usize);
+        let (target, e) = min_valid_b(&self.estimators, key, t)?;
+        debug_assert!(target >= due, "missed B event");
+        if target != due {
+            return None;
         }
-        None
+        t.b.pop();
+        Some(e as usize)
     }
 
     /// Point `key`'s check at the earliest row its smallest valid B target can fire: every row
@@ -359,17 +374,9 @@ impl AmsEntropy {
         let Some(t) = self.tracked.get_mut(&key) else {
             return;
         };
-        let min = loop {
-            match t.b.peek() {
-                None => break None,
-                Some(&Reverse((target, e))) if b_valid(&self.estimators, key, target, e) => {
-                    break Some(target);
-                }
-                Some(_) => {
-                    t.b.pop();
-                }
-            }
-        };
+        // Invariant: after row R, every valid B target of `key` exceeds the number of non-`key`
+        // rows through R.
+        let min = min_valid_b(&self.estimators, key, t).map(|(target, _)| target);
         let at = min.map_or(u64::MAX, |target| {
             let after = t.others(row) + u64::from(x != key);
             // target == after: another B event is due on this row, during `check` (whose
@@ -377,8 +384,8 @@ impl AmsEntropy {
             debug_assert!(target >= after, "missed B event");
             row.saturating_add(target - after)
         });
-        if at != t.check {
-            t.check = at;
+        if at != t.check_row {
+            t.check_row = at;
             if at != u64::MAX {
                 self.checks.push(Reverse((at, key)));
             }
@@ -393,7 +400,7 @@ impl AmsEntropy {
             start: row,
             holders: 0,
             b: BinaryHeap::new(),
-            check: u64::MAX,
+            check_row: u64::MAX,
         });
         t.holders += 1;
         t.count
@@ -470,12 +477,18 @@ mod tests {
         assert_ne!(sketch(&keys, 128, 9), sketch(&keys, 128, 10));
     }
 
-    fn fired(keys: impl Iterator<Item = u64>, num_samples: usize) -> u64 {
+    /// (events fired, key checks processed, rows) of a 64-estimator run.
+    fn cost(keys: impl Iterator<Item = u64>, num_samples: usize) -> (u64, u64, u64) {
         let mut s = AmsEntropy::new(num_samples, 0);
         for k in keys {
             s.update(k);
         }
-        s.fired
+        eprintln!("cost: fired {} checked {} rows {}", s.fired, s.checked, s.m);
+        (s.fired, s.checked, s.m)
+    }
+
+    fn fired(keys: impl Iterator<Item = u64>, num_samples: usize) -> u64 {
+        cost(keys, num_samples).0
     }
 
     #[test]
@@ -492,8 +505,12 @@ mod tests {
         let keys = std::iter::repeat_n(0, 1000)
             .chain([1])
             .chain(std::iter::repeat_n(0, 100_000));
-        let fired = fired(keys, 64);
+        let (fired, checked, rows) = cost(keys, 64);
         assert!(fired < 64 * 30, "fired {fired} events");
+        assert!(
+            checked <= rows + fired,
+            "{checked} checks, {rows} rows, {fired} events"
+        );
     }
 
     #[test]
@@ -505,8 +522,12 @@ mod tests {
                 0
             }
         });
-        let fired = fired(keys, 64);
+        let (fired, checked, rows) = cost(keys, 64);
         assert!(fired < 64 * 60, "fired {fired} events");
+        assert!(
+            checked <= rows + fired,
+            "{checked} checks, {rows} rows, {fired} events"
+        );
     }
 
     fn exact_entropy(keys: &[u64]) -> f64 {
@@ -519,6 +540,107 @@ mod tests {
             .values()
             .map(|&c| c as f64 / m * (m / c as f64).log2())
             .sum()
+    }
+
+    /// Pareto-rounded tokens: P(token >= k) = k^-1.1, a heavy head (~53% are 1) and long tail.
+    fn zipf(n: usize, seed: u64) -> Vec<u64> {
+        let mut rng = Rng(seed);
+        (0..n)
+            .map(|_| rng.unit1().powf(-1.0 / 1.1) as u64)
+            .collect()
+    }
+
+    /// 95% one value, the rest spread over 1,000 others: exercises the backup sample.
+    fn skewed(n: usize, seed: u64) -> Vec<u64> {
+        let mut rng = Rng(seed);
+        (0..n)
+            .map(|_| {
+                if rng.unit0() < 0.95 {
+                    0
+                } else {
+                    1 + rng.next_u64() % 1000
+                }
+            })
+            .collect()
+    }
+
+    fn mean_and_se(xs: &[f64]) -> (f64, f64) {
+        let n = xs.len() as f64;
+        let mean = xs.iter().sum::<f64>() / n;
+        let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+        (mean, (var / n).sqrt())
+    }
+
+    /// CCM Algorithm 1 as written: a fresh label for every estimator on every row, O(c) per row.
+    fn naive(keys: &[u64], c: usize, seed: u64) -> f64 {
+        let mut rng = Rng(seed);
+        let mut mg = MisraGries::default();
+        // (key, label, r) per estimator; label 1.0 marks an empty slot.
+        let mut p = vec![(0u64, 1.0f64, 0u64); c];
+        let mut b = vec![(0u64, 1.0f64, 0u64); c];
+        for &x in keys {
+            mg.update(x);
+            for (p, b) in p.iter_mut().zip(b.iter_mut()) {
+                let t = rng.unit0();
+                if t < p.1 {
+                    if p.1 < 1.0 && x != p.0 {
+                        *b = *p;
+                    }
+                    *p = (x, t, 1);
+                } else if x == p.0 {
+                    p.2 += 1;
+                } else if t < b.1 {
+                    *b = (x, t, 1);
+                } else if b.1 < 1.0 && x == b.0 {
+                    b.2 += 1;
+                }
+            }
+        }
+        ccm_estimate(
+            keys.len() as u64,
+            &mg,
+            p.iter()
+                .zip(&b)
+                .map(|(p, b)| (p.0, p.2, (b.1 < 1.0).then_some(b.2))),
+        )
+    }
+
+    #[test]
+    fn mean_estimate_is_within_one_percent_of_exact() {
+        for keys in [zipf(10_000, 1), skewed(10_000, 2)] {
+            let h = exact_entropy(&keys);
+            let est: Vec<f64> = (0..100).map(|seed| sketch(&keys, 4096, seed)).collect();
+            let (mean, se) = mean_and_se(&est);
+            eprintln!("accuracy: mean {mean} se {se} exact {h}");
+            assert!(
+                (mean - h).abs() <= 0.01 * h,
+                "mean {mean} (se {se}) vs exact {h}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_clock_matches_naive_algorithm_1() {
+        for keys in [zipf(2_000, 3), skewed(2_000, 4)] {
+            let fast: Vec<f64> = (0..400).map(|s| sketch(&keys, 64, s)).collect();
+            let slow: Vec<f64> = (0..400).map(|s| naive(&keys, 64, 10_000 + s)).collect();
+            let ((m1, se1), (m2, se2)) = (mean_and_se(&fast), mean_and_se(&slow));
+            // se = sd / sqrt(n), so the ratio of standard errors is the ratio of deviations.
+            let ratio = se1 / se2;
+            eprintln!(
+                "equivalence: two-clock {m1} +- {se1}, naive {m2} +- {se2}, sd ratio {ratio}"
+            );
+            assert!(
+                (m1 - m2).abs() <= 4.0 * (se1 * se1 + se2 * se2).sqrt(),
+                "two-clock {m1} +- {se1}, naive {m2} +- {se2}"
+            );
+            assert!(
+                (0.8..=1.25).contains(&ratio),
+                "sd ratio {ratio}: two-clock sd {}, naive sd {}",
+                se1 * 20.0,
+                se2 * 20.0
+            );
+        }
     }
 
     #[test]
