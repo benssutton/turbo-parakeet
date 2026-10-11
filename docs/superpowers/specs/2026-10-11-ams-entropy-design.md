@@ -65,8 +65,11 @@ At the end, s0 is a uniform sample of the stream and r0 ~ R. For any item a, the
 (s0, r0) if s0 ≠ a, otherwise (s1, r1), is a uniform sample of the stream with every a removed
 (CCM Lemma 2.4).
 
-A **Misra–Gries summary with 8 counters** (internal constant `MG_COUNTERS`) gives p̂_max, the share
-of the most frequent item a_max, with p̂_max ≤ p_max.
+A **Misra–Gries summary with 256 counters** (internal constant `MG_COUNTERS`) gives p̂_max, the
+share of the most frequent item a_max, with p_max − (1 − p_max)/k ≤ p̂_max ≤ p_max (CCM Lemma 2.3).
+That under-estimate biases H by about 1/k relative: 8 counters would give ~12% on a
+95%-one-value column with a 1,000-value tail, while 256 give ~0.4%. The counters cost about 4 KB
+and an amortised O(1) hash-map update per row.
 
 Estimate:
 
@@ -84,7 +87,8 @@ Comparing each row against 2c samples would cost O(c) per row. Two devices remov
 
 - **Shared counters.** A hash map holds `cnt[key]`, the number of times a key has occurred since it
   started being tracked, for every key that some estimator holds as s0 or s1. An estimator stores
-  `offset = cnt[key]` when it picks a sample, so r = cnt[key] − offset + 1. Each row costs one map
+  `offset = cnt[key]` when it picks a sample, before that row is counted, so r = cnt[key] − offset.
+  Each row costs one map
   lookup and one increment, however many estimators share its key. A key is dropped from the map
   when no estimator holds it any more (reference counts).
 - **Skip-ahead.** Labels are iid uniform in [0, 1). Instead of drawing one per row per estimator,
@@ -92,7 +96,20 @@ Comparing each row against 2c samples would cost O(c) per row. Two devices remov
   probability t1). At that row it draws t uniformly in [0, t1) and applies the update rule; t < t0
   happens with probability t0/t1, as it should. A binary min-heap orders estimators by their next
   event row. Each estimator has O(log m) events over the whole stream, so per-row cost is one map
-  lookup plus one heap peek.
+  lookup plus one heap peek. Stale heap entries (an estimator rescheduled early) are skipped
+  lazily: each estimator stores its `next` row, and an entry that doesn't match is ignored.
+- **Waiting estimators.** An estimator whose primary has no backup yet would have t1 = 1 and fire
+  on every row. On a constant column, that means O(c) per row. Such an estimator is instead
+  *waiting*. Its heap threshold is t0, which covers a new smallest label on a row of its own token,
+  and it sits in a map from its primary token to the waiting estimators. The first row whose token
+  differs fires it exactly once, with the label drawn conditionally:
+  - in [0, t0) if its heap event falls on that row, so the token becomes the primary and the old
+    primary the backup;
+  - otherwise in [t0, 1), so the token becomes the backup.
+
+  The estimator is then rescheduled with threshold t1, and it never waits again. Waiting keys are
+  iterated in a deterministic order (foldhash `FixedState`), so a seed always gives the same
+  estimate.
 
 Randomness comes from a seeded generator per sketch (`seed`, mixed with the combination index so
 that combinations are independent and results do not depend on thread scheduling).
@@ -100,7 +117,8 @@ that combinations are independent and results do not depend on thread scheduling
 ### 2.3 Memory
 
 The state is about c × 2 samples × 32 B, plus the tracked-key map of at most 2c entries, plus the
-heap: about 0.5 MB at c = 4096, independent of m and of the number of distinct values.
+heap and the waiting map (at most c entries each), plus about 4 KB of Misra–Gries counters:
+about 0.5 MB at c = 4096, independent of m and of the number of distinct values.
 
 ## 3. Rust
 
@@ -181,10 +199,13 @@ for the detector's "low MI" criterion, and the benchmark reports it explicitly (
 
 - All-unique stream → exactly log₂ m (every r = 1, so every X = log₂ m).
 - Constant stream → exactly 0.
-- Over 200 seeds, the mean estimate is within 1% of the exact H on a Zipf(1.1) stream of 10K
-  tokens, and on a 95%-one-value stream (the backup-sample path).
-- The skip-ahead estimator and a naive per-row-label reference implementation (test-only)
-  produce estimate distributions whose means agree within 1% over 200 seeds.
+- Over 100 seeds at the default c = 4096, the mean estimate is within 1% of the exact H on a
+  Zipf(1.1) stream of 10K tokens, and on a 95%-one-value stream (the backup-sample path).
+- The skip-ahead estimator and a naive reference implementation (test-only; CCM Algorithm 1 with
+  a fresh label per row per estimator) give means within 4 combined standard errors of each other
+  over 400 seeds at c = 64, on both streams. The naive version is O(c) per row, so it needs a
+  statistical rather than a 1% test at that size.
+- The same seed gives the same estimate.
 - `num_samples = 0` → error at the API.
 
 ### 5.2 Python accuracy (`tests/test_pairwise_entropy.py`, `tests/test_threeway_entropy.py`)
@@ -208,8 +229,8 @@ answers, checked for every implementation:
 | `mid` | ~1,000 distinct values |
 | `low` | ~10 distinct values |
 
-That gives 28 pairs and 56 triplets, every joint space above 2²⁰ (the exact kernels' hash-map
-path), and one real two-column key.
+That gives 28 pairs and 56 triplets and one real two-column key. Most joint spaces exceed 2²⁰
+(the exact kernels' hash-map path); `mid × low`, `key_hi × low` and the like stay in the flat array.
 
 **Speed.** `benchmark_pairwise_entropy.py` and `benchmark_threeway_entropy.py` add
 `Dataset("near-unique 1M x 8", lambda: {"t": near_unique()})` to their existing three shapes. The
