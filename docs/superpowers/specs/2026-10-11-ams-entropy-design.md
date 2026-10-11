@@ -91,25 +91,33 @@ Comparing each row against 2c samples would cost O(c) per row. Two devices remov
   Each row costs one map
   lookup and one increment, however many estimators share its key. A key is dropped from the map
   when no estimator holds it any more (reference counts).
-- **Skip-ahead.** Labels are iid uniform in [0, 1). Instead of drawing one per row per estimator,
-  each estimator draws a geometric skip to the next row whose label is below t1 (success
-  probability t1). At that row it draws t uniformly in [0, t1) and applies the update rule; t < t0
-  happens with probability t0/t1, as it should. A binary min-heap orders estimators by their next
-  event row. Each estimator has O(log m) events over the whole stream, so per-row cost is one map
-  lookup plus one heap peek. Stale heap entries (an estimator rescheduled early) are skipped
-  lazily: each estimator stores its `next` row, and an entry that doesn't match is ignored.
-- **Waiting estimators.** An estimator whose primary has no backup yet would have t1 = 1 and fire
-  on every row. On a constant column, that means O(c) per row. Such an estimator is instead
-  *waiting*. Its heap threshold is t0, which covers a new smallest label on a row of its own token,
-  and it sits in a map from its primary token to the waiting estimators. The first row whose token
-  differs fires it exactly once, with the label drawn conditionally:
-  - in [0, t0) if its heap event falls on that row, so the token becomes the primary and the old
-    primary the backup;
-  - otherwise in [t0, 1), so the token becomes the backup.
+- **Two label clocks.** Labels are iid uniform in [0, 1), and only two outcomes matter: a label
+  below t0 (event A, on any row) and a label in [t0, t1) on a row whose token is not s0 (event B;
+  t1 = 1 with no backup). A label in [t0, t1) on an s0 row changes nothing, so it must not cost an
+  event: a single clock with threshold t1 fires about every other row on a near-constant column
+  whose primary is the dominant token. Each estimator instead runs two independent geometric
+  clocks:
+  - **A**, counted in rows, success probability t0 (1 with no primary). At its row, t is drawn in
+    [0, t0): the token becomes the primary (renewed in place if it is s0; otherwise the old primary
+    becomes the backup).
+  - **B**, counted in rows whose token is not the primary's key K, success probability
+    p′ = (t1 − t0)/(1 − t0). At its row, t is drawn in [t0, t1) and the token becomes the backup.
+    An estimator without a backup has p′ = 1 and gets one on the first row of another token.
 
-  The estimator is then rescheduled with threshold t1, and it never waits again. Waiting keys are
-  iterated in a deterministic order (foldhash `FixedState`), so a seed always gives the same
-  estimate.
+  Per row, A fires with probability t0 and, failing A, B with p′ on non-s0 rows, so B happens with
+  probability t1 − t0, exactly as in Algorithm 1. A is processed before B on the same row, and
+  every event redraws both clocks (memoryless: only "not fired yet" has been observed). A events
+  sit in a global min-heap by row. B targets sit in a min-heap per tracked key, holding the
+  estimators whose primary is that key, in units of "rows not of this key since tracking began"
+  (tracked from the key's `start` row and `count`). A global *check* heap holds, per key, the
+  earliest row its smallest target could fire if every following row were another token. A check
+  that finds nothing due (rows of the key came in between) is rescheduled; each such wasted check
+  is paid for by at least one row of that key since its previous check, so there are at most
+  m + (number of events) checks in total. Each estimator has O(log m) A events (new minima) and
+  O(log m) B events (new minima among non-s0 rows), so per-row work is O(1) amortised whatever
+  the skew. Stale heap entries are skipped lazily (each estimator stores its `next_a` row and
+  `next_b` target; a B entry is also stale once its key is no longer the estimator's primary).
+  Heap ties order by estimator index and key, so a seed always gives the same estimate.
 
 Randomness comes from a seeded generator per sketch (`seed`, mixed with the combination index so
 that combinations are independent and results do not depend on thread scheduling).
@@ -117,8 +125,10 @@ that combinations are independent and results do not depend on thread scheduling
 ### 2.3 Memory
 
 The state is about c × 2 samples × 32 B, plus the tracked-key map of at most 2c entries, plus the
-heap and the waiting map (at most c entries each), plus about 4 KB of Misra–Gries counters:
-about 0.5 MB at c = 4096, independent of m and of the number of distinct values.
+A heap and the per-key B heaps (at most c live entries each in total; stale entries are bounded
+by the events), plus the check heap (one live entry per tracked key), plus about 4 KB of
+Misra–Gries counters: about 0.5 MB at c = 4096, independent of m and of the number of distinct
+values.
 
 ## 3. Rust
 
@@ -201,7 +211,7 @@ for the detector's "low MI" criterion, and the benchmark reports it explicitly (
 - Constant stream → exactly 0.
 - Over 100 seeds at the default c = 4096, the mean estimate is within 1% of the exact H on a
   Zipf(1.1) stream of 10K tokens, and on a 95%-one-value stream (the backup-sample path).
-- The skip-ahead estimator and a naive reference implementation (test-only; CCM Algorithm 1 with
+- The two-clock estimator and a naive reference implementation (test-only; CCM Algorithm 1 with
   a fresh label per row per estimator) give means within 4 combined standard errors of each other
   over 400 seeds at c = 64, on both streams. The naive version is O(c) per row, so it needs a
   statistical rather than a 1% test at that size.

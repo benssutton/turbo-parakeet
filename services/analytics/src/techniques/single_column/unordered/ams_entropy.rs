@@ -128,41 +128,69 @@ struct Sample {
 }
 
 /// One AMS estimator: the smallest-label row (primary), the smallest-label row of another
-/// token (backup), and the row of its next label event.
+/// token (backup), and the next events of its two label clocks (see `AmsEntropy`).
 #[derive(Clone, Copy)]
 struct Estimator {
     primary: Option<Sample>,
     backup: Option<Sample>,
-    next: u64,
+    /// A clock: the row of the next label below t0.
+    next_a: u64,
+    /// B clock: the next label in [t0, t1) falls on the `next_b`-th row (1-based) since the
+    /// primary key's tracking began whose token is not the primary key.
+    next_b: u64,
 }
 
 impl Estimator {
-    /// Labels below this change the estimator.
-    fn threshold(&self) -> f64 {
-        match (self.primary, self.backup) {
-            (None, _) => 1.0,
-            (Some(p), None) => p.label,
-            (Some(_), Some(b)) => b.label,
-        }
+    fn t0(&self) -> f64 {
+        self.primary.map_or(1.0, |p| p.label)
+    }
+
+    fn t1(&self) -> f64 {
+        self.backup.map_or(1.0, |b| b.label)
     }
 }
 
-/// Occurrences of a key since an estimator first held it, and how many samples hold it.
+/// A key that some estimator holds. `count` and `start` cover the rows since tracking last
+/// began (the entry is dropped when `holders` reaches 0): from row `start` on, `count` rows
+/// held this key and the rest held other keys.
 struct Tracked {
     count: u64,
+    start: u64,
     holders: u32,
+    /// B clocks of the estimators whose primary is this key: (`next_b`, estimator), smallest
+    /// first; entries not matching the estimator's `next_b` or primary key are stale.
+    b: BinaryHeap<Reverse<(u64, u32)>>,
+    /// Row at which `b` is next checked (an entry of `AmsEntropy::checks`), `u64::MAX` if none.
+    check: u64,
+}
+
+impl Tracked {
+    /// Rows of other keys from `start` up to, but not including, `row` (before `row` is counted).
+    fn others(&self, row: u64) -> u64 {
+        row - self.start - self.count
+    }
+}
+
+fn b_valid(estimators: &[Estimator], key: u64, target: u64, e: u32) -> bool {
+    let est = &estimators[e as usize];
+    est.next_b == target && est.primary.is_some_and(|p| p.key == key)
 }
 
 /// Streaming Shannon-entropy sketch (bits) with `num_samples` estimators.
+///
+/// Each estimator's per-row label is simulated by two independent geometric clocks: A (label
+/// below t0, relevant on every row; success probability t0 per row) and B (label in
+/// [t0, t1), relevant only on rows whose token is not the primary's; success probability
+/// (t1 − t0)/(1 − t0) per such row, given no A event). A events are processed before B events
+/// on the same row, and every event redraws both clocks. Rows of the primary's token never
+/// advance the B clock, so a dominant token costs no events.
 pub(crate) struct AmsEntropy {
     estimators: Vec<Estimator>,
-    /// (next event row, estimator), smallest row first; entries not matching the
-    /// estimator's `next` are stale and skipped.
-    events: BinaryHeap<Reverse<(u64, u32)>>,
+    /// A clocks: (row, estimator), smallest first; entries not matching `next_a` are stale.
+    a_events: BinaryHeap<Reverse<(u64, u32)>>,
+    /// (row, key): when to check that key's B heap; valid while `tracked[key].check == row`.
+    checks: BinaryHeap<Reverse<(u64, u64)>>,
     tracked: HashMap<u64, Tracked, FixedState>,
-    /// Estimators with a primary but no backup yet, by primary key.
-    waiting: HashMap<u64, Vec<u32>, FixedState>,
-    n_waiting: usize,
     mg: MisraGries,
     rng: Rng,
     m: u64,
@@ -172,17 +200,21 @@ pub(crate) struct AmsEntropy {
 
 impl AmsEntropy {
     pub(crate) fn new(num_samples: usize, seed: u64) -> Self {
+        assert!(
+            num_samples >= 1 && num_samples <= u32::MAX as usize,
+            "num_samples must be in 1..=u32::MAX, got {num_samples}"
+        );
         let blank = Estimator {
             primary: None,
             backup: None,
-            next: 0,
+            next_a: 0,
+            next_b: u64::MAX,
         };
         Self {
             estimators: vec![blank; num_samples],
-            events: (0..num_samples as u32).map(|e| Reverse((0, e))).collect(),
+            a_events: (0..num_samples as u32).map(|e| Reverse((0, e))).collect(),
+            checks: BinaryHeap::new(),
             tracked: HashMap::default(),
-            waiting: HashMap::default(),
-            n_waiting: 0,
             mg: MisraGries::default(),
             rng: Rng(seed),
             m: 0,
@@ -195,16 +227,22 @@ impl AmsEntropy {
         let row = self.m;
         self.m += 1;
         self.mg.update(x);
-        if self.n_waiting > self.waiting.get(&x).map_or(0, Vec::len) {
-            self.fire_waiting(row, x);
-        }
-        while let Some(&Reverse((at, e))) = self.events.peek() {
+        while let Some(&Reverse((at, e))) = self.a_events.peek() {
             if at > row {
                 break;
             }
-            self.events.pop();
-            if self.estimators[e as usize].next == row {
-                self.event(e as usize, row, x);
+            self.a_events.pop();
+            if self.estimators[e as usize].next_a == row {
+                self.a_event(e as usize, row, x);
+            }
+        }
+        while let Some(&Reverse((at, key))) = self.checks.peek() {
+            if at > row {
+                break;
+            }
+            self.checks.pop();
+            if self.tracked.get(&key).is_some_and(|t| t.check == row) {
+                self.check(key, row, x);
             }
         }
         if let Some(t) = self.tracked.get_mut(&x) {
@@ -225,108 +263,144 @@ impl AmsEntropy {
         )
     }
 
-    /// The first row of another token gives every estimator waiting on a different key its
-    /// backup, or a new primary when its heap event falls on this row (label below t0).
-    fn fire_waiting(&mut self, row: u64, x: u64) {
-        let keys: Vec<u64> = self.waiting.keys().copied().filter(|&k| k != x).collect();
-        for k in keys {
-            for e in self.waiting.remove(&k).unwrap_or_default() {
-                self.n_waiting -= 1;
-                let e = e as usize;
-                let p = self.estimators[e]
-                    .primary
-                    .expect("waiting estimators hold a primary");
-                let offset = self.hold(x);
-                if self.estimators[e].next == row {
-                    let label = self.rng.unit0() * p.label;
-                    self.estimators[e].backup = Some(p);
-                    self.estimators[e].primary = Some(Sample {
-                        key: x,
-                        label,
-                        offset,
-                    });
-                } else {
-                    let label = p.label + self.rng.unit0() * (1.0 - p.label);
-                    self.estimators[e].backup = Some(Sample {
-                        key: x,
-                        label,
-                        offset,
-                    });
-                }
-                #[cfg(test)]
-                {
-                    self.fired += 1;
-                }
-                self.schedule(e, row);
-            }
-        }
-    }
-
-    /// Estimator `e` draws a label below its threshold on this row, whose token is `x`.
-    fn event(&mut self, e: usize, row: u64, x: u64) {
+    /// A label below t0 on this row, whose token is `x`: a new primary.
+    fn a_event(&mut self, e: usize, row: u64, x: u64) {
         #[cfg(test)]
         {
             self.fired += 1;
         }
         let est = self.estimators[e];
-        let label = self.rng.unit0() * est.threshold();
-        match (est.primary, est.backup) {
-            (None, _) => {
-                let offset = self.hold(x);
+        let label = self.rng.unit0() * est.t0();
+        match est.primary {
+            None => {
+                let offset = self.hold(x, row);
                 self.estimators[e].primary = Some(Sample {
                     key: x,
                     label,
                     offset,
                 });
-                self.waiting.entry(x).or_default().push(e as u32);
-                self.n_waiting += 1;
             }
-            (Some(p), None) => {
-                // Waiting: other tokens went through fire_waiting, so x is the primary's
-                // token, and a smaller label restarts its count.
-                debug_assert_eq!(x, p.key);
+            Some(p) if p.key == x => {
                 let offset = self.tracked[&x].count;
                 self.estimators[e].primary = Some(Sample { label, offset, ..p });
             }
-            (Some(p), Some(b)) => {
-                if label < p.label {
-                    if x == p.key {
-                        let offset = self.tracked[&x].count;
-                        self.estimators[e].primary = Some(Sample { label, offset, ..p });
-                    } else {
-                        self.release(b.key);
-                        let offset = self.hold(x);
-                        self.estimators[e].backup = Some(p);
-                        self.estimators[e].primary = Some(Sample {
-                            key: x,
-                            label,
-                            offset,
-                        });
-                    }
-                } else if x != p.key {
+            Some(p) => {
+                if let Some(b) = est.backup {
                     self.release(b.key);
-                    let offset = self.hold(x);
-                    self.estimators[e].backup = Some(Sample {
-                        key: x,
-                        label,
-                        offset,
-                    });
                 }
+                let offset = self.hold(x, row);
+                self.estimators[e].backup = Some(p);
+                self.estimators[e].primary = Some(Sample {
+                    key: x,
+                    label,
+                    offset,
+                });
             }
         }
-        self.schedule(e, row);
+        self.schedule(e, row, x);
     }
 
-    /// Start (or share) tracking `key`; its count so far is the new sample's offset.
-    fn hold(&mut self, key: u64) -> u64 {
-        let t = self.tracked.entry(key).or_insert(Tracked {
+    /// A label in [t0, t1) on this row, whose token `x` is not the primary's: a new backup.
+    fn b_event(&mut self, e: usize, row: u64, x: u64) {
+        #[cfg(test)]
+        {
+            self.fired += 1;
+        }
+        let est = self.estimators[e];
+        let (t0, t1) = (est.t0(), est.t1());
+        // May round up to t1: harmless, the B clock keeps its rate (one extra event).
+        let label = t0 + self.rng.unit0() * (t1 - t0);
+        if let Some(b) = est.backup {
+            self.release(b.key);
+        }
+        let offset = self.hold(x, row);
+        self.estimators[e].backup = Some(Sample {
+            key: x,
+            label,
+            offset,
+        });
+        self.schedule(e, row, x);
+    }
+
+    /// Fire the B events due on this row among the estimators whose primary is `key`, then
+    /// schedule the key's next check.
+    fn check(&mut self, key: u64, row: u64, x: u64) {
+        if x != key {
+            let due = self.tracked[&key].others(row) + 1;
+            while let Some(e) = self.pop_due(key, due) {
+                self.b_event(e, row, x);
+            }
+        }
+        self.refresh_check(key, row, x);
+    }
+
+    /// Pop the next valid B entry of `key` if its target is `due`.
+    fn pop_due(&mut self, key: u64, due: u64) -> Option<usize> {
+        let t = self.tracked.get_mut(&key)?;
+        while let Some(&Reverse((target, e))) = t.b.peek() {
+            if !b_valid(&self.estimators, key, target, e) {
+                t.b.pop();
+                continue;
+            }
+            debug_assert!(target >= due, "missed B event");
+            if target != due {
+                return None;
+            }
+            t.b.pop();
+            return Some(e as usize);
+        }
+        None
+    }
+
+    /// Point `key`'s check at the earliest row its smallest valid B target can fire: every row
+    /// after this one (token `x`) holding another key. Wasted checks are paid for by rows of
+    /// `key` in between, so there are at most m of them plus one per event.
+    fn refresh_check(&mut self, key: u64, row: u64, x: u64) {
+        let Some(t) = self.tracked.get_mut(&key) else {
+            return;
+        };
+        let min = loop {
+            match t.b.peek() {
+                None => break None,
+                Some(&Reverse((target, e))) if b_valid(&self.estimators, key, target, e) => {
+                    break Some(target);
+                }
+                Some(_) => {
+                    t.b.pop();
+                }
+            }
+        };
+        let at = min.map_or(u64::MAX, |target| {
+            let after = t.others(row) + u64::from(x != key);
+            // target == after: another B event is due on this row, during `check` (whose
+            // `check` row this already is, so nothing is pushed).
+            debug_assert!(target >= after, "missed B event");
+            row.saturating_add(target - after)
+        });
+        if at != t.check {
+            t.check = at;
+            if at != u64::MAX {
+                self.checks.push(Reverse((at, key)));
+            }
+        }
+    }
+
+    /// Start (or share) tracking `key` on `row`, before it is counted; its count so far is the
+    /// new sample's offset.
+    fn hold(&mut self, key: u64, row: u64) -> u64 {
+        let t = self.tracked.entry(key).or_insert_with(|| Tracked {
             count: 0,
+            start: row,
             holders: 0,
+            b: BinaryHeap::new(),
+            check: u64::MAX,
         });
         t.holders += 1;
         t.count
     }
 
+    /// Drop a hold. With no holders left, no estimator has `key` as its primary, so the key's
+    /// B heap holds only stale entries and goes with it.
     fn release(&mut self, key: u64) {
         if let Some(t) = self.tracked.get_mut(&key) {
             t.holders -= 1;
@@ -336,13 +410,25 @@ impl AmsEntropy {
         }
     }
 
-    /// Draw the row of estimator `e`'s next event after `row`.
-    fn schedule(&mut self, e: usize, row: u64) {
-        let skip = self.rng.skip(self.estimators[e].threshold());
-        let next = row.saturating_add(1).saturating_add(skip);
-        self.estimators[e].next = next;
-        if next != u64::MAX {
-            self.events.push(Reverse((next, e as u32)));
+    /// Redraw both clocks of estimator `e` after its event on `row` (token `x`).
+    fn schedule(&mut self, e: usize, row: u64, x: u64) {
+        let est = self.estimators[e];
+        let p = est.primary.expect("an event leaves a primary");
+        let (t0, t1) = (est.t0(), est.t1());
+        let next_a = row.saturating_add(1).saturating_add(self.rng.skip(t0));
+        self.estimators[e].next_a = next_a;
+        if next_a != u64::MAX {
+            self.a_events.push(Reverse((next_a, e as u32)));
+        }
+        // No backup: t1 = 1, so the B clock fires on the first row of another token.
+        let skip = self.rng.skip((t1 - t0) / (1.0 - t0));
+        let t = self.tracked.get_mut(&p.key).expect("primaries are tracked");
+        let after = t.others(row) + u64::from(x != p.key);
+        let next_b = after.saturating_add(1).saturating_add(skip);
+        self.estimators[e].next_b = next_b;
+        if next_b != u64::MAX {
+            t.b.push(Reverse((next_b, e as u32)));
+            self.refresh_check(p.key, row, x);
         }
     }
 }
@@ -384,15 +470,77 @@ mod tests {
         assert_ne!(sketch(&keys, 128, 9), sketch(&keys, 128, 10));
     }
 
+    fn fired(keys: impl Iterator<Item = u64>, num_samples: usize) -> u64 {
+        let mut s = AmsEntropy::new(num_samples, 0);
+        for k in keys {
+            s.update(k);
+        }
+        s.fired
+    }
+
     #[test]
     fn constant_stream_does_not_fire_every_estimator_every_row() {
-        // Without the waiting set, an estimator with no backup has threshold 1 and fires on
-        // every row: 64 × 100K events. With it, about 64 × (1 + ln 100K) ≈ 800.
-        let mut s = AmsEntropy::new(64, 0);
-        for _ in 0..100_000 {
-            s.update(3);
+        // A backup-less estimator's B clock counts only rows of other tokens, so it never
+        // fires; the A clock fires on new minima: about 64 × (1 + ln 100K) ≈ 800 events.
+        let fired = fired(std::iter::repeat_n(3, 100_000), 64);
+        assert!(fired < 64 * 30, "fired {fired} events");
+    }
+
+    #[test]
+    fn near_constant_stream_with_an_outlier_is_cheap() {
+        // Labels in [t0, t1) on rows of the primary's token are no-ops; they must not be events.
+        let keys = std::iter::repeat_n(0, 1000)
+            .chain([1])
+            .chain(std::iter::repeat_n(0, 100_000));
+        let fired = fired(keys, 64);
+        assert!(fired < 64 * 30, "fired {fired} events");
+    }
+
+    #[test]
+    fn sparse_tail_stream_is_cheap() {
+        let keys = (0..100_000u64).map(|i| {
+            if mix64(i).is_multiple_of(1000) {
+                1 + i
+            } else {
+                0
+            }
+        });
+        let fired = fired(keys, 64);
+        assert!(fired < 64 * 60, "fired {fired} events");
+    }
+
+    fn exact_entropy(keys: &[u64]) -> f64 {
+        let mut counts: HashMap<u64, u64> = HashMap::new();
+        for &k in keys {
+            *counts.entry(k).or_default() += 1;
         }
-        assert!(s.fired < 64 * 100, "fired {} events", s.fired);
+        let m = keys.len() as f64;
+        counts
+            .values()
+            .map(|&c| c as f64 / m * (m / c as f64).log2())
+            .sum()
+    }
+
+    #[test]
+    fn two_clock_scheme_matches_exact_on_small_streams() {
+        // Dominant tokens (p > ½) exercise A and B events, backups and the p̂ > ½ path; the
+        // estimator is unbiased, so the mean over seeds is within 4 standard errors of H.
+        let streams: [&[u64]; 2] = [
+            &[0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 3, 0, 1, 0, 0],
+            &[9, 9, 9, 9, 4, 9, 9, 4, 9, 7, 9, 9, 9, 8, 9, 9, 9, 9, 9, 6],
+        ];
+        for keys in streams {
+            let n = 2000;
+            let hs: Vec<f64> = (0..n).map(|seed| sketch(keys, 8, seed)).collect();
+            let mean = hs.iter().sum::<f64>() / n as f64;
+            let var = hs.iter().map(|h| (h - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+            let se = (var / n as f64).sqrt();
+            let exact = exact_entropy(keys);
+            assert!(
+                (mean - exact).abs() < 4.0 * se,
+                "mean {mean} vs exact {exact} (se {se})"
+            );
+        }
     }
 
     #[test]
