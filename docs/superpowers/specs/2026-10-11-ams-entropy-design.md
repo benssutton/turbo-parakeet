@@ -23,8 +23,8 @@ Facts that bound what the sketch can do:
   time measured here decide how many combinations that can be.
 - **One-shot, AMS is not expected to beat exact counting on speed.** Both read every row once, and
   the exact path counts dense ids in a flat array (83.5 µs per pair at 50K rows). The sketch's
-  advantage is memory: its state is O(`num_samples`) and does not depend on the number of distinct
-  values.
+  advantage is memory: its state is O(`num_samples`) plus stale heap entries (section 2.3) and
+  does not depend on the number of distinct values.
 
 ## 2. Algorithm choice
 
@@ -114,22 +114,29 @@ Comparing each row against 2c samples would cost O(c) per row. Two devices remov
   that finds nothing due (rows of the key came in between) is rescheduled; each such wasted check
   is paid for by at least one row of that key since its previous check, so there are at most
   m + (number of events) checks in total. Each estimator has O(log m) A events (new minima) and
-  O(log m) B events (new minima among non-s0 rows), so per-row work is O(1) amortised whatever
-  the skew. Stale heap entries are skipped lazily (each estimator stores its `next_a` row and
+  O(log m) B events (new minima among non-s0 rows), so per-row work is O(1) amortised heap
+  operations (each O(log c)) whatever the skew. Stale heap entries are skipped lazily (each estimator stores its `next_a` row and
   `next_b` target; a B entry is also stale once its key is no longer the estimator's primary).
-  Heap ties order by estimator index and key, so a seed always gives the same estimate.
+  Heap ties order by estimator index and key. The estimate is deterministic for a given build
+  (see "Determinism" below).
 
 Randomness comes from a seeded generator per sketch (derived from the user `seed`, a domain tag and the column names of the column or
 combination), so a combination's estimate depends neither on thread scheduling nor on which other
 combinations were requested in the same call.
 
+**Determinism.** An estimate is deterministic for a given build, not for all time: the order of
+random draws depends on key values (the checks heap is ordered by (row, key), and Misra–Gries
+breaks ties by key). Keys of String, Binary and other hashed dtypes come from foldhash
+`FixedState`, which is not stable across crate versions or platforms, so a foldhash upgrade can
+change the estimates of string columns.
+
 ### 2.3 Memory
 
 The state is about c × 2 samples × 32 B, plus the tracked-key map of at most 2c entries, plus the
-A heap and the per-key B heaps (at most c live entries each in total; stale entries are bounded
-by the events), plus the check heap (one live entry per tracked key), plus about 4 KB of
-Misra–Gries counters: about 0.5 MB at c = 4096, independent of m and of the number of distinct
-values.
+A heap and the per-key B heaps (at most c live entries each in total), plus the check heap (one
+live entry per tracked key), plus about 4 KB of Misra–Gries counters. Stale heap entries are
+skipped lazily and bounded by the events: O(c) plus stale entries, O(c·log m) worst case. That is
+about 1 MB at c = 4096 and 1M rows, independent of the number of distinct values.
 
 ## 3. Rust
 
@@ -150,8 +157,9 @@ pub(crate) fn ams_marginal_entropy_impl(inputs: &[Series], num_samples: usize, s
 ```
 
 The marginal kernel keys each row by `encode_series` (via `build_column_cache_par`). Null is its
-own category, as in `marginal_entropy.rs`: the key mixes in `is_null` so that a null cannot
-collide with a real value. Columns run in parallel with rayon.
+own category, as in `marginal_entropy.rs`: a null row's key is the constant `NULL_KEY`, and a value's key is
+`mix64` of its `encode_series` key. A null therefore collides with the one value whose `mix64`
+equals `NULL_KEY`, a probability of about 2⁻⁶⁴ per distinct value. Columns run in parallel with rayon.
 
 ### 3.2 Joint kernels
 
@@ -159,7 +167,8 @@ collide with a real value. Columns run in parallel with rayon.
 `ams_pairwise_joint_entropy_impl` and `ams_threeway_joint_entropy_impl`. They take the same
 arguments as their exact counterparts in `joint_entropy.rs` plus `num_samples` and `seed`, and
 return the same output schemas. Each row's key combines the columns' null-folded `encode_series`
-keys into one u64 with a mixing hash (foldhash). These keys are value-stable across batches, which
+keys into one u64 with the SplitMix64-based `combine(a, b) = mix64(a ^ mix64(b))`, nested for
+triplets. These keys are value-stable across batches, which
 the streaming detector will need; dense ids are not. Combinations run in parallel with rayon, one
 `AmsEntropy` each. A sketch cannot be split across row ranges, because its samples depend on
 stream order.
@@ -173,7 +182,8 @@ In `src/bindings/api/techniques.rs`:
 - `ams_threeway_joint_entropy(batch, triplets, num_samples, seed)` returns
   `col_a, col_b, col_c, entropy`.
 
-`num_samples = 0` → `InvalidInput`. Name checks are as in the exact entry points. They are exposed
+`num_samples` outside 1 ..= 2²⁰ (1,048,576) → `InvalidInput` (a larger size would abort on
+allocation); the Python classes raise `ValueError` (`analytics/_ams.py`). Name checks are as in the exact entry points. They are exposed
 in `bindings/python.rs` and wrapped in `analytics/_plugin.py`, and are private like the other
 kernels. There is no C ABI or Java binding.
 
@@ -191,13 +201,13 @@ classes are added to their package's `IMPLEMENTATIONS`; the Polars reference is 
 1 thread, and CLAUDE.md lets only `*Rust` classes call `_plugin`.
 
 **Agreement.** Both classes set `RTOL = 0.05` and `ATOL = 1e-9`. The three-way technique reports
-only `h_abc` and `n_rows`, so `ThreewayEntropyAmsRust` uses the inherited `agreement` unchanged and
-calls only `ams_threeway_joint_entropy`. `PairwiseEntropyAmsRust` overrides `agreement`:
+only `h_abc` and `n_rows`, so `ThreewayEntropyAmsRust` calls only `ams_threeway_joint_entropy` and overrides `agreement`
+only for `n_rows` (entropy at RTOL, `n_rows` exact). `PairwiseEntropyAmsRust` overrides `agreement`:
 
 - entropies (`h_a`, `h_b`, `h_ab`) within RTOL of the reference;
 - `mi` within |ΔMI| ≤ RTOL·(h_a + h_b + h_ab), computed from the reference's entropies;
 - `nmi` within that bound ÷ min(h_a, h_b) (skipped where the reference's NMI is NaN);
-- `n_rows` exact;
+- `n_rows` exact (both classes);
 - conclusions (`redundant`, `near_unique`) not compared: an estimate within tolerance can still
   land on the other side of a threshold.
 
@@ -216,8 +226,9 @@ for the detector's "low MI" criterion, and the benchmark reports it explicitly (
   a fresh label per row per estimator) give means within 4 combined standard errors of each other
   over 400 seeds at c = 64, on both streams. The naive version is O(c) per row, so it needs a
   statistical rather than a 1% test at that size.
-- The same seed gives the same estimate.
-- `num_samples = 0` → error at the API.
+- The same seed gives the same estimate (deterministic for a given build).
+- Two rare keys interleaved in a long stream of one key stay cheap (`interleaved_sparse_flags_are_cheap`).
+- `num_samples = 0` or above 2²⁰ → error at the API.
 
 ### 5.2 Python accuracy (`tests/test_pairwise_entropy.py`, `tests/test_threeway_entropy.py`)
 
@@ -278,3 +289,33 @@ keeping rows at all, applies to streaming and is not measured here.
 
 CLAUDE.md gains the new implementation names under Joint entropy, and the module in the project
 structure.
+
+## 7. Results (2026-10-12)
+
+Measured on 4 CPUs with `benchmark_ams_entropy.py` and the speed benchmarks (c = 4096).
+
+**Accuracy.** Maximum relative entropy error is 0.3–4.3% across datasets (p95 ≤ 1.3%); maximum
+absolute MI error 0.07–0.14 bits.
+
+**Speed.** The sketches are slower than the exact Rust kernels everywhere except near-unique
+1M × 9, where they are on par:
+
+| Case | AMS | Exact Rust | Polars |
+|---|---|---|---|
+| Pairwise, near-unique 1M × 9 | 919 ms | 765 ms | 6,190 ms |
+| Threeway, near-unique 1M × 9 | 1,844 ms | 1,824 ms | 16,404 ms |
+| Pairwise, wide 20K × 60 | 11.4 s | 34 ms | 1.9 s |
+| Pairwise, large_dataset (50K × 101) | 37 s | 0.62 s | 18.7 s |
+| Pairwise, near-constant 1M × 3 | 123 ms | 24 ms | — |
+
+On wide 20K × 60 AMS is about 330× slower than exact Rust: each sketch pays a fixed cost of about
+c·ln m events at c = 4096, which dominates at small m.
+
+**Memory.** Peak above the loaded data, pairwise near-unique 1M × 9: AMS 125 MB, exact Rust
+579 MB, Polars 249 MB; threeway 119 vs 399 vs 301 MB. Elsewhere the figures are similar or favour
+the exact kernels.
+
+**Conclusion.** One-shot, the sketch's value is bounded memory on high-cardinality data, not
+speed. Its real use is streaming, where rows are not kept. The MI error is the sum of three
+independent sketch errors. A follow-up idea for the primary-key detector: share row labels between
+the h_a, h_b and h_ab sketches so the errors correlate and MI variance shrinks.

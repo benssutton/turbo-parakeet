@@ -56,12 +56,14 @@ pub fn threeway_joint_entropy(
     table(crate::techniques::joint_entropy::threeway_joint_entropy_impl(&columns(batch)?, kwargs))
 }
 
-/// The AMS sketches' size: 1 ..= u32::MAX estimators.
+use crate::techniques::ams_entropy::MAX_SAMPLES;
+
+/// The AMS sketches' size: 1 ..= `MAX_SAMPLES` estimators (a larger one would abort on allocation).
 fn ams_samples(num_samples: usize) -> Result<usize> {
-    if num_samples == 0 || num_samples > u32::MAX as usize {
+    if num_samples == 0 || num_samples > MAX_SAMPLES {
         return Err(Error::InvalidInput(format!(
             "num_samples must be between 1 and {}, got {num_samples}",
-            u32::MAX
+            MAX_SAMPLES
         )));
     }
     Ok(num_samples)
@@ -579,6 +581,15 @@ mod tests {
         assert_eq!(p.column(2).as_primitive::<Float64Type>().value(0), 2.0);
         let t = ams_threeway_joint_entropy(&b, None, 64, 0).unwrap();
         assert_eq!(t.column(3).as_primitive::<Float64Type>().value(0), 2.0);
+    }
+
+    #[test]
+    fn ams_sample_count_is_capped() {
+        let b = batch(vec![("a", ints(&[1, 2]))]);
+        assert!(matches!(
+            ams_marginal_entropy(&b, MAX_SAMPLES + 1, 0),
+            Err(Error::InvalidInput(_))
+        ));
     }
 
     #[test]

@@ -3,17 +3,9 @@ import math
 import polars as pl
 
 from analytics import _plugin
+from analytics._ams import check_ams_params
 from analytics.base import group_by_frame, metric_mismatches
 from analytics.pairwise_entropy.base import PairwiseEntropy
-
-
-def check_ams_params(num_samples: int, seed: int) -> None:
-    if type(num_samples) is not int or not 1 <= num_samples <= 2**32 - 1:
-        raise ValueError(
-            f"num_samples must be an integer in [1, 2**32 - 1], got {num_samples!r}"
-        )
-    if type(seed) is not int or not 0 <= seed <= 2**64 - 1:
-        raise ValueError(f"seed must be an integer in [0, 2**64 - 1], got {seed!r}")
 
 
 class PairwiseEntropyAmsRust(PairwiseEntropy):
@@ -22,6 +14,7 @@ class PairwiseEntropyAmsRust(PairwiseEntropy):
     per column and per pair, rayon-parallel. Entropies agree with the reference within
     RTOL; MI / NMI within the error the entropies propagate (see `agreement`)."""
 
+    # mixed_dtypes(1_000) at num_samples=4096, seed=0: max relative error 2.7% (h_ab).
     RTOL = 0.05
     ATOL = 1e-9
 
@@ -70,12 +63,13 @@ class PairwiseEntropyAmsRust(PairwiseEntropy):
             result,
             reference,
             keys,
-            ["h_a", "h_b", "h_ab", "n_rows"],
+            ["h_a", "h_b", "h_ab"],
             self.RTOL,
             self.ATOL,
         )
         if problems[:1] == ["key columns differ from the reference"]:
             return problems
+        problems += metric_mismatches(result, reference, keys, ["n_rows"], 0.0, 0.0)
         both = (
             reference.select(*keys, "h_a", "h_b", "h_ab", "mi", "nmi")
             .with_columns(got_mi=result["mi"], got_nmi=result["nmi"])

@@ -97,3 +97,5 @@ def test_ams_num_samples_checked():
 
     with pytest.raises(ValueError, match="num_samples"):
         ThreewayEntropyAmsRust(num_samples=0)
+    with pytest.raises(ValueError, match="num_samples"):
+        ThreewayEntropyAmsRust(num_samples=2**20 + 1)

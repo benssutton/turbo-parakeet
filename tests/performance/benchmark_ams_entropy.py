@@ -12,11 +12,11 @@ only bounds the true figure from below. Windows: WorkingSetSize / PeakWorkingSet
 Linux: /proc/self/statm and ru_maxrss; macOS: ru_maxrss for both. The parent compares each
 result with the reference's: max_rel_err / p95_rel_err over every computed entropy,
 n_missing (null estimates where the reference computed), max_abs_mi_err (pairwise only).
-Each child has a 1800 s timeout (status "timeout"); implementations a dataset excludes get
+Each child has a 1800 s timeout (status "timeout"); a crashed child is status "error"; implementations a dataset excludes get
 status "excluded".
 
-The AMS path holds 8 B per row per column after converting keys in place; the exact path
-about 9. peak_mb differences therefore show mostly the counting state; the sketch's
+The AMS path holds about 9 B per row per column at peak (values + null flags), then 8 B
+after converting keys in place; the exact path about 9. peak_mb differences therefore show mostly the counting state; the sketch's
 advantage of not keeping rows at all is a streaming one and is not measured here.
 
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_ams_entropy.py
@@ -193,10 +193,16 @@ def main() -> None:
                             [sys.executable, __file__, "--child", package]
                             + [str(index), name, out],
                             stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
                             text=True,
                             check=True,
                             timeout=1800,
                         )
+                    except subprocess.CalledProcessError as exc:
+                        row["status"] = "error"
+                        tail = "\n".join((exc.stderr or "").splitlines()[-20:])
+                        print(f"    error:\n{tail}", file=sys.stderr, flush=True)
+                        continue
                     except subprocess.TimeoutExpired:
                         row["status"] = "timeout"
                         print("    timeout", file=sys.stderr, flush=True)

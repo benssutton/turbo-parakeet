@@ -167,5 +167,8 @@ def test_ams_seed_is_reproducible_and_num_samples_checked():
     assert not first["h_ab"].equals(run(PairwiseEntropyAmsRust, frames, seed=1)["h_ab"])
     with pytest.raises(ValueError, match="num_samples"):
         PairwiseEntropyAmsRust(num_samples=0)
+    with pytest.raises(ValueError, match="num_samples"):
+        PairwiseEntropyAmsRust(num_samples=2**20 + 1)
+    PairwiseEntropyAmsRust(num_samples=2**20)
     with pytest.raises(ValueError, match="seed"):
         PairwiseEntropyAmsRust(seed=-1)

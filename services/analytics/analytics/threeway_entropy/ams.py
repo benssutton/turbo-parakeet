@@ -1,8 +1,8 @@
 import polars as pl
 
 from analytics import _plugin
-from analytics.base import group_by_frame
-from analytics.pairwise_entropy.ams import check_ams_params
+from analytics._ams import check_ams_params
+from analytics.base import group_by_frame, metric_mismatches
 from analytics.threeway_entropy.base import ThreewayEntropy
 
 
@@ -42,3 +42,15 @@ class ThreewayEntropyAmsRust(ThreewayEntropy):
                 )
             )
         return pl.concat(parts)
+
+    def agreement(self, result: pl.DataFrame, reference: pl.DataFrame) -> list[str]:
+        """h_abc within RTOL, n_rows exact."""
+        keys = self.key_columns()
+        problems = metric_mismatches(
+            result, reference, keys, ["h_abc"], self.RTOL, self.ATOL
+        )
+        if problems[:1] == ["key columns differ from the reference"]:
+            return problems
+        return problems + metric_mismatches(
+            result, reference, keys, ["n_rows"], 0.0, 0.0
+        )

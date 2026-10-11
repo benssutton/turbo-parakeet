@@ -10,6 +10,9 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::common::*;
 
+/// Largest `num_samples` (about 0.5 GB of estimators; larger is refused rather than aborting).
+pub(crate) const MAX_SAMPLES: usize = 1 << 20;
+
 /// Misra–Gries counters for the dominant item: p̂ is low by at most (1 − p)/k (CCM Lemma 2.3),
 /// which biases H by about 1/k relative.
 const MG_COUNTERS: usize = 256;
@@ -332,8 +335,8 @@ pub(crate) struct AmsEntropy {
 impl AmsEntropy {
     pub(crate) fn new(num_samples: usize, seed: u64) -> Self {
         assert!(
-            num_samples >= 1 && num_samples <= u32::MAX as usize,
-            "num_samples must be in 1..=u32::MAX, got {num_samples}"
+            (1..=MAX_SAMPLES).contains(&num_samples),
+            "num_samples must be in 1..={MAX_SAMPLES}, got {num_samples}"
         );
         let blank = Estimator {
             primary: None,
@@ -637,6 +640,22 @@ mod tests {
             } else {
                 0
             }
+        });
+        let (fired, checked, rows) = cost(keys, 64);
+        assert!(fired < 64 * 60, "fired {fired} events");
+        assert!(
+            checked <= rows + fired,
+            "{checked} checks, {rows} rows, {fired} events"
+        );
+    }
+
+    #[test]
+    fn interleaved_sparse_flags_are_cheap() {
+        // Two rare keys interleaved in a stream of zeros.
+        let keys = (0..100_000u64).map(|i| match i % 10_000 {
+            7 => 1,
+            1_007 => 2,
+            _ => 0,
         });
         let (fired, checked, rows) = cost(keys, 64);
         assert!(fired < 64 * 60, "fired {fired} events");
