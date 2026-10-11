@@ -27,7 +27,7 @@ pub(crate) fn ams_pairwise_joint_entropy_impl(
     seed: u64,
 ) -> PolarsResult<Series> {
     let n = inputs.len();
-    if n < 2 {
+    if n == 1 {
         return entropy_struct(
             "pairwise_entropy",
             vec![("col_a", vec![]), ("col_b", vec![])],
@@ -45,9 +45,14 @@ pub(crate) fn ams_pairwise_joint_entropy_impl(
     let entropy: Vec<f64> = pairs
         .par_iter()
         .map(|&(i, j)| {
-            let id = combine(name_key(inputs[i].name()), name_key(inputs[j].name()));
+            // Columns in name-key order: seed and row keys, hence the estimate, do not depend
+            // on the order the pair was requested in (the sketch's tie-breaks see key values).
+            let mut ix = [i, j];
+            ix.sort_unstable_by_key(|&c| name_key(inputs[c].name()));
+            let [p, q] = ix;
+            let id = combine(name_key(inputs[p].name()), name_key(inputs[q].name()));
             let mut sketch = AmsEntropy::new(num_samples, sketch_seed(seed, PAIR, id));
-            for (&a, &b) in keys[i].iter().zip(&keys[j]) {
+            for (&a, &b) in keys[p].iter().zip(&keys[q]) {
                 sketch.update(combine(a, b));
             }
             sketch.estimate()
@@ -89,12 +94,16 @@ pub(crate) fn ams_threeway_joint_entropy_impl(
     let entropy: Vec<f64> = triplets
         .par_iter()
         .map(|&(i, j, k)| {
+            // Name-key order, as for pairs.
+            let mut ix = [i, j, k];
+            ix.sort_unstable_by_key(|&c| name_key(inputs[c].name()));
+            let [p, q, r] = ix;
             let id = combine(
-                name_key(inputs[i].name()),
-                combine(name_key(inputs[j].name()), name_key(inputs[k].name())),
+                name_key(inputs[p].name()),
+                combine(name_key(inputs[q].name()), name_key(inputs[r].name())),
             );
             let mut sketch = AmsEntropy::new(num_samples, sketch_seed(seed, TRIPLE, id));
-            for ((&a, &b), &c) in keys[i].iter().zip(&keys[j]).zip(&keys[k]) {
+            for ((&a, &b), &c) in keys[p].iter().zip(&keys[q]).zip(&keys[r]) {
                 sketch.update(combine(a, combine(b, c)));
             }
             sketch.estimate()
@@ -226,6 +235,38 @@ mod tests {
         let alone = run(vec![lo_x()]);
         let second = run(vec![vec!["hi".into(), "x".into()], lo_x()]);
         assert_eq!(entropy_of(&alone, 0), entropy_of(&second, 1));
+    }
+
+    #[test]
+    fn zero_columns_is_an_error() {
+        let r = ams_pairwise_joint_entropy_impl(&[], PairwiseKwargs { pairs: None }, 16, 0);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn pair_and_triplet_estimates_do_not_depend_on_column_order() {
+        let mut cols = frame(1000);
+        cols.push(Series::new(
+            "x".into(),
+            (0..1000i64).map(|i| (i * 7919) % 13).collect::<Vec<_>>(),
+        ));
+        let pair = |a: &str, b: &str| {
+            let kw = PairwiseKwargs {
+                pairs: Some(vec![vec![a.into(), b.into()]]),
+            };
+            let out = ams_pairwise_joint_entropy_impl(&cols, kw, 64, 0).unwrap();
+            entropy_of(&out.into_frame().unnest(["pairwise_entropy"]).unwrap(), 0)
+        };
+        assert_eq!(pair("lo", "x"), pair("x", "lo"));
+        let triple = |a: &str, b: &str, c: &str| {
+            let kw = ThreewayKwargs {
+                triplets: Some(vec![vec![a.into(), b.into(), c.into()]]),
+            };
+            let out = ams_threeway_joint_entropy_impl(&cols, kw, 64, 0).unwrap();
+            entropy_of(&out.into_frame().unnest(["threeway_entropy"]).unwrap(), 0)
+        };
+        assert_eq!(triple("lo", "x", "hi"), triple("hi", "lo", "x"));
+        assert_eq!(triple("lo", "x", "hi"), triple("x", "hi", "lo"));
     }
 
     #[test]

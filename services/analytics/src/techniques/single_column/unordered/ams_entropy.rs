@@ -820,9 +820,10 @@ mod tests {
         let h = entropies(out, "marginal_entropy");
         assert!((h[0] - (n as f64).log2()).abs() < 1e-12);
         assert_eq!(h[1], 0.0);
-        assert_eq!(h[2], 0.0); // all null: one category
-                               // Per-estimator sd ~ log2(e) = 1.44 bits, so se = 1.44/sqrt(4096) = 0.023; 0.1 is ~4.4 se.
-                               // null vs 1, half each:
+        // all null: one category
+        assert_eq!(h[2], 0.0);
+        // Per-estimator sd ~ log2(e) = 1.44 bits, so se = 1.44/sqrt(4096) = 0.023; 0.1 is ~4.4 se.
+        // null vs 1, half each:
         assert!((h[3] - 1.0).abs() < 0.1, "{}", h[3]);
     }
 
