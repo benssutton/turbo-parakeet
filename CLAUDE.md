@@ -49,7 +49,7 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 
 **Chi-squared — `analytics.chi_squared`** (`ChiSquaredRust`, ★`ChiSquaredScipy`, `ChiSquaredPolarsDS`). Independence test on Boolean/String/Categorical/Enum/integer columns with ≤ `max_unique=1000` values; null rows dropped (`n_valid`). χ² detects any association but not causality; at 50K rows p-values are vanishingly small, so **Cramér's V is the diagnostic**: `associated` = V ≥ 0.3. `low_expected_count` flags unreliable tables.
 
-**Joint entropy — `analytics.pairwise_entropy`** (`PairwiseEntropyRust`, ★`PairwiseEntropyPolars`) and **`analytics.threeway_entropy`** (`ThreewayEntropyRust`, ★`ThreewayEntropyPolars`). Null is its own category. Pairwise reports `h_a, h_b, h_ab`, `mi = h_a + h_b − h_ab`, `nmi = mi / min(h_a, h_b)`; `redundant` = NMI ≥ 0.9 (one column predicts the other). `near_unique` = joint entropy ≥ log₂(n_rows) − 0.1 (near-unique combinations — a different diagnostic). Threeway reports `h_abc` and `near_unique`.
+**Joint entropy — `analytics.pairwise_entropy`** (`PairwiseEntropyRust`, `PairwiseEntropyAmsRust`, ★`PairwiseEntropyPolars`) and **`analytics.threeway_entropy`** (`ThreewayEntropyRust`, `ThreewayEntropyAmsRust`, ★`ThreewayEntropyPolars`). Null is its own category. Pairwise reports `h_a, h_b, h_ab`, `mi = h_a + h_b − h_ab`, `nmi = mi / min(h_a, h_b)`; `redundant` = NMI ≥ 0.9 (one column predicts the other). `near_unique` = joint entropy ≥ log₂(n_rows) − 0.1 (near-unique combinations — a different diagnostic). Threeway reports `h_abc` and `near_unique`. The `*AmsRust` implementations estimate every entropy with a Chakrabarti–Cormode–McGregor AMS-sampling sketch (spec: docs/superpowers/specs/2026-10-11-ams-entropy-design.md; techniques/single_column/unordered/ams_entropy.rs, pairwise/ordered/ams_joint_entropy.rs): one pass, O(`num_samples`) memory per column / combination whatever the cardinality, a backup sample plus 256 Misra–Gries counters for a dominant item, and two geometric label clocks (row-indexed; indexed by rows of other keys) so per-row work is O(1) amortised even on near-constant streams. Seeds derive from the user seed and the column names (sorted), so an estimate depends neither on thread scheduling, column order nor the other combinations requested. Keywords `num_samples=4096`, `seed=0`. Agreement: entropies within 5%; MI within 5%·(h_a + h_b + h_ab), NMI within that ÷ min(h_a, h_b); conclusions not compared. Benchmarks: tests/performance/benchmark_ams_entropy.py (memory + error) and the two entropy speed benchmarks (near-unique 1M x 9, near-constant 1M x 3).
 
 **Adjusted Rand Index — `analytics.adjusted_rand`** (`AdjustedRandRust`, ★`AdjustedRandSklearn`). Chance-corrected partition agreement (1 = identical, ≈0 = chance, floor −0.5); null rows dropped (`n_valid`); `same_partition` = ARI ≥ 0.9. Unlike NMI it is chance-adjusted; unlike χ² it measures partition identity.
 
@@ -83,9 +83,9 @@ turbo-parakeet/
 │   ├── pyproject.toml, Cargo.toml          # maturin build (editable install via analytics.pth)
 │   ├── src/                                # Rust extension — layers, one-way: bindings → recommenders → techniques → common
 │   │   ├── common/                           #   error, arrow_io, encode, selection, ipc_sizes, text, entropy_math
-│   │   ├── techniques/                     #   single_column/unordered/{describe/, gcd, marginal_entropy, hll, cardinality_estimators}
-│   │   │                                   #   pairwise/unordered/{bloomfilter, minhash}; pairwise/ordered/{chi_squared, ari,
-│   │   │                                   #   contingency, joint_entropy}
+│   │   ├── techniques/                     #   single_column/unordered/{describe/, gcd, marginal_entropy, hll, cardinality_estimators,
+│   │   │                                   #   ams_entropy}; pairwise/unordered/{bloomfilter, minhash}; pairwise/ordered/{chi_squared,
+│   │   │                                   #   ari, contingency, joint_entropy, ams_joint_entropy}
 │   │   ├── recommenders/                   #   engine/ (rules, cast, verify, choose), schema, oneshot, streaming/ (partial,
 │   │   │                                   #   reservoir, distinct_sample, sizing)
 │   │   └── bindings/                       #   api/, python.rs, capi.rs
@@ -135,6 +135,7 @@ Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design
 Private — reached only through `analytics._plugin`, only by the `*Rust` classes (and the exceptions named below):
 `column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
 `pairwise_joint_entropy`, `threeway_joint_entropy` (the classes always pass explicit triplets; `triplets=None` means every triplet, uncapped — C(101,3) = 166,650 at 101 cols, ~65 s at 50K rows),
+`ams_marginal_entropy`, `ams_pairwise_joint_entropy`, `ams_threeway_joint_entropy`,
 `bloom_filter` + `membership_ratio` (the bit array crosses as `bytes`), `minhash` + `lsh_candidates`,
 `describe_columns` + `column_sizes`; `render` (arrow-rs text of min / max, used by
 `analytics.describe.base`); `checked_table` (the checked Arrow import, used by
