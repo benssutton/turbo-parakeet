@@ -8,11 +8,11 @@ from analytics.pairwise_entropy.base import PairwiseEntropy
 
 
 def check_ams_params(num_samples: int, seed: int) -> None:
-    if not isinstance(num_samples, int) or not 1 <= num_samples <= 2**32 - 1:
+    if type(num_samples) is not int or not 1 <= num_samples <= 2**32 - 1:
         raise ValueError(
             f"num_samples must be an integer in [1, 2**32 - 1], got {num_samples!r}"
         )
-    if not isinstance(seed, int) or not 0 <= seed <= 2**64 - 1:
+    if type(seed) is not int or not 0 <= seed <= 2**64 - 1:
         raise ValueError(f"seed must be an integer in [0, 2**64 - 1], got {seed!r}")
 
 
@@ -76,13 +76,11 @@ class PairwiseEntropyAmsRust(PairwiseEntropy):
         )
         if problems[:1] == ["key columns differ from the reference"]:
             return problems
-        both = pl.concat(
-            [
-                reference.select(*keys, "h_a", "h_b", "h_ab", "mi", "nmi"),
-                result.select(got_mi="mi", got_nmi="nmi"),
-            ],
-            how="horizontal",
-        ).filter(pl.col("h_ab").is_not_null())
+        both = (
+            reference.select(*keys, "h_a", "h_b", "h_ab", "mi", "nmi")
+            .with_columns(got_mi=result["mi"], got_nmi=result["nmi"])
+            .filter(pl.col("h_ab").is_not_null())
+        )
         for r in both.iter_rows(named=True):
             label = " ~ ".join(
                 f"{r[keys[i]]}.{r[keys[i + 1]]}" for i in range(0, len(keys), 2)

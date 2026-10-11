@@ -29,10 +29,19 @@ OTHERS = implementation_params(PKG, include_reference=False)
 NAN = float("nan")
 
 
+def _sketch(impl) -> bool:
+    return impl.endswith("AmsRust")
+
+
 def _tol(impl) -> dict:
-    """The implementation's own agreement tolerance: exact kernels 1e-5, sketches 5%."""
+    """Approx kwargs: sketches use their own agreement tolerance, exact kernels pytest's."""
     cls = load(impl)
-    return {"rel": cls.RTOL, "abs": cls.ATOL}
+    return {"rel": cls.RTOL, "abs": cls.ATOL} if _sketch(impl) else {}
+
+
+def _mi_tol(impl, k: int) -> float:
+    """Tolerance around MI / NMI = 0 or 1: sketches carry k entropies' RTOL errors."""
+    return load(impl).RTOL * k + 1e-12 if _sketch(impl) else 1e-12
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -61,7 +70,7 @@ def test_independent_columns(impl):
     tol = _tol(impl)
     assert (r["h_a"], r["h_b"], r["h_ab"]) == pytest.approx((1.0, 1.0, 2.0), **tol)
     # MI and NMI carry the entropies' errors: RTOL · (h_a + h_b + h_ab).
-    mi_tol = tol["rel"] * 4 + 1e-12
+    mi_tol = _mi_tol(impl, 4)
     assert r["mi"] == pytest.approx(0.0, abs=mi_tol)
     assert r["nmi"] == pytest.approx(0.0, abs=mi_tol)
     assert r["redundant"] is False
@@ -77,8 +86,8 @@ def test_redundant_columns_and_null_category(impl):
     )  # null is a category: a determines b
     tol = _tol(impl)
     assert (r["h_a"], r["h_b"], r["h_ab"]) == pytest.approx((1.0, 1.0, 1.0), **tol)
-    assert r["nmi"] == pytest.approx(1.0, abs=tol["rel"] * 3 + 1e-12)
-    if tol["rel"] < 1e-3:  # exact kernels; an estimate may land either side of 0.9
+    assert r["nmi"] == pytest.approx(1.0, abs=_mi_tol(impl, 3))
+    if not _sketch(impl):  # exact kernels; an estimate may land either side of 0.9
         assert r["redundant"] is True
     assert r["near_unique"] is False
 
