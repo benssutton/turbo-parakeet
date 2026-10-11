@@ -12,6 +12,7 @@ from datagen import (
     integer_random,
     low_cardinality,
     mixed_dtypes,
+    near_unique,
     related_frames,
     similar_frames,
     stringified,
@@ -131,3 +132,24 @@ def test_describe_benchmark_shapes():
         "list_str": pl.List(pl.String),
         "struct": pl.Struct({"a": pl.Int64, "b": pl.String}),
     }
+
+
+def test_near_unique():
+    df = near_unique(10_000)
+    assert df.columns == [
+        "u0",
+        "u1",
+        "u2",
+        "key_hi",
+        "key_lo",
+        "skewed",
+        "mid",
+        "low",
+        "flag",
+    ]
+    assert df.select(pl.struct("key_hi", "key_lo").n_unique()).item() == 10_000
+    assert 9_985 <= df["u0"].n_unique() < 10_000
+    assert 0.93 < (df["skewed"] == 0).mean() < 0.97
+    assert df["low"].n_unique() == 10
+    assert df["flag"].sum() == 1
+    assert near_unique(1_000).equals(near_unique(1_000))

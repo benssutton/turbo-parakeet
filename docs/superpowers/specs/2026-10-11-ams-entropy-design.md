@@ -239,8 +239,9 @@ answers, checked for every implementation:
 | `skewed` | 95% one value, the rest uniform over 50K values |
 | `mid` | ~1,000 distinct values |
 | `low` | ~10 distinct values |
+| `flag` | near-constant: 1 in every 10,000 rows, else 0 |
 
-That gives 28 pairs and 56 triplets and one real two-column key. Most joint spaces exceed 2²⁰
+That gives 36 pairs and 84 triplets and one real two-column key. Most joint spaces exceed 2²⁰
 (the exact kernels' hash-map path); `mid × low`, `key_hi × low` and the like stay in the flat array.
 
 **Speed.** `benchmark_pairwise_entropy.py` and `benchmark_threeway_entropy.py` add

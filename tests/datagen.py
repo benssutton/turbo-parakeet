@@ -2,7 +2,7 @@
 Seeded toy-data generators shared by accuracy tests (small sizes) and speed
 benchmarks (large sizes). Every generator is deterministic for a given seed.
 
-Ordered techniques:   mixed_dtypes, low_cardinality
+Ordered techniques:   mixed_dtypes, low_cardinality, near_unique
 Multi-set techniques: related_frames, similar_frames
 Per-column (GCD):     integer_multiples, integer_random
 Per-column (describe): describe_mixed, stringified (tests); describe_narrow, describe_wide, describe_nested (benchmarks)
@@ -136,6 +136,32 @@ def low_cardinality(
         prev = values
         cols.append(_with_nulls(f"c{i:03d}", values, rng.random(n_rows) < null_rate))
     return pl.DataFrame(cols)
+
+
+def near_unique(n_rows: int = 1_000_000, seed: int = 42) -> pl.DataFrame:
+    """Int64 columns that stress entropy sketches and the exact kernels' hash-map path:
+    u0–u2 near-unique (a permutation with ~0.1% of rows copying another row's value), a
+    genuine composite key key_hi = i // 1000, key_lo = i % 1000 over shuffled i (unique
+    together), `skewed` (95% one value, the rest over 50,000 others), `mid` / `low`
+    with ~1,000 / 10 values, and `flag`, a near-constant 0/1 column with one 1 per
+    10,000 rows."""
+    rng = np.random.default_rng(seed)
+    cols = {}
+    for i in range(3):
+        values = rng.permutation(n_rows)
+        dup = rng.choice(n_rows, n_rows // 1000, replace=False)
+        values[dup] = values[rng.integers(0, n_rows, dup.size)]
+        cols[f"u{i}"] = values
+    perm = rng.permutation(n_rows)
+    cols["key_hi"] = perm // 1000
+    cols["key_lo"] = perm % 1000
+    cols["skewed"] = np.where(
+        rng.random(n_rows) < 0.95, 0, rng.integers(1, 50_001, n_rows)
+    )
+    cols["mid"] = rng.integers(0, 1_000, n_rows)
+    cols["low"] = rng.integers(0, 10, n_rows)
+    cols["flag"] = (np.arange(n_rows) % 10_000 == 7).astype(np.int64)
+    return pl.DataFrame({k: v.astype(np.int64) for k, v in cols.items()})
 
 
 # ── multi-set techniques ──────────────────────────────────────────────────────
