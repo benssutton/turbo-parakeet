@@ -68,7 +68,7 @@ At the end, s0 is a uniform sample of the stream and r0 ~ R. For any item a, the
 A **Misra–Gries summary with 256 counters** (internal constant `MG_COUNTERS`) gives p̂_max, the
 share of the most frequent item a_max, with p_max − (1 − p_max)/k ≤ p̂_max ≤ p_max (CCM Lemma 2.3).
 That under-estimate biases H by about 1/k relative: 8 counters would give ~12% on a
-95%-one-value column with a 1,000-value tail, while 256 give ~0.4%. The counters cost about 4 KB
+95%-one-value column with a 1,000-value tail, while 256 give ~0.4%. Each missed count shifts H by about (H_rest/(1 − p) + 1.44)/m bits, so a tail of singletons, which has a large H_rest/(1 − p), amplifies it (measured: +0.2% on a 95%-one-value stream with a 1,000-value tail, as predicted). The counters cost about 4 KB
 and an amortised O(1) hash-map update per row.
 
 Estimate:

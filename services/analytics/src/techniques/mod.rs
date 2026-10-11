@@ -5,7 +5,9 @@
 pub(crate) mod pairwise;
 pub(crate) mod single_column;
 
-pub(crate) use pairwise::ordered::{ari, chi_squared, contingency, joint_entropy};
+pub(crate) use pairwise::ordered::{
+    ams_joint_entropy, ari, chi_squared, contingency, joint_entropy,
+};
 pub(crate) use pairwise::unordered::{bloomfilter, minhash};
 pub(crate) use single_column::unordered::{
     ams_entropy, cardinality_estimators, describe, gcd, hll, marginal_entropy,

@@ -3,8 +3,12 @@
 //! swamp the estimate. Spec: docs/superpowers/specs/2026-10-11-ams-entropy-design.md.
 
 use foldhash::fast::FixedState;
+use polars::prelude::*;
+use rayon::prelude::*;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
+
+use crate::common::*;
 
 /// Misra–Gries counters for the dominant item: p̂ is low by at most (1 − p)/k (CCM Lemma 2.3),
 /// which biases H by about 1/k relative.
@@ -16,6 +20,116 @@ pub(crate) fn mix64(z: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+/// Key of a null row: null is its own category, as in the exact kernels. (It collides with
+/// the one value whose `mix64` equals it.)
+const NULL_KEY: u64 = 0x6E75_6C6C_6E75_6C6C;
+
+/// Seed domains, so a marginal and a combination with the same index draw different labels.
+pub(crate) const MARGINAL: u64 = 1;
+pub(crate) const PAIR: u64 = 2;
+pub(crate) const TRIPLE: u64 = 3;
+
+/// One key for two keys, order-sensitive; nest it for triplets.
+pub(crate) fn combine(a: u64, b: u64) -> u64 {
+    mix64(a ^ mix64(b))
+}
+
+/// The seed of sketch `index` in `domain`: independent sketches, whatever the thread schedule.
+pub(crate) fn sketch_seed(seed: u64, domain: u64, index: usize) -> u64 {
+    mix64(mix64(seed ^ domain) ^ index as u64)
+}
+
+/// Row count shared by every input column; errors on no columns, zero rows or ragged input.
+pub(crate) fn row_count(inputs: &[Series], what: &str) -> PolarsResult<usize> {
+    let Some(first) = inputs.first() else {
+        return Err(PolarsError::ComputeError(
+            format!("{what} requires at least one column").into(),
+        ));
+    };
+    let r = first.len();
+    if r == 0 {
+        return Err(PolarsError::ComputeError(
+            "Cannot calculate entropy on empty columns".into(),
+        ));
+    }
+    if let Some((idx, s)) = inputs.iter().enumerate().find(|(_, s)| s.len() != r) {
+        return Err(PolarsError::ShapeMismatch(
+            format!(
+                "All columns must have the same length: column {idx} has length {} but expected {r}",
+                s.len()
+            )
+            .into(),
+        ));
+    }
+    Ok(r)
+}
+
+/// Per-row sketch keys of the columns in `needed` (value-stable `encode_series` keys, null
+/// folded in); other slots stay empty.
+pub(crate) fn keyed_columns(
+    inputs: &[Series],
+    needed: impl IntoIterator<Item = usize>,
+) -> PolarsResult<Vec<Vec<u64>>> {
+    let needed: HashSet<usize> = needed.into_iter().collect();
+    let cache = build_column_cache_par(inputs, &needed)?;
+    Ok(cache
+        .par_iter()
+        .map(|col| {
+            (0..col.len())
+                .map(|i| {
+                    if col.is_null[i] {
+                        NULL_KEY
+                    } else {
+                        mix64(col.values[i])
+                    }
+                })
+                .collect()
+        })
+        .collect())
+}
+
+/// The kernels' output: struct `name` of string key columns, then `entropy`.
+pub(crate) fn entropy_struct(
+    name: &str,
+    keys: Vec<(&str, Vec<&str>)>,
+    entropy: Vec<f64>,
+) -> PolarsResult<Series> {
+    let n = entropy.len();
+    let mut fields: Vec<Series> = keys
+        .into_iter()
+        .map(|(field, values)| {
+            StringChunked::from_iter(values)
+                .into_series()
+                .with_name(field.into())
+        })
+        .collect();
+    fields.push(Float64Chunked::from_vec("entropy".into(), entropy).into_series());
+    Ok(StructChunked::from_series(name.into(), n, fields.iter())?.into_series())
+}
+
+/// H(col) of every column, one sketch each: `col_name`, `entropy`.
+pub(crate) fn ams_marginal_entropy_impl(
+    inputs: &[Series],
+    num_samples: usize,
+    seed: u64,
+) -> PolarsResult<Series> {
+    row_count(inputs, "ams_marginal_entropy")?;
+    let keys = keyed_columns(inputs, 0..inputs.len())?;
+    let entropy: Vec<f64> = keys
+        .par_iter()
+        .enumerate()
+        .map(|(i, col)| {
+            let mut sketch = AmsEntropy::new(num_samples, sketch_seed(seed, MARGINAL, i));
+            for &k in col {
+                sketch.update(k);
+            }
+            sketch.estimate()
+        })
+        .collect();
+    let names = inputs.iter().map(|s| s.name().as_str()).collect();
+    entropy_struct("marginal_entropy", vec![("col_name", names)], entropy)
 }
 
 /// SplitMix64 generator.
@@ -477,7 +591,7 @@ mod tests {
         assert_ne!(sketch(&keys, 128, 9), sketch(&keys, 128, 10));
     }
 
-    /// (events fired, key checks processed, rows) of a 64-estimator run.
+    /// (events fired, key checks processed, rows) of a run with `num_samples` estimators.
     fn cost(keys: impl Iterator<Item = u64>, num_samples: usize) -> (u64, u64, u64) {
         let mut s = AmsEntropy::new(num_samples, 0);
         for k in keys {
@@ -634,11 +748,12 @@ mod tests {
                 (m1 - m2).abs() <= 4.0 * (se1 * se1 + se2 * se2).sqrt(),
                 "two-clock {m1} +- {se1}, naive {m2} +- {se2}"
             );
+            // A 4,000-seed release run measured sd ratios of 0.99 (zipf) and 0.98 (skewed); 400 seeds keep debug runs fast.
             assert!(
                 (0.8..=1.25).contains(&ratio),
                 "sd ratio {ratio}: two-clock sd {}, naive sd {}",
-                se1 * 20.0,
-                se2 * 20.0
+                se1 * (fast.len() as f64).sqrt(),
+                se2 * (slow.len() as f64).sqrt()
             );
         }
     }
@@ -675,5 +790,46 @@ mod tests {
         assert_eq!(top, 5);
         // Lower bound, short by at most (m − m_top) / k = 2500 / 256.
         assert!((7_490..=7_500).contains(&count), "{count}");
+    }
+
+    fn entropies(out: Series, name: &str) -> Vec<f64> {
+        let df = out.into_frame().unnest([name]).unwrap();
+        df.column("entropy")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_no_null_iter()
+            .collect()
+    }
+
+    #[test]
+    fn marginal_kernel_unique_constant_and_null_columns() {
+        let n = 1000i64;
+        let u = Series::new("u".into(), (0..n).collect::<Vec<_>>());
+        let k = Series::new("k".into(), vec![7i64; n as usize]);
+        let nulls = Series::new("z".into(), vec![None::<i64>; n as usize]);
+        let half = Series::new(
+            "h".into(),
+            (0..n)
+                .map(|i| (i % 2 == 0).then_some(1i64))
+                .collect::<Vec<_>>(),
+        );
+        let out = ams_marginal_entropy_impl(&[u, k, nulls, half], 4096, 0).unwrap();
+        let h = entropies(out, "marginal_entropy");
+        assert!((h[0] - (n as f64).log2()).abs() < 1e-12);
+        assert_eq!(h[1], 0.0);
+        assert_eq!(h[2], 0.0); // all null: one category
+                               // Per-estimator sd ~ log2(e) = 1.44 bits, so se = 1.44/sqrt(4096) = 0.023; 0.1 is ~4.4 se.
+        assert!((h[3] - 1.0).abs() < 0.1, "{}", h[3]); // null vs 1, half each
+    }
+
+    #[test]
+    fn marginal_kernel_rejects_empty_and_ragged_input() {
+        assert!(ams_marginal_entropy_impl(&[], 16, 0).is_err());
+        let empty = Series::new("a".into(), Vec::<i64>::new());
+        assert!(ams_marginal_entropy_impl(&[empty], 16, 0).is_err());
+        let a = Series::new("a".into(), &[1i64, 2, 3]);
+        let b = Series::new("b".into(), &[1i64, 2]);
+        assert!(ams_marginal_entropy_impl(&[a, b], 16, 0).is_err());
     }
 }
