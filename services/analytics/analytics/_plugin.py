@@ -67,6 +67,39 @@ def marginal_entropy(df: Frame) -> pl.DataFrame:
     return pl.DataFrame(_rs.marginal_entropy(_collected(df)))
 
 
+def ams_marginal_entropy(df: Frame, num_samples: int, seed: int) -> pl.DataFrame:
+    """col_name, entropy per column, estimated by the AMS (CCM) sketch."""
+    return pl.DataFrame(_rs.ams_marginal_entropy(_collected(df), num_samples, seed))
+
+
+def ams_pairwise_joint_entropy(
+    df: Frame,
+    pairs: Sequence[tuple[str, str]] | None,
+    num_samples: int,
+    seed: int,
+) -> pl.DataFrame:
+    """col_a, col_b, entropy (H(A,B) in bits, AMS estimate); every pair when None."""
+    return pl.DataFrame(
+        _rs.ams_pairwise_joint_entropy(
+            _collected(df), _tuples(pairs), num_samples, seed
+        )
+    )
+
+
+def ams_threeway_joint_entropy(
+    df: Frame,
+    triplets: Sequence[tuple[str, str, str]] | None,
+    num_samples: int,
+    seed: int,
+) -> pl.DataFrame:
+    """col_a, col_b, col_c, entropy (H(A,B,C) in bits, AMS estimate); every triplet when None."""
+    return pl.DataFrame(
+        _rs.ams_threeway_joint_entropy(
+            _collected(df), _tuples(triplets), num_samples, seed
+        )
+    )
+
+
 def pairwise_chi_squared(
     df: Frame, pairs: Sequence[tuple[str, str]] | None = None
 ) -> pl.DataFrame:

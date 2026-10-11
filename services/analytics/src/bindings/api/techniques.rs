@@ -30,22 +30,94 @@ pub fn pairwise_joint_entropy(
     table(crate::techniques::joint_entropy::pairwise_joint_entropy_impl(&columns(batch)?, kwargs))
 }
 
-/// `col_a`, `col_b`, `col_c`, `entropy` per triplet; every triplet when None.
-pub fn threeway_joint_entropy(
+/// `triplets` as kernel kwargs, every name checked.
+fn threeway(
     batch: &RecordBatch,
     triplets: Option<&[(String, String, String)]>,
-) -> Result<RecordBatch> {
+) -> Result<ThreewayKwargs> {
     if let Some(t) = triplets {
         check_names(batch, t.iter().flat_map(|(a, b, c)| [a, b, c]))?;
     }
-    let kwargs = ThreewayKwargs {
+    Ok(ThreewayKwargs {
         triplets: triplets.map(|t| {
             t.iter()
                 .map(|(a, b, c)| vec![a.clone(), b.clone(), c.clone()])
                 .collect()
         }),
-    };
+    })
+}
+
+/// `col_a`, `col_b`, `col_c`, `entropy` per triplet; every triplet when None.
+pub fn threeway_joint_entropy(
+    batch: &RecordBatch,
+    triplets: Option<&[(String, String, String)]>,
+) -> Result<RecordBatch> {
+    let kwargs = threeway(batch, triplets)?;
     table(crate::techniques::joint_entropy::threeway_joint_entropy_impl(&columns(batch)?, kwargs))
+}
+
+/// The AMS sketches' size: 1 ..= u32::MAX estimators.
+fn ams_samples(num_samples: usize) -> Result<usize> {
+    if num_samples == 0 || num_samples > u32::MAX as usize {
+        return Err(Error::InvalidInput(format!(
+            "num_samples must be between 1 and {}, got {num_samples}",
+            u32::MAX
+        )));
+    }
+    Ok(num_samples)
+}
+
+/// `col_name`, `entropy` per column, estimated by the AMS (CCM) sketch.
+pub fn ams_marginal_entropy(
+    batch: &RecordBatch,
+    num_samples: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    let c = ams_samples(num_samples)?;
+    table(crate::techniques::ams_entropy::ams_marginal_entropy_impl(
+        &columns(batch)?,
+        c,
+        seed,
+    ))
+}
+
+/// `col_a`, `col_b`, `entropy` per pair (every pair when None), estimated by the AMS sketch.
+pub fn ams_pairwise_joint_entropy(
+    batch: &RecordBatch,
+    pairs: Option<&[(String, String)]>,
+    num_samples: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    let c = ams_samples(num_samples)?;
+    let kwargs = pairwise(batch, pairs)?;
+    table(
+        crate::techniques::ams_joint_entropy::ams_pairwise_joint_entropy_impl(
+            &columns(batch)?,
+            kwargs,
+            c,
+            seed,
+        ),
+    )
+}
+
+/// `col_a`, `col_b`, `col_c`, `entropy` per triplet (every triplet when None), estimated by
+/// the AMS sketch.
+pub fn ams_threeway_joint_entropy(
+    batch: &RecordBatch,
+    triplets: Option<&[(String, String, String)]>,
+    num_samples: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    let c = ams_samples(num_samples)?;
+    let kwargs = threeway(batch, triplets)?;
+    table(
+        crate::techniques::ams_joint_entropy::ams_threeway_joint_entropy_impl(
+            &columns(batch)?,
+            kwargs,
+            c,
+            seed,
+        ),
+    )
 }
 
 /// `col_a`, `col_b`, `chi2_stat`, `p_value`, `cramers_v`, `low_expected_count`, `n_valid`.
@@ -489,5 +561,45 @@ mod tests {
         ]);
         assert_eq!(describe_columns(&b, 0, 10_000).unwrap().num_rows(), 2);
         assert_eq!(column_sizes(&b, 1).unwrap().num_rows(), 2);
+    }
+
+    #[test]
+    fn ams_entropy_smoke() {
+        let b = batch(vec![
+            ("a", ints(&[1, 2, 3, 4])),
+            ("b", ints(&[5, 5, 5, 5])),
+            ("c", ints(&[1, 1, 2, 2])),
+        ]);
+        let m = ams_marginal_entropy(&b, 64, 0).unwrap();
+        assert_eq!(m.column(1).as_primitive::<Float64Type>().value(0), 2.0); // unique
+        assert_eq!(m.column(1).as_primitive::<Float64Type>().value(1), 0.0); // constant
+        let pairs = [("a".to_string(), "b".to_string())];
+        let p = ams_pairwise_joint_entropy(&b, Some(&pairs[..]), 64, 0).unwrap();
+        assert_eq!(p.num_rows(), 1);
+        assert_eq!(p.column(2).as_primitive::<Float64Type>().value(0), 2.0);
+        let t = ams_threeway_joint_entropy(&b, None, 64, 0).unwrap();
+        assert_eq!(t.column(3).as_primitive::<Float64Type>().value(0), 2.0);
+    }
+
+    #[test]
+    fn ams_zero_samples_and_unknown_names_are_invalid_input() {
+        let b = batch(vec![("a", ints(&[1, 2])), ("b", ints(&[1, 2]))]);
+        assert!(matches!(
+            ams_marginal_entropy(&b, 0, 0),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ams_pairwise_joint_entropy(&b, None, 0, 0),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ams_threeway_joint_entropy(&b, None, 0, 0),
+            Err(Error::InvalidInput(_))
+        ));
+        let pairs = [("a".to_string(), "zz".to_string())];
+        assert!(matches!(
+            ams_pairwise_joint_entropy(&b, Some(&pairs[..]), 8, 0),
+            Err(Error::InvalidInput(_))
+        ));
     }
 }

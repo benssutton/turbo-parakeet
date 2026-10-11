@@ -312,6 +312,50 @@ fn threeway_joint_entropy(
 }
 
 #[pyfunction]
+#[pyo3(signature = (data, num_samples, seed))]
+fn ams_marginal_entropy(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    num_samples: usize,
+    seed: u64,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::ams_marginal_entropy(&batch, num_samples, seed)).map(ArrowTable)
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, pairs, num_samples, seed))]
+fn ams_pairwise_joint_entropy(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    pairs: Option<Vec<(String, String)>>,
+    num_samples: usize,
+    seed: u64,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || {
+        api::ams_pairwise_joint_entropy(&batch, pairs.as_deref(), num_samples, seed)
+    })
+    .map(ArrowTable)
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, triplets, num_samples, seed))]
+fn ams_threeway_joint_entropy(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    triplets: Option<Vec<(String, String, String)>>,
+    num_samples: usize,
+    seed: u64,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || {
+        api::ams_threeway_joint_entropy(&batch, triplets.as_deref(), num_samples, seed)
+    })
+    .map(ArrowTable)
+}
+
+#[pyfunction]
 #[pyo3(signature = (data, pairs=None))]
 fn pairwise_chi_squared(
     py: Python<'_>,
@@ -422,6 +466,9 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_joint_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(threeway_joint_entropy, m)?)?;
+    m.add_function(wrap_pyfunction!(ams_marginal_entropy, m)?)?;
+    m.add_function(wrap_pyfunction!(ams_pairwise_joint_entropy, m)?)?;
+    m.add_function(wrap_pyfunction!(ams_threeway_joint_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_chi_squared, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_adjusted_rand, m)?)?;
     m.add_function(wrap_pyfunction!(bloom_filter, m)?)?;
