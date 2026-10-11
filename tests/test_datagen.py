@@ -12,6 +12,7 @@ from datagen import (
     integer_random,
     low_cardinality,
     mixed_dtypes,
+    near_constant,
     near_unique,
     related_frames,
     similar_frames,
@@ -153,3 +154,11 @@ def test_near_unique():
     assert df["low"].n_unique() == 10
     assert df["flag"].sum() == 1
     assert near_unique(1_000).equals(near_unique(1_000))
+
+
+def test_near_constant():
+    df = near_constant(100_000)
+    assert df.shape == (100_000, 3)
+    assert df.columns == ["f0", "f1", "f2"]
+    assert df.sum().row(0) == (10, 10, 10)
+    assert (df.sum_horizontal() <= 1).all()

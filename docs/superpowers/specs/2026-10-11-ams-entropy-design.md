@@ -230,7 +230,7 @@ answers, checked for every implementation:
 
 ### 5.3 Speed, memory and error
 
-**Dataset.** A new `datagen.near_unique(n_rows=1_000_000, seed=42)` builds eight columns:
+**Dataset.** A new `datagen.near_unique(n_rows=1_000_000, seed=42)` builds nine columns:
 
 | column | content |
 |---|---|
@@ -245,9 +245,11 @@ That gives 36 pairs and 84 triplets and one real two-column key. Most joint spac
 (the exact kernels' hash-map path); `mid × low`, `key_hi × low` and the like stay in the flat array.
 
 **Speed.** `benchmark_pairwise_entropy.py` and `benchmark_threeway_entropy.py` add
-`Dataset("near-unique 1M x 8", lambda: {"t": near_unique()})` to their existing three shapes. The
+`Dataset("near-unique 1M x 9", lambda: {"t": near_unique()})` to their existing three shapes. The
 harness reports median and min times, the 1-thread re-run and the algorithmic / parallel / total
 speedups for both Rust classes, and the `agrees` flag.
+
+A second dataset, `datagen.near_constant(1_000_000, 3)` (`Dataset("near-constant 1M x 3", ...)`, added to both speed benchmarks and the memory report), has three Int64 columns that are 1 on disjoint rows, one in every 10,000. It measures the sketch's per-row cost on near-constant streams, where the two-clock scheme pays about one heap check per row; every pair and triplet there is a near-constant joint stream, which the single `flag` column cannot isolate.
 
 **Memory and error.** A new `tests/performance/benchmark_ams_entropy.py` runs, for each dataset
 and each implementation (exact Rust, AMS, Polars) of both packages, one fresh child process. The

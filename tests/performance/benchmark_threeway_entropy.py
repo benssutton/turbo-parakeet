@@ -10,7 +10,7 @@ give 166,650 triplets (~65 s per Rust run), far past the reference's budget.
 
 from harness import Dataset, large_dataset, run
 
-from datagen import low_cardinality, near_unique
+from datagen import low_cardinality, near_constant, near_unique
 
 if __name__ == "__main__":
     run(
@@ -24,6 +24,7 @@ if __name__ == "__main__":
             Dataset("narrow 1M x 5", lambda: {"t": low_cardinality(1_000_000, 5)}),
             Dataset("wide 20K x 30", lambda: {"t": low_cardinality(20_000, 30)}),
             Dataset("near-unique 1M x 9", lambda: {"t": near_unique()}),
+            Dataset("near-constant 1M x 3", lambda: {"t": near_constant()}),
         ],
         runs=3,
     )

@@ -164,6 +164,19 @@ def near_unique(n_rows: int = 1_000_000, seed: int = 42) -> pl.DataFrame:
     return pl.DataFrame({k: v.astype(np.int64) for k, v in cols.items()})
 
 
+def near_constant(n_rows: int = 1_000_000, n_cols: int = 3) -> pl.DataFrame:
+    """Int64 columns f0... where column i is 1 on rows with row % 10_000 == 7 + 1_000 * i,
+    else 0: deterministic, and every pair and triplet is a near-constant joint stream.
+    """
+    rows = np.arange(n_rows)
+    return pl.DataFrame(
+        {
+            f"f{i}": (rows % 10_000 == 7 + 1_000 * i).astype(np.int64)
+            for i in range(n_cols)
+        }
+    )
+
+
 # ── multi-set techniques ──────────────────────────────────────────────────────
 
 
