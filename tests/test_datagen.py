@@ -17,6 +17,7 @@ from datagen import (
     related_frames,
     similar_frames,
     stringified,
+    top_k_streams,
 )
 
 
@@ -162,3 +163,17 @@ def test_near_constant():
     assert df.columns == ["f0", "f1", "f2"]
     assert df.sum().row(0) == (10, 10, 10)
     assert (df.sum_horizontal() <= 1).all()
+
+
+def test_top_k_streams_shape_and_determinism():
+    df = top_k_streams(20_000)
+    assert df.columns == ["zipf_15", "zipf_11", "zipf_08", "flat", "skewed", "zipf_str"]
+    assert df.height == 20_000
+    assert df.equals(top_k_streams(20_000))
+    assert top_k_streams(20_000, columns=["zipf_08"])["zipf_08"].equals(df["zipf_08"])
+    share = {
+        c: df[c].value_counts(sort=True)["count"][0] / df.height for c in df.columns
+    }
+    assert share["zipf_15"] > share["zipf_11"] > share["zipf_08"] > share["flat"]
+    assert 0.93 < share["skewed"] < 0.97
+    assert df["zipf_str"][0] == f"item_{df['zipf_11'][0]}"

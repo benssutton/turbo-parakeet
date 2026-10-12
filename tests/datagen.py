@@ -5,6 +5,7 @@ benchmarks (large sizes). Every generator is deterministic for a given seed.
 Ordered techniques:   mixed_dtypes, low_cardinality, near_unique
 Multi-set techniques: related_frames, similar_frames
 Per-column (GCD):     integer_multiples, integer_random
+Per-column (top-k):     top_k_streams
 Per-column (describe): describe_mixed, stringified (tests); describe_narrow, describe_wide, describe_nested (benchmarks)
 """
 
@@ -175,6 +176,50 @@ def near_constant(n_rows: int = 1_000_000, n_cols: int = 3) -> pl.DataFrame:
             for i in range(n_cols)
         }
     )
+
+
+# ── per-column top-k ──────────────────────────────────────────────────────────
+
+TOP_K_COLUMNS = ("zipf_15", "zipf_11", "zipf_08", "flat", "skewed", "zipf_str")
+
+
+def _bounded_zipf(n_rows: int, n_values: int, alpha: float, rng) -> np.ndarray:
+    """Zipf(alpha) truncated to n_values ranks (any alpha > 0, unlike numpy's zipf), mapped
+    through a random permutation so the most frequent values are not 0, 1, 2, …"""
+    cdf = np.cumsum(np.arange(1, n_values + 1, dtype=np.float64) ** -alpha)
+    cdf /= cdf[-1]
+    ranks = np.minimum(
+        np.searchsorted(cdf, rng.random(n_rows), side="right"), n_values - 1
+    )
+    return rng.permutation(n_values)[ranks]
+
+
+def top_k_streams(
+    n_rows: int = 10_000_000, seed: int = 42, columns: list[str] | None = None
+) -> pl.DataFrame:
+    """Int64 streams for top-k sketches over 1M possible values: zipf_15 / zipf_11 / zipf_08
+    (Zipf α = 1.5 / 1.1 / 0.8), flat (uniform), skewed (95% one value, the rest over 50,000
+    others) and zipf_str (zipf_11 as "item_<n>" strings). Each column has its own seeded
+    generator, so a column is the same whichever `columns` are asked for."""
+    columns = list(TOP_K_COLUMNS) if columns is None else columns
+
+    def rng(name: str):
+        return np.random.default_rng([seed, TOP_K_COLUMNS.index(name)])
+
+    def make(name: str) -> pl.Series:
+        if name == "zipf_str":
+            return ("item_" + make("zipf_11").cast(pl.String)).alias(name)
+        r = rng(name)
+        if name == "flat":
+            values = r.integers(0, 1_000_000, n_rows)
+        elif name == "skewed":
+            values = np.where(r.random(n_rows) < 0.95, 0, r.integers(1, 50_001, n_rows))
+        else:
+            alpha = {"zipf_15": 1.5, "zipf_11": 1.1, "zipf_08": 0.8}[name]
+            values = _bounded_zipf(n_rows, 1_000_000, alpha, r)
+        return pl.Series(name, values.astype(np.int64))
+
+    return pl.DataFrame([make(c) for c in columns])
 
 
 # ── multi-set techniques ──────────────────────────────────────────────────────
