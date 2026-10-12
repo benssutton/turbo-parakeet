@@ -122,6 +122,42 @@ pub fn ams_threeway_joint_entropy(
     )
 }
 
+use crate::techniques::heavy_keeper::HeavyKeeper;
+use crate::techniques::space_saving::SpaceSaving;
+
+/// `col_name, rank, row, count, error, n_non_null, sketch_bytes`: each column's top `k` by
+/// SpaceSaving in `memory_bytes` (spec 2026-10-12). k = 0 or a budget below k counters ->
+/// InvalidInput.
+pub fn space_saving_top_k(
+    batch: &RecordBatch,
+    k: usize,
+    memory_bytes: usize,
+) -> Result<RecordBatch> {
+    SpaceSaving::new(k, memory_bytes).map_err(Error::InvalidInput)?;
+    table(crate::techniques::space_saving::space_saving_top_k_impl(
+        &columns(batch)?,
+        k,
+        memory_bytes,
+    ))
+}
+
+/// As `space_saving_top_k`, by HeavyKeeper (`error` null); a budget leaving fewer than k
+/// buckets per array -> InvalidInput.
+pub fn heavy_keeper_top_k(
+    batch: &RecordBatch,
+    k: usize,
+    memory_bytes: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    HeavyKeeper::new(k, memory_bytes, seed).map_err(Error::InvalidInput)?;
+    table(crate::techniques::heavy_keeper::heavy_keeper_top_k_impl(
+        &columns(batch)?,
+        k,
+        memory_bytes,
+        seed,
+    ))
+}
+
 /// `col_a`, `col_b`, `chi2_stat`, `p_value`, `cramers_v`, `low_expected_count`, `n_valid`.
 pub fn pairwise_chi_squared(
     batch: &RecordBatch,
@@ -581,6 +617,55 @@ mod tests {
         assert_eq!(p.column(2).as_primitive::<Float64Type>().value(0), 2.0);
         let t = ams_threeway_joint_entropy(&b, None, 64, 0).unwrap();
         assert_eq!(t.column(3).as_primitive::<Float64Type>().value(0), 2.0);
+    }
+
+    #[test]
+    fn top_k_smoke() {
+        use arrow_array::types::{UInt32Type, UInt64Type};
+        let b = batch(vec![(
+            "a",
+            Arc::new(Int64Array::from(vec![Some(1), Some(1), Some(2), None])) as ArrayRef,
+        )]);
+        for out in [
+            space_saving_top_k(&b, 5, 16 * 1024).unwrap(),
+            heavy_keeper_top_k(&b, 5, 16 * 1024, 0).unwrap(),
+        ] {
+            let names: Vec<String> = out
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    "col_name",
+                    "rank",
+                    "row",
+                    "count",
+                    "error",
+                    "n_non_null",
+                    "sketch_bytes"
+                ]
+            );
+            assert_eq!(out.num_rows(), 2);
+            assert_eq!(out.column(1).as_primitive::<UInt32Type>().value(0), 1);
+            assert_eq!(out.column(3).as_primitive::<UInt64Type>().value(0), 2);
+            assert_eq!(out.column(5).as_primitive::<UInt64Type>().value(0), 3);
+        }
+    }
+
+    #[test]
+    fn top_k_parameters_are_checked() {
+        let b = batch(vec![("a", ints(&[1, 2]))]);
+        for r in [
+            space_saving_top_k(&b, 0, 16 * 1024),
+            space_saving_top_k(&b, 5, 64),
+            heavy_keeper_top_k(&b, 0, 16 * 1024, 0),
+            heavy_keeper_top_k(&b, 5, 64, 0),
+        ] {
+            assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
+        }
     }
 
     #[test]

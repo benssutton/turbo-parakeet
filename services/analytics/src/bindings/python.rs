@@ -356,6 +356,34 @@ fn ams_threeway_joint_entropy(
 }
 
 #[pyfunction]
+#[pyo3(signature = (data, k, memory_bytes))]
+fn space_saving_top_k(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    k: usize,
+    memory_bytes: usize,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::space_saving_top_k(&batch, k, memory_bytes)).map(ArrowTable)
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, k, memory_bytes, seed))]
+fn heavy_keeper_top_k(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    k: usize,
+    memory_bytes: usize,
+    seed: u64,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || {
+        api::heavy_keeper_top_k(&batch, k, memory_bytes, seed)
+    })
+    .map(ArrowTable)
+}
+
+#[pyfunction]
 #[pyo3(signature = (data, pairs=None))]
 fn pairwise_chi_squared(
     py: Python<'_>,
@@ -469,6 +497,8 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ams_marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(ams_pairwise_joint_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(ams_threeway_joint_entropy, m)?)?;
+    m.add_function(wrap_pyfunction!(space_saving_top_k, m)?)?;
+    m.add_function(wrap_pyfunction!(heavy_keeper_top_k, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_chi_squared, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_adjusted_rand, m)?)?;
     m.add_function(wrap_pyfunction!(bloom_filter, m)?)?;

@@ -1,6 +1,3 @@
-// heavy_keeper_top_k_impl is called by bindings/api from Task 4; drop the allow then.
-#![allow(dead_code)]
-
 //! HeavyKeeper (Gong et al., "HeavyKeeper: An Accurate Algorithm for Finding Top-k Elephant
 //! Flows", USENIX ATC 2018), final version: d = 2 arrays of (fingerprint, count) buckets with
 //! count-with-exponential-decay (a different key decays a bucket with probability b^−C), plus a

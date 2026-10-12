@@ -1,6 +1,3 @@
-// space_saving_top_k_impl is called by bindings/api from Task 4; drop the allow then.
-#![allow(dead_code)]
-
 //! SpaceSaving (Metwally, Agrawal, El Abbadi, ICDT 2005): m counters; a new key replaces the
 //! minimum counter and inherits its count as an over-count bound ε, so a tracked key's true
 //! count lies in [count − ε, count] and every key above n/m is tracked. Mergeable with the

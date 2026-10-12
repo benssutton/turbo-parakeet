@@ -100,6 +100,17 @@ def ams_threeway_joint_entropy(
     )
 
 
+def space_saving_top_k(df: Frame, k: int, memory_bytes: int) -> pl.DataFrame:
+    """col_name, rank, row, count, error, n_non_null, sketch_bytes: each column's top k by
+    SpaceSaving (one row per rank; one null-rank row for a column without values)."""
+    return pl.DataFrame(_rs.space_saving_top_k(_collected(df), k, memory_bytes))
+
+
+def heavy_keeper_top_k(df: Frame, k: int, memory_bytes: int, seed: int) -> pl.DataFrame:
+    """As space_saving_top_k, by HeavyKeeper (error null)."""
+    return pl.DataFrame(_rs.heavy_keeper_top_k(_collected(df), k, memory_bytes, seed))
+
+
 def pairwise_chi_squared(
     df: Frame, pairs: Sequence[tuple[str, str]] | None = None
 ) -> pl.DataFrame:
