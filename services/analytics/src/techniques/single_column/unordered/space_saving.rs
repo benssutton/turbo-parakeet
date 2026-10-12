@@ -116,7 +116,7 @@ impl SpaceSaving {
         all.sort_unstable_by(rank_order);
         all.truncate(a.capacity());
         let mut merged = Counters::new(a.capacity());
-        for e in all {
+        for e in all.into_iter().rev() {
             merged.push(e);
         }
         self.counters = merged;
@@ -153,30 +153,34 @@ pub(crate) fn space_saving_top_k_impl(
     k: usize,
     memory_bytes: usize,
 ) -> PolarsResult<Series> {
+    sketch(k, memory_bytes)?; // validate the parameters once, before the parallel section
     let keys = encoded(inputs)?;
     let tops = keys
         .par_iter()
         .map(|col| -> PolarsResult<ColumnTop> {
             let n = col.len();
-            let parts = (0..n.div_ceil(CHUNK_ROWS))
-                .into_par_iter()
-                .map(|c| {
-                    let mut s = sketch(k, memory_bytes)?;
-                    for i in c * CHUNK_ROWS..((c + 1) * CHUNK_ROWS).min(n) {
-                        if !col.is_null[i] {
-                            s.insert(col.values[i], i as u64, 1);
+            let n_chunks = n.div_ceil(CHUNK_ROWS);
+            let wave = rayon::current_num_threads().max(1);
+            let mut s = sketch(k, memory_bytes)?;
+            // Waves of chunks keep the peak at (wave × budget) while merging stays in chunk order.
+            for first in (0..n_chunks).step_by(wave) {
+                let parts = (first..(first + wave).min(n_chunks))
+                    .into_par_iter()
+                    .map(|c| {
+                        let (lo, hi) = (c * CHUNK_ROWS, ((c + 1) * CHUNK_ROWS).min(n));
+                        let mut p = sketch(k, memory_bytes)?;
+                        let rows = col.values[lo..hi].iter().zip(&col.is_null[lo..hi]);
+                        for (i, (&v, &null)) in rows.enumerate() {
+                            if !null {
+                                p.insert(v, (lo + i) as u64, 1);
+                            }
                         }
-                    }
-                    Ok(s)
-                })
-                .collect::<PolarsResult<Vec<_>>>()?;
-            let mut parts = parts.into_iter();
-            let mut s = match parts.next() {
-                Some(s) => s,
-                None => sketch(k, memory_bytes)?,
-            };
-            for p in parts {
-                s.merge(&p);
+                        Ok(p)
+                    })
+                    .collect::<PolarsResult<Vec<_>>>()?;
+                for p in parts {
+                    s.merge(&p);
+                }
             }
             Ok(ColumnTop {
                 items: s.top(),
@@ -243,8 +247,8 @@ mod tests {
     fn bounds_hold_on_a_zipf_stream() {
         let stream = zipf_stream(200_000, 5_000, 1.1, 7);
         let s = fed(&stream, 0);
-        check_guarantees(&s, &exact_counts(&stream), stream.len() as u64);
         let truth = exact_counts(&stream);
+        check_guarantees(&s, &truth, stream.len() as u64);
         let mut want: Vec<(u64, u64)> = truth.iter().map(|(&k, &c)| (c, k)).collect();
         want.sort_unstable_by(|a, b| b.cmp(a));
         let got: Vec<u64> = s.top().iter().map(|i| i.key).collect();
@@ -258,6 +262,26 @@ mod tests {
         let (lo, hi) = stream.split_at(stream.len() / 2);
         let mut a = fed(lo, 0);
         a.merge(&fed(hi, lo.len() as u64));
+        check_guarantees(&a, &exact_counts(&stream), stream.len() as u64);
+    }
+
+    #[test]
+    fn merge_of_three_parts_keeps_the_guarantees() {
+        let stream = zipf_stream(150_000, 5_000, 1.0, 13);
+        let third = stream.len() / 3;
+        let mut a = fed(&stream[..third], 0);
+        a.merge(&fed(&stream[third..2 * third], third as u64));
+        a.merge(&fed(&stream[2 * third..], 2 * third as u64));
+        check_guarantees(&a, &exact_counts(&stream), stream.len() as u64);
+    }
+
+    #[test]
+    fn full_merged_with_room_keeps_the_guarantees() {
+        let stream = zipf_stream(100_050, 5_000, 1.1, 17);
+        let (big, small) = stream.split_at(100_000);
+        let mut a = fed(big, 0);
+        assert!(a.counters.is_full());
+        a.merge(&fed(small, 100_000));
         check_guarantees(&a, &exact_counts(&stream), stream.len() as u64);
     }
 
@@ -297,6 +321,12 @@ mod tests {
         let run = || space_saving_top_k_impl(std::slice::from_ref(&s), 5, BUDGET).unwrap();
         let (a, b) = (run(), run());
         assert!(a.equals_missing(&b));
+        let one = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(run);
+        assert!(a.equals_missing(&one));
         let out = a.struct_().unwrap();
         let counts = out.field_by_name("count").unwrap();
         let errors = out.field_by_name("error").unwrap();
@@ -309,6 +339,16 @@ mod tests {
                 errors.u64().unwrap().get(i).unwrap(),
             );
             assert!(c - e <= truth[&key] && truth[&key] <= c);
+        }
+        let reported: Vec<u64> = (0..out.len())
+            .map(|i| stream[rows.u64().unwrap().get(i).unwrap() as usize])
+            .collect();
+        let mut by_count: Vec<(u64, u64)> = truth.iter().map(|(&k, &c)| (c, k)).collect();
+        by_count.sort_unstable_by(|a, b| b.cmp(a));
+        for &(c, k) in by_count.iter().take(5) {
+            if c > n as u64 / 307 {
+                assert!(reported.contains(&k), "key {k} ({c}) not reported");
+            }
         }
         assert_eq!(
             out.field_by_name("n_non_null")
