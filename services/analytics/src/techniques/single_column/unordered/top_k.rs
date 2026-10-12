@@ -40,6 +40,9 @@ pub(crate) fn rank_order(a: &Entry, b: &Entry) -> Ordering {
         .then(a.key.cmp(&b.key))
 }
 
+/// 4 GiB per sketch: ids fit u32, sizing cannot overflow.
+pub(crate) const MAX_MEMORY_BYTES: usize = 1 << 32;
+
 const EMPTY: u32 = u32::MAX;
 
 fn table_len(cap: usize) -> usize {
@@ -78,8 +81,10 @@ impl Counters {
         cap * (std::mem::size_of::<Entry>() + 8) + table_len(cap) * 4
     }
 
-    /// The most entries whose `bytes_for` fits `memory_bytes` (0 when none fits).
+    /// The most entries whose `bytes_for` fits `memory_bytes` (0 when none fits); the budget is
+    /// clamped to `MAX_MEMORY_BYTES`.
     pub(crate) fn capacity_for(memory_bytes: usize) -> usize {
+        let memory_bytes = memory_bytes.min(MAX_MEMORY_BYTES);
         let per = std::mem::size_of::<Entry>() + 8;
         let (mut best, mut t) = (0, 8usize);
         while 4 * t <= memory_bytes {
@@ -89,6 +94,7 @@ impl Counters {
         best
     }
 
+    // `with_capacity` allocates exactly the capacity asked for these element types; the test pins it.
     /// Allocated bytes, by the same formula as `bytes_for`.
     pub(crate) fn bytes(&self) -> usize {
         self.entries.capacity() * std::mem::size_of::<Entry>()
@@ -244,7 +250,7 @@ impl Counters {
     }
 }
 
-/// SplitMix64: the sketches' seeded randomness.
+/// SplitMix64 over `mix64` (which adds γ again): the sketches' seeded randomness. Not the reference stream.
 pub(crate) struct SplitMix(pub u64);
 
 impl SplitMix {
@@ -428,9 +434,17 @@ mod tests {
             let m = Counters::capacity_for(budget);
             if m > 0 {
                 assert!(Counters::bytes_for(m) <= budget, "{budget}: {m}");
+                assert!(
+                    Counters::bytes_for(m + 1) > budget,
+                    "{budget}: {m} not maximal"
+                );
             }
         }
         assert_eq!(Counters::capacity_for(31), 0);
+        assert_eq!(
+            Counters::capacity_for(usize::MAX),
+            Counters::capacity_for(MAX_MEMORY_BYTES)
+        );
     }
 
     #[test]
