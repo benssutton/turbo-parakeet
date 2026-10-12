@@ -9,6 +9,9 @@ pub(crate) use pairwise::ordered::{
     ams_joint_entropy, ari, chi_squared, contingency, joint_entropy,
 };
 pub(crate) use pairwise::unordered::{bloomfilter, minhash};
+// heavy_keeper / space_saving / top_k are used by the next tasks; drop the allow then.
+#[allow(unused_imports)]
 pub(crate) use single_column::unordered::{
-    ams_entropy, cardinality_estimators, describe, gcd, hll, marginal_entropy,
+    ams_entropy, cardinality_estimators, describe, gcd, heavy_keeper, hll, marginal_entropy,
+    space_saving, top_k,
 };
