@@ -86,7 +86,7 @@ This is the paper's final version (Algorithm 1, Optimisations I and II):
   - A key not in the heap enters if the heap has room or estimate = n_min + 1, evicting the minimum.
     This is *fingerprint-collision detection*: an outsider can only exceed n_min by 1.
 - **Randomness.** The decay coin and the hash salts come from a seeded generator whose seed is derived
-  from the user `seed`, the domain tag `"heavy_keeper"` and the column name, as in AMS. An estimate is
+  from the user `seed`, the domain tag 4 (AMS uses 1–3) and the column name, as in AMS. An estimate is
   deterministic for a given build. String keys come from foldhash, so a foldhash upgrade re-rolls
   them.
 - **Sizing.** The heap's k entries are paid for first, and w is the largest width whose 2 × w buckets
@@ -277,3 +277,71 @@ It shows sketch memory flat at 16 KiB while the exact count grows with the disti
 
 CLAUDE.md gains a **Top-k** entry under Per-column and the two modules in the project structure. A
 §8 Results is added once the benchmarks have run, as in the AMS spec.
+
+## 8. Results (2026-10-12)
+
+Measured on 4 CPUs with `benchmark_top_k.py` (speed) and `benchmark_top_k_accuracy.py`
+(accuracy and memory, 10M rows; scale run 100M rows). Budgets are ¼×, 1× and 4× the default
+max(16 KiB, k × 1 KiB).
+
+**Accuracy.** Tie-aware precision (reported values whose true count ≥ the true k-th count):
+
+| Column | k | Budget | HeavyKeeper | SpaceSaving |
+|---|---|---|---|---|
+| zipf_15, zipf_11, zipf_str | 5 | all | 1.0 | 1.0 |
+| zipf_15, zipf_11, zipf_str | 256 | 64 KiB | 1.0 | 1.0 / 0.957 / 0.957 |
+| zipf_08 | 5 | 4 KiB / 16 KiB / 64 KiB | 1.0 / 1.0 / 1.0 | 0.8 / 1.0 / 1.0 |
+| zipf_08 | 256 | 64 KiB / 256 KiB / 1 MiB | 0.977 / 0.996 / 0.996 | 0.484 / 0.977 / 1.0 |
+| flat | 5, 256 | all | 0.0–0.016 | 0.0 |
+| skewed | 5 | all | 0.2 | 0.2 |
+| skewed | 256 | 64 KiB / 256 KiB / 1 MiB | 0.059 / 0.254 / 0.984 | 0.023 / 0.066 / 0.414 |
+
+- Counts on found values are near exact for both sketches where precision is 1: mean relative
+  error ≤ 0.05% at the default budget.
+- SpaceSaving's bound held on every reported value in all 42 runs (`max_bound_violation` = 0).
+  Where it is starved (zipf_08 at ¼×, flat, skewed), its over-counts are large (mean relative
+  error 1.75 at zipf_08 k = 5, 4 KiB): the bound is honest but wide.
+- Neither sketch separates near-tied values. On flat (counts ≈ 10 ± 3) and on skewed's uniform
+  tail, both find only the dominant value. That is expected: those top-k sets are noise.
+
+**Memory.** `sketch_bytes` stays within budget: 16 376 B at k = 5, 262 136–262 144 B at
+k = 256. Process peak above the loaded data is about 94 MB for both sketches at 10M rows and
+864 MB at 100M rows, against 68–286 MB and 227 MB for Polars. The one-shot kernels encode the
+whole column into keys and null flags first (about 9 B per row), and that dominates. The 16 KiB
+sketch only pays off when it is fed batch by batch.
+
+**Speed** (median, 4 threads; total = fastest non-Rust ÷ Rust):
+
+| Dataset | Polars | HeavyKeeper | SpaceSaving |
+|---|---|---|---|
+| large_dataset.arrow (50K × 101) | 446 ms | 94 ms (4.8×) | 149 ms (3.0×) |
+| narrow 10M × 4 (1,000 values) | 351 ms | 372 ms (0.9×) | 1,133 ms (0.3×) |
+| wide 200K × 100 (1,000 values) | 299 ms | 250 ms (1.2×) | 575 ms (0.5×) |
+| zipf 10M × 4 | 1,055 ms | 382 ms (2.8×) | 940 ms (1.1×) |
+| zipf_11 100M × 1 (scale run) | 1.97 s | 4.48 s | 3.11 s |
+
+- SpaceSaving's within-column chunk parallelism does not make up for its per-row cost. It is
+  2–3× slower than HeavyKeeper at 1 thread, and slower overall on every shape.
+- On a single 100M-row column both sketches lose to Polars' parallel group-by. HeavyKeeper runs
+  that column on one thread.
+- `agrees` is false on every speed dataset because of ties: agreement's precision is a lower
+  bound, and the flat and uniform columns' top-k are ties. No bound or count-error problem was
+  reported.
+
+**Conclusion.** For the StreamingRecommender, HeavyKeeper is the better sketch at equal memory:
+
+- it is at least as accurate everywhere, and clearly more accurate on light skew (Zipf 0.8) and on
+  small budgets;
+- it is 2–3× faster per row.
+
+SpaceSaving's advantages are its proven per-item bounds and that it merges. Neither matters
+much here: the recommender absorbs each column sequentially, so no merge is needed. The
+integration spec should therefore:
+
+- use HeavyKeeper, with a weighted insert (geometric skipping over decay trials) to feed each
+  batch's (key, count) list;
+- report top-k only as an estimate above `categorical_threshold`;
+- not expect any sketch to rank near-tied values.
+
+The one-shot memory result also means the integration should feed the sketch per batch rather
+than encode whole columns.
