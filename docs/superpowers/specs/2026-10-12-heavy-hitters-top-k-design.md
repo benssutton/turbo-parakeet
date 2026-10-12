@@ -48,8 +48,9 @@ accounted bytes (`bytes()`, §3.3) fit the budget. A budget too small for k entr
 
 ## 3. Rust
 
-Two stand-alone files in `src/techniques/single_column/unordered/`, beside `hll.rs`, importing only
-`common`. Keys are the u64 keys of `encode_series` (as HLL and AMS use them). Every tracked item
+Two stand-alone files in `src/techniques/single_column/unordered/`, beside `hll.rs`, plus a shared
+`top_k.rs` (the indexed min-heap `Counters` both use, a SplitMix64 generator and the kernels' output
+builder). They import only `common` and `techniques`. Keys are the u64 keys of `encode_series` (as HLL and AMS use them). Every tracked item
 carries a **row** where its value occurs, so the values can be rendered later.
 
 ### 3.1 `heavy_keeper.rs`
@@ -71,8 +72,10 @@ This is the paper's final version (Algorithm 1, Optimisations I and II):
   bucket size. Each array index and the fingerprint come from independent seeded mixes of the key.
   Counts saturate at `u32::MAX`.
 - **Per row, for each array j,** with C the bucket's count:
-  - If the fingerprint matches and (the key is in the heap, the heap has room, or C < n_min), then
-    C += 1. This is *selective increment*: otherwise C is left alone.
+  - If the fingerprint matches and (the key is in the heap, the heap has room, or C ≤ n_min), then
+    C += 1. This is *selective increment*: a bucket larger than n_min cannot belong to an outsider
+    (the paper's prose, Optimisation II), so it is left alone. With C < n_min an outsider could
+    never reach n_min + 1.
   - If the fingerprint does not match, C −= 1 with probability 1.08^−C. When C reaches 0, the bucket
     takes the key's fingerprint with C = 1.
   - An empty bucket (C = 0) takes the key with C = 1.
@@ -185,9 +188,11 @@ Struct, Null, Object and Int128 / UInt128 are ineligible.
 
 **Agreement** (`TopK.agreement`, overridden as MinHash's and Bloom's are):
 
-- **Tie-aware precision.** A reported value is correct if its true count is ≥ the true k-th count
-  (or it is among all of a column's values when there are fewer than k). Aggregate precision over all
-  computed columns must be ≥ 0.9.
+- **Precision.** A reported value counts as correct when the reference lists it. This is a lower
+  bound of tie-aware precision, because the reference lists only k of the values tied at its k-th
+  count, and agreement has no full counts. The accuracy benchmark computes the exact tie-aware
+  figure (§6.2). Aggregate precision over all computed columns must be ≥ 0.9. Agreement test data
+  therefore avoids heavy ties at the k-th count.
 - **SpaceSaving:** for every reported value, true count ∈ [count − error, count]. No exceptions.
 - **HeavyKeeper:** aggregate ARE (mean |count − true| / true over correct values) ≤ 0.05.
 - `n_non_null` exact. `dominated` is not compared.
