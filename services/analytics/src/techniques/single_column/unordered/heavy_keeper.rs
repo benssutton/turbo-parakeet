@@ -53,6 +53,7 @@ pub(crate) struct HeavyKeeper {
     salts: [u64; D + 1],
     rng: SplitMix,
     heap: Counters,
+    thresholds: &'static [u64],
 }
 
 impl HeavyKeeper {
@@ -65,6 +66,11 @@ impl HeavyKeeper {
         if memory_bytes > MAX_MEMORY_BYTES {
             return Err(format!(
                 "memory_bytes = {memory_bytes} exceeds the 4 GiB ({MAX_MEMORY_BYTES} bytes) limit"
+            ));
+        }
+        if k > memory_bytes / 16 {
+            return Err(format!(
+                "memory_bytes = {memory_bytes} leaves no room for a heap of k = {k}: it leaves                  0 HeavyKeeper buckets per array; at least k are needed"
             ));
         }
         let rest = memory_bytes.saturating_sub(Counters::bytes_for(k));
@@ -83,6 +89,7 @@ impl HeavyKeeper {
             salts,
             rng,
             heap: Counters::new(k),
+            thresholds: decay_thresholds(),
         })
     }
 
@@ -91,7 +98,8 @@ impl HeavyKeeper {
     }
 
     fn slot(&self, key: u64, j: usize) -> usize {
-        j * self.width + (mix64(key ^ self.salts[j]) % self.width as u64) as usize
+        j * self.width + // Lemire's multiply-shift: a uniform index without a division.
+            ((mix64(key ^ self.salts[j]) as u128 * self.width as u128) >> 64) as usize
     }
 
     /// Algorithm 1 of the paper. A matching bucket increments only when the key is in the heap,
@@ -107,7 +115,7 @@ impl HeavyKeeper {
             0
         };
         let free = id.is_some() || !full;
-        let thresholds = decay_thresholds();
+        let thresholds = self.thresholds;
         let mut maxv = 0u64;
         for j in 0..D {
             let i = self.slot(key, j);
@@ -120,11 +128,13 @@ impl HeavyKeeper {
                     b.count = b.count.saturating_add(1);
                 }
                 maxv = maxv.max(u64::from(b.count));
-            } else if self.rng.next_u64() < thresholds.get(b.count as usize).copied().unwrap_or(0) {
-                b.count -= 1;
-                if b.count == 0 {
-                    *b = Bucket { fp, count: 1 };
-                    maxv = maxv.max(1);
+            } else if let Some(&t) = thresholds.get(b.count as usize) {
+                if self.rng.next_u64() < t {
+                    b.count -= 1;
+                    if b.count == 0 {
+                        *b = Bucket { fp, count: 1 };
+                        maxv = maxv.max(1);
+                    }
                 }
             }
         }
@@ -266,8 +276,14 @@ mod tests {
             hk.insert(1, i);
         }
         assert_eq!(top(&hk), [(1, 10)]);
-        for i in 0..30 {
+        for i in 0..10 {
             hk.insert(2, 10 + i);
+        }
+        assert_eq!(top(&hk), [(1, 10)]);
+        hk.insert(2, 20);
+        assert_eq!(top(&hk), [(2, 11)]);
+        for i in 0..19 {
+            hk.insert(2, 21 + i);
         }
         assert_eq!(top(&hk), [(2, 30)]);
     }
@@ -303,6 +319,14 @@ mod tests {
     }
 
     #[test]
+    fn different_seeds_draw_different_salts() {
+        assert_ne!(
+            HeavyKeeper::new(5, BUDGET, 1).unwrap().salts,
+            HeavyKeeper::new(5, BUDGET, 2).unwrap().salts
+        );
+    }
+
+    #[test]
     fn sizing() {
         let hk = HeavyKeeper::new(5, BUDGET, 0).unwrap();
         assert_eq!(hk.width, (BUDGET - Counters::bytes_for(5)) / 16);
@@ -310,6 +334,7 @@ mod tests {
         assert!(HeavyKeeper::new(0, BUDGET, 0).is_err());
         assert!(HeavyKeeper::new(5, 300, 0).is_err());
         assert!(HeavyKeeper::new(5, MAX_MEMORY_BYTES + 1, 0).is_err());
+        assert!(HeavyKeeper::new(usize::MAX, BUDGET, 0).is_err());
     }
 
     #[test]

@@ -368,5 +368,6 @@ mod tests {
         assert!(SpaceSaving::new(0, BUDGET).is_err());
         assert!(SpaceSaving::new(5, 64).is_err());
         assert!(SpaceSaving::new(5, MAX_MEMORY_BYTES + 1).is_err());
+        assert!(SpaceSaving::new(usize::MAX, BUDGET).is_err());
     }
 }
