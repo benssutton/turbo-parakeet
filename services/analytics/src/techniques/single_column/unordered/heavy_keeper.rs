@@ -71,7 +71,8 @@ impl HeavyKeeper {
         let min_bytes = k.saturating_mul(D * std::mem::size_of::<Bucket>());
         if memory_bytes < min_bytes {
             return Err(format!(
-                "memory_bytes = {memory_bytes} is too small for k = {k}: HeavyKeeper needs at                  least {min_bytes} bytes (2 × k buckets of 8 B)"
+                "memory_bytes = {memory_bytes} is too small for k = {k}: HeavyKeeper needs at \
+                 least {min_bytes} bytes (2 × k buckets of 8 B)"
             ));
         }
         let rest = memory_bytes.saturating_sub(Counters::bytes_for(k));
