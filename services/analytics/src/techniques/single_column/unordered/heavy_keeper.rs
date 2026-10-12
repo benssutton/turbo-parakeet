@@ -68,9 +68,10 @@ impl HeavyKeeper {
                 "memory_bytes = {memory_bytes} exceeds the 4 GiB ({MAX_MEMORY_BYTES} bytes) limit"
             ));
         }
-        if k > memory_bytes / 16 {
+        let min_bytes = k.saturating_mul(D * std::mem::size_of::<Bucket>());
+        if memory_bytes < min_bytes {
             return Err(format!(
-                "memory_bytes = {memory_bytes} leaves no room for a heap of k = {k}: it leaves                  0 HeavyKeeper buckets per array; at least k are needed"
+                "memory_bytes = {memory_bytes} is too small for k = {k}: HeavyKeeper needs at                  least {min_bytes} bytes (2 × k buckets of 8 B)"
             ));
         }
         let rest = memory_bytes.saturating_sub(Counters::bytes_for(k));
