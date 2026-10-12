@@ -58,7 +58,7 @@ def _binary_as_text(s: pl.Series) -> pl.Series:
     """Binary as String, non-UTF-8 values null (Polars' non-strict cast raises on them)."""
     try:
         return s.cast(pl.String, strict=False)
-    except pl.exceptions.ComputeError:
+    except pl.exceptions.PolarsError:
         return pl.Series(s.name, [_utf8(b) for b in s.to_list()], dtype=pl.String)
 
 
@@ -80,9 +80,8 @@ class TopK(Technique):
     METRICS = {"n_non_null": pl.UInt64, "top_k": TOP_K, "sketch_bytes": pl.UInt64}
     CONCLUSIONS = {"dominated": pl.Boolean}
     MIN_PRECISION = 0.9
-    MAX_ARE: float | None = (
-        None  # mean relative count error over found values, if checked
-    )
+    # Mean relative count error over found values, if checked.
+    MAX_ARE: float | None = None
 
     def __init__(
         self,
@@ -109,7 +108,10 @@ class TopK(Technique):
         return isinstance(series.dtype, ELIGIBLE)
 
     def describe(self, frames, combos):
-        return {"dtype": [str(frames[n].schema[c]) for ((n, c),) in combos]}
+        dtypes = {
+            (n, c): str(dt) for n, f in frames.items() for c, dt in f.schema.items()
+        }
+        return {"dtype": [dtypes[n, c] for ((n, c),) in combos]}
 
     def top_k_rows(
         self, frames, combos, ranked: dict[str, pl.DataFrame]
@@ -131,9 +133,8 @@ class TopK(Technique):
             values = []
             if items.height:
                 s = frames[frame][col].gather(items["row"])
-                if (
-                    s.dtype == pl.Binary
-                ):  # as text; non-UTF-8 → null, as arrow-rs renders it
+                # Binary as text; non-UTF-8 → null, as arrow-rs renders it.
+                if s.dtype == pl.Binary:
                     s = _binary_as_text(s)
                 values = _plugin.render(s)
             top.append(
@@ -176,10 +177,10 @@ class TopK(Technique):
             true = {w["value"]: w["count"] for w in want}
             floor = want[-1]["count"] if len(want) == self.k else 0
             wanted += len(want)
+            found += len({i["value"] for i in got} & true.keys())
             for item in got:
                 t = true.get(item["value"])
                 if t is not None:
-                    found += 1
                     rel.append(abs(item["count"] - t) / t)
                 problems += self._item_problems(f"{df}.{col}", item, t, floor)
         precision = found / wanted if wanted else 1.0
