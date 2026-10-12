@@ -159,7 +159,8 @@ pub(crate) fn space_saving_top_k_impl(
             let n_chunks = n.div_ceil(CHUNK_ROWS);
             let wave = rayon::current_num_threads().max(1);
             let mut s = sketch(k, memory_bytes)?;
-            // Waves of chunks keep the peak at (wave × budget) while merging stays in chunk order.
+            // Waves of chunks bound a column's summaries to about (wave + 2) × budget while merging
+            // stays in chunk order; with columns in parallel the peak is about threads × that.
             for first in (0..n_chunks).step_by(wave) {
                 let parts = (first..(first + wave).min(n_chunks))
                     .into_par_iter()
@@ -343,7 +344,7 @@ mod tests {
         let mut by_count: Vec<(u64, u64)> = truth.iter().map(|(&k, &c)| (c, k)).collect();
         by_count.sort_unstable_by(|a, b| b.cmp(a));
         for &(c, k) in by_count.iter().take(5) {
-            if c > n as u64 / 307 {
+            if c > n as u64 / Counters::capacity_for(BUDGET) as u64 {
                 assert!(reported.contains(&k), "key {k} ({c}) not reported");
             }
         }

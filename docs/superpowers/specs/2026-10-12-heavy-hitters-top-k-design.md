@@ -41,10 +41,10 @@ The one sizing keyword, `memory_bytes`, defaults to **max(16 KiB, k × 1 KiB)**.
 the per-column HLL's size (p = 14). Each implementation sizes itself to the largest structure whose
 accounted bytes (`bytes()`, §3.3) fit the budget. A budget too small for k entries is an error.
 
-| k | Budget | SpaceSaving (~48 B / counter) | HeavyKeeper (8 B / bucket, after the heap of k) |
+| k | Budget | SpaceSaving (40 B / counter + index ≈ 53 B) | HeavyKeeper (8 B / bucket, after the heap of k) |
 |---|---|---|---|
-| 5 | 16 KiB | ~340 counters | ~2 × 1,000 buckets |
-| 256 | 256 KiB | ~5,400 counters | ~2 × 15,000 buckets |
+| 5 | 16 KiB | 307 counters | ~2 × 1,000 buckets |
+| 256 | 256 KiB | 4,915 counters | ~2 × 15,000 buckets |
 
 ## 3. Rust
 
@@ -226,7 +226,7 @@ The four standard blocks:
    - ties ranked by first row;
    - all-null gives an empty list;
    - Categorical renders labels;
-   - a too-small `memory_bytes` → `ValueError`.
+   - a too-small `memory_bytes` → `ValueError` (the sketches; the reference ignores the budget).
 4. Conclusions via `with_metrics`, including an empty-list row.
 
 ## 6. Benchmarks
@@ -298,11 +298,13 @@ max(16 KiB, k × 1 KiB).
 
 - Counts on found values are near exact for both sketches where precision is 1: mean relative
   error ≤ 0.05% at the default budget.
-- SpaceSaving's bound held on every reported value in all 42 runs (`max_bound_violation` = 0).
+- SpaceSaving's bound held on every reported value in all 36 runs, and in the scale run (`max_bound_violation` = 0).
   Where it is starved (zipf_08 at ¼×, flat, skewed), its over-counts are large (mean relative
   error 1.75 at zipf_08 k = 5, 4 KiB): the bound is honest but wide.
-- Neither sketch separates near-tied values. On flat (counts ≈ 10 ± 3) and on skewed's uniform
-  tail, both find only the dominant value. That is expected: those top-k sets are noise.
+- Neither sketch separates near-tied values unless the budget covers the tail. On flat
+  (counts ≈ 10 ± 3, no dominant value) precision is about 0. On skewed, both find the dominant
+  value but not its uniform tail, except at k = 256 with 1 MiB, where the 50K-value tail fits
+  (HeavyKeeper 0.984, SpaceSaving 0.414). Those near-tied top-k sets are noise.
 
 **Memory.** `sketch_bytes` stays within budget: 16 376 B at k = 5, 262 136–262 144 B at
 k = 256. Process peak above the loaded data is about 94 MB for both sketches at 10M rows and
@@ -321,18 +323,21 @@ sketch only pays off when it is fed batch by batch.
 | zipf_11 100M × 1 (scale run) | 1.97 s | 4.48 s | 3.11 s |
 
 - SpaceSaving's within-column chunk parallelism does not make up for its per-row cost. It is
-  2–3× slower than HeavyKeeper at 1 thread, and slower overall on every shape.
+  2–3× slower than HeavyKeeper at 1 thread (per row), and slower at 4 threads on every
+  multi-column shape. On the single 100M-row column, chunk parallelism makes it faster than
+  HeavyKeeper (3.11 s vs 4.48 s).
 - On a single 100M-row column both sketches lose to Polars' parallel group-by. HeavyKeeper runs
   that column on one thread.
-- `agrees` is false on every speed dataset because of ties: agreement's precision is a lower
-  bound, and the flat and uniform columns' top-k are ties. No bound or count-error problem was
+- `agrees` is false on every speed dataset because of near-ties: agreement's precision is a
+  lower bound, and the flat, uniform and many large_dataset columns have k-th counts of a few
+  occurrences (tie-aware precision on large_dataset: 0.69 HeavyKeeper, 0.665 SpaceSaving). No bound or count-error problem was
   reported.
 
 **Conclusion.** For the StreamingRecommender, HeavyKeeper is the better sketch at equal memory:
 
 - it is as accurate or more at every point measured but one (zipf_08 at k = 256 with 1 MiB:
   0.996 against SpaceSaving's 1.0), and clearly more accurate on light skew and small budgets;
-- it is 2–3× faster per row.
+- it is 2–3× faster per row (1 thread); at 4 threads it is faster on every multi-column shape.
 
 SpaceSaving's advantages are its proven per-item bounds and that it merges. Neither matters
 much here: the recommender absorbs each column sequentially, so no merge is needed. The
