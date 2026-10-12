@@ -175,6 +175,35 @@ def test_default_budget_follows_k():
     assert cls(k=5, memory_bytes=1000).memory_bytes == 1000
 
 
+@pytest.mark.parametrize("impl", OTHERS)
+def test_a_budget_below_k_entries_raises(impl):
+    with pytest.raises(ValueError, match="memory_bytes"):
+        run(load(impl), {"t": pl.DataFrame({"x": [1, 2]})}, memory_bytes=64)
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+@pytest.mark.parametrize("k", [5, 256])
+def test_sketch_bytes_fit_the_budget(impl, k):
+    out = run(load(impl), {"t": pl.DataFrame({"x": [1, 2]})}, k=k)
+    assert 0 < out["sketch_bytes"][0] <= max(16 * 1024, k * 1024)
+
+
+def test_space_saving_is_exact_while_values_fit():
+    s = pl.Series("x", [i for i in range(100) for _ in range(i + 1)])
+    out = run(load(f"{PKG}:TopKSpaceSavingRust"), {"t": s.to_frame()})
+    assert out["top_k"].to_list()[0] == [
+        {"value": str(v), "count": v + 1, "error": 0} for v in (99, 98, 97, 96, 95)
+    ]
+
+
+def test_heavy_keeper_is_deterministic_per_seed():
+    frame = top_k_streams(50_000, columns=["zipf_08"])
+    cls = load(f"{PKG}:TopKHeavyKeeperRust")
+    assert run(cls, {"t": frame}, seed=3).equals(run(cls, {"t": frame}, seed=3))
+    with pytest.raises(ValueError):
+        cls(seed=-1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Conclusions
 
