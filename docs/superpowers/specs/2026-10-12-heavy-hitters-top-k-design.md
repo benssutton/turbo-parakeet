@@ -330,8 +330,8 @@ sketch only pays off when it is fed batch by batch.
 
 **Conclusion.** For the StreamingRecommender, HeavyKeeper is the better sketch at equal memory:
 
-- it is at least as accurate everywhere, and clearly more accurate on light skew (Zipf 0.8) and on
-  small budgets;
+- it is as accurate or more at every point measured but one (zipf_08 at k = 256 with 1 MiB:
+  0.996 against SpaceSaving's 1.0), and clearly more accurate on light skew and small budgets;
 - it is 2–3× faster per row.
 
 SpaceSaving's advantages are its proven per-item bounds and that it merges. Neither matters
