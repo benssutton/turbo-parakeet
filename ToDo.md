@@ -1,22 +1,19 @@
 # ToDo - A List of future enhancements to this project
 
-1. Please extend describe and the recommenders to retrun:
-- To return the top-5 items by count, per column.  For OneShotRecommender this is deterministic based on frequency counts, StreamingRecommender should use the Heavy Keepers algorithm:  https://www.usenix.org/conference/atc18/presentation/gong
-- To return the entropy of a single column.  OneShotRecommender should use the existing Single-column entropy function in Rust.  For the StreamingRecommender we should introduce the AMS Sampling 
-
-Both Heavy Keepers and AMS should be implemented as stand-alone, individual functions similar to bloomfilter.rs and be benchmarked for speed and accuracy against deterministic methods in Polars.
-
-2. Introduce a new class of function: Ordered Single Column.   We will then have 4 symmetrical sets of functions.
+1. Introduce a new class of function: Ordered Single Column.   We will then have 4 symmetrical sets of functions.
 a. Unordered Single Column: Describe, GCD, Marginal Entropy, Schnabel/Chao1, HLL, Heavy Hitters, AMS
 b. Ordered Single Column - see below
 c. Unordered Pair-Wise (currently called multi-set): Membership, Similarity
 d. Ordered Pair-Wise: Chi-squared, Adjusted Rand Index, Joint Entropy
 
 As the first candidates for Ordered Single Column we will add:
-- Wald-Wolfowitz runs test (to identify candidates for REE)
 - Window functions of 2 rows: delta, double-delta, entropy and min/max values for each of these.
 - Window functions of a specified width to calculate the number of distinct values and min/max values as a portion of the entire data (to identify candidates for ClickHouse's minmax and skipindexes)
 - Selectivity = to be worked through.
+
+2. Please extend describe and the recommenders to retrun:
+- Examplars: we will pass to the recommender a primary key tuple of columns.  The Recommended will include the first-encountered populated example of a given column and the first-encountered null example of a column (where applicable.)
+- To return the entropy of a single column.  OneShotRecommender should use the existing Single-column entropy function in Rust.  For the StreamingRecommender we should use the AMS sketch.
 
 3. Introduce a new function 'Shrink' (Unordered Single Column) that reduces each column to it's optimal data type (per the recommender function) and returns optimised columns.  This is an element-wise response rather than a table of rows & values.
 

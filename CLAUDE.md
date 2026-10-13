@@ -7,8 +7,8 @@ Determine patterns and relationships between columns, both within and between da
 - Polars as the primary dataframe library
 
 # Python Environment
-Conda environment: `C:\Users\Ben\miniconda3\envs\p312`
-Python exe: `C:\Users\Ben\miniconda3\envs\p312\python.exe`
+Conda environment: `C:\Users\Alexander\miniconda3\envs\p312`
+Python exe: `C:\Users\Alexander\miniconda3\envs\p312\python.exe`
 
 # Coding Style
 Prioritise performance & simplicity.
@@ -39,6 +39,12 @@ how column combinations are enumerated.
 
 **Streaming Recommend — `analytics.recommend.StreamingRecommender`** (Rust only; not on the uniform contract). OneShotRecommender's dtype recommendations from batches added over time (spec: docs/superpowers/specs/2026-09-29-streaming-recommender-design.md). `add(frame)` any number of times (columns may appear, disappear or start as Null; other type changes raise; each Arrow batch is atomic, one multi-batch `add` is not), `result()` at any point → one row per column: `column, status, dtype, first_row, n_rows, n_null`, Describe's value block (`n_unique, unique, est_*, class, min, max`, lengths, `gcd`, float / numeric-string / ISO counts), the `inner_*` block (list inner values), `n_midnight`, the size columns, `top_k, inner_top_k`, Recommend's `rec_*` columns, `n_sampled_rows, n_sampled_blocks`. Exact running statistics (recommenders/streaming/partial.rs) prove each recommendation on every row (`prove`, `lossy_by_stats` in recommenders/engine/); a seeded Algorithm-L sample of contiguous row blocks (recommenders/streaming/reservoir.rs; compact `copy_rows` pieces) gives ZSTD sizes — those of an IPC file written in `block_rows` batches — and cross-checks the chosen type. Original sizes analytic except Struct / deeper nesting (per-batch sums). Every dtype is distinct-counted (per-column absorb in parallel) by HyperLogLog (techniques/single_column/unordered/hll.rs, p = 14, Ertl's estimator) and a bottom-k distinct sample (recommenders/streaming/distinct_sample.rs, k = max(`categorical_threshold`, 1000)): exact while the sample holds every value, then `n_unique` is floored at k + 1 and the estimate is Schnabel → Chao1 from the sample (`seen` = k + 1), or HLL when d/n ≥ 0.5 — the same rule as Describe; the count is capped at the non-null values (every sampled value seen once → all of them). While exact, the sample also holds each value's full count, first row and (text levels) text, giving the same ranking as one-shot. Memory per eligible level, every dtype: ≈ 16 KB of HLL + a sample of up to ≈ 65 bytes × k (≈ 0.65 MB at k = 10 000), e.g. ≈ 0.65 GB for 1 000 high-cardinality columns; text levels also keep their distinct values' text while exact (k × mean value length). Extremes for every scalar dtype incl. text / boolean / binary (Categorical by string, Enum by category code). Int128/UInt128, Object and nested-Null columns ineligible (marked by the Python wrapper, `n_null` null). Keywords: `reservoir_rows=524_288` (0: no sample, ZSTD null), `block_rows=65_536`, `categorical_threshold=10_000`, `zstd_level=1`, `seed=0`, `top_k=256`, `boolean_pairs`.
 
+## 1b. Per-column, order-dependent (row order within one column matters)
+
+Same contract and `per_column` scope; implementations read rows in the frame's own order. Rust kernels live in `techniques/single_column/ordered/`.
+
+**Runs test — `analytics.runs_test`** (`RunsTestRust`, ★`RunsTestPolars`). k-category one-sample runs test (Barton & David's generalisation of Wald–Wolfowitz; spec: docs/superpowers/specs/2026-10-13-runs-test-design.md): candidates for Arrow run-end encoding. Metrics `n_rows`, `n_runs` (R = maximal runs of equal consecutive values = REE run-ends length; null one value, floats canonical), `expected_runs` E[R] = 1 + (n² − Σnᵢ²)/n, `z` with Var[R] = [S₂(S₂ + n(n+1)) − 2nS₃ − n³]/(n²(n−1)), `p_value` **one-sided, lower tail** Φ(z) (fewer runs than chance; normal approximation, no continuity correction), `mean_run_length` n/R — the effect size (p vanishes at large n). Var = 0 (n = 1, constant, all distinct) → z, p NaN. No conclusions (REE decisions belong to the recommenders); no keywords. Ineligible: List/Array/Struct/Null/Object, Int128/UInt128, zero-row columns. Rust: techniques/single_column/ordered/runs_test.rs — native neighbour comparison, one hash update per run, 2¹⁶-row chunks merged in row order (rayon), variance numerator exact in i128 up to ≈ 3·10⁹ rows (then f64), R − E exact, Φ via `libm::erfc` (statrs' CDF is only ~1e-10 accurate). Reference: Polars `ne_missing` + `group_by`, exact Python-int moments, `math.erfc`. Agreement: counts exact, floats RTOL 1e-9. Tests also cross-check z with statsmodels' binary `Runs` (optional dependency) and the moments by permutation Monte Carlo. **Outcome (spec §10):** Rust agrees with the reference on every benchmark; total speedup 16.9x on large_dataset.arrow, 3.9x wide 1M x 100, 3.0x long runs 10M x 4 (algorithmic 1.3x: the per-row scan, not hashing, dominates), 1.2x random 10M x 4 (algorithmic 0.7x: one hash insert per row, and each column's counts merge on one thread at the top of the reduce).
+
 ## 2. Multi-set (distinct-value sets; pairs may span frames)
 
 Pairs are compared only within one **value family** (ints ≤64-bit; String/Categorical/Enum; otherwise exact dtype) — other pairs are ineligible.
@@ -57,7 +63,7 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 
 ★ = accuracy reference.
 
-**Not implemented:** run-length / REE compression analysis (`run_length.py` was deleted in `93f6dcb`). A Wald-Wolfowitz runs test is planned as a future ordered/per-column technique on this same contract.
+**Not implemented:** run-length / REE compression analysis (`run_length.py` was deleted in `93f6dcb`). The runs test (§1b) covers run structure as a technique; REE recommendations are the recommenders' concern.
 
 # Checks, CI and local tooling
 `python scripts/check.py <step|group>` (run with the p312 Python) runs exactly what CI runs: `fast` (rustfmt, black, clippy for both
@@ -86,7 +92,7 @@ turbo-parakeet/
 │   ├── src/                                # Rust extension — layers, one-way: bindings → recommenders → techniques → common
 │   │   ├── common/                           #   error, arrow_io, encode, selection, ipc_sizes, text, entropy_math
 │   │   ├── techniques/                     #   single_column/unordered/{describe/, gcd, top_k, space_saving, heavy_keeper, marginal_entropy, hll, cardinality_estimators,
-│   │   │                                   #   ams_entropy}; pairwise/unordered/{bloomfilter, minhash}; pairwise/ordered/{chi_squared,
+│   │   │                                   #   ams_entropy}; single_column/ordered/{runs_test}; pairwise/unordered/{bloomfilter, minhash}; pairwise/ordered/{chi_squared,
 │   │   │                                   #   ari, contingency, joint_entropy, ams_joint_entropy}
 │   │   ├── recommenders/                   #   engine/ (rules, cast, verify, choose), schema, oneshot, streaming/ (partial,
 │   │   │                                   #   reservoir, distinct_sample, sizing)
@@ -98,7 +104,7 @@ turbo-parakeet/
 │       ├── _plugin.py                      # PRIVATE wrappers over the Arrow binding (called only by *Rust classes)
 │       ├── _dtypes.py, _sets.py            # dtype groupings / value families; canonical distinct values
 │       ├── base.py                         # Technique contract, helpers, metric_mismatches
-│       └── <technique>/                    # gcd, describe, top_k, recommend, membership, similarity, chi_squared,
+│       └── <technique>/                    # gcd, describe, top_k, runs_test, recommend, membership, similarity, chi_squared,
 │           ├── __init__.py                 #   pairwise_entropy, threeway_entropy, adjusted_rand
 │           ├── base.py                     # technique base: METRICS, eligibility, conclusions, RTOL/ATOL
 │           ├── rust.py, <library>.py …     # one file per implementation
@@ -135,7 +141,7 @@ Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design
   2 Compute with a message in `*error`. Wrapped by `io.github.benssutton.analytics.OneShotRecommender` / `StreamingRecommender` (Java 25 FFM + Arrow Java `arrow-c-data`; both extend the package-private `NativeRecommender`: AutoCloseable, a read/write lock keeps `close` from racing `add`/`result`, a Cleaner frees an unclosed handle; `OneShotParams` / `StreamingParams`, `BooleanPair`), which map 1 → IllegalArgumentException, 2 → AnalyticsException (a RuntimeException). `Native` holds the shared library lookup and error mapping.
 
 Private — reached only through `analytics._plugin`, only by the `*Rust` classes (and the exceptions named below):
-`column_gcd`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
+`column_gcd`, `runs_test`, `pairwise_chi_squared`, `pairwise_adjusted_rand`, `marginal_entropy`,
 `pairwise_joint_entropy`, `threeway_joint_entropy` (the classes always pass explicit triplets; `triplets=None` means every triplet, uncapped — C(101,3) = 166,650 at 101 cols, ~65 s at 50K rows),
 `ams_marginal_entropy`, `ams_pairwise_joint_entropy`, `ams_threeway_joint_entropy`,
 `space_saving_top_k`, `heavy_keeper_top_k`,
@@ -163,7 +169,7 @@ Every technique package declares `REFERENCE` (the exact accuracy reference) and 
 - Rust unit tests: `cargo test --lib <module>::` from `services/analytics/` with `PYO3_PYTHON` set to the env's `python.exe` and the env dir on `PATH` (else `STATUS_DLL_NOT_FOUND`).
 
 # Current Focus
-All nine techniques (GCD, Describe, Top-k; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract and one Arrow-in/Arrow-out Rust core, one accuracy-test pattern and one benchmark harness (spec: docs/superpowers/specs/2026-09-24-uniform-technique-interface-design.md). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. Next technique: Wald-Wolfowitz runs test. OneShotRecommender and StreamingRecommender share one output schema and the add / result interface (spec 2026-10-04).
+All ten techniques (GCD, Describe, Top-k; Runs test; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract and one Arrow-in/Arrow-out Rust core, one accuracy-test pattern and one benchmark harness (spec: docs/superpowers/specs/2026-09-24-uniform-technique-interface-design.md). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. Next: the runs test's use by the StreamingRecommender (on the reservoir's row blocks). OneShotRecommender and StreamingRecommender share one output schema and the add / result interface (spec 2026-10-04).
 
 Joint entropy (2-way and 3-way) is dense-id encoded (see below): 83.5µs/pair, 170.3µs/triplet at 50K rows/101 cols — roughly 2x faster than the original hash-tuple implementation, and the 3-way/2-way speedup-vs-native-Polars gap that motivated the change is closed (3-way now outpaces 2-way's multiplier rather than trailing it). ARI (`pairwise_adjusted_rand`) is complete and validated against scikit-learn; chi² now shares the same dense contingency builder and reports `n_valid`.
 
