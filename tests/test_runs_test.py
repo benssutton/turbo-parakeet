@@ -141,8 +141,10 @@ def test_nulls_are_one_value(impl):
 def test_floats_compare_canonically(impl):
     other_nan = np.array([0x7FF8_0000_0000_0001], dtype=np.uint64).view(np.float64)[0]
     s = pl.Series("x", [0.0, -0.0, float("nan"), other_nan])
-    assert stats(impl, s)["n_runs"] == 2
-    assert stats(impl, s.cast(pl.Float32))["n_runs"] == 2
+    for series in (s, s.cast(pl.Float32)):
+        r = stats(impl, series)
+        # counts {0: 2, NaN: 2} → E = 1 + (16 − 8) / 4 = 3: counting is canonical too
+        assert (r["n_runs"], r["expected_runs"]) == (2, 3.0)
 
 
 @pytest.mark.parametrize("impl", ALL)
