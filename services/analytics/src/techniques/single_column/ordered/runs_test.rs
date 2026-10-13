@@ -233,6 +233,132 @@ fn statistics(t: Tally) -> RunsStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Dispatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Logical dtypes the kernel accepts — mirrored by analytics/runs_test/base.py::ELIGIBLE.
+fn supported(dtype: &DataType) -> bool {
+    matches!(
+        dtype,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Boolean
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal(_, _)
+            | DataType::Date
+            | DataType::Datetime(_, _)
+            | DataType::Duration(_)
+            | DataType::Time
+            | DataType::String
+            | DataType::Binary
+            | DataType::Categorical(_, _)
+            | DataType::Enum(_, _)
+    )
+}
+
+/// Integer keys (temporal values, Decimal's unscaled i128, Categorical / Enum codes).
+fn numeric<T>(ca: &ChunkedArray<T>) -> Tally
+where
+    T: PolarsNumericType,
+    T::Native: Eq + Hash,
+{
+    let arr = ca.downcast_iter().next().expect(ONE_CHUNK);
+    runs_of(arr.len(), |i| arr.is_valid(i).then(|| arr.value(i)))
+}
+
+/// The run statistics of one column, in its row order. Keys by physical type:
+/// Categorical / Enum compare codes (bijective with their strings within a column),
+/// Decimal its unscaled i128, temporal types their integers, floats canonical bits.
+pub(crate) fn series_runs(s: &Series) -> PolarsResult<RunsStats> {
+    if !supported(s.dtype()) {
+        polars_bail!(
+            InvalidOperation: "runs_test: unsupported dtype {} (column {})", s.dtype(), s.name()
+        );
+    }
+    if s.is_empty() {
+        return Ok(statistics(Tally::default()));
+    }
+    // One chunk, so row i is index i of a single Arrow array (zero-copy if already one).
+    let phys = s.to_physical_repr().rechunk();
+    let tally = match phys.dtype() {
+        DataType::Int8 => numeric(phys.i8()?),
+        DataType::Int16 => numeric(phys.i16()?),
+        DataType::Int32 => numeric(phys.i32()?),
+        DataType::Int64 => numeric(phys.i64()?),
+        DataType::UInt8 => numeric(phys.u8()?),
+        DataType::UInt16 => numeric(phys.u16()?),
+        DataType::UInt32 => numeric(phys.u32()?),
+        DataType::UInt64 => numeric(phys.u64()?),
+        DataType::Int128 => numeric(phys.i128()?),
+        DataType::Float32 => {
+            let arr = phys.f32()?.downcast_iter().next().expect(ONE_CHUNK);
+            runs_of(arr.len(), |i| {
+                arr.is_valid(i).then(|| canon_f32(arr.value(i)))
+            })
+        }
+        DataType::Float64 => {
+            let arr = phys.f64()?.downcast_iter().next().expect(ONE_CHUNK);
+            runs_of(arr.len(), |i| {
+                arr.is_valid(i).then(|| canon_f64(arr.value(i)))
+            })
+        }
+        DataType::Boolean => {
+            let arr = phys.bool()?.downcast_iter().next().expect(ONE_CHUNK);
+            runs_of(arr.len(), |i| arr.is_valid(i).then(|| arr.value(i)))
+        }
+        DataType::String => {
+            let arr = phys.str()?.downcast_iter().next().expect(ONE_CHUNK);
+            runs_of(arr.len(), |i| arr.is_valid(i).then(|| arr.value(i)))
+        }
+        DataType::Binary => {
+            let arr = phys.binary()?.downcast_iter().next().expect(ONE_CHUNK);
+            runs_of(arr.len(), |i| arr.is_valid(i).then(|| arr.value(i)))
+        }
+        dt => polars_bail!(ComputeError: "runs_test: unexpected physical dtype {dt}"),
+    };
+    Ok(statistics(tally))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `column, n_rows, n_runs, expected_runs, z, p_value, mean_run_length` per column;
+/// columns in parallel (and each column's chunks).
+pub(crate) fn runs_test_impl(inputs: &[Series]) -> PolarsResult<Series> {
+    let stats: Vec<RunsStats> = inputs
+        .par_iter()
+        .map(series_runs)
+        .collect::<PolarsResult<_>>()?;
+    let column = StringChunked::from_iter(inputs.iter().map(|s| s.name().as_str()))
+        .into_series()
+        .with_name("column".into());
+    let u64s = |name: &str, f: fn(&RunsStats) -> u64| {
+        UInt64Chunked::from_vec(name.into(), stats.iter().map(f).collect()).into_series()
+    };
+    let f64s = |name: &str, f: fn(&RunsStats) -> f64| {
+        Float64Chunked::from_vec(name.into(), stats.iter().map(f).collect()).into_series()
+    };
+    let fields = [
+        column,
+        u64s("n_rows", |s| s.n_rows),
+        u64s("n_runs", |s| s.n_runs),
+        f64s("expected_runs", |s| s.expected_runs),
+        f64s("z", |s| s.z),
+        f64s("p_value", |s| s.p_value),
+        f64s("mean_run_length", |s| s.mean_run_length),
+    ];
+    Ok(StructChunked::from_series("runs_test".into(), inputs.len(), fields.iter())?.into_series())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -382,5 +508,120 @@ mod tests {
         let want = 2.0 * p * (2.0 * p - n as f64);
         let got = variance_numerator(n, s2, s3);
         assert!(((got - want) / want).abs() < 1e-12, "{got} vs {want}");
+    }
+
+    fn stats_of(s: Series) -> RunsStats {
+        series_runs(&s).unwrap()
+    }
+
+    #[test]
+    fn strings_known_answer() {
+        let r = stats_of(Series::new("x".into(), &["A", "A", "B", "B", "B", "C"]));
+        assert_eq!((r.n_rows, r.n_runs), (6, 3));
+        assert!((r.expected_runs - 14.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn alternating_gives_positive_z_and_upper_p() {
+        let r = stats_of(Series::new("x".into(), &[0i64, 1, 0, 1, 0, 1]));
+        assert_eq!((r.n_runs, r.expected_runs), (6, 4.0));
+        assert!((r.z - 2.0 / 1.2f64.sqrt()).abs() < 1e-12);
+        assert!(r.p_value > 0.5);
+    }
+
+    #[test]
+    fn nulls_form_one_run() {
+        let r = stats_of(Series::new("x".into(), &[Some(1i64), None, None, Some(1)]));
+        assert_eq!(r.n_runs, 3);
+        let all_null = stats_of(Series::new("x".into(), &[None::<i64>, None, None]));
+        assert_eq!((all_null.n_runs, all_null.expected_runs), (1, 1.0));
+        assert!(all_null.z.is_nan());
+    }
+
+    #[test]
+    fn floats_compare_canonically() {
+        let other_nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        let r = stats_of(Series::new(
+            "x".into(),
+            &[0.0f64, -0.0, f64::NAN, other_nan],
+        ));
+        assert_eq!(r.n_runs, 2);
+        let r32 = stats_of(Series::new("x".into(), &[0.0f32, -0.0, f32::NAN, f32::NAN]));
+        assert_eq!(r32.n_runs, 2);
+    }
+
+    #[test]
+    fn every_physical_family() {
+        let ints = Series::new("x".into(), &[0i64, 0, 1, 1, 1, 2]);
+        for dt in [
+            DataType::Int8,
+            DataType::UInt16,
+            DataType::Date,
+            DataType::Datetime(TimeUnit::Microseconds, None),
+            DataType::Duration(TimeUnit::Milliseconds),
+            DataType::Time,
+            DataType::Decimal(Some(10), Some(2)),
+            DataType::String,
+            DataType::Binary,
+        ] {
+            let s = if dt == DataType::Binary {
+                ints.cast(&DataType::String).unwrap().cast(&dt).unwrap()
+            } else {
+                ints.cast(&dt).unwrap()
+            };
+            assert_eq!(stats_of(s).n_runs, 3, "{dt}");
+        }
+        let b = Series::new("x".into(), &[true, true, false, false, false, true]);
+        assert_eq!(stats_of(b).n_runs, 3);
+    }
+
+    #[test]
+    fn multi_chunk_input_matches_one_chunk() {
+        let mut s = Series::new("x".into(), &[1i64, 1]);
+        s.append(&Series::new("x".into(), &[1i64, 2])).unwrap();
+        s.append(&Series::new("x".into(), &[2i64])).unwrap();
+        assert!(s.n_chunks() > 1);
+        assert_eq!(stats_of(s).n_runs, 2);
+    }
+
+    #[test]
+    fn empty_column_is_nan() {
+        let r = stats_of(Series::new_empty("x".into(), &DataType::Int64));
+        assert_eq!((r.n_rows, r.n_runs), (0, 0));
+        assert!(r.expected_runs.is_nan() && r.mean_run_length.is_nan());
+    }
+
+    #[test]
+    fn unsupported_dtype_is_invalid_operation() {
+        let s = Series::new("x".into(), &[1i128, 2]);
+        assert!(matches!(
+            series_runs(&s),
+            Err(PolarsError::InvalidOperation(_))
+        ));
+    }
+
+    #[test]
+    fn impl_returns_one_struct_row_per_column() {
+        let out = runs_test_impl(&[
+            Series::new("a".into(), &[1i64, 1, 2]),
+            Series::new("b".into(), &["x", "y", "y"]),
+        ])
+        .unwrap();
+        assert_eq!(out.len(), 2);
+        let fields = out.struct_().unwrap().fields_as_series();
+        let names: Vec<_> = fields.iter().map(|f| f.name().to_string()).collect();
+        assert_eq!(
+            names,
+            [
+                "column",
+                "n_rows",
+                "n_runs",
+                "expected_runs",
+                "z",
+                "p_value",
+                "mean_run_length"
+            ]
+        );
+        assert_eq!(fields[2].u64().unwrap().get(1), Some(2));
     }
 }
