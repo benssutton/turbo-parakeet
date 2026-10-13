@@ -5,6 +5,7 @@ benchmarks (large sizes). Every generator is deterministic for a given seed.
 Ordered techniques:   mixed_dtypes, low_cardinality, near_unique
 Multi-set techniques: related_frames, similar_frames
 Per-column (GCD):     integer_multiples, integer_random
+Per-column, ordered (runs test): runs_int, runs_str
 Per-column (top-k):     top_k_streams
 Per-column (describe): describe_mixed, stringified (tests); describe_narrow, describe_wide, describe_nested (benchmarks)
 """
@@ -349,6 +350,44 @@ def integer_random(n_rows: int, n_cols: int, seed: int = 42) -> pl.DataFrame:
             f"c{i}": rng.integers(-(2**62), 2**62, n_rows, dtype=np.int64)
             for i in range(n_cols)
         }
+    )
+
+
+def runs_int(
+    n_rows: int,
+    n_cols: int,
+    mean_run: int,
+    cardinality: int,
+    prefix: str = "c",
+    seed: int = 42,
+) -> pl.DataFrame:
+    """Int64 columns {prefix}0… made of runs: geometric run lengths with mean `mean_run`
+    (1: every row its own draw), each run's value uniform in [0, cardinality). Adjacent
+    runs drawing the same value merge (probability 1 / cardinality)."""
+    rng = np.random.default_rng(seed)
+    columns = {}
+    for i in range(n_cols):
+        lengths = rng.geometric(1 / mean_run, size=n_rows // mean_run + 64)
+        while lengths.sum() < n_rows:
+            more = rng.geometric(1 / mean_run, size=n_rows // mean_run + 64)
+            lengths = np.concatenate([lengths, more])
+        values = rng.integers(0, cardinality, lengths.size, dtype=np.int64)
+        columns[f"{prefix}{i}"] = np.repeat(values, lengths)[:n_rows]
+    return pl.DataFrame(columns)
+
+
+def runs_str(
+    n_rows: int,
+    n_cols: int,
+    mean_run: int,
+    cardinality: int,
+    prefix: str = "s",
+    seed: int = 42,
+) -> pl.DataFrame:
+    """runs_int's runs as String values "v<k>"."""
+    df = runs_int(n_rows, n_cols, mean_run, cardinality, prefix, seed)
+    return df.with_columns(
+        ("v" + pl.col(c).cast(pl.String)).alias(c) for c in df.columns
     )
 
 

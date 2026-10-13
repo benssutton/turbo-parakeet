@@ -1,6 +1,7 @@
 """The planted structure that other tests and benchmarks rely on."""
 
 import polars as pl
+import pytest
 from polars.testing import assert_frame_equal
 
 from datagen import (
@@ -15,6 +16,8 @@ from datagen import (
     near_constant,
     near_unique,
     related_frames,
+    runs_int,
+    runs_str,
     similar_frames,
     stringified,
     top_k_streams,
@@ -177,3 +180,17 @@ def test_top_k_streams_shape_and_determinism():
     assert share["zipf_15"] > share["zipf_11"] > share["zipf_08"] > share["flat"]
     assert 0.93 < share["skewed"] < 0.97
     assert df["zipf_str"][0] == f"item_{df['zipf_11'][0]}"
+
+
+def test_runs_generators_plant_mean_run_length():
+    df = runs_int(100_000, 2, mean_run=50, cardinality=1_000)
+    assert df.columns == ["c0", "c1"] and df.height == 100_000
+    assert_frame_equal(df, runs_int(100_000, 2, mean_run=50, cardinality=1_000))
+    for c in df.columns:
+        n_runs = 1 + (df[c].diff() != 0).sum()
+        assert 100_000 / n_runs == pytest.approx(50, rel=0.1)
+    single = runs_int(1_000, 1, mean_run=1, cardinality=1_000_000)
+    assert (single["c0"].diff() != 0).sum() > 990  # every row its own draw
+    s = runs_str(1_000, 1, mean_run=10, cardinality=5)
+    assert s.columns == ["s0"] and s.schema["s0"] == pl.String
+    assert s["s0"][0].startswith("v")
