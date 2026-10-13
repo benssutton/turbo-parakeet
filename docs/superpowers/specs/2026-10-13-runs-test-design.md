@@ -202,3 +202,25 @@ The harness reports algorithmic (Polars ÷ Rust@1), parallel and total speedups.
 
 Integration with the StreamingRecommender / reservoir; REE size estimation or a "beneficial" conclusion
 (recommenders' concern); exact small-sample p-values; nested dtypes; the binary (dichotomised) runs test.
+
+## 10. Outcome
+
+Benchmark (tests/performance/benchmark_runs_test.py, 4 CPUs, median ms; `agrees` on every dataset):
+
+| Dataset | RunsTestPolars | RunsTestRust (N threads) | Rust @ 1 thread | algorithmic | parallel | total |
+|---|---|---|---|---|---|---|
+| large_dataset.arrow | 656 | 39 | 98 | 6.7x | 2.5x | 16.9x |
+| long runs 10M x 4 | 273 | 92 | 211 | 1.3x | 2.3x | 3.0x |
+| random 10M x 4 | 7 179 | 5 775 | 10 200 | 0.7x | 1.8x | 1.2x |
+| wide 1M x 100 | 722 | 183 | 525 | 1.4x | 2.9x | 3.9x |
+
+- Correctness: the reference agreement found one kernel defect, now fixed. statrs' normal CDF is accurate only
+  to ~1e-10, so the kernel computes p = ½·erfc(−z/√2) with `libm`. Review also found that the rounded E[R]
+  turned a fixed R (all-distinct columns past ~10⁸ rows) into z = ±inf; R − E is now exact in i128.
+- Long runs (the REE-friendly case): hashing per run works, but the per-row scan (validity check +
+  value access per row) now dominates, so the gain over Polars' vectorised `ne_missing` is only 1.3x per
+  thread. A no-null fast path over the values slice, and raw view comparison for strings, are the next steps.
+- Random high cardinality (R ≈ n): one hash insert per row, and each column's counts merge on one
+  thread at the top of the reduce — slower than Polars' group-by per thread (0.7x). Sharding the counts
+  (hash-partitioned, merged shard by shard in parallel) would lift this; the reservoir use case (bounded
+  blocks) is less exposed.
