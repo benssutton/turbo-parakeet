@@ -141,6 +141,7 @@ Categorical, Enum. Ineligible (listed, never dropped): List, Array, Struct, Null
 | zero rows | ineligible | null | null | null | null | null |
 | n = 1 | computed | 1 | 1 | 1 | NaN | 1 |
 | one distinct value (incl. all-null) | computed | n | 1 | 1 | NaN (Var = 0) | n |
+| every value distinct | computed | n | n | n | NaN (Var = 0: R is fixed) | 1 |
 | Var > 0 | computed | n | R | E[R] | finite | n / R |
 
 Zero rows are ineligible, matching the ordered scope's rule. NaN = computed but undefined (Rust yields NaN
