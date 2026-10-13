@@ -99,6 +99,7 @@ impl<K: Copy + Eq + Hash> Partial<K> {
         if self.counts.len() < other.counts.len() {
             std::mem::swap(&mut self.counts, &mut other.counts);
         }
+        self.counts.reserve(other.counts.len());
         for (k, c) in other.counts {
             *self.counts.entry(k).or_insert(0) += c;
         }
@@ -188,13 +189,34 @@ fn variance_numerator(n: u128, s2: u128, s3: u128) -> f64 {
     )
 }
 
-/// 0/0 gives NaN naturally: n = 0 (everything), n = 1 and Var = 0 (z, p).
+/// n(R − 1) − (n² − S₂), the numerator of R − E[R] (= d / n): exact in i128, f64 on overflow.
+fn run_excess_numerator(n: u128, runs: u64, s2: u128) -> f64 {
+    let exact = || -> Option<i128> {
+        let n = i128::try_from(n).ok()?;
+        let s2 = i128::try_from(s2).ok()?;
+        let r1 = i128::from(runs) - 1;
+        n.checked_mul(r1)?
+            .checked_sub(n.checked_mul(n)?.checked_sub(s2)?)
+    };
+    exact().map_or_else(
+        || n as f64 * (runs as f64 - 1.0) - ((n as f64) * (n as f64) - s2 as f64),
+        |v| v as f64,
+    )
+}
+
+/// R − E is computed exactly as (n(R−1) − (n² − S₂))/n so a fixed R gives NaN, not ±inf.
+/// NaN (z, p) when Var is not positive: n ≤ 1, one distinct value, all distinct.
 fn statistics(t: Tally) -> RunsStats {
     let n = t.rows as u128;
     let (nf, rf) = (t.rows as f64, t.runs as f64);
     let expected = 1.0 + (n * n - t.s2) as f64 / nf;
-    let variance = variance_numerator(n, t.s2, t.s3) / ((n * n) as f64 * (nf - 1.0));
-    let z = (rf - expected) / variance.sqrt();
+    let var_num = variance_numerator(n, t.s2, t.s3);
+    let variance = var_num / ((n * n) as f64 * (nf - 1.0));
+    let z = if variance > 0.0 {
+        (run_excess_numerator(n, t.runs, t.s2) / nf) / variance.sqrt()
+    } else {
+        f64::NAN
+    };
     let p_value = if z.is_nan() {
         f64::NAN
     } else {
@@ -269,6 +291,25 @@ mod tests {
         let n = 3 * CHUNK + 17; // runs of 1 000 rows straddle every chunk boundary
         let t = runs_of(n, |i| Some((i / 1000) as i64));
         assert_eq!((t.rows, t.runs), (n as u64, n.div_ceil(1000) as u64));
+
+        // runs end exactly on chunk boundaries (never joined across them)
+        let t = runs_of(n, |i| Some((i / CHUNK) as i64));
+        assert_eq!((t.rows, t.runs), (n as u64, n.div_ceil(CHUNK) as u64));
+        assert_eq!(t.s2, 3 * (CHUNK as u128).pow(2) + 17u128.pow(2));
+        assert_eq!(t.s3, 3 * (CHUNK as u128).pow(3) + 17u128.pow(3));
+    }
+
+    #[test]
+    fn statistics_all_distinct_large_is_nan_not_inf() {
+        let n = 231_383_004u64;
+        let r = statistics(Tally {
+            rows: n,
+            runs: n,
+            s2: n as u128,
+            s3: n as u128,
+        });
+        assert!(r.z.is_nan() && r.p_value.is_nan());
+        assert!((r.expected_runs - n as f64).abs() < 1.0);
     }
 
     #[test]
@@ -320,6 +361,16 @@ mod tests {
     #[test]
     fn variance_numerator_is_exact_when_it_fits() {
         assert_eq!(variance_numerator(6, 14, 36), 136.0);
+        // near-constant: n = 10⁶, counts [n − 10, 10]; k = 2 closed form 2p(2p − n), p = 10(n − 10)
+        let (n, a, b) = (1_000_000i128, 999_990i128, 10i128);
+        let p = b * a;
+        let want = (2 * p * (2 * p - n)) as f64;
+        let got = variance_numerator(
+            n as u128,
+            (a * a + b * b) as u128,
+            (a * a * a + b * b * b) as u128,
+        );
+        assert_eq!(got, want);
     }
 
     #[test]
