@@ -449,7 +449,8 @@ mod tests {
         assert!((r.expected_runs - 14.0 / 3.0).abs() < 1e-12);
         let z = (3.0 - 14.0 / 3.0) / (136.0f64 / 180.0).sqrt();
         assert!((r.z - z).abs() < 1e-12);
-        assert!((r.p_value - 0.5 * libm::erfc(-z / std::f64::consts::SQRT_2)).abs() < 1e-12);
+        // Φ(z), computed independently in Python: 0.5 * math.erfc(-z / math.sqrt(2))
+        assert!((r.p_value - 0.02759277549556695).abs() < 1e-15);
         assert_eq!(r.mean_run_length, 2.0);
     }
 

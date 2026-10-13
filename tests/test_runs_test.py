@@ -18,6 +18,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from analytics.runs_test.polars import exact_moments
 from datagen import mixed_dtypes, runs_int, runs_str
 from harness import (
     assert_agrees,
@@ -129,7 +130,7 @@ def test_agrees_with_reference_seeded(impl):
 @pytest.mark.parametrize("seed", range(30))
 def test_seeded_fuzz_matches_reference(impl, seed):
     rng = random.Random(seed)
-    dtype = rng.choice(ELIGIBLE_DTYPES)
+    dtype = ELIGIBLE_DTYPES[seed % len(ELIGIBLE_DTYPES)]
     n = rng.choice([1, 2, 17, 1_000, CHUNK + rng.randint(1, 5_000)])
     k = rng.choice([1, 2, 3, 10, 50])
     if isinstance(dtype, pl.Enum):
@@ -266,3 +267,45 @@ def test_ineligible_columns_are_listed(impl):
     assert out["status"].to_list() == ["ineligible"] * 5 + ["computed", "ineligible"]
     assert out["dtype"].to_list() == [str(dt) for dt in df.dtypes] + ["Int64"]
     assert out["n_runs"].to_list() == [None] * 5 + [1, None]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Statistical correctness (no conclusions to test: the technique reports metrics only)
+
+
+def test_moments_match_permutation_monte_carlo():
+    counts, n = [16, 12, 8, 4], 40
+    base = np.repeat(np.arange(len(counts)), counts)
+    shuffles = np.random.default_rng(7).permuted(np.tile(base, (20_000, 1)), axis=1)
+    runs = 1 + (shuffles[:, 1:] != shuffles[:, :-1]).sum(axis=1)
+    expected, variance = exact_moments(n, counts)
+    assert abs(runs.mean() - expected) < 4 * math.sqrt(variance / runs.size)
+    assert runs.var(ddof=1) == pytest.approx(variance, rel=0.05)
+
+
+@pytest.mark.parametrize("impl", ALL)
+@pytest.mark.parametrize("seed", range(5))
+def test_two_valued_z_matches_statsmodels(impl, seed):
+    sm_runs = pytest.importorskip(
+        "statsmodels.sandbox.stats.runs", reason="statsmodels not installed"
+    )
+    rng = np.random.default_rng(seed)
+    x = (rng.random(500) < rng.uniform(0.2, 0.8)).astype(np.int64)
+    x[: 50 * seed] = np.sort(x[: 50 * seed])  # a clustered prefix varies z
+    z_sm, _ = sm_runs.Runs(x).runs_test(correction=False)
+    r = stats(impl, pl.Series("x", x))
+    assert r["z"] == pytest.approx(z_sm, rel=1e-9)
+    assert r["p_value"] == pytest.approx(phi(z_sm), rel=1e-9)  # ours: one-sided
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_near_constant_variance_is_exact(impl):
+    # Var's numerator terms are ~1e24 here and cancel to ~4e14: f64 would lose ~7 digits.
+    n = 1_000_000
+    x = np.zeros(n, dtype=np.int64)
+    x[::100_000] = 1
+    n_runs = 1 + int(np.count_nonzero(np.diff(x)))
+    expected, variance = exact_moments(n, [n - 10, 10])
+    r = stats(impl, pl.Series("x", x))
+    assert r["n_runs"] == n_runs
+    assert r["z"] == pytest.approx((n_runs - expected) / math.sqrt(variance), rel=1e-9)
