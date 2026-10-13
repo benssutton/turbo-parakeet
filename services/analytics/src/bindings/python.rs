@@ -281,6 +281,12 @@ fn column_gcd(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
 }
 
 #[pyfunction]
+fn runs_test(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::runs_test(&batch)).map(ArrowTable)
+}
+
+#[pyfunction]
 fn marginal_entropy(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::marginal_entropy(&batch)).map(ArrowTable)
@@ -491,6 +497,7 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<StreamingRecommender>()?;
     m.add_class::<OneShotRecommender>()?;
     m.add_function(wrap_pyfunction!(column_gcd, m)?)?;
+    m.add_function(wrap_pyfunction!(runs_test, m)?)?;
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_joint_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(threeway_joint_entropy, m)?)?;

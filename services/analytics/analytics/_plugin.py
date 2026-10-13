@@ -130,6 +130,12 @@ def column_gcd(df: Frame) -> pl.DataFrame:
     return pl.DataFrame(_rs.column_gcd(_collected(df)))
 
 
+def runs_test(df: Frame) -> pl.DataFrame:
+    """column, n_rows, n_runs, expected_runs, z, p_value (one-sided, lower tail),
+    mean_run_length per column — rows in the frame's order."""
+    return pl.DataFrame(_rs.runs_test(_collected(df)))
+
+
 def minhash(df: Frame, name: str, num_perm: int = 128) -> pl.DataFrame:
     """qualified_name ("{name}|{column}"), minhash: List(UInt32) per column."""
     return pl.DataFrame(_rs.minhash(_collected(df), name, num_perm))

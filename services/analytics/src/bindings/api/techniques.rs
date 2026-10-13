@@ -14,6 +14,14 @@ pub fn column_gcd(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::gcd::column_gcd_impl(&columns(batch)?))
 }
 
+/// `column`, `n_rows`, `n_runs`, `expected_runs`, `z`, `p_value`, `mean_run_length` per
+/// column (k-category runs test, rows in batch order).
+pub fn runs_test(batch: &RecordBatch) -> Result<RecordBatch> {
+    table(crate::techniques::runs_test::runs_test_impl(&columns(
+        batch,
+    )?))
+}
+
 /// `col_name`, `entropy` per column.
 pub fn marginal_entropy(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::marginal_entropy::marginal_entropy_impl(
