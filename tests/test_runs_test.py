@@ -11,17 +11,20 @@ Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
 
 import math
+import random
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pytest
 
-from datagen import mixed_dtypes, runs_int
+from datagen import mixed_dtypes, runs_int, runs_str
 from harness import (
+    assert_agrees,
     assert_contract,
     implementation_params,
     load,
+    reference,
     run,
 )
 
@@ -98,6 +101,58 @@ def test_contract(impl):
     }
     cls = load(impl)
     assert_contract(cls, run(cls, frames), frames)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Reference agreement
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+def test_agrees_with_reference_large_dataset(impl):
+    frames = {"large": pl.read_ipc(LARGE)}
+    cls = load(impl)
+    assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+def test_agrees_with_reference_seeded(impl):
+    frames = {
+        "mixed": mixed_dtypes(2_000),
+        "ints": runs_int(200_000, 3, 25, 100),
+        "strs": runs_str(200_000, 2, 5, 1_000),
+    }
+    cls = load(impl)
+    assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+@pytest.mark.parametrize("seed", range(30))
+def test_seeded_fuzz_matches_reference(impl, seed):
+    rng = random.Random(seed)
+    dtype = rng.choice(ELIGIBLE_DTYPES)
+    n = rng.choice([1, 2, 17, 1_000, CHUNK + rng.randint(1, 5_000)])
+    k = rng.choice([1, 2, 3, 10, 50])
+    if isinstance(dtype, pl.Enum):
+        dtype = pl.Enum([str(i) for i in range(k)])
+    null_rate = rng.choice([0.0, 0.1, 0.5])
+    values, cur = [], 0
+    for _ in range(n):  # sticky random walk over k values → runs of varied length
+        if rng.random() < 0.3:
+            cur = rng.randrange(k)
+        values.append(None if rng.random() < null_rate else cur)
+    s = as_dtype(values, dtype)
+    cut = rng.randint(0, n)  # optional second Arrow chunk
+    s = pl.concat([s.slice(0, cut), s.slice(cut)], rechunk=False)
+    frames = {"t": s.to_frame()}
+    cls = load(impl)
+    assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
+
+
+def test_kernel_rejects_unsupported_dtype():
+    from analytics import _plugin
+
+    with pytest.raises(ValueError, match="unsupported dtype"):
+        _plugin.runs_test(pl.DataFrame({"x": [[1], [2]]}))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -33,6 +33,7 @@ mimalloc = "0.1.48"
 
 #Statistics
 statrs = "0.19"
+libm = "0.2"
 
 #GCD (Stein's binary algorithm)
 gcd = "2.3"

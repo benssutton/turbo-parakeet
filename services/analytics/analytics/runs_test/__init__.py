@@ -2,8 +2,9 @@
 
 from analytics.runs_test.base import RunsTest
 from analytics.runs_test.polars import RunsTestPolars
+from analytics.runs_test.rust import RunsTestRust
 
 REFERENCE = "RunsTestPolars"
-IMPLEMENTATIONS = ("RunsTestPolars",)
+IMPLEMENTATIONS = ("RunsTestRust", "RunsTestPolars")
 
-__all__ = ["RunsTest", "RunsTestPolars", "REFERENCE", "IMPLEMENTATIONS"]
+__all__ = ["RunsTest", "RunsTestRust", "RunsTestPolars", "REFERENCE", "IMPLEMENTATIONS"]

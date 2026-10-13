@@ -25,7 +25,6 @@ use foldhash::fast::RandomState;
 use polars::prelude::*;
 use polars_arrow::array::Array;
 use rayon::prelude::*;
-use statrs::distribution::{ContinuousCDF, Normal};
 
 use crate::common::encode::{canon_f32, canon_f64};
 
@@ -220,7 +219,7 @@ fn statistics(t: Tally) -> RunsStats {
     let p_value = if z.is_nan() {
         f64::NAN
     } else {
-        Normal::new(0.0, 1.0).expect("standard normal").cdf(z)
+        0.5 * libm::erfc(-z / std::f64::consts::SQRT_2)
     };
     RunsStats {
         n_rows: t.rows,
@@ -450,7 +449,7 @@ mod tests {
         assert!((r.expected_runs - 14.0 / 3.0).abs() < 1e-12);
         let z = (3.0 - 14.0 / 3.0) / (136.0f64 / 180.0).sqrt();
         assert!((r.z - z).abs() < 1e-12);
-        assert!((r.p_value - Normal::new(0.0, 1.0).unwrap().cdf(z)).abs() < 1e-12);
+        assert!((r.p_value - 0.5 * libm::erfc(-z / std::f64::consts::SQRT_2)).abs() < 1e-12);
         assert_eq!(r.mean_run_length, 2.0);
     }
 
