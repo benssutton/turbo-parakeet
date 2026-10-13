@@ -4,9 +4,9 @@ Runs-test speed benchmark: RunsTestRust vs RunsTestPolars (reference).
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_runs_test.py
 
 Shapes: large_dataset.arrow (realistic mix); long runs 10M x 4 (REE-friendly, mean run
-1 000, int + string: the kernel hashes once per run, so it should be near memory-bound);
+1 000, int + string: the kernel hashes once per run, so the per-row scan dominates);
 random 10M x 4 (R ≈ n, one hash insert per row — the worst case); wide 1M x 100 (mean runs
-1 / 10 / 100 / 1 000; parallelism across columns).
+1 / 10 / 100 / 1 000; parallelism across columns). Results: spec 2026-10-13-runs-test §10.
 """
 
 import polars as pl

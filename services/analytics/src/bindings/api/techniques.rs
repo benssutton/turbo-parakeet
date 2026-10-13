@@ -15,7 +15,7 @@ pub fn column_gcd(batch: &RecordBatch) -> Result<RecordBatch> {
 }
 
 /// `column`, `n_rows`, `n_runs`, `expected_runs`, `z`, `p_value`, `mean_run_length` per
-/// column (k-category runs test, rows in batch order).
+/// column (k-category runs test, rows in batch order; p one-sided, lower tail).
 pub fn runs_test(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::runs_test::runs_test_impl(&columns(
         batch,

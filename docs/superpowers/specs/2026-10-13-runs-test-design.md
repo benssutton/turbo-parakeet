@@ -92,8 +92,8 @@ One pass per column, with hash-map work per **run**, not per row:
 struct Partial<K> {                  // summary of one contiguous chunk
     rows: u64,
     runs: u64,
-    first: Option<K>,                // Option<K>: null is a value (None)
-    last:  Option<K>,
+    first: Option<Option<K>>,        // inner None: a null value; outer None: empty range
+    last:  Option<Option<K>>,
     counts: HashMap<Option<K>, u64>, // foldhash; += run length once per run
 }
 ```
@@ -116,17 +116,19 @@ struct Partial<K> {                  // summary of one contiguous chunk
 
 - **Statistics:** S₂, S₃ from the merged counts. E[R] in f64. The variance numerator
   S₂(S₂ + n(n+1)) − 2nS₃ − n³ is evaluated **exactly in `i128`** with checked arithmetic (terms ~n⁴ cancel
-  heavily on near-constant columns); on overflow (n ≳ 3·10⁹) it falls back to f64. p = Φ(z) via statrs
-  `Normal`.
+  heavily on near-constant columns); on overflow (n ≳ 3·10⁹) it falls back to f64. R − E is computed exactly
+  as (n(R − 1) − (n² − S₂)) / n (i128, exact to n ≈ 10¹⁹), so a fixed R gives NaN, never ±inf.
+  p = Φ(z) = ½·erfc(−z/√2) via `libm` (statrs' `Normal` CDF is accurate only to ~1e-10; see §10).
 - **Entry point:** `bindings/api/techniques.rs::runs_test(batch: &RecordBatch) -> Result<RecordBatch>` →
   `column, n_rows, n_runs, expected_runs, z, p_value, mean_run_length`; registered in `bindings/python.rs`,
   wrapped by `_plugin.runs_test`. The C ABI is unchanged.
 - **Chunked input:** each column is rechunked once (zero-copy if already one chunk) before the kernel splits
   it into its own work chunks, so input chunk boundaries never affect R.
 
-**Reference** `RunsTestPolars`: R from `ne_missing(shift(1))`, counts from `value_counts` (after `+ 0.0`
-and `fill_nan` to one NaN on floats, since `value_counts` separates −0.0 and 0.0), S₂, S₃ and the variance
-numerator as Python ints (exact at any n); only the final division and Φ are floating point. It shares no
+**Reference** `RunsTestPolars`: R from `ne_missing` between neighbours (plus an explicit NaN-run guard),
+counts from `group_by(..).len()` (after `+ 0.0` and `fill_nan` to one NaN on floats — defensive: the
+kernel's float semantics are made explicit rather than left to Polars'), S₂, S₃, the variance numerator and
+R − E as Python ints (exact at any n); only the final divisions and Φ (`math.erfc`) are floating point. It shares no
 code with the kernel.
 
 ## 5. Eligibility and edge cases

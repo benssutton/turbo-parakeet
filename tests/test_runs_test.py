@@ -171,6 +171,14 @@ def test_known_answer_every_dtype(impl, dtype):
     assert r["mean_run_length"] == 2.0
 
 
+def test_known_answers_cover_every_eligible_class():
+    """Every class in ELIGIBLE (mirrored by the Rust kernel's `supported`) runs through both
+    implementations in test_known_answer_every_dtype (Boolean: test_boolean)."""
+    from analytics.runs_test.base import ELIGIBLE
+
+    assert {type(dt) for dt in ELIGIBLE_DTYPES} | {pl.Boolean} == set(ELIGIBLE)
+
+
 @pytest.mark.parametrize("impl", ALL)
 def test_boolean(impl):
     r = stats(impl, pl.Series("x", [True, True, False, False, False, True]))
