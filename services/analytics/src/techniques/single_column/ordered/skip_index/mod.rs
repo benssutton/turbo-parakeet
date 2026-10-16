@@ -319,6 +319,7 @@ where
 /// P(a w-row window of a uniformly random order of n rows holds none of m given rows)
 /// = C(n − m, w) / C(n, w), in log space.
 pub(crate) fn avoid(n: u64, w: u64, m: u64) -> f64 {
+    debug_assert!(m <= n, "avoid: m > n");
     if m == 0 {
         return 1.0;
     }
