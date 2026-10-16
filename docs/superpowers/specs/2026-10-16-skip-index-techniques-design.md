@@ -256,3 +256,23 @@ std from the integer sums equals a direct two-pass std; `avoid` edges (m = 0 →
 Recommender integration and reservoir evaluation (follow-up spec); range queries; `bloom_filter` and token /
 n-gram indexes; byte-adaptive granules (`index_granularity_bytes`); several granularities per instance; any
 decision or conclusion.
+
+## 10. Outcome
+
+Benchmark (tests/performance/benchmark_{minmax,set}_index.py, 4 CPUs, median ms; `agrees` on every dataset where the reference ran):
+
+| Technique | Dataset | Polars | Rust (N threads) | Rust @ 1 thread | algorithmic | parallel | total |
+|---|---|---|---|---|---|---|---|
+| minmax | large_dataset.arrow | 6 067 | 242 | 885 | 6.9x | 3.7x | 25.1x |
+| minmax | clustered 10M x 4 | 3 979 | 357 | 1 279 | 3.1x | 3.6x | 11.1x |
+| minmax | random 10M x 4 | 5 728 | 870 | 2 064 | 2.8x | 2.4x | 6.6x |
+| minmax | wide 1M x 100 | 11 910 | 744 | 2 901 | 4.1x | 3.9x | 16.0x |
+| set | large_dataset.arrow | 4 196 | 124 | 361 | 11.6x | 2.9x | 33.9x |
+| set | clustered 10M x 4 | 16 785 | 484 | 1 476 | 11.4x | 3.1x | 34.7x |
+| set | random 10M x 4 | 17 006 | 702 | 1 202 | 14.1x | 1.7x | 24.2x |
+| set | wide 1M x 100 | skipped (over the harness's 60 s budget) | 1 575 | 6 131 | — | 3.9x | — |
+
+- Rust is faster than the Polars reference on every benchmarked shape (total 6.6x to 34.7x). On set's wide 1M x 100 the reference was skipped, so agreement there rests on the accuracy tests.
+- The set speedups are larger than minmax's (algorithmic 11-14x vs 2.8-6.9x), likely because the set reference (interval sort + difference array + a Python-level baseline) is the slowest of the four implementations (16.8 s on 10M x 4), not because the Rust kernel is faster.
+- minmax's smallest gain is random 10M x 4 (algorithmic 2.8x, parallel 2.4x); likely the population build (hash + sort of ~100 000 distinct values per column) dominates, as the deque scan itself is cheap.
+- set's parallel gain is lowest on random 10M x 4 (1.7x, and the 1-thread run is only 1.7x slower); a likely cause is that each parallel range allocates and zeroes a per-id array of d entries, ranges being at least d window starts long.

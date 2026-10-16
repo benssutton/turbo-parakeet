@@ -8,7 +8,7 @@ d. Ordered Pair-Wise: Chi-squared, Adjusted Rand Index, Joint Entropy
 
 As the first candidates for Ordered Single Column we will add:
 - Window functions of 2 rows: delta, double-delta, entropy and min/max values for each of these.
-- Window functions of a specified width to calculate the number of distinct values and min/max values as a portion of the entire data (to identify candidates for ClickHouse's minmax and skipindexes)
+- ~~Window functions of a specified width … minmax and skipindexes~~ — delivered as techniques `analytics.minmax_index` / `analytics.set_index` (spec 2026-10-16); recommender use pending (item 5).
 - Selectivity = to be worked through.
 
 2. Please extend describe and the recommenders to retrun:
