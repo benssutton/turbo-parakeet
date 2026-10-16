@@ -235,8 +235,9 @@ fn statistics(t: Tally) -> RunsStats {
 // Dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Logical dtypes the kernel accepts — mirrored by analytics/runs_test/base.py::ELIGIBLE.
-fn supported(dtype: &DataType) -> bool {
+/// Logical dtypes the order-dependent kernels accept (runs test, skip indexes) — mirrored by
+/// analytics/_dtypes.py::ORDERED_SCALARS.
+pub(crate) fn supported(dtype: &DataType) -> bool {
     matches!(
         dtype,
         DataType::Int8
