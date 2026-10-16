@@ -9,14 +9,16 @@ Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
 
 import math
+import random
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pytest
 
-from datagen import mixed_dtypes, runs_int
+from datagen import mixed_dtypes, runs_int, runs_str
 from harness import (
+    assert_agrees,
     assert_contract,
     implementation_params,
     load,
@@ -79,6 +81,88 @@ def test_ineligible_columns_are_listed(impl):
     assert out["status"].to_list() == ["ineligible"] * 5 + ["computed", "ineligible"]
     assert out["dtype"].to_list() == [str(dt) for dt in df.dtypes] + ["Int64"]
     assert out["n_windows"].to_list() == [None] * 5 + [1, None]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Reference agreement
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+@pytest.mark.parametrize("params", [{}, {"index_granularity": 1_024, "granularity": 2}])
+def test_agrees_with_reference_large_dataset(impl, params):
+    frames = {"large": pl.read_ipc(LARGE)}
+    cls = load(impl)
+    assert_agrees(
+        cls(**params), run(cls, frames, **params), run(reference(PKG), frames, **params)
+    )
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+def test_agrees_with_reference_seeded(impl):
+    # 200 000 rows: more window starts than one parallel range (2^16)
+    frames = {
+        "mixed": mixed_dtypes(2_000),
+        "ints": runs_int(200_000, 3, 25, 100),
+        "strs": runs_str(200_000, 2, 5, 1_000),
+    }
+    cls = load(impl)
+    params = {"index_granularity": 512}
+    assert_agrees(
+        cls(**params), run(cls, frames, **params), run(reference(PKG), frames, **params)
+    )
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+@pytest.mark.parametrize("seed", range(30))
+def test_seeded_fuzz_matches_reference(impl, seed):
+    rng = random.Random(seed)
+    dtype = ELIGIBLE_DTYPES[seed % len(ELIGIBLE_DTYPES)]
+    n = rng.choice([1, 2, 17, 1_000, 70_000])
+    k = rng.choice([1, 2, 3, 10])
+    if isinstance(dtype, pl.Enum):
+        dtype = pl.Enum([str(i) for i in range(k)])
+    null_rate = rng.choice([0.0, 0.1, 0.5])
+    values, cur = [], 0
+    for _ in range(n):  # sticky random walk → clustered values
+        if rng.random() < 0.3:
+            cur = rng.randrange(k)
+        values.append(None if rng.random() < null_rate else cur)
+    s = as_dtype(values, dtype)
+    cut = rng.randint(0, n)  # optional second Arrow chunk
+    s = pl.concat([s.slice(0, cut), s.slice(cut)], rechunk=False)
+    frames = {"t": s.to_frame()}
+    params = {"index_granularity": rng.choice([1, 3, 64, 5_000])}
+    cls = load(impl)
+    assert_agrees(
+        cls(**params), run(cls, frames, **params), run(reference(PKG), frames, **params)
+    )
+
+
+@pytest.mark.parametrize("impl", ALL)
+@pytest.mark.parametrize("seed", range(40))
+def test_matches_brute_force_oracle(impl, seed):
+    rng = random.Random(seed)
+    n = rng.randint(1, 60)
+    k = rng.choice([1, 2, 3, 5, 10])
+    null_rate = rng.choice([0.0, 0.1, 0.5, 1.0])
+    values = [None if rng.random() < null_rate else rng.randrange(k) for _ in range(n)]
+    window = rng.randint(1, 12)
+    got = stats(impl, pl.Series("x", values, dtype=pl.Int64), index_granularity=window)
+    assert_metrics(got, minmax_oracle(values, window))
+
+
+def test_kernel_rejects_bad_input():
+    from analytics import _plugin
+
+    with pytest.raises(ValueError, match="unsupported dtype"):
+        _plugin.minmax_index(pl.DataFrame({"x": [[1], [2]]}), 4)
+    with pytest.raises(ValueError, match="window_rows"):
+        _plugin.minmax_index(pl.DataFrame({"x": [1, 2]}), 0)
+
+
+def test_window_must_fit_in_64_bits():
+    with pytest.raises(ValueError, match="64 bits"):
+        reference(PKG)(index_granularity=2**40, granularity=2**40)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

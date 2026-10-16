@@ -67,6 +67,8 @@ class SkipIndex(Technique):
         super().__init__()
         positive("index_granularity", index_granularity)
         positive("granularity", granularity)
+        if index_granularity * granularity > 2**64 - 1:
+            raise ValueError("index_granularity × granularity must fit in 64 bits")
         self.index_granularity = index_granularity
         self.granularity = granularity
 
