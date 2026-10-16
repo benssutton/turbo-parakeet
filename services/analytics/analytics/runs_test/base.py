@@ -3,25 +3,11 @@ docs/superpowers/specs/2026-10-13-runs-test-design.md)"""
 
 import polars as pl
 
-from analytics._dtypes import INTEGERS_64
+from analytics._dtypes import ORDERED_SCALARS
 from analytics.base import Technique
 
 # Mirrors the Rust kernel's `supported` (src/techniques/single_column/ordered/runs_test.rs).
-ELIGIBLE = (
-    *INTEGERS_64,
-    pl.Boolean,
-    pl.Float32,
-    pl.Float64,
-    pl.Decimal,
-    pl.Date,
-    pl.Datetime,
-    pl.Duration,
-    pl.Time,
-    pl.String,
-    pl.Binary,
-    pl.Categorical,
-    pl.Enum,
-)
+ELIGIBLE = ORDERED_SCALARS
 
 
 class RunsTest(Technique):

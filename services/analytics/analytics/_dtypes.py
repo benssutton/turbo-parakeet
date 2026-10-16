@@ -34,6 +34,26 @@ def holds_wide_integer(dtype: pl.DataType) -> bool:
     return False
 
 
+# Scalar dtypes with a value order and identity: the order-dependent per-column techniques'
+# eligibility (runs_test, minmax_index, set_index). Mirrors the Rust kernels' `supported`
+# (src/techniques/single_column/ordered/runs_test.rs).
+ORDERED_SCALARS = (
+    *INTEGERS_64,
+    pl.Boolean,
+    pl.Float32,
+    pl.Float64,
+    pl.Decimal,
+    pl.Date,
+    pl.Datetime,
+    pl.Duration,
+    pl.Time,
+    pl.String,
+    pl.Binary,
+    pl.Categorical,
+    pl.Enum,
+)
+
+
 # Dtypes the Rust encoder (src/common/encode.rs::encode_series) accepts. Anything else
 # (Struct, Binary, Null, Object, 128-bit integers) makes the extension raise.
 ENCODABLE = (
