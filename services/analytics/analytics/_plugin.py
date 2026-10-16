@@ -136,6 +136,18 @@ def runs_test(df: Frame) -> pl.DataFrame:
     return pl.DataFrame(_rs.runs_test(_collected(df)))
 
 
+def minmax_index(df: Frame, window_rows: int) -> pl.DataFrame:
+    """column + MinMaxIndex's metrics per column — windows of `window_rows` rows sliding
+    over the frame's row order."""
+    return pl.DataFrame(_rs.minmax_index(_collected(df), window_rows))
+
+
+def set_index(df: Frame, window_rows: int, max_size: int) -> pl.DataFrame:
+    """column + SetIndex's metrics per column — windows of `window_rows` rows sliding over
+    the frame's row order; `max_size` 0 = unlimited."""
+    return pl.DataFrame(_rs.set_index(_collected(df), window_rows, max_size))
+
+
 def minhash(df: Frame, name: str, num_perm: int = 128) -> pl.DataFrame:
     """qualified_name ("{name}|{column}"), minhash: List(UInt32) per column."""
     return pl.DataFrame(_rs.minhash(_collected(df), name, num_perm))

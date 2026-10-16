@@ -287,6 +287,25 @@ fn runs_test(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (data, window_rows))]
+fn minmax_index(py: Python<'_>, data: &Bound<'_, PyAny>, window_rows: u64) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::minmax_index(&batch, window_rows)).map(ArrowTable)
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, window_rows, max_size))]
+fn set_index(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    window_rows: u64,
+    max_size: u64,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::set_index(&batch, window_rows, max_size)).map(ArrowTable)
+}
+
+#[pyfunction]
 fn marginal_entropy(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::marginal_entropy(&batch)).map(ArrowTable)
@@ -498,6 +517,8 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<OneShotRecommender>()?;
     m.add_function(wrap_pyfunction!(column_gcd, m)?)?;
     m.add_function(wrap_pyfunction!(runs_test, m)?)?;
+    m.add_function(wrap_pyfunction!(minmax_index, m)?)?;
+    m.add_function(wrap_pyfunction!(set_index, m)?)?;
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_joint_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(threeway_joint_entropy, m)?)?;

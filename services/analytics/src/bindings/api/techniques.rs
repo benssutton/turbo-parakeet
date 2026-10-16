@@ -22,6 +22,34 @@ pub fn runs_test(batch: &RecordBatch) -> Result<RecordBatch> {
     )?))
 }
 
+/// `window_rows >= 1`, else InvalidInput.
+fn window(window_rows: u64) -> Result<u64> {
+    if window_rows == 0 {
+        return Err(Error::InvalidInput("window_rows must be >= 1".into()));
+    }
+    Ok(window_rows)
+}
+
+/// `column` + MinMaxIndex's metrics per column: windows of `window_rows` rows sliding over the
+/// batch's row order.
+pub fn minmax_index(batch: &RecordBatch, window_rows: u64) -> Result<RecordBatch> {
+    let w = window(window_rows)?;
+    table(crate::techniques::skip_index::minmax::minmax_index_impl(
+        &columns(batch)?,
+        w,
+    ))
+}
+
+/// `column` + SetIndex's metrics per column; `max_size` 0 = unlimited.
+pub fn set_index(batch: &RecordBatch, window_rows: u64, max_size: u64) -> Result<RecordBatch> {
+    let w = window(window_rows)?;
+    table(crate::techniques::skip_index::set::set_index_impl(
+        &columns(batch)?,
+        w,
+        max_size,
+    ))
+}
+
 /// `col_name`, `entropy` per column.
 pub fn marginal_entropy(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::marginal_entropy::marginal_entropy_impl(

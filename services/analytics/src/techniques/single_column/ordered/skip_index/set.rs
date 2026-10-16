@@ -314,6 +314,8 @@ mod tests {
         let p = pop(&[Some(1), None, Some(2), None]);
         assert_eq!(whole(&p, 2, 1).overflowed, 3);
         assert_eq!(whole(&p, 2, 2).overflowed, 0);
+        let s = whole(&p, 2, 2);
+        assert_eq!((s.rows.sum, s.values.sum), (3, 3));
     }
 
     #[test]
