@@ -69,6 +69,9 @@ impl<'a> Window<'a> {
 /// The windows starting at `starts` (each `w` rows), in one pass over rows
 /// `starts.start .. starts.end + w − 1`.
 pub(crate) fn scan(pop: &Population, w: usize, max_size: u64, starts: Range<usize>) -> WindowSums {
+    if starts.is_empty() {
+        return WindowSums::default();
+    }
     let (nn, d) = (pop.non_null(), pop.d());
     let mut win = Window::new(pop);
     let mut sums = WindowSums::default();
@@ -433,5 +436,11 @@ mod tests {
                 "expected_overflow_fraction"
             ]
         );
+    }
+
+    #[test]
+    fn empty_start_range_reads_nothing() {
+        let p = pop(&[Some(1), Some(2)]);
+        assert_eq!(scan(&p, 4, 0, 2..2), WindowSums::default());
     }
 }

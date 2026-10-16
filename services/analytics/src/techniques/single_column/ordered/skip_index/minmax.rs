@@ -15,6 +15,9 @@ use super::{
 /// The windows starting at `starts` (each `w` rows), in one pass over rows
 /// `starts.start .. starts.end + w − 1`.
 pub(crate) fn scan(pop: &Population, w: usize, starts: Range<usize>) -> WindowSums {
+    if starts.is_empty() {
+        return WindowSums::default();
+    }
     let (ids, nn, d) = (&pop.ids, pop.non_null(), pop.d());
     let mut sums = WindowSums::default();
     let (mut lows, mut highs) = (VecDeque::<usize>::new(), VecDeque::<usize>::new());
@@ -216,5 +219,11 @@ mod tests {
                 "expected_skip_values"
             ]
         );
+    }
+
+    #[test]
+    fn empty_start_range_reads_nothing() {
+        let p = pop(&[Some(1), Some(2)]);
+        assert_eq!(scan(&p, 4, 2..2), WindowSums::default());
     }
 }

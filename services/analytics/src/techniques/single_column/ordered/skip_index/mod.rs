@@ -591,4 +591,18 @@ mod tests {
             WindowSums::default()
         );
     }
+
+    #[test]
+    fn supported_rejects_nested_and_wide_types() {
+        use crate::techniques::runs_test::supported;
+        for dt in [
+            DataType::List(Box::new(DataType::Int64)),
+            DataType::Array(Box::new(DataType::Int64), 2),
+            DataType::Struct(vec![Field::new("a".into(), DataType::Int64)]),
+            DataType::Null,
+            DataType::Int128,
+        ] {
+            assert!(!supported(&dt), "{dt}");
+        }
+    }
 }

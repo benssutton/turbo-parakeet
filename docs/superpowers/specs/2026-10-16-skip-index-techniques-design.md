@@ -148,7 +148,7 @@ Categorical, Enum. Ineligible (listed, never dropped): List, Array, Struct, Null
 
 ## 4. Rust kernels
 
-`src/techniques/single_column/ordered/skip_index/`, importing only `common`:
+`src/techniques/single_column/ordered/skip_index/`, importing only `common` (and the runs test's `supported`, the shared eligibility list):
 
 - **`mod.rs`** —
   - `Population`: the column as dense **rank ids** `0..d` in §2.4 order (nulls out of band), `counts[d]`,
@@ -196,6 +196,13 @@ baselines need only counts. The follow-up spec wires them into both recommenders
 streaming over the reservoir's blocks (default `block_rows` 65 536 ≥ the default window; a window larger than
 `block_rows` is then not evaluable), with the population from sampled rows and d from the running distinct
 estimate.
+
+Status: in place are `scan(population, w, starts)` per segment, the exact `WindowSums::merge`, baselines computed
+from the population alone, and empty start ranges as no-ops. Still to do in the recommender integration spec:
+(a) a multi-segment entry point (`over_ranges` splits one contiguous `0..k`; a caller must clip each segment's
+window starts to `seg.start..seg.end - w + 1`); (b) injecting N' / d from running statistics instead of
+`Population::counts` (`scan` uses `pop.d()` / `pop.non_null()` as denominators); (c) `Population::from_ids`
+derives `n_null = ids.len() - sum(counts)`, so counts must describe the same rows as the ids.
 
 ## 6. Benchmark
 
