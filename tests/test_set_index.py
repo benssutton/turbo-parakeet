@@ -179,7 +179,14 @@ def test_known_answer_every_dtype(impl, dtype):
     assert r["skip_rows_mean"] == pytest.approx(0.125, rel=1e-12)
     assert r["skip_values_mean"] == pytest.approx(1 / 3, rel=1e-12)
     assert r["skip_rows_std"] == pytest.approx(0.0, abs=1e-15)
+    assert r["skip_values_std"] == pytest.approx(0.0, abs=1e-15)
     assert r["overflow_fraction"] == 0.0
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_window_is_index_granularity_times_granularity(impl):
+    r = stats(impl, pl.Series("x", list(range(20))), index_granularity=2, granularity=3)
+    assert (r["window_rows"], r["n_windows"]) == (6, 15)
 
 
 def test_known_answers_cover_every_eligible_class():
