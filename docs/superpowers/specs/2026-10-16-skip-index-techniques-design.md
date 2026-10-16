@@ -73,14 +73,23 @@ row ≤ v or no row ≥ v; both events contain the all-null window, which is sub
 
   P_v = avoid(N′ − G_v) + avoid(N′ − L_v) − avoid(N′)
 
-**set.** q_v = avoid(n_v) (v absent); the NULL entry has q_null = avoid(n − N′) and is included when n > N′.
+**set.** The window's entries are the distinct non-null values plus, when n > N′, the NULL entry (count
+n − N′). q_u = avoid(n_u) is the probability entry u is absent. With M = `max_size`:
 
-- μ = Σ (1 − q) over all entries (NULL included) — exact `expected_window_distinct`;
-- σ² = Σ q(1 − q) — the variance if entry presences were independent (they are slightly negatively correlated,
-  so σ is slightly high);
-- `expected_overflow_fraction` = 1 − Φ((M + ½ − μ) / σ), a step function (μ > M) when σ = 0;
-- P_v ≈ q_v · Φ((M + ½ − μ_v) / σ), μ_v = μ − (1 − q_v) (expected entry count given v absent);
-- with `max_size` = 0 (unlimited) the Φ factors are 1 (overflow 0) and the baseline is exact.
+- μ = Σ_u (1 − q_u) — exact `expected_window_distinct`;
+- σ² = Σ_u q_u(1 − q_u) + Σ_{u ≠ u′} [avoid(n_u + n_u′) − q_u q_u′] — the exact variance of the entry count;
+- μ_v = Σ_{u ≠ v} (1 − avoid_{n − n_v}(n_u)) — the exact expected entry count given v absent (the window is
+  then a uniform w-subset of the other n − n_v rows; avoid_{n − n_v} is avoid over n − n_v rows);
+- `expected_overflow_fraction` = 1 − Ψ(M + ½ − μ);
+- P_v ≈ q_v · Ψ(M + ½ − μ_v), where Ψ(x) = Φ(x / σ), or [x ≥ 0] when σ = 0 (a normal approximation of the
+  entry count, with continuity correction and the unconditional σ);
+- with M = 0 (unlimited) Ψ ≡ 1, overflow is 0 and the baseline is exact.
+
+Entries are grouped by count: values with equal counts have equal q, so every sum runs over the C distinct
+counts with multiplicities, and the pair sum and the μ_v are O(C²). Since 1 + 2 + … + C ≤ n, C² ≤ 2n: linear in
+the worst case and far smaller in practice. Against permutation Monte Carlo (12 random Zipf columns, M near μ)
+the approximation's worst error was 0.010 on every set baseline metric; a cheaper variant (independent
+presences, μ_v = μ − (1 − q_v)) erred by up to 0.06.
 
 **Both:** `expected_skip_rows` = Σ_v (n_v / N′)·P_v, `expected_skip_values` = (1/d)·Σ_v P_v.
 
@@ -145,8 +154,11 @@ Categorical, Enum. Ineligible (listed, never dropped): List, Array, Struct, Null
   - `Population`: the column as dense **rank ids** `0..d` in §2.4 order (nulls out of band), `counts[d]`,
     `cum[d+1]` (prefix sums), n, N′, n_null.
   - `avoid(n, w, m)` (log space, `libm::lgamma`); Φ via `libm::erfc` (as the runs test).
-  - `WindowSums`: Chan-mergeable (count, mean, M2) for the row-weighted and distinct-weighted skips, plus, for
-    set, Σ e_W, max e_W and the overflow count. `merge` is associative; windows never cross segments.
+  - `WindowSums`: each window's skips are integer numerators — (N′ − rows covered) over N′, (d − values
+    covered) over d, 0 on overflow — summed exactly as Σa and Σa² in `u128`, plus, for set, Σ e_W, max e_W and
+    the overflow count. `merge` adds, so it is exact and associative whatever the split; windows never cross
+    segments. mean = Σa / (K·den), std = √(K·Σa² − (Σa)²) / (K·den), the numerator exact in i128 (f64 on
+    overflow, as the runs test's variance).
 - **`minmax.rs`** — `scan(&Population, segment) -> WindowSums`: two monotonic deques over the segment's rank ids
   (nulls skipped). Per window: row skip = 1 − (cum[hi+1] − cum[lo]) / N′, distinct skip = 1 − (hi − lo + 1) / d;
   all-null window → 1. Baseline per §2.5.
@@ -158,8 +170,9 @@ plus `baseline(population, w)`. One-shot: one segment, the whole column, populat
 StreamingRecommender integration supplies the reservoir's contiguous blocks as segments and a population built
 from the sampled rows; nothing in the reservoir changes in this spec.
 
-**Parallelism:** columns in parallel (rayon); within a long column, window starts are split into ranges, each
-range warms its window over its first w rows then slides, and ranges merge in order. Each column is rechunked
+**Parallelism:** columns in parallel (rayon); within a long column, window starts are split into ranges of
+max(2¹⁶, 4w) starts (set: also ≥ d, so zeroing its per-id array never outweighs the scan); each range warms its
+window over its first w − 1 rows then slides, and ranges merge. Each column is rechunked
 once (zero-copy if already one chunk), so input chunk boundaries never affect results.
 
 **Entry points:** `bindings/api/techniques.rs::minmax_index(batch, window_rows: u64)` and
@@ -193,7 +206,7 @@ estimate.
 |---|---|
 | `large_dataset.arrow` | realistic mix |
 | narrow 10M × 4, clustered (sorted / long runs, `runs_int` / `runs_str`) | index-friendly |
-| narrow 10M × 4, random high cardinality | worst case for set (overflow) and minmax (wide ranges) |
+| narrow 10M × 4, random, cardinality 100 000 | worst case for set (overflow) and minmax (wide ranges) |
 | wide 1M × 100 | parallelism across columns |
 
 The harness reports algorithmic (Polars ÷ Rust@1), parallel and total speedups.
@@ -203,8 +216,11 @@ The harness reports algorithmic (Polars ÷ Rust@1), parallel and total speedups.
 `tests/test_minmax_index.py` and `tests/test_set_index.py`, via `tests/harness.py`:
 
 1. **Contract** (every implementation): schema, canonical order, ineligible rows null, `to_arrow()` native.
-2. **Reference agreement** on `large_dataset.arrow` and seeded fixtures: counts exact; means, stds and baselines
-   within `RTOL = 1e-9`; NaN matches NaN.
+2. **Reference agreement** on `large_dataset.arrow` and seeded fixtures: counts exact; observed means and stds
+   within `RTOL = 1e-9` (`ATOL = 1e-12`); the `expected_*` baselines within `BASELINE_RTOL = 1e-6` (sums of
+   `lgamma` differences, ~10⁸ at 10⁷ rows, from two libms); NaN matches NaN. A seeded fuzz also checks both
+   implementations against a brute-force oracle in the test file (every window evaluated directly from the
+   §2.3 definitions).
 3. **Known answers** (both implementations):
    - `A A A B A A A C`, w = 4 (5 windows; counts A 6, B 1, C 1):
      - set, `max_size` 0: skip_rows mean 0.125, std 0; skip_values mean 1/3, std 0; window_distinct mean 2, max 2;
@@ -217,13 +233,15 @@ The harness reports algorithmic (Polars ÷ Rust@1), parallel and total speedups.
    - `[0.0, -0.0, NaN]` canonicalisation; a multi-chunk input equals the single-chunk result; every eligible dtype
      once.
 4. **Statistical correctness** (in place of the conclusions block — there are none):
-   - Monte Carlo baseline: the mean observed skip over 2 000 seeded shuffles matches `expected_*` within 4σ of the
-     Monte Carlo error for minmax and unlimited set; within 0.02 absolute for set with finite `max_size` (normal
-     approximation), including `expected_overflow_fraction`.
-   - Alignment invariance: a column of repeated tiles gives the same means from any starting row.
+   - Monte Carlo baseline: under a random order every window is a uniform w-subset of the rows, so the mean skip
+     over 20 000 seeded w-subsets estimates `expected_*`. Minmax and unlimited set match within 5 Monte Carlo
+     standard errors (+ 1e-9); set with finite `max_size` within 0.02 absolute (normal approximation),
+     including `expected_overflow_fraction` and `expected_window_distinct`.
+   - Hand-worked baseline: `1 2 3 4`, w = 2 → minmax `expected_skip_values` = `expected_skip_rows` = 1/3
+     (6 equally likely pairs, 8 of 24 query–pair combinations skipped); unlimited set 1/2.
 
-Rust unit tests: `WindowSums` merged at every split point of a small column equal the one-segment result; Chan's
-merge equals a direct two-pass std; `avoid` edges (m = 0 → 1; n − m < w → 0).
+Rust unit tests: `WindowSums` merged at every split point of a small column equal the one-segment result; the
+std from the integer sums equals a direct two-pass std; `avoid` edges (m = 0 → 1; n − m < w → 0).
 
 ## 8. Documentation
 
