@@ -6,7 +6,6 @@ Accuracy only — nothing here is timed.
 """
 
 import struct
-from pathlib import Path
 
 import polars as pl
 import pyarrow as pa
@@ -15,9 +14,7 @@ import pytest
 from analytics.describe import _sizes
 from analytics.gcd import GcdRust
 from analytics.recommend import OneShotRecommender, StreamingRecommender
-from datagen import describe_mixed, stringified
-
-LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
+from datagen import describe_mixed, large_dataset, large_dataset_mixed, stringified
 
 CANDIDATE = pl.Struct(
     {
@@ -327,8 +324,11 @@ def test_parity_with_list_columns(batch_rows):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_rows", [7_919, 50_000])
-def test_parity_on_the_large_dataset(batch_rows):
-    frame = pl.read_ipc(LARGE)
+@pytest.mark.parametrize(
+    "make", [large_dataset, large_dataset_mixed], ids=["large", "mixed"]
+)
+def test_parity_on_the_large_dataset(batch_rows, make):
+    frame = make()
     assert_parity(stream(frame, batch_rows), frame, batch_rows >= frame.height)
 
 
@@ -366,7 +366,7 @@ def test_zstd_sizes_are_those_of_a_file_written_in_blocks():
 
 @pytest.mark.slow
 def test_sampled_zstd_estimate_is_within_ten_percent():
-    frame = pl.read_ipc(LARGE)
+    frame = large_dataset()
     full = stream(frame, 10_000, block_rows=4_096, reservoir_rows=frame.height + 4_096)
     sampled = stream(frame, 10_000, block_rows=4_096, reservoir_rows=16_384)
     for a, b in zip(full.iter_rows(named=True), sampled.iter_rows(named=True)):

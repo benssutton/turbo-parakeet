@@ -9,7 +9,6 @@ the Python cardinality estimators. Accuracy only — nothing here is timed.
 import re
 from datetime import datetime, time, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -19,9 +18,7 @@ import pytest
 
 from analytics.describe import _sizes
 from analytics.recommend import OneShotRecommender, StreamingRecommender
-from datagen import describe_mixed, stringified
-
-LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
+from datagen import describe_mixed, large_dataset, stringified
 
 
 def rec(s: pl.Series, **params) -> dict:
@@ -823,7 +820,7 @@ ORACLE_FRAMES = [
         lambda: {"strings": stringified(describe_mixed(500))}, id="stringified"
     ),
     pytest.param(
-        lambda: {"large": pl.read_ipc(LARGE)}, id="large", marks=pytest.mark.slow
+        lambda: {"large": large_dataset()}, id="large", marks=pytest.mark.slow
     ),
 ]
 

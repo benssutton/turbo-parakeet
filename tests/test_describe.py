@@ -15,7 +15,7 @@ import pyarrow as pa
 import pytest
 
 from analytics.describe import Describe, _sizes, estimators
-from datagen import describe_mixed, stringified
+from datagen import describe_mixed, large_dataset, large_dataset_mixed, stringified
 from harness import (
     assert_agrees,
     assert_contract,
@@ -25,9 +25,6 @@ from harness import (
     run,
     with_metrics,
 )
-
-LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Conclusions — estimators (pure functions)
@@ -487,8 +484,11 @@ def test_agrees_with_reference(impl):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("impl", OTHERS)
-def test_agrees_with_reference_on_large_dataset(impl):
-    frames = {"large": pl.read_ipc(LARGE)}
+@pytest.mark.parametrize(
+    "make", [large_dataset, large_dataset_mixed], ids=["large", "mixed"]
+)
+def test_agrees_with_reference_on_large_dataset(impl, make):
+    frames = {"large": make()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -944,7 +944,7 @@ def test_stringified_describe_mixed(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_stringified_large_dataset_columns(impl):
-    large = pl.read_ipc(LARGE).head(5_000)
+    large = large_dataset().head(5_000)
     cols = [
         c
         for c, dt in large.schema.items()

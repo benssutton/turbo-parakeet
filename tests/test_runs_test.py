@@ -12,14 +12,13 @@ Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 
 import math
 import random
-from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pytest
 
 from analytics.runs_test.polars import exact_moments
-from datagen import mixed_dtypes, runs_int, runs_str
+from datagen import large_dataset, large_dataset_mixed, mixed_dtypes, runs_int, runs_str
 from harness import (
     assert_agrees,
     assert_contract,
@@ -34,7 +33,6 @@ ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
 CHUNK = 1 << 16  # runs_test.rs parallel chunk size
-LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,8 +107,11 @@ def test_contract(impl):
 
 
 @pytest.mark.parametrize("impl", OTHERS)
-def test_agrees_with_reference_large_dataset(impl):
-    frames = {"large": pl.read_ipc(LARGE)}
+@pytest.mark.parametrize(
+    "make", [large_dataset, large_dataset_mixed], ids=["large", "mixed"]
+)
+def test_agrees_with_reference_large_dataset(impl, make):
+    frames = {"large": make()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 

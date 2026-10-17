@@ -10,13 +10,12 @@ Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 
 import math
 import random
-from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pytest
 
-from datagen import mixed_dtypes, runs_int, runs_str
+from datagen import large_dataset, large_dataset_mixed, mixed_dtypes, runs_int, runs_str
 from harness import (
     assert_agrees,
     assert_contract,
@@ -37,7 +36,6 @@ from skip_index_helpers import (
 PKG = "analytics.minmax_index"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
-LARGE = Path(__file__).parent / "data" / "large_dataset.arrow"
 
 TOY = [0, 0, 0, 1, 0, 0, 0, 2]  # A A A B A A A C (spec §7)
 
@@ -89,8 +87,11 @@ def test_ineligible_columns_are_listed(impl):
 
 @pytest.mark.parametrize("impl", OTHERS)
 @pytest.mark.parametrize("params", [{}, {"index_granularity": 1_024, "granularity": 2}])
-def test_agrees_with_reference_large_dataset(impl, params):
-    frames = {"large": pl.read_ipc(LARGE)}
+@pytest.mark.parametrize(
+    "make", [large_dataset, large_dataset_mixed], ids=["large", "mixed"]
+)
+def test_agrees_with_reference_large_dataset(impl, params, make):
+    frames = {"large": make()}
     cls = load(impl)
     assert_agrees(
         cls(**params), run(cls, frames, **params), run(reference(PKG), frames, **params)
