@@ -3,7 +3,7 @@ MinMax skip-index speed benchmark: MinMaxIndexRust vs MinMaxIndexPolars (referen
 
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_minmax_index.py
 
-Default window (8 192 rows). Shapes: large_dataset.arrow (realistic mix); clustered 10M x 4
+Default window (8 192 rows). Shapes: large_dataset (realistic mix); clustered 10M x 4
 (runs of ~1 000 rows, cardinality 1 000, int + string: index-friendly); random 10M x 4
 (cardinality 100 000: wide window ranges); wide 1M x 100 (mean runs 1 / 10 / 100 / 1 000;
 parallelism across columns). Results: spec 2026-10-16-skip-index-techniques §10.

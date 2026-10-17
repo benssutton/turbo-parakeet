@@ -3,9 +3,9 @@ Top-k speed benchmark: TopKHeavyKeeperRust vs TopKSpaceSavingRust vs TopKPolars 
 
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_top_k.py
 
-Shapes: large_dataset.arrow (realistic mix); narrow / long (parallelism inside a column:
+Shapes: large_dataset (realistic mix); narrow / long (parallelism inside a column:
 SpaceSaving merges 2^20-row chunks, HeavyKeeper cannot); wide (parallelism across columns);
-zipf 10M x 4 (stream-like skew, 1M possible values). `agrees` on large_dataset.arrow can be
+zipf 10M x 4 (stream-like skew, 1M possible values). `agrees` on large_dataset can be
 false from ties at the k-th count (agreement precision is a lower bound there).
 """
 

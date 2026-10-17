@@ -5,7 +5,7 @@ The objectives these serve (target engines, formats, row order, queries, validat
 
 ToDos are broken into thematic sections in a suggested priority order, but items within each section are in no priority order.  The order in which these are implemented should favour efficiency and code quality.  Item numbers are stable: CLAUDE.md and the specs refer to them.
 
-**Agreed starting order:** 6 + 5g → 1.0 (spec) → 4 + 2 (the spec's first increment) → 1a–g.  Do 5c (rename) just before the first new Python package (ToDo 3 or 8).
+**Agreed starting order:** 1.0 (spec) → 4 + 2 (the spec's first increment) → 1a–g (6 + 5g done).  Do 5c (rename) just before the first new Python package (ToDo 3 or 8).
 
 ---
 The following ToDos 1 to 7 are largely intended as a clean up of existing code and implementation of encoding and skipping index recommendations.
@@ -50,15 +50,12 @@ c. Rename the Python package to `turbo_parakeet`, with maturin's mixed layout: `
 d. Today no technique accepts a column / pair / triplet list: `add()` takes frames only, and `Technique.enumerate` always runs every compatible combination (for the bloomfilter, pairs within one value family).  Add the optional explicit list; ToDos 8 and 9 need it (101 columns = 166 650 triplets).
 e. Interfaces should be uniform where parameters have the same meaning, and should be consistent in optional parameters, again where applicable.
 f. An audit of benchmarks should be carried out to ensure speed, accuracy and test sets are uniform.
-g. Remove Parquet (the objectives already forbid it): benchmark results (tests/performance/harness.py, benchmark_top_k_accuracy.py, benchmark_ams_entropy.py, benchmark_recommend.py) move to Arrow IPC `.arrow` — done together with ToDo 6, which edits the same harness.  The transitive `polars-parquet` dependency arrives through the polars crate's default features (Cargo.toml does not set `default-features = false`): start there, which should also shorten builds.
+g. **Done** (spec 2026-10-17-generated-dataset-design.md): benchmark results are Arrow IPC; polars is built without default features (no polars-parquet); tests/test_layering.py guards both.
 
-6. \tests\data\large_dataset.arrow should be replaced with an equivalent function that generates this data to avoid checking in static data, as well as provide future flexibility.  Done together with 5g (same benchmark harness).
-- Its shape is easy to reproduce: 50 000 rows, `identity` plus 25 repeating groups of (Int32, Float64, 3-character String, Date), with distinct counts stepping down from 100 to 1, no nulls and random order.
-- Add settings for null rate, run length and clustering: without them null exemplars (2) and the order-dependent recommendations (1a, 1d, 1e, 3) cannot be tested on it.
-- Expect hard-coded numbers to change (e.g. the MinHash recall 389/625 in CLAUDE.md, ZSTD sizes).
-- Deleting the file does not shrink the repository (392 MiB pack); rewriting history is optional and not decided.  Run `git gc` (orphaned pack `.idx` files).
+6. **Done** (spec 2026-10-17-generated-dataset-design.md): `datagen.large_dataset(n_rows, seed, null_rate, mean_run, clustering)` and `large_dataset_mixed()` replace tests/data/large_dataset.arrow.  The git pack still holds the old blob (history not rewritten).
 
 7. Any remaining follow-ups tracked in CLAUDE.md.  The Bloom and MinHash follow-ups are prerequisites for ToDo 10: BloomRust is ≈ 6× slower than exact sets on the wide benchmark, and MinHash misses containment pairs (overlap 1, low Jaccard) — exactly the foreign-key → primary-key case.
+- Recommender parity, string columns whose null slots hold bytes (e.g. built with `pl.when(...).then(None)` or `Series.set`): one-shot measures those bytes in its cast candidates (`rec_arrow_size_bytes`), streaming does not; `assert_parity` excuses the gap only for the original type.  Decide which is right (an Arrow cast keeps the bytes; a writer may not) and align them.
 
 ---
 The following ToDo 8 is largely aimed at identifying an optimal sort-order on the dataset to increase the efficiency of sparse indexes such as the ClickHouse primary key.

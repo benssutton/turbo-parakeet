@@ -4,7 +4,7 @@ ThreewayEntropyPolars (reference).
 
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_threeway_entropy.py
 
-large_dataset.arrow is cut to its first 40 columns (9,880 triplets): all 101 columns
+large_dataset is cut to its first 40 columns (9,880 triplets): all 101 columns
 give 166,650 triplets (~65 s per Rust run), far past the reference's budget.
 """
 

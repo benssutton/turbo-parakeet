@@ -24,14 +24,14 @@ import pyarrow as pa
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))  # tests/: datagen
 
-from datagen import describe_narrow, describe_wide  # noqa: E402
+from datagen import describe_narrow, describe_wide, large_dataset  # noqa: E402
 
 from analytics.describe import _sizes  # noqa: E402
 
 from analytics.recommend import OneShotRecommender, StreamingRecommender  # noqa: E402
 
 DATASETS = {
-    "large_dataset": lambda: pl.read_ipc(HERE.parent / "data" / "large_dataset.arrow"),
+    "large_dataset": large_dataset,
     "narrow 1M x 4": lambda: describe_narrow(1_000_000),
     "wide 50K x 100": lambda: describe_wide(50_000, 100),
     "zipf 1M x 4": lambda: zipf_frame(),
