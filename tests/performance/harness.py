@@ -45,9 +45,9 @@ sys.path.insert(
 )  # tests/ -> `import datagen` in benchmark scripts
 
 import analytics  # noqa: E402
+from datagen import large_dataset as generated_large_dataset  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
-LARGE_DATASET = Path(__file__).parents[1] / "data" / "large_dataset.arrow"
 SINGLE_THREAD_ENV = {"RAYON_NUM_THREADS": "1", "POLARS_MAX_THREADS": "1"}
 _CHILD_ENV = "ANALYTICS_BENCH_CHILD"
 
@@ -62,11 +62,11 @@ class Dataset:
 
 
 def large_dataset(columns: int | None = None, exclude: tuple[str, ...] = ()) -> Dataset:
-    """tests/data/large_dataset.arrow (50K rows × 101 cols), optionally only its first `columns`."""
-    label = "large_dataset.arrow" + (f" (first {columns} cols)" if columns else "")
+    """datagen.large_dataset() (50K rows × 101 cols, generated), optionally only its first `columns`."""
+    label = "large_dataset" + (f" (first {columns} cols)" if columns else "")
 
     def make() -> dict[str, pl.DataFrame]:
-        df = pl.read_ipc(LARGE_DATASET)
+        df = generated_large_dataset()
         return {"large": df.select(df.columns[:columns]) if columns else df}
 
     return Dataset(label, make, exclude)
