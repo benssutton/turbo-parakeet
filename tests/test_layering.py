@@ -1,7 +1,10 @@
 """scripts/check_layering.py: the Rust crate's dependency rule (bindings -> recommenders ->
-techniques -> common), on synthetic trees and on the real one."""
+techniques -> common), on synthetic trees and on the real one.
+Also: no Parquet anywhere (CLAUDE.md § Project Objectives, Formats)."""
 
 import importlib.util
+import re
+import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -78,3 +81,49 @@ def test_comments_are_ignored(tmp_path):
 
 def test_the_real_tree_has_no_violations():
     assert layering.violations() == []
+
+
+ROOT = HERE.parent
+PARQUET = re.compile(
+    r"read_parquet|write_parquet|scan_parquet|sink_parquet|pyarrow\.parquet|\.parquet[\"']"
+)
+
+
+def parquet_uses(paths: list[Path]) -> list[str]:
+    """`file:line` for every line that reads or writes Parquet."""
+    return [
+        f"{p.name}:{i}"
+        for p in paths
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if PARQUET.search(line)
+    ]
+
+
+def test_parquet_uses_are_found(tmp_path):
+    files = tree(
+        tmp_path,
+        {
+            "a.py": 'df.write_parquet(out)\nprint("no Parquet here")\n',
+            "b.py": 'import pyarrow.parquet as pq\nx = "r.parquet"\n',
+        },
+    )
+    assert parquet_uses(sorted(files.glob("*.py"))) == ["a.py:1", "b.py:1", "b.py:2"]
+
+
+def test_no_python_file_uses_parquet():
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "tests/*.py", "services/*.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    paths = [ROOT / t for t in tracked if ROOT / t != Path(__file__).resolve()]
+    assert paths and parquet_uses(paths) == []
+
+
+def test_polars_crate_builds_without_parquet():
+    cargo = (ROOT / "services" / "analytics" / "Cargo.toml").read_text(encoding="utf-8")
+    polars = next(line for line in cargo.splitlines() if line.startswith("polars ="))
+    assert "default-features = false" in polars
+    assert "parquet" not in cargo
