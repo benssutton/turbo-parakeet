@@ -18,10 +18,10 @@ Scores, per run (`top` = the reported items, true = exact counts):
   sketch_bytes         the sketch's accounted bytes (null for the reference)
 
 --rows N (e.g. --rows 100_000_000): the scale run instead — zipf_11 only, k = 5, 1× budget,
-written to results/top_k_scale.parquet.
+written to results/top_k_scale.arrow.
 
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_top_k_accuracy.py
-Results -> tests/performance/results/top_k_accuracy.parquet
+Results -> tests/performance/results/top_k_accuracy.arrow
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def child(data: str, column: str, name: str, k: int, budget: int, out: str) -> N
     result = cls(k=k, memory_bytes=budget).add({"t": frame}).result()
     elapsed = time.perf_counter() - start
     _, peak_after = memory_mb()
-    result.select("top_k", "sketch_bytes").write_parquet(out)
+    result.select("top_k", "sketch_bytes").write_ipc(out)
     print(
         json.dumps(
             {
@@ -157,7 +157,7 @@ def main(n_rows: int, scale: bool) -> None:
                         file=sys.stderr,
                         flush=True,
                     )
-                    out = str(Path(tmp) / "out.parquet")
+                    out = str(Path(tmp) / "out.arrow")
                     try:
                         info = run_one(
                             data, column, name, k, budget or default_budget(k), out
@@ -172,14 +172,15 @@ def main(n_rows: int, scale: bool) -> None:
                     except subprocess.TimeoutExpired:
                         row["status"] = "timeout"
                         continue
-                    result = pl.read_parquet(out)
+                    result = pl.read_ipc(out, memory_map=False)
                     row.update(info)
                     row["sketch_bytes"] = result["sketch_bytes"][0]
                     row.update(score(result["top_k"][0].to_list(), truth, k))
     df = pl.DataFrame(rows, infer_schema_length=None)
     RESULTS_DIR.mkdir(exist_ok=True)
-    df.write_parquet(
-        RESULTS_DIR / ("top_k_scale.parquet" if scale else "top_k_accuracy.parquet")
+    df.write_ipc(
+        RESULTS_DIR / ("top_k_scale.arrow" if scale else "top_k_accuracy.arrow"),
+        compression="zstd",
     )
     with pl.Config(tbl_rows=-1, tbl_cols=-1):
         print(df)

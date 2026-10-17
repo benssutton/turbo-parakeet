@@ -20,7 +20,7 @@ after converting keys in place; the exact path about 9. peak_mb differences ther
 advantage of not keeping rows at all is a streaming one and is not measured here.
 
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_ams_entropy.py
-Results -> tests/performance/results/ams_entropy.parquet
+Results -> tests/performance/results/ams_entropy.arrow
 """
 
 from __future__ import annotations
@@ -116,7 +116,7 @@ def child(package: str, index: int, name: str, out: str) -> None:
     current_before, peak_before = memory_mb()
     result = cls().add(frames).result()
     _, peak_after = memory_mb()
-    result.write_parquet(out)
+    result.write_ipc(out)
     print(
         json.dumps(
             {
@@ -186,7 +186,7 @@ def main() -> None:
                         file=sys.stderr,
                         flush=True,
                     )
-                    out = str(Path(tmp) / f"{name}.parquet")
+                    out = str(Path(tmp) / f"{name}.arrow")
                     start = time.perf_counter()
                     try:
                         proc = subprocess.run(
@@ -215,14 +215,14 @@ def main() -> None:
                     info = json.loads(proc.stdout.strip().splitlines()[-1])
                     row["peak_mb"] = info["peak_mb"]
                     row["peak_is_lower_bound"] = info["peak_is_lower_bound"]
-                    results[name] = pl.read_parquet(out)
+                    results[name] = pl.read_ipc(out, memory_map=False)
                     if name != module.REFERENCE and module.REFERENCE in results:
                         row.update(
                             errors(package, results[name], results[module.REFERENCE])
                         )
     df = pl.DataFrame(rows)
     RESULTS_DIR.mkdir(exist_ok=True)
-    df.write_parquet(RESULTS_DIR / "ams_entropy.parquet")
+    df.write_ipc(RESULTS_DIR / "ams_entropy.arrow", compression="zstd")
     with pl.Config(tbl_rows=-1, tbl_cols=-1):
         print(df)
 

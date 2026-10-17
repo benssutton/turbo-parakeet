@@ -262,7 +262,7 @@ def _report(package: str, rows: list[dict]) -> pl.DataFrame:
         timestamp=pl.lit(stamp),
     )
     RESULTS_DIR.mkdir(exist_ok=True)
-    path = RESULTS_DIR / f"{technique}_{stamp}.parquet"
-    frame.write_parquet(path)
+    path = RESULTS_DIR / f"{technique}_{stamp}.arrow"
+    frame.write_ipc(path, compression="zstd")
     print(f"\nsaved {path}")
     return frame

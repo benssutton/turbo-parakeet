@@ -5,11 +5,11 @@ assumes IMPLEMENTATIONS.
 Also, per dataset: one-shot at top_k=0 (the cost of building the top_k maps; the ranking and frequency-ordered dictionary run regardless), the Polars top-k oracle's time
 (the deterministic baseline), and per dictionary column the Arrow ZSTD size of the
 frequency-ordered dictionary against pyarrow's first-seen dictionary_encode
-(→ results/recommend_dictionary_order.parquet).
+(→ results/recommend_dictionary_order.arrow).
 
 Run: /c/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_recommend.py
 
-Results → tests/performance/results/recommend.parquet (git-ignored).
+Results → tests/performance/results/recommend.arrow (git-ignored).
 `peak_mb` is the process's peak memory so far (dataset included), where the OS reports it.
 """
 
@@ -178,9 +178,11 @@ def main() -> None:
             print(rows[-1])
     out = HERE / "results"
     out.mkdir(exist_ok=True)
-    pl.DataFrame(rows).write_parquet(out / "recommend.parquet")
+    pl.DataFrame(rows).write_ipc(out / "recommend.arrow", compression="zstd")
     if orders:
-        pl.DataFrame(orders).write_parquet(out / "recommend_dictionary_order.parquet")
+        pl.DataFrame(orders).write_ipc(
+            out / "recommend_dictionary_order.arrow", compression="zstd"
+        )
         with pl.Config(tbl_rows=-1):
             print(pl.DataFrame(orders).sort("gain"))
 
