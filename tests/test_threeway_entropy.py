@@ -4,6 +4,8 @@ Three-way joint entropy accuracy tests — every implementation in analytics.thr
 Reference: ThreewayEntropyPolars. mixed_dtypes: 18 eligible columns → C(18,3) = 816 triplets.
 """
 
+import math
+
 import polars as pl
 import pytest
 
@@ -69,3 +71,31 @@ def test_conclusions():
 def test_zero_row_frame_is_ineligible(impl):
     df = pl.DataFrame({c: pl.Series([], dtype=pl.Int64) for c in "abc"})
     assert run(load(impl), {"t": df})["status"].to_list() == ["ineligible"]
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_composite_key_and_constant_triplets(impl):
+    n = 1_000
+    keyed = pl.DataFrame(
+        {
+            "hi": [i // 10 for i in range(n)],
+            "lo": [i % 10 for i in range(n)],
+            "k": [7] * n,
+        }
+    )
+    assert run(load(impl), {"t": keyed})["h_abc"].item() == pytest.approx(
+        math.log2(n), rel=1e-9
+    )
+    constant = pl.DataFrame({c: [1] * n for c in "abc"})
+    assert run(load(impl), {"t": constant})["h_abc"].item() == pytest.approx(
+        0.0, abs=1e-12
+    )
+
+
+def test_ams_num_samples_checked():
+    from analytics.threeway_entropy import ThreewayEntropyAmsRust
+
+    with pytest.raises(ValueError, match="num_samples"):
+        ThreewayEntropyAmsRust(num_samples=0)
+    with pytest.raises(ValueError, match="num_samples"):
+        ThreewayEntropyAmsRust(num_samples=2**20 + 1)

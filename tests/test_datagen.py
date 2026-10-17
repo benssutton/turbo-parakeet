@@ -1,6 +1,7 @@
 """The planted structure that other tests and benchmarks rely on."""
 
 import polars as pl
+import pytest
 from polars.testing import assert_frame_equal
 
 from datagen import (
@@ -12,9 +13,14 @@ from datagen import (
     integer_random,
     low_cardinality,
     mixed_dtypes,
+    near_constant,
+    near_unique,
     related_frames,
+    runs_int,
+    runs_str,
     similar_frames,
     stringified,
+    top_k_streams,
 )
 
 
@@ -131,3 +137,60 @@ def test_describe_benchmark_shapes():
         "list_str": pl.List(pl.String),
         "struct": pl.Struct({"a": pl.Int64, "b": pl.String}),
     }
+
+
+def test_near_unique():
+    df = near_unique(10_000)
+    assert df.columns == [
+        "u0",
+        "u1",
+        "u2",
+        "key_hi",
+        "key_lo",
+        "skewed",
+        "mid",
+        "low",
+        "flag",
+    ]
+    assert df.select(pl.struct("key_hi", "key_lo").n_unique()).item() == 10_000
+    assert 9_985 <= df["u0"].n_unique() < 10_000
+    assert 0.93 < (df["skewed"] == 0).mean() < 0.97
+    assert df["low"].n_unique() == 10
+    assert df["flag"].sum() == 1
+    assert near_unique(1_000).equals(near_unique(1_000))
+
+
+def test_near_constant():
+    df = near_constant(100_000)
+    assert df.shape == (100_000, 3)
+    assert df.columns == ["f0", "f1", "f2"]
+    assert df.sum().row(0) == (10, 10, 10)
+    assert (df.sum_horizontal() <= 1).all()
+
+
+def test_top_k_streams_shape_and_determinism():
+    df = top_k_streams(20_000)
+    assert df.columns == ["zipf_15", "zipf_11", "zipf_08", "flat", "skewed", "zipf_str"]
+    assert df.height == 20_000
+    assert df.equals(top_k_streams(20_000))
+    assert top_k_streams(20_000, columns=["zipf_08"])["zipf_08"].equals(df["zipf_08"])
+    share = {
+        c: df[c].value_counts(sort=True)["count"][0] / df.height for c in df.columns
+    }
+    assert share["zipf_15"] > share["zipf_11"] > share["zipf_08"] > share["flat"]
+    assert 0.93 < share["skewed"] < 0.97
+    assert df["zipf_str"][0] == f"item_{df['zipf_11'][0]}"
+
+
+def test_runs_generators_plant_mean_run_length():
+    df = runs_int(100_000, 2, mean_run=50, cardinality=1_000)
+    assert df.columns == ["c0", "c1"] and df.height == 100_000
+    assert_frame_equal(df, runs_int(100_000, 2, mean_run=50, cardinality=1_000))
+    for c in df.columns:
+        n_runs = 1 + (df[c].diff() != 0).sum()
+        assert 100_000 / n_runs == pytest.approx(50, rel=0.1)
+    single = runs_int(1_000, 1, mean_run=1, cardinality=1_000_000)
+    assert (single["c0"].diff() != 0).sum() > 990  # every row its own draw
+    s = runs_str(1_000, 1, mean_run=10, cardinality=5)
+    assert s.columns == ["s0"] and s.schema["s0"] == pl.String
+    assert s["s0"][0].startswith("v")

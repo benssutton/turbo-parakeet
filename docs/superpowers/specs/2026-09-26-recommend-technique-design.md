@@ -5,7 +5,7 @@
 > **Superseded in part** by [the Arrow FFI interface](2026-09-27-arrow-ffi-interface-design.md): Int128 / UInt128 columns are now ineligible (so the Int128 rules, the "over 38 digits → null" GCD case and null sizes / recommendations for nested Int128 no longer apply), and the Rust entry points are `api.rs` functions behind the `analytics.analytics` binding, not Polars plugins.
 
 **Date:** 2026-09-26
-**Status:** Implemented (branch `recommend-technique`)
+**Status:** Implemented (plan docs/superpowers/plans/2026-09-26-recommend-technique.md)
 **Amended by:** [recommender parity](2026-10-01-recommender-parity-design.md) — estimator rule, `class`, rendered min / max values; entropy, top-5, `population_rows` and Duj1 removed.
 **Builds on:** Spec A, `docs/superpowers/specs/2026-09-26-describe-technique-design.md` (the Describe technique).
 

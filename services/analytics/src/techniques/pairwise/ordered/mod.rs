@@ -1,5 +1,6 @@
 //! Pairwise techniques that compare row i of one column with row i of the other.
 
+pub(crate) mod ams_joint_entropy;
 pub(crate) mod ari;
 pub(crate) mod chi_squared;
 pub(crate) mod contingency;

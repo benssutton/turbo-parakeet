@@ -1,6 +1,6 @@
 # Java binding for `describe_and_recommend` — design
 
-Status: approved, not implemented.
+Status: implemented (plan docs/superpowers/plans/2026-09-28-java-binding.md).
 
 ## 1. Goal
 

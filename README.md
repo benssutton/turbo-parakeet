@@ -1,6 +1,7 @@
 # turbo-parakeet
 
-Finds patterns and relationships between columns, within and between dataframes. Python API
+Recommends how to store and query tabular data efficiently in ClickHouse, DataFusion and
+Polars, from patterns and relationships between columns within and between dataframes. Python API
 over a Rust extension (pyo3, Arrow at the FFI boundary), with a Java binding over the same
 C ABI. Technique and architecture details: [CLAUDE.md](CLAUDE.md).
 
@@ -29,12 +30,13 @@ Run `python scripts/check.py ci` with the p312 Python. It runs these steps, in o
 |---|---|
 | `fmt-check` | `cargo fmt --check` and `black --check` |
 | `lint` | clippy for both feature sets (`-D warnings`) and ruff |
+| `layering` | `scripts/check_layering.py`: the Rust crate's one-way module dependencies (bindings → recommenders → techniques → common) |
 | `build` | `maturin develop --release` |
 | `test-rust` | `cargo test --lib` |
 | `test-py` | pytest on 4 pytest-xdist workers (`-n 4` in `pytest.ini`; `-n 0` for serial) |
 | `test-java` | builds the C library with Cargo profile `ci` (release without fat LTO), then `./mvnw test` with JaCoCo |
 
-Groups: `fast` = `fmt-check` + `lint`; `check` = everything except `test-java`; `ci` = all of
+Groups: `fast` = `fmt-check` + `lint` + `layering`; `check` = everything except `test-java`; `ci` = all of
 the above. Any step can also be run on its own (`python scripts/check.py test-py`).
 
 On demand:

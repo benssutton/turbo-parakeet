@@ -2,9 +2,11 @@
 Seeded toy-data generators shared by accuracy tests (small sizes) and speed
 benchmarks (large sizes). Every generator is deterministic for a given seed.
 
-Ordered techniques:   mixed_dtypes, low_cardinality
+Ordered techniques:   mixed_dtypes, low_cardinality, near_unique
 Multi-set techniques: related_frames, similar_frames
 Per-column (GCD):     integer_multiples, integer_random
+Per-column, ordered (runs test): runs_int, runs_str
+Per-column (top-k):     top_k_streams
 Per-column (describe): describe_mixed, stringified (tests); describe_narrow, describe_wide, describe_nested (benchmarks)
 """
 
@@ -138,6 +140,89 @@ def low_cardinality(
     return pl.DataFrame(cols)
 
 
+def near_unique(n_rows: int = 1_000_000, seed: int = 42) -> pl.DataFrame:
+    """Int64 columns that stress entropy sketches and the exact kernels' hash-map path:
+    u0–u2 near-unique (a permutation with ~0.1% of rows copying another row's value), a
+    genuine composite key key_hi = i // 1000, key_lo = i % 1000 over shuffled i (unique
+    together), `skewed` (95% one value, the rest over 50,000 others), `mid` / `low`
+    with ~1,000 / 10 values, and `flag`, a near-constant 0/1 column with one 1 per
+    10,000 rows."""
+    rng = np.random.default_rng(seed)
+    cols = {}
+    for i in range(3):
+        values = rng.permutation(n_rows)
+        dup = rng.choice(n_rows, n_rows // 1000, replace=False)
+        values[dup] = values[rng.integers(0, n_rows, dup.size)]
+        cols[f"u{i}"] = values
+    perm = rng.permutation(n_rows)
+    cols["key_hi"] = perm // 1000
+    cols["key_lo"] = perm % 1000
+    cols["skewed"] = np.where(
+        rng.random(n_rows) < 0.95, 0, rng.integers(1, 50_001, n_rows)
+    )
+    cols["mid"] = rng.integers(0, 1_000, n_rows)
+    cols["low"] = rng.integers(0, 10, n_rows)
+    cols["flag"] = (np.arange(n_rows) % 10_000 == 7).astype(np.int64)
+    return pl.DataFrame({k: v.astype(np.int64) for k, v in cols.items()})
+
+
+def near_constant(n_rows: int = 1_000_000, n_cols: int = 3) -> pl.DataFrame:
+    """Int64 columns f0... where column i is 1 on rows with row % 10_000 == 7 + 1_000 * i,
+    else 0: deterministic, and every pair and triplet is a near-constant joint stream.
+    """
+    rows = np.arange(n_rows)
+    return pl.DataFrame(
+        {
+            f"f{i}": (rows % 10_000 == 7 + 1_000 * i).astype(np.int64)
+            for i in range(n_cols)
+        }
+    )
+
+
+# ── per-column top-k ──────────────────────────────────────────────────────────
+
+TOP_K_COLUMNS = ("zipf_15", "zipf_11", "zipf_08", "flat", "skewed", "zipf_str")
+
+
+def _bounded_zipf(n_rows: int, n_values: int, alpha: float, rng) -> np.ndarray:
+    """Zipf(alpha) truncated to n_values ranks (any alpha > 0, unlike numpy's zipf), mapped
+    through a random permutation so the most frequent values are not 0, 1, 2, …"""
+    cdf = np.cumsum(np.arange(1, n_values + 1, dtype=np.float64) ** -alpha)
+    cdf /= cdf[-1]
+    ranks = np.minimum(
+        np.searchsorted(cdf, rng.random(n_rows), side="right"), n_values - 1
+    )
+    return rng.permutation(n_values)[ranks]
+
+
+def top_k_streams(
+    n_rows: int = 10_000_000, seed: int = 42, columns: list[str] | None = None
+) -> pl.DataFrame:
+    """Int64 streams for top-k sketches over 1M possible values: zipf_15 / zipf_11 / zipf_08
+    (Zipf α = 1.5 / 1.1 / 0.8), flat (uniform), skewed (95% one value, the rest over 50,000
+    others) and zipf_str (zipf_11 as "item_<n>" strings). Each column has its own seeded
+    generator, so a column is the same whichever `columns` are asked for."""
+    columns = list(TOP_K_COLUMNS) if columns is None else columns
+
+    def rng(name: str):
+        return np.random.default_rng([seed, TOP_K_COLUMNS.index(name)])
+
+    def make(name: str) -> pl.Series:
+        if name == "zipf_str":
+            return ("item_" + make("zipf_11").cast(pl.String)).alias(name)
+        r = rng(name)
+        if name == "flat":
+            values = r.integers(0, 1_000_000, n_rows)
+        elif name == "skewed":
+            values = np.where(r.random(n_rows) < 0.95, 0, r.integers(1, 50_001, n_rows))
+        else:
+            alpha = {"zipf_15": 1.5, "zipf_11": 1.1, "zipf_08": 0.8}[name]
+            values = _bounded_zipf(n_rows, 1_000_000, alpha, r)
+        return pl.Series(name, values.astype(np.int64))
+
+    return pl.DataFrame([make(c) for c in columns])
+
+
 # ── multi-set techniques ──────────────────────────────────────────────────────
 
 
@@ -265,6 +350,44 @@ def integer_random(n_rows: int, n_cols: int, seed: int = 42) -> pl.DataFrame:
             f"c{i}": rng.integers(-(2**62), 2**62, n_rows, dtype=np.int64)
             for i in range(n_cols)
         }
+    )
+
+
+def runs_int(
+    n_rows: int,
+    n_cols: int,
+    mean_run: int,
+    cardinality: int,
+    prefix: str = "c",
+    seed: int = 42,
+) -> pl.DataFrame:
+    """Int64 columns {prefix}0… made of runs: geometric run lengths with mean `mean_run`
+    (1: every row its own draw), each run's value uniform in [0, cardinality). Adjacent
+    runs drawing the same value merge (probability 1 / cardinality)."""
+    rng = np.random.default_rng(seed)
+    columns = {}
+    for i in range(n_cols):
+        lengths = rng.geometric(1 / mean_run, size=n_rows // mean_run + 64)
+        while lengths.sum() < n_rows:
+            more = rng.geometric(1 / mean_run, size=n_rows // mean_run + 64)
+            lengths = np.concatenate([lengths, more])
+        values = rng.integers(0, cardinality, lengths.size, dtype=np.int64)
+        columns[f"{prefix}{i}"] = np.repeat(values, lengths)[:n_rows]
+    return pl.DataFrame(columns)
+
+
+def runs_str(
+    n_rows: int,
+    n_cols: int,
+    mean_run: int,
+    cardinality: int,
+    prefix: str = "s",
+    seed: int = 42,
+) -> pl.DataFrame:
+    """runs_int's runs as String values "v<k>"."""
+    df = runs_int(n_rows, n_cols, mean_run, cardinality, prefix, seed)
+    return df.with_columns(
+        ("v" + pl.col(c).cast(pl.String)).alias(c) for c in df.columns
     )
 
 

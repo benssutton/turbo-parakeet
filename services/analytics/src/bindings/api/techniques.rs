@@ -14,6 +14,42 @@ pub fn column_gcd(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::gcd::column_gcd_impl(&columns(batch)?))
 }
 
+/// `column`, `n_rows`, `n_runs`, `expected_runs`, `z`, `p_value`, `mean_run_length` per
+/// column (k-category runs test, rows in batch order; p one-sided, lower tail).
+pub fn runs_test(batch: &RecordBatch) -> Result<RecordBatch> {
+    table(crate::techniques::runs_test::runs_test_impl(&columns(
+        batch,
+    )?))
+}
+
+/// `window_rows >= 1`, else InvalidInput.
+fn window(window_rows: u64) -> Result<u64> {
+    if window_rows == 0 {
+        return Err(Error::InvalidInput("window_rows must be >= 1".into()));
+    }
+    Ok(window_rows)
+}
+
+/// `column` + MinMaxIndex's metrics per column: windows of `window_rows` rows sliding over the
+/// batch's row order.
+pub fn minmax_index(batch: &RecordBatch, window_rows: u64) -> Result<RecordBatch> {
+    let w = window(window_rows)?;
+    table(crate::techniques::skip_index::minmax::minmax_index_impl(
+        &columns(batch)?,
+        w,
+    ))
+}
+
+/// `column` + SetIndex's metrics per column; `max_size` 0 = unlimited.
+pub fn set_index(batch: &RecordBatch, window_rows: u64, max_size: u64) -> Result<RecordBatch> {
+    let w = window(window_rows)?;
+    table(crate::techniques::skip_index::set::set_index_impl(
+        &columns(batch)?,
+        w,
+        max_size,
+    ))
+}
+
 /// `col_name`, `entropy` per column.
 pub fn marginal_entropy(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::marginal_entropy::marginal_entropy_impl(
@@ -30,22 +66,132 @@ pub fn pairwise_joint_entropy(
     table(crate::techniques::joint_entropy::pairwise_joint_entropy_impl(&columns(batch)?, kwargs))
 }
 
-/// `col_a`, `col_b`, `col_c`, `entropy` per triplet; every triplet when None.
-pub fn threeway_joint_entropy(
+/// `triplets` as kernel kwargs, every name checked.
+fn threeway(
     batch: &RecordBatch,
     triplets: Option<&[(String, String, String)]>,
-) -> Result<RecordBatch> {
+) -> Result<ThreewayKwargs> {
     if let Some(t) = triplets {
         check_names(batch, t.iter().flat_map(|(a, b, c)| [a, b, c]))?;
     }
-    let kwargs = ThreewayKwargs {
+    Ok(ThreewayKwargs {
         triplets: triplets.map(|t| {
             t.iter()
                 .map(|(a, b, c)| vec![a.clone(), b.clone(), c.clone()])
                 .collect()
         }),
-    };
+    })
+}
+
+/// `col_a`, `col_b`, `col_c`, `entropy` per triplet; every triplet when None.
+pub fn threeway_joint_entropy(
+    batch: &RecordBatch,
+    triplets: Option<&[(String, String, String)]>,
+) -> Result<RecordBatch> {
+    let kwargs = threeway(batch, triplets)?;
     table(crate::techniques::joint_entropy::threeway_joint_entropy_impl(&columns(batch)?, kwargs))
+}
+
+use crate::techniques::ams_entropy::MAX_SAMPLES;
+
+/// The AMS sketches' size: 1 ..= `MAX_SAMPLES` estimators (a larger one would abort on allocation).
+fn ams_samples(num_samples: usize) -> Result<usize> {
+    if num_samples == 0 || num_samples > MAX_SAMPLES {
+        return Err(Error::InvalidInput(format!(
+            "num_samples must be between 1 and {}, got {num_samples}",
+            MAX_SAMPLES
+        )));
+    }
+    Ok(num_samples)
+}
+
+/// `col_name`, `entropy` per column, estimated by the AMS (CCM) sketch.
+pub fn ams_marginal_entropy(
+    batch: &RecordBatch,
+    num_samples: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    let c = ams_samples(num_samples)?;
+    table(crate::techniques::ams_entropy::ams_marginal_entropy_impl(
+        &columns(batch)?,
+        c,
+        seed,
+    ))
+}
+
+/// `col_a`, `col_b`, `entropy` per pair (every pair when None), estimated by the AMS sketch.
+pub fn ams_pairwise_joint_entropy(
+    batch: &RecordBatch,
+    pairs: Option<&[(String, String)]>,
+    num_samples: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    let c = ams_samples(num_samples)?;
+    let kwargs = pairwise(batch, pairs)?;
+    table(
+        crate::techniques::ams_joint_entropy::ams_pairwise_joint_entropy_impl(
+            &columns(batch)?,
+            kwargs,
+            c,
+            seed,
+        ),
+    )
+}
+
+/// `col_a`, `col_b`, `col_c`, `entropy` per triplet (every triplet when None), estimated by
+/// the AMS sketch.
+pub fn ams_threeway_joint_entropy(
+    batch: &RecordBatch,
+    triplets: Option<&[(String, String, String)]>,
+    num_samples: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    let c = ams_samples(num_samples)?;
+    let kwargs = threeway(batch, triplets)?;
+    table(
+        crate::techniques::ams_joint_entropy::ams_threeway_joint_entropy_impl(
+            &columns(batch)?,
+            kwargs,
+            c,
+            seed,
+        ),
+    )
+}
+
+use crate::techniques::heavy_keeper::HeavyKeeper;
+use crate::techniques::space_saving::SpaceSaving;
+
+/// `col_name, rank, row, count, error, n_non_null, sketch_bytes`: each column's top `k` by
+/// SpaceSaving in `memory_bytes` (spec 2026-10-12). k = 0 or a budget below k counters ->
+/// InvalidInput.
+pub fn space_saving_top_k(
+    batch: &RecordBatch,
+    k: usize,
+    memory_bytes: usize,
+) -> Result<RecordBatch> {
+    SpaceSaving::new(k, memory_bytes).map_err(Error::InvalidInput)?;
+    table(crate::techniques::space_saving::space_saving_top_k_impl(
+        &columns(batch)?,
+        k,
+        memory_bytes,
+    ))
+}
+
+/// As `space_saving_top_k`, by HeavyKeeper (`error` null); a budget leaving fewer than k
+/// buckets per array -> InvalidInput.
+pub fn heavy_keeper_top_k(
+    batch: &RecordBatch,
+    k: usize,
+    memory_bytes: usize,
+    seed: u64,
+) -> Result<RecordBatch> {
+    HeavyKeeper::new(k, memory_bytes, seed).map_err(Error::InvalidInput)?;
+    table(crate::techniques::heavy_keeper::heavy_keeper_top_k_impl(
+        &columns(batch)?,
+        k,
+        memory_bytes,
+        seed,
+    ))
 }
 
 /// `col_a`, `col_b`, `chi2_stat`, `p_value`, `cramers_v`, `low_expected_count`, `n_valid`.
@@ -489,5 +635,103 @@ mod tests {
         ]);
         assert_eq!(describe_columns(&b, 0, 10_000).unwrap().num_rows(), 2);
         assert_eq!(column_sizes(&b, 1).unwrap().num_rows(), 2);
+    }
+
+    #[test]
+    fn ams_entropy_smoke() {
+        let b = batch(vec![
+            ("a", ints(&[1, 2, 3, 4])),
+            ("b", ints(&[5, 5, 5, 5])),
+            ("c", ints(&[1, 1, 2, 2])),
+        ]);
+        let m = ams_marginal_entropy(&b, 64, 0).unwrap();
+        assert_eq!(m.column(1).as_primitive::<Float64Type>().value(0), 2.0); // unique
+        assert_eq!(m.column(1).as_primitive::<Float64Type>().value(1), 0.0); // constant
+        let pairs = [("a".to_string(), "b".to_string())];
+        let p = ams_pairwise_joint_entropy(&b, Some(&pairs[..]), 64, 0).unwrap();
+        assert_eq!(p.num_rows(), 1);
+        assert_eq!(p.column(2).as_primitive::<Float64Type>().value(0), 2.0);
+        let t = ams_threeway_joint_entropy(&b, None, 64, 0).unwrap();
+        assert_eq!(t.column(3).as_primitive::<Float64Type>().value(0), 2.0);
+    }
+
+    #[test]
+    fn top_k_smoke() {
+        use arrow_array::types::{UInt32Type, UInt64Type};
+        let b = batch(vec![(
+            "a",
+            Arc::new(Int64Array::from(vec![Some(1), Some(1), Some(2), None])) as ArrayRef,
+        )]);
+        for out in [
+            space_saving_top_k(&b, 5, 16 * 1024).unwrap(),
+            heavy_keeper_top_k(&b, 5, 16 * 1024, 0).unwrap(),
+        ] {
+            let names: Vec<String> = out
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    "col_name",
+                    "rank",
+                    "row",
+                    "count",
+                    "error",
+                    "n_non_null",
+                    "sketch_bytes"
+                ]
+            );
+            assert_eq!(out.num_rows(), 2);
+            assert_eq!(out.column(1).as_primitive::<UInt32Type>().value(0), 1);
+            assert_eq!(out.column(3).as_primitive::<UInt64Type>().value(0), 2);
+            assert_eq!(out.column(5).as_primitive::<UInt64Type>().value(0), 3);
+        }
+    }
+
+    #[test]
+    fn top_k_parameters_are_checked() {
+        let b = batch(vec![("a", ints(&[1, 2]))]);
+        for r in [
+            space_saving_top_k(&b, 0, 16 * 1024),
+            space_saving_top_k(&b, 5, 64),
+            heavy_keeper_top_k(&b, 0, 16 * 1024, 0),
+            heavy_keeper_top_k(&b, 5, 64, 0),
+        ] {
+            assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn ams_sample_count_is_capped() {
+        let b = batch(vec![("a", ints(&[1, 2]))]);
+        assert!(matches!(
+            ams_marginal_entropy(&b, MAX_SAMPLES + 1, 0),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn ams_zero_samples_and_unknown_names_are_invalid_input() {
+        let b = batch(vec![("a", ints(&[1, 2])), ("b", ints(&[1, 2]))]);
+        assert!(matches!(
+            ams_marginal_entropy(&b, 0, 0),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ams_pairwise_joint_entropy(&b, None, 0, 0),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ams_threeway_joint_entropy(&b, None, 0, 0),
+            Err(Error::InvalidInput(_))
+        ));
+        let pairs = [("a".to_string(), "zz".to_string())];
+        assert!(matches!(
+            ams_pairwise_joint_entropy(&b, Some(&pairs[..]), 8, 0),
+            Err(Error::InvalidInput(_))
+        ));
     }
 }

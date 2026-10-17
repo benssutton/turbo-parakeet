@@ -67,6 +67,50 @@ def marginal_entropy(df: Frame) -> pl.DataFrame:
     return pl.DataFrame(_rs.marginal_entropy(_collected(df)))
 
 
+def ams_marginal_entropy(df: Frame, num_samples: int, seed: int) -> pl.DataFrame:
+    """col_name, entropy per column, estimated by the AMS (CCM) sketch."""
+    return pl.DataFrame(_rs.ams_marginal_entropy(_collected(df), num_samples, seed))
+
+
+def ams_pairwise_joint_entropy(
+    df: Frame,
+    pairs: Sequence[tuple[str, str]] | None,
+    num_samples: int,
+    seed: int,
+) -> pl.DataFrame:
+    """col_a, col_b, entropy (H(A,B) in bits, AMS estimate); every pair when None."""
+    return pl.DataFrame(
+        _rs.ams_pairwise_joint_entropy(
+            _collected(df), _tuples(pairs), num_samples, seed
+        )
+    )
+
+
+def ams_threeway_joint_entropy(
+    df: Frame,
+    triplets: Sequence[tuple[str, str, str]] | None,
+    num_samples: int,
+    seed: int,
+) -> pl.DataFrame:
+    """col_a, col_b, col_c, entropy (H(A,B,C) in bits, AMS estimate); every triplet when None."""
+    return pl.DataFrame(
+        _rs.ams_threeway_joint_entropy(
+            _collected(df), _tuples(triplets), num_samples, seed
+        )
+    )
+
+
+def space_saving_top_k(df: Frame, k: int, memory_bytes: int) -> pl.DataFrame:
+    """col_name, rank, row, count, error, n_non_null, sketch_bytes: each column's top k by
+    SpaceSaving (one row per rank; one null-rank row for a column without values)."""
+    return pl.DataFrame(_rs.space_saving_top_k(_collected(df), k, memory_bytes))
+
+
+def heavy_keeper_top_k(df: Frame, k: int, memory_bytes: int, seed: int) -> pl.DataFrame:
+    """As space_saving_top_k, by HeavyKeeper (error null)."""
+    return pl.DataFrame(_rs.heavy_keeper_top_k(_collected(df), k, memory_bytes, seed))
+
+
 def pairwise_chi_squared(
     df: Frame, pairs: Sequence[tuple[str, str]] | None = None
 ) -> pl.DataFrame:
@@ -84,6 +128,24 @@ def pairwise_adjusted_rand(
 def column_gcd(df: Frame) -> pl.DataFrame:
     """column, dtype (Rust display form), gcd: Decimal(38, 0) per column."""
     return pl.DataFrame(_rs.column_gcd(_collected(df)))
+
+
+def runs_test(df: Frame) -> pl.DataFrame:
+    """column, n_rows, n_runs, expected_runs, z, p_value (one-sided, lower tail),
+    mean_run_length per column — rows in the frame's order."""
+    return pl.DataFrame(_rs.runs_test(_collected(df)))
+
+
+def minmax_index(df: Frame, window_rows: int) -> pl.DataFrame:
+    """column + MinMaxIndex's metrics per column — windows of `window_rows` rows sliding
+    over the frame's row order."""
+    return pl.DataFrame(_rs.minmax_index(_collected(df), window_rows))
+
+
+def set_index(df: Frame, window_rows: int, max_size: int) -> pl.DataFrame:
+    """column + SetIndex's metrics per column — windows of `window_rows` rows sliding over
+    the frame's row order; `max_size` 0 = unlimited."""
+    return pl.DataFrame(_rs.set_index(_collected(df), window_rows, max_size))
 
 
 def minhash(df: Frame, name: str, num_perm: int = 128) -> pl.DataFrame:
