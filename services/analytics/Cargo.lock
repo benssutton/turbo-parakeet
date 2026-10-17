@@ -1958,7 +1958,6 @@ dependencies = [
  "polars-io",
  "polars-lazy",
  "polars-ops",
- "polars-parquet",
  "polars-plan",
  "polars-sql",
  "polars-time",
