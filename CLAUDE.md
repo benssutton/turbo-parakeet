@@ -1,10 +1,36 @@
 # Project Objectives
-Determine patterns and relationships between columns, both within and between dataframes.
+Recommend how to store and query tabular data efficiently in three engines, given equal weight — **ClickHouse**,
+**DataFusion** (pure Arrow) and **Polars** — by determining patterns and relationships between columns, within and
+between dataframes.
+
+- **Measure vs decide.** Techniques report metrics only: statistics, estimates (with interval and method) and effect
+  sizes. Anything that compares a value against a tunable threshold is a decision, and decisions belong to the
+  recommenders and detectors.
+- **Targets.**
+  - DataFusion: Arrow types and encodings (dictionary; REE where DataFusion's operators support it — to verify,
+    ToDo 1a).
+  - Polars: Polars dtypes (Categorical / Enum; no REE).
+  - Both: Arrow IPC buffer compression (LZ4_FRAME / ZSTD + level).
+  - ClickHouse: column type, codec chain (GCD, Delta, DoubleDelta, then LZ4 / ZSTD + level), skip indexes
+    (`minmax`, `set`, `bloom_filter`, GRANULARITY) and `ORDER BY`.
+- **Formats.** In-memory and Arrow IPC only. **No Parquet anywhere**: not as an analysis target, and not for the
+  project's own files (fixtures, benchmark results).
+- **Row order.** The frame's row order is taken to be the stored order. Order-dependent metrics (runs, MinMax, Set,
+  delta) are measured on it, beside random-order baselines. For ClickHouse the caller supplies data sorted by the
+  intended `ORDER BY`. Evaluating proposed orders is the Ordering Recommender's job (ToDo 8).
+- **Queries.** Point-equality queries `col = v`, weighted by row frequency or uniformly over distinct values. Range
+  queries are planned (ToDo 1).
+- **Validation.** DataFusion and Polars recommendations are proven in process: cast, verified row by row and
+  measured as IPC. ClickHouse recommendations carry predicted metrics and are validated empirically by the sibling
+  project `clickhouse_benchmark`. The handoff is the recommender's Arrow result written as IPC, plus a helper that
+  renders it as `CREATE TABLE`.
+- **Deliverables.** Every recommender and detector ships one-shot and streaming versions (streaming tested for
+  parity against one-shot) and a Java binding at parity. Techniques have no Java binding (Python API only).
 
 # Technology
 - Arrow columnar data format throughout
 - Python with Rust extensions via pyo3, with Arrow at the FFI boundary for performance
-- Polars as the primary dataframe library
+- Polars as the primary Python-facing dataframe library; the Rust kernels are moving to native arrow-rs (ToDo 5b)
 
 # Python Environment
 Conda environment: `C:\Users\Alexander\miniconda3\envs\p312`
@@ -24,7 +50,11 @@ use Decimal(38, 0) for 128-bit integers. `add()` accepts Polars DataFrames / Laz
 tabular object (pyarrow Table, RecordBatch, RecordBatchReader — anything with `__arrow_c_stream__`).
 Int128 / UInt128 columns, at any depth, are ineligible in every technique: Arrow has no 128-bit integer
 (`analytics._dtypes.WIDE_INTEGERS`). Thresholds are keyword-only
-constructor arguments with the defaults below. Techniques are grouped by **scope** —
+constructor arguments with the defaults below. Techniques report metrics only (statistics, estimates,
+effect sizes); threshold decisions such as "use REE" belong to the recommenders and detectors. Existing
+conclusions, and their threshold keywords, are removed as the recommender or detector that owns each decision
+lands (ToDo 5a); until then they remain. Describe's `min` / `max` / `unique` / `est_*` count as metrics; its
+`class` moves to the recommenders. Techniques are grouped by **scope** —
 how column combinations are enumerated.
 
 ## 1. Per-column (one column at a time)
@@ -104,7 +134,7 @@ turbo-parakeet/
 │       ├── __init__.py                     # __version__ only
 │       ├── analytics.pyd                   # compiled extension (module analytics.analytics)
 │       ├── _plugin.py                      # PRIVATE wrappers over the Arrow binding (called only by *Rust classes)
-│       ├── _dtypes.py, _sets.py, _skip_index.py  # dtype groupings / value families; canonical distinct values; the skip-index base
+│       ├── _dtypes.py, _sets.py, _skip_index.py, _ams.py  # dtype groupings / value families; canonical distinct values; the skip-index base; AMS parameter checks
 │       ├── base.py                         # Technique contract, helpers, metric_mismatches
 │       └── <technique>/                    # gcd, describe, top_k, runs_test, minmax_index, set_index, recommend, membership, similarity, chi_squared,
 │           ├── __init__.py                 #   pairwise_entropy, threeway_entropy, adjusted_rand
@@ -117,6 +147,7 @@ turbo-parakeet/
     ├── skip_index_helpers.py                # skip-index oracle, Monte Carlo sampler
     ├── harness.py                          # implementation_params/load/reference/run/assert_contract/assert_agrees/with_metrics
     ├── test_base.py, test_datagen.py, test_benchmark_harness.py
+    ├── test_plugin.py, test_layering.py    # the Arrow boundary (128-bit ints, binding, Arrow inputs); scripts/check_layering.py
     ├── test_<technique>.py                 # one per technique package
     ├── test_recommend.py, test_streaming_recommend.py  # the recommenders: known answers, oracles, parity, ZSTD
     ├── data/large_dataset.arrow            # 50K rows, 101 columns
@@ -137,7 +168,7 @@ tests the shipped build), then `./mvnw test` in `services/analytics/bindings/jav
 **Source layout** (spec: docs/superpowers/specs/2026-10-04-rust-module-structure-design.md): `common` imports nothing else in the crate; `techniques` import only `common` / `techniques`; `recommenders` those plus `recommenders`; `bindings` anything. `python scripts/check_layering.py` (part of `check.py fast`) enforces it. New techniques go in the taxonomy folder they belong to, as stand-alone files (like `bloomfilter.rs`).
 
 Four layers (specs: docs/superpowers/specs/2026-09-27-arrow-ffi-interface-design.md, 2026-09-28-java-binding-design.md):
-- `src/bindings/api/` — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; a future Java / C-ABI binding wraps exactly this file. Errors: `InvalidInput` (unknown or duplicate column names, a malformed Bloom array or zero Bloom/LSH parameters, wrong column counts, an unimportable Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/`ShapeMismatch` error — a column of the wrong type for the kernel) / `Compute`. `OneShotRecommender` and `StreamingRecommender` (new / add / mark_ineligible / result) are the stateful entry points.
+- `src/bindings/api/` (`techniques.rs`, `recommenders.rs`) — the language-neutral core: one `pub fn` per entry point, arrow-rs `RecordBatch` (+ plain parameters) in, `RecordBatch` out (Bloom: bytes). No pyo3 or Polars type in any signature; `python.rs` and `capi.rs` (Java) both wrap exactly this. Errors: `InvalidInput` (unknown or duplicate column names, a malformed Bloom array or zero Bloom/LSH parameters, wrong column counts, an unimportable Arrow type, or a kernel `ColumnNotFound`/`SchemaMismatch`/`InvalidOperation`/`ShapeMismatch` error — a column of the wrong type for the kernel) / `Compute`. `OneShotRecommender` and `StreamingRecommender` (new / add / mark_ineligible / result) are the stateful entry points.
 - `src/common/arrow_io.rs` — RecordBatch ↔ Polars Series, zero-copy through the C Data Interface (Polars' `_PL_CATEGORICAL2` / `_PL_ENUM_VALUES2` field metadata restores Categorical / Enum). Kernels still compute on Series; `common/ipc_sizes.rs` / `recommenders/engine/` measure layouts derived with `export_series`. Every import is checked, once (`CheckedReader` / `import_checked`; `api` entry points trust their RecordBatch: structure on the raw C structs, `ArrayData::validate` + `validate_values` + nulls at every level, FixedSizeList offsets, unsupported types such as Decimal256 refused from the schema), so malformed input is InvalidInput, not a process abort. Limit: the C Data Interface carries no buffer lengths, so offsets past the producer's real buffer go undetected.
 - `src/bindings/python.rs` — pyo3 module `analytics.analytics`: reads any `__arrow_c_stream__` object into one batch, rejects Polars' private `_pli128` / `_plu128` (Int128 / UInt128) with ValueError naming the column, releases the GIL, returns `ArrowTable` (itself `__arrow_c_stream__`). InvalidInput → ValueError, Compute → RuntimeError, non-Arrow input → TypeError. `OneShotRecommender` and `StreamingRecommender` pyclasses (frozen, mutex-guarded; `add(data, ineligible)`: one-shot reads the stream whole, streaming batch by batch, marking the wrapper's ineligible columns first).
 - `src/bindings/capi.rs` — C ABI (`extern "C"`, no pyo3): `analytics_oneshot_recommender_{new,add,result,free}` and `analytics_streaming_recommender_{new,add,result,free}` (opaque `void *` handles; `add` consumes the stream — one-shot concatenates it — plain C parameters) and `analytics_free_error`. Returns 0 / 1 InvalidInput /
@@ -168,13 +199,11 @@ Every technique package declares `REFERENCE` (the exact accuracy reference) and 
   Times `Impl(**params).add(frames).result()` (fresh instance, 1 warm-up + 5 runs, median/min) on
   large_dataset.arrow + a narrow/long + a wide shape. Rust implementations are re-timed at 1 thread in a child
   process (`RAYON_NUM_THREADS=1`, `POLARS_MAX_THREADS=1`) to report **algorithmic** (fastest non-Rust ÷ Rust@1),
-  **parallel** (Rust@1 ÷ Rust@N) and **total** speedups. Results → `tests/performance/results/*.parquet` (git-ignored).
+  **parallel** (Rust@1 ÷ Rust@N) and **total** speedups. Results → `tests/performance/results/*.parquet` (git-ignored; to move to Arrow IPC, ToDo 5g).
 - Rust unit tests: `cargo test --lib <module>::` from `services/analytics/` with `PYO3_PYTHON` set to the env's `python.exe` and the env dir on `PATH` (else `STATUS_DLL_NOT_FOUND`).
 
 # Current Focus
-All twelve techniques (GCD, Describe, Top-k; Runs test, MinMax index, Set index; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract and one Arrow-in/Arrow-out Rust core, one accuracy-test pattern and one benchmark harness (spec: docs/superpowers/specs/2026-09-24-uniform-technique-interface-design.md). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. Next: the runs test's and skip indexes' use by the recommenders (the StreamingRecommender on the reservoir's row blocks). OneShotRecommender and StreamingRecommender share one output schema and the add / result interface (spec 2026-10-04).
-
-Joint entropy (2-way and 3-way) is dense-id encoded (see below): 83.5µs/pair, 170.3µs/triplet at 50K rows/101 cols — roughly 2x faster than the original hash-tuple implementation, and the 3-way/2-way speedup-vs-native-Polars gap that motivated the change is closed (3-way now outpaces 2-way's multiplier rather than trailing it). ARI (`pairwise_adjusted_rand`) is complete and validated against scikit-learn; chi² now shares the same dense contingency builder and reports `n_valid`.
+All twelve techniques (GCD, Describe, Top-k; Runs test, MinMax index, Set index; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract and one Arrow-in/Arrow-out Rust core, one accuracy-test pattern and one benchmark harness (described under Analytical Functions; the original spec was deleted in `1bb7ca4`). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. Next, in order (ToDo.md): ToDo 6 + 5g (generate large_dataset.arrow with null / run / clustering settings; benchmark results to Arrow IPC) → ToDo 1.0 (the output-schema spec for ToDos 1–4) → ToDo 4 + 2 (entropy and exemplars in both recommenders, the spec's first increment) → ToDo 1a–g. OneShotRecommender and StreamingRecommender share one output schema and the add / result interface (spec 2026-10-04).
 
 ## Entropy dense re-encoding (common/encode.rs + techniques/pairwise/ordered/joint_entropy.rs)
 Columns feeding `pairwise_joint_entropy`/`threeway_joint_entropy` are dictionary-encoded to dense ids `0..card` via `densify`/`build_dense_cache_par` (nulls become their own id, so the per-row loop carries no separate null mask). Joint keys are then combined arithmetically (`(a·Kb + b)·Kc + c`) instead of hashing multi-field tuples:
@@ -194,7 +223,7 @@ See ./ToDo.md for a list of future planned enhancements
 ## Implementation cleanups
 
 **[minhash.rs](services/analytics/src/techniques/pairwise/unordered/minhash.rs)**
-- [minhash.rs:75-92](services/analytics/src/techniques/pairwise/unordered/minhash.rs#L75-L92): bucket-pair generation is O(|bucket|²) per band. Acceptable at typical scales; document as a known scaling concern for pathologically dense buckets.
+- [minhash.rs:41-53](services/analytics/src/techniques/pairwise/unordered/minhash.rs#L41-L53) `bucket_pairs`: bucket-pair generation is O(|bucket|²) per band. Acceptable at typical scales; document as a known scaling concern for pathologically dense buckets.
 
 **[similarity/rust.py]**
 - MinHash recall on large_dataset.arrow is 0.62 (389/625 passing pairs), below MIN_RECALL 0.85: all misses are containment pairs (overlap = 1.0) whose Jaccard is below the ~0.43 LSH candidate threshold (min(j·0.9, o·0.45)). The heuristic is carried over unchanged from the old filter. Follow-ups: add a containment-heavy recall fixture to tests/test_similarity.py; derive the candidate threshold from the overlap threshold and the cardinality ratio.
@@ -203,6 +232,6 @@ See ./ToDo.md for a list of future planned enhancements
 - `BloomRust` loses to `MembershipExact` (plain Python `frozenset` intersection) on every benchmarked shape: 0.60x algorithmic on large_dataset.arrow, 0.98x on the narrow related-frames shape, and 0.16x total (6x slower overall, parallelism included) on the wide 100-column shape — see tests/performance/results/membership_*.parquet. Building a fresh Bloom filter per column (`bloom_filter_bits`, one binding call each) carries enough constant overhead that it doesn't pay off at these value-set sizes; exact set intersection is already near-optimal here. Follow-ups: batch filter construction across columns in one Rust call instead of one call per column; only reach for Bloom below a distinct-value-count threshold (or drop it in favour of `MembershipExact` as the default and keep Bloom for pathologically large value sets where set intersection stops being cheap).
 
 ## Cross-cutting notes (not bugs, worth documenting)
-- `encode_series` (formerly `series_to_u64`) returns `EncodedColumn { values, is_null }` — nulls are out-of-band (no in-band sentinel), floats are canonicalised (`-0.0`→`0.0`, all NaN payloads→one key). Null policy per module: entropy = null is a category; chi² = null rows dropped; minhash/bloom = nulls skipped. Keep this in mind when deriving MI from entropy + chi² outputs. Entropy additionally densifies `EncodedColumn` → `DenseColumn` (`0..card` ids) via `densify` — see "Entropy dense re-encoding" above.
+- `encode_series` returns `EncodedColumn { values, is_null }` — nulls are out-of-band (no in-band sentinel), floats are canonicalised (`-0.0`→`0.0`, all NaN payloads→one key). Null policy per module: entropy = null is a category; chi² = null rows dropped; minhash/bloom = nulls skipped. Keep this in mind when deriving MI from entropy + chi² outputs. Entropy additionally densifies `EncodedColumn` → `DenseColumn` (`0..card` ids) via `densify` — see "Entropy dense re-encoding" above.
 - `String / categorical / enum / list / decimal types route through foldhash → u64` (categorical/enum are cast to their string value first, so a categorical `"x"` hashes identically to the string `"x"` and identically across frames regardless of physical code). Collision probability at 50K rows is ~6×10⁻¹¹ per pair — negligible for entropy/χ², irrelevant for MinHash (deterministic seed across columns). foldhash `FixedState` is NOT stable across crate versions/platforms — don't persist bloom bit arrays or minhash signatures across rebuilds for hashed dtypes.
 - chi² and ARI share `build_contingency` (techniques/pairwise/ordered/contingency.rs): dense-id counting, drop-null policy, marginals + non-zero cells. Entropy keeps its own counting (null-as-category — different policy by design).
