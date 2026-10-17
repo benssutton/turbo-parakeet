@@ -6,14 +6,17 @@ Ordered techniques:   mixed_dtypes, low_cardinality, near_unique
 Multi-set techniques: related_frames, similar_frames
 Per-column (GCD):     integer_multiples, integer_random
 Per-column, ordered (runs test): runs_int, runs_str
+Shared large frame (agreement / parity tests, benchmarks): large_dataset, large_dataset_mixed
 Per-column (top-k):     top_k_streams
 Per-column (describe): describe_mixed, stringified (tests); describe_narrow, describe_wide, describe_nested (benchmarks)
 """
 
 from __future__ import annotations
 
+import string
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from functools import cache
 
 import numpy as np
 import polars as pl
@@ -353,6 +356,15 @@ def integer_random(n_rows: int, n_cols: int, seed: int = 42) -> pl.DataFrame:
     )
 
 
+def _run_lengths(n_rows: int, mean_run: float, rng: np.random.Generator) -> np.ndarray:
+    """Geometric run lengths with mean `mean_run`, summing to at least `n_rows`."""
+    lengths = rng.geometric(1 / mean_run, size=int(n_rows // mean_run) + 64)
+    while lengths.sum() < n_rows:
+        more = rng.geometric(1 / mean_run, size=int(n_rows // mean_run) + 64)
+        lengths = np.concatenate([lengths, more])
+    return lengths
+
+
 def runs_int(
     n_rows: int,
     n_cols: int,
@@ -367,10 +379,7 @@ def runs_int(
     rng = np.random.default_rng(seed)
     columns = {}
     for i in range(n_cols):
-        lengths = rng.geometric(1 / mean_run, size=n_rows // mean_run + 64)
-        while lengths.sum() < n_rows:
-            more = rng.geometric(1 / mean_run, size=n_rows // mean_run + 64)
-            lengths = np.concatenate([lengths, more])
+        lengths = _run_lengths(n_rows, mean_run, rng)
         values = rng.integers(0, cardinality, lengths.size, dtype=np.int64)
         columns[f"{prefix}{i}"] = np.repeat(values, lengths)[:n_rows]
     return pl.DataFrame(columns)
@@ -389,6 +398,116 @@ def runs_str(
     return df.with_columns(
         ("v" + pl.col(c).cast(pl.String)).alias(c) for c in df.columns
     )
+
+
+# ── large dataset (agreement / parity fixture, benchmarks) ────────────────────
+
+LARGE_DATASET_GROUPS = 25
+LARGE_DATASET_REGIMES = (  # large_dataset_mixed: group g uses regime g mod 5
+    {"null_rate": 0.0, "mean_run": 1, "clustering": 0.0},  # plain
+    {"null_rate": 0.1, "mean_run": 1, "clustering": 0.0},  # nulls
+    {"null_rate": 0.0, "mean_run": 50, "clustering": 0.0},  # runs
+    {"null_rate": 0.0, "mean_run": 1, "clustering": 1.0},  # sorted
+    {"null_rate": 0.1, "mean_run": 50, "clustering": 0.9},  # combined
+)
+_LETTERS = np.frombuffer(string.ascii_letters.encode(), dtype=np.uint8)
+_DAYS_TO_2017 = 17_167  # 1970-01-01 -> 2017-01-01
+
+
+def _group_cardinality(g: int) -> int:
+    """Int32 / Date distinct values of group g: 100, 20, 10, 7, 5, 4, 3, 3, 2, …, 1."""
+    return 100 if g == 0 else max(1, round(20 / g))
+
+
+def _draw(kind: int, card: int, k: int, rng: np.random.Generator) -> np.ndarray:
+    """k values for a group's column `kind`: 0 Int32, 1 Float64, 2 String (as S3 bytes),
+    3 Date (as Int32 days since the epoch)."""
+    if kind == 0:
+        return rng.integers(0, card, k, dtype=np.int32)
+    if kind == 1:
+        return rng.random(k)
+    if kind == 2:
+        return _LETTERS[rng.integers(0, _LETTERS.size, (k, 3))].view("S3").ravel()
+    return rng.integers(0, card, k, dtype=np.int32) + np.int32(_DAYS_TO_2017)
+
+
+def _large_column(
+    name: str,
+    kind: int,
+    card: int,
+    n_rows: int,
+    rng: np.random.Generator,
+    null_rate: float,
+    mean_run: float,
+    clustering: float,
+) -> pl.Series:
+    """Values in geometric runs, then the clustering shuffle, then nulls — drawn in that
+    order, so changing a setting re-rolls only its own step and the later ones."""
+    lengths = _run_lengths(n_rows, mean_run, rng)
+    values = np.repeat(_draw(kind, card, lengths.size, rng), lengths)[:n_rows]
+    if clustering > 0:  # 0 keeps the drawn order, runs included
+        values = np.sort(values)
+        moved = rng.choice(n_rows, round((1 - clustering) * n_rows), replace=False)
+        values[moved] = values[rng.permutation(moved)]
+    s = pl.Series(name, values)
+    if kind == 2:
+        s = s.cast(pl.String)
+    elif kind == 3:
+        s = s.cast(pl.Date)
+    if null_rate > 0:
+        # zip_with leaves null slots empty; pl.when and Series.set keep the old bytes,
+        # which the one-shot recommender measures and the streaming one does not.
+        keep = pl.Series(rng.random(n_rows) >= null_rate)
+        s = s.zip_with(keep, pl.repeat(None, n_rows, dtype=s.dtype, eager=True))
+    return s
+
+
+def _check_large_settings(null_rate: float, mean_run: float, clustering: float) -> None:
+    if mean_run < 1 or not 0 <= null_rate <= 1 or not 0 <= clustering <= 1:
+        raise ValueError(
+            "need mean_run >= 1 and null_rate, clustering in [0, 1]; got "
+            f"{mean_run=}, {null_rate=}, {clustering=}"
+        )
+
+
+def _large(n_rows: int, seed: int, regimes: tuple[dict, ...]) -> pl.DataFrame:
+    for regime in regimes:
+        _check_large_settings(**regime)
+    seeds = np.random.SeedSequence(seed).spawn(4 * LARGE_DATASET_GROUPS)
+    columns = [pl.Series("identity", np.arange(n_rows, dtype=np.int64))]
+    for g in range(LARGE_DATASET_GROUPS):
+        regime = regimes[g % len(regimes)]
+        for kind in range(4):
+            j = 4 * g + kind
+            rng = np.random.default_rng(seeds[j])
+            card = _group_cardinality(g)
+            columns.append(_large_column(f"col_{j}", kind, card, n_rows, rng, **regime))
+    return pl.DataFrame(columns)
+
+
+@cache
+def large_dataset(
+    n_rows: int = 50_000,
+    seed: int = 0,
+    null_rate: float = 0.0,
+    mean_run: float = 1,
+    clustering: float = 0.0,
+) -> pl.DataFrame:
+    """The shared large frame (spec 2026-10-17-generated-dataset-design.md): `identity`
+    (Int64 0..n) then 25 groups of (Int32, Float64, 3-letter String, Date), Int32 / Date
+    distinct counts stepping down from 100 to 1. Settings apply to every column but
+    `identity`: `mean_run` (geometric run length), `clustering` (1 sorted, 0 drawn
+    order, in between: a share 1 − clustering of positions shuffled after sorting),
+    `null_rate` (Bernoulli). Cached: callers must not modify the frame in place."""
+    regime = {"null_rate": null_rate, "mean_run": mean_run, "clustering": clustering}
+    return _large(n_rows, seed, (regime,))
+
+
+@cache
+def large_dataset_mixed(n_rows: int = 50_000, seed: int = 0) -> pl.DataFrame:
+    """large_dataset with LARGE_DATASET_REGIMES cycled over the 25 groups: group g equals
+    group g of large_dataset(n_rows, seed, **LARGE_DATASET_REGIMES[g % 5])."""
+    return _large(n_rows, seed, LARGE_DATASET_REGIMES)
 
 
 # ── per-column (describe) ─────────────────────────────────────────────────────

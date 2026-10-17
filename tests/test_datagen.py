@@ -1,16 +1,21 @@
 """The planted structure that other tests and benchmarks rely on."""
 
+from datetime import date
+
 import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
 from datagen import (
+    LARGE_DATASET_REGIMES,
     describe_mixed,
     describe_narrow,
     describe_nested,
     describe_wide,
     integer_multiples,
     integer_random,
+    large_dataset,
+    large_dataset_mixed,
     low_cardinality,
     mixed_dtypes,
     near_constant,
@@ -194,3 +199,86 @@ def test_runs_generators_plant_mean_run_length():
     s = runs_str(1_000, 1, mean_run=10, cardinality=5)
     assert s.columns == ["s0"] and s.schema["s0"] == pl.String
     assert s["s0"][0].startswith("v")
+
+
+LARGE_DTYPES = (pl.Int32, pl.Float64, pl.String, pl.Date)
+
+
+def test_large_dataset_has_the_former_files_schema():
+    df = large_dataset()
+    assert df.shape == (50_000, 101) and df.n_chunks() == 1
+    assert df.columns == ["identity"] + [f"col_{j}" for j in range(100)]
+    assert df.schema["identity"] == pl.Int64
+    assert df["identity"].to_numpy().tolist() == list(range(50_000))
+    for j in range(100):
+        assert df.schema[f"col_{j}"] == LARGE_DTYPES[j % 4], j
+
+
+def test_large_dataset_defaults():
+    df = large_dataset()
+    assert sum(df.null_count().row(0)) == 0
+    counts = [df[f"col_{4 * g}"].n_unique() for g in range(25)]
+    assert counts[:9] == [100, 20, 10, 7, 5, 4, 3, 3, 2] and counts[-1] == 1
+    for g in range(25):
+        assert df[f"col_{4 * g + 3}"].n_unique() == counts[g]
+        assert df[f"col_{4 * g + 1}"].n_unique() == 50_000
+        strings = df[f"col_{4 * g + 2}"]
+        assert strings.n_unique() > 40_000
+        assert strings.str.len_bytes().unique().to_list() == [3]
+    assert df["col_3"].min() == date(2017, 1, 1)
+    assert not df["col_1"].is_sorted()
+
+
+def test_large_dataset_is_seeded_and_settings_reroll_only_their_step():
+    assert large_dataset.__wrapped__().equals(large_dataset())  # uncached rebuild
+    assert not large_dataset(seed=1).equals(large_dataset())
+    plain, nulls = large_dataset(), large_dataset(null_rate=0.1)
+    for c in plain.columns:
+        keep = nulls[c].is_not_null()
+        assert plain[c].filter(keep).equals(nulls[c].filter(keep)), c
+
+
+def test_large_dataset_null_rate():
+    df = large_dataset(null_rate=0.1)
+    assert df["identity"].null_count() == 0
+    three_sigma = 3 * (0.1 * 0.9 / 50_000) ** 0.5
+    for c in df.columns[1:]:
+        assert abs(df[c].null_count() / 50_000 - 0.1) < three_sigma, c
+    # Null slots hold no bytes (zip_with), as an Arrow builder would leave them.
+    s = df["col_2"]
+    data = s.to_arrow(compat_level=pl.CompatLevel.oldest()).buffers()[2]
+    assert data.size == s.str.len_bytes().sum()
+
+
+def test_large_dataset_mean_run():
+    df = large_dataset(mean_run=50)
+    for c in ("col_1", "col_2"):  # high cardinality: adjacent runs rarely merge
+        n_runs = df[c].ne_missing(df[c].shift(1)).sum()
+        assert 50_000 / n_runs == pytest.approx(50, rel=0.1), c
+
+
+def test_large_dataset_clustering():
+    df = large_dataset(clustering=1.0)
+    assert all(df[c].is_sorted() for c in df.columns)
+    half = large_dataset(clustering=0.5)["col_1"]
+    assert not half.is_sorted()
+    assert (half == half.sort()).sum() >= 25_000
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"mean_run": 0}, {"null_rate": -0.1}, {"null_rate": 1.5}, {"clustering": 2.0}],
+)
+def test_large_dataset_rejects_invalid_settings(bad):
+    with pytest.raises(ValueError):
+        large_dataset(n_rows=10, **bad)
+
+
+def test_large_dataset_mixed_cycles_the_regimes():
+    mixed = large_dataset_mixed()
+    assert mixed["identity"].equals(large_dataset()["identity"])
+    for g in range(25):
+        regime = LARGE_DATASET_REGIMES[g % 5]
+        cols = [f"col_{4 * g + k}" for k in range(4)]
+        assert mixed.select(cols).equals(large_dataset(**regime).select(cols)), g
+    assert mixed["col_5"].null_count() > 0 and mixed["col_1"].null_count() == 0
