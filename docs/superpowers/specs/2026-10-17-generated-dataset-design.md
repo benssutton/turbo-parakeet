@@ -47,9 +47,14 @@ Applied to every non-`identity` column, in this order:
    helper both use); each run draws one value.  `mean_run=1` → every row an independent draw.  Adjacent runs
    drawing the same value merge, as in `runs_int`.
 2. **Order — `clustering` ∈ [0, 1].**  Sort the column ascending, then pick a uniformly random subset of
-   `round((1 − clustering) · n_rows)` positions and shuffle their values among themselves.  1 → sorted, 0 → a
-   random permutation (today's order).
-3. **Nulls — `null_rate` ∈ [0, 1].**  An independent Bernoulli(`null_rate`) mask per column.
+   `round((1 − clustering) · n_rows)` positions and shuffle their values among themselves.  1 → sorted.  `clustering = 0` skips this step entirely and keeps the drawn order, so runs from step 1 survive
+   (sorting and then shuffling every position would destroy them).
+3. **Nulls — `null_rate` ∈ [0, 1].**  An independent Bernoulli(`null_rate`) mask per column, applied with
+   `Series.zip_with` so null slots hold no bytes (as an Arrow builder leaves them).  `pl.when(...).then(None)` and
+   `Series.set(mask, None)` keep the old bytes under the nulls; the one-shot recommender then measures those bytes
+   in the cast candidates while the streaming one does not, and the parity test fails (e.g. `col_6`
+   `rec_arrow_size_bytes` 341 376 vs 356 264).  That gap is recorded as a follow-up in ToDo 7; this spec does not
+   fix it.
 
 Out-of-range settings (`mean_run < 1`, `clustering` or `null_rate` outside [0, 1]) raise `ValueError`.
 
@@ -84,10 +89,10 @@ call it.  A column's draws depend only on `seed`, its index and its own regime, 
   `large_dataset_mixed()`.
 - **Benchmarks.**  `tests/performance/harness.py`: `large_dataset(columns=None, exclude=())` keeps its signature and
   wraps the generator; the label becomes `large_dataset` (generated).  `LARGE_DATASET` is removed.
-- **Measured numbers.**  Re-measure and update every figure taken from the old file: the MinHash recall 0.62
-  (389/625, 236 misses) in `analytics/similarity/rust.py` and CLAUDE.md, and the large_dataset.arrow speedups
-  quoted in CLAUDE.md (runs test 16.9x; Membership 0.60x).  Figures not re-measured are labelled as measured on the
-  old file.
+- **Measured numbers.**  The MinHash recall is re-measured (on the generated frame: 0.65, 407/625, 218 misses, all containment pairs with
+  Jaccard 0.00002–0.33, median 0.10) and updated in `analytics/similarity/rust.py` and CLAUDE.md.  Benchmark speedups
+  quoted in CLAUDE.md (runs test 16.9x; Membership 0.60x) are not re-run: they are labelled as measured on the former
+  large_dataset.arrow.
 - **Removal.**  `tests/data/large_dataset.arrow` and `tests/data/` are deleted in an ordinary commit.
 
 ## 4. Parquet removal (ToDo 5g)
@@ -104,9 +109,14 @@ call it.  A column's draws depend only on `seed`, its index and its own regime, 
 
 ### 4.2 Cargo
 
-`polars` gets `default-features = false`.  Its defaults are `docs, zip_with, csv, polars-parquet, temporal, fmt,
-dtype-slim`; add back only those the crate needs (expected: `fmt`, `temporal`, `zip_with`, `dtype-slim`; the build
-decides — `csv` and `polars-parquet` must not return).  Acceptance:
+`polars` gets `default-features = false`.  The defaults (`docs, zip_with, csv, polars-parquet, temporal, fmt,
+dtype-slim`) also switched on, through polars-io, `dtype-i8` / `dtype-i16` / `dtype-time` and the whole cloud stack
+(tokio, reqwest, object_store).  The library still compiles without them, but losing a dtype feature would change
+runtime behaviour silently, so the feature list is:
+`lazy, performant, dtype-slim, dtype-i8, dtype-i16, dtype-time, dtype-decimal, dtype-struct, dtype-array,
+dtype-categorical, temporal, timezones, fmt, zip_with`.  Acceptance adds: the features enabled on polars-core,
+polars-ops, polars-io, polars-time and polars-lazy (`cargo tree -e features`) lose nothing but the Parquet, CSV,
+IPC, serde, cloud / async, new-streaming and unused-ops features listed in the plan (Task 5).  Acceptance:
 
 - `cargo tree -i polars-parquet` reports no match;
 - `python scripts/check.py ci` passes (Python extension, C-API build, Java tests);
