@@ -43,6 +43,40 @@ fn decay_thresholds() -> &'static [u64] {
     })
 }
 
+/// One array's bucket for a key of fingerprint `fp`: claim it when empty, count a matching
+/// fingerprint (selective increment), else decay it with probability b^−C (the RNG is drawn
+/// only then). Returns the bucket's count for the key, 0 if it holds none.
+#[inline]
+fn touch(
+    b: &mut Bucket,
+    fp: u32,
+    free: bool,
+    n_min: u64,
+    thresholds: &[u64],
+    rng: &mut SplitMix,
+) -> u64 {
+    if b.count == 0 {
+        *b = Bucket { fp, count: 1 };
+        1
+    } else if b.fp == fp {
+        if free || u64::from(b.count) <= n_min {
+            b.count = b.count.saturating_add(1);
+        }
+        u64::from(b.count)
+    } else {
+        if let Some(&t) = thresholds.get(b.count as usize) {
+            if rng.next_u64() < t {
+                b.count -= 1;
+                if b.count == 0 {
+                    *b = Bucket { fp, count: 1 };
+                    return 1;
+                }
+            }
+        }
+        0
+    }
+}
+
 pub(crate) struct HeavyKeeper {
     width: usize,
     buckets: Vec<Bucket>,
@@ -118,24 +152,14 @@ impl HeavyKeeper {
         let mut maxv = 0u64;
         for j in 0..D {
             let i = self.slot(key, j);
-            let b = &mut self.buckets[i];
-            if b.count == 0 {
-                *b = Bucket { fp, count: 1 };
-                maxv = maxv.max(1);
-            } else if b.fp == fp {
-                if free || u64::from(b.count) <= n_min {
-                    b.count = b.count.saturating_add(1);
-                }
-                maxv = maxv.max(u64::from(b.count));
-            } else if let Some(&t) = thresholds.get(b.count as usize) {
-                if self.rng.next_u64() < t {
-                    b.count -= 1;
-                    if b.count == 0 {
-                        *b = Bucket { fp, count: 1 };
-                        maxv = maxv.max(1);
-                    }
-                }
-            }
+            maxv = maxv.max(touch(
+                &mut self.buckets[i],
+                fp,
+                free,
+                n_min,
+                thresholds,
+                &mut self.rng,
+            ));
         }
         let entry = Entry {
             key,

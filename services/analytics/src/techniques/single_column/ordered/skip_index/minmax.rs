@@ -12,46 +12,80 @@ use super::{
     avoid, output, over_ranges, population, windows, Common, Population, WindowSums, NULL,
 };
 
+/// The sliding window's extremes: two monotonic deques of row positions, the minimum's ids
+/// increasing and the maximum's decreasing from front to back.
+struct Extremes<'a> {
+    ids: &'a [u32],
+    lows: VecDeque<usize>,
+    highs: VecDeque<usize>,
+}
+
+impl<'a> Extremes<'a> {
+    fn new(ids: &'a [u32]) -> Self {
+        Self {
+            ids,
+            lows: VecDeque::new(),
+            highs: VecDeque::new(),
+        }
+    }
+
+    /// Row `r` joins the window; NULL rows leave the deques alone.
+    fn enter(&mut self, r: usize) {
+        let id = self.ids[r];
+        if id == NULL {
+            return;
+        }
+        while self.lows.back().is_some_and(|&b| self.ids[b] >= id) {
+            self.lows.pop_back();
+        }
+        self.lows.push_back(r);
+        while self.highs.back().is_some_and(|&b| self.ids[b] <= id) {
+            self.highs.pop_back();
+        }
+        self.highs.push_back(r);
+    }
+
+    /// Rows before `s` leave the window.
+    fn leave_before(&mut self, s: usize) {
+        while self.lows.front().is_some_and(|&f| f < s) {
+            self.lows.pop_front();
+        }
+        while self.highs.front().is_some_and(|&f| f < s) {
+            self.highs.pop_front();
+        }
+    }
+
+    /// The non-null extremes' ids (lowest, highest); `None` for an all-null window.
+    fn get(&self) -> Option<(usize, usize)> {
+        match (self.lows.front(), self.highs.front()) {
+            (Some(&lo), Some(&hi)) => Some((self.ids[lo] as usize, self.ids[hi] as usize)),
+            _ => None,
+        }
+    }
+}
+
 /// The windows starting at `starts` (each `w` rows), in one pass over rows
 /// `starts.start .. starts.end + w − 1`.
 pub(crate) fn scan(pop: &Population, w: usize, starts: Range<usize>) -> WindowSums {
     if starts.is_empty() {
         return WindowSums::default();
     }
-    let (ids, nn, d) = (&pop.ids, pop.non_null(), pop.d());
+    let (nn, d) = (pop.non_null(), pop.d());
+    let mut ext = Extremes::new(&pop.ids);
     let mut sums = WindowSums::default();
-    let (mut lows, mut highs) = (VecDeque::<usize>::new(), VecDeque::<usize>::new());
     for r in starts.start..starts.end + w - 1 {
-        let id = ids[r];
-        if id != NULL {
-            while lows.back().is_some_and(|&b| ids[b] >= id) {
-                lows.pop_back();
-            }
-            lows.push_back(r);
-            while highs.back().is_some_and(|&b| ids[b] <= id) {
-                highs.pop_back();
-            }
-            highs.push_back(r);
-        }
+        ext.enter(r);
         if r + 1 < starts.start + w {
             continue;
         }
         let s = r + 1 - w; // the window is rows s..=r
-        while lows.front().is_some_and(|&f| f < s) {
-            lows.pop_front();
-        }
-        while highs.front().is_some_and(|&f| f < s) {
-            highs.pop_front();
-        }
-        match (lows.front(), highs.front()) {
-            (Some(&lo), Some(&hi)) => {
-                let (lo, hi) = (ids[lo] as usize, ids[hi] as usize);
-                sums.push(
-                    nn - (pop.cum[hi + 1] - pop.cum[lo]),
-                    d - (hi - lo + 1) as u64,
-                );
-            }
-            _ => sums.push(nn, d),
+        ext.leave_before(s);
+        match ext.get() {
+            Some((lo, hi)) => sums.push(
+                nn - (pop.cum[hi + 1] - pop.cum[lo]),
+                d - (hi - lo + 1) as u64,
+            ),
+            None => sums.push(nn, d),
         }
     }
     sums

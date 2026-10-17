@@ -5,7 +5,7 @@ in the local SonarQube server (status lives in its database: `docker compose dow
 loses it, so re-mark after a reset using this list). Review before acting on a Sonar finding
 of the same rule; add new entries here when a finding is rejected.
 
-## `python:S5807` — "Change or remove this string; X is not defined" (11, BLOCKER)
+## `python:S5807` — "Change or remove this string; X is not defined" (12, BLOCKER)
 
 **Why it is wrong:** the packages' `__init__.py` define a module-level `__getattr__`
 (PEP 562, `analytics.base.lazy_attributes`), so every name in `__all__` resolves on access;
@@ -26,6 +26,15 @@ sees names bound statically.
 | `pairwise_entropy/__init__.py` | `PairwiseEntropyPolars` |
 | `threeway_entropy/__init__.py` | `ThreewayEntropyPolars` |
 | `adjusted_rand/__init__.py` | `AdjustedRandSklearn` |
+| `top_k/__init__.py` | `TopKPolars` |
+
+## `python:S3776` — cognitive complexity 16 against the limit of 15 (1, CRITICAL)
+
+Accepted like the Rust cases below: one point over, no natural seam. Marked *False positive*;
+do not refactor to chase the score.
+
+- `top_k/base.py` `TopK.agreement` (16): a single pass building found / wanted / rel per
+  column, then three checks
 
 ## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (5, CRITICAL)
 
@@ -41,6 +50,26 @@ Marked *False positive* in Sonar so the dashboard is clean; do not refactor to c
 
 (`DistinctSample::absorb` reached 19 and was split instead: `admit_exact` holds the
 exact-phase bookkeeping.)
+
+## `python:S1172` — unused function parameter (3, MAJOR)
+
+`top_k/base.py` `_item_problems(self, floor, label, item)` (the three flagged parameters).
+
+**Why it is wrong:** it is a hook with a fixed signature. The base returns `[]`;
+`TopKSpaceSavingRust._item_problems` (`top_k/space_saving.py`) overrides it and uses `label`,
+`item`, `true` and `floor`; `agreement()` passes all four.
+
+**Do not:** remove a parameter, which would break the override.
+
+## `python:S1940` — "use the opposite operator" for `not a <= b` (2, MINOR)
+
+`pairwise_entropy/ams.py` lines 83 and 90: `not abs(got - ref) <= bound`.
+
+**Why it is wrong:** the form is deliberately NaN-safe. A NaN estimate makes `abs(got - ref) <=
+bound` False, so it is reported as a mismatch; the suggested `abs(got - ref) > bound` is False
+for NaN and would silently pass it.
+
+**Do not:** rewrite the comparisons as `>`.
 
 ## `python:S5778` — more than one call that can raise inside `pytest.raises` (1, MAJOR)
 
@@ -65,3 +94,14 @@ downcalls to one place, `Native.call`, which rethrows runtime exceptions and err
 anything else in `AnalyticsException`. A narrower clause does not compile. Marked *False
 positive*; do not narrow it. (The `RuntimeException`s thrown by the binding were separately
 replaced by `AnalyticsException`.)
+
+## Accepted, deferred (tests frozen) — 14 findings
+
+Genuine findings in test files that were frozen for the change that introduced this list.
+Marked *Accepted* in Sonar (not false positives); fix when tests may change.
+
+- `python:S5778` (9): building operands / looking up the class outside `pytest.raises` —
+  `tests/test_set_index.py:160,162,305`; `tests/test_minmax_index.py:157,159,164,290`;
+  `tests/test_runs_test.py:155`; `tests/test_top_k.py:180`
+- `python:S9073` (5, minor): split into separate asserts — `tests/test_set_index.py:246`;
+  `tests/test_runs_test.py:201,227`; `tests/test_datagen.py:187,195`

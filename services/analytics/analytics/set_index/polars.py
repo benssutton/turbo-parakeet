@@ -35,6 +35,18 @@ def per_window(iv: pl.DataFrame, weight: np.ndarray, k: int) -> np.ndarray:
     return np.cumsum(diff[:k])
 
 
+def std_present(entries: Counter, n: int, w: int) -> float:
+    """The std of a window's entry count, as `std_present` in set.rs."""
+    q = {c: avoid(n, w, c) for c in entries}
+    var = sum(m * q[c] * (1 - q[c]) for c, m in entries.items())
+    for c, m in entries.items():
+        for c2, m2 in entries.items():
+            pairs = m * (m2 - (c == c2))
+            if pairs:
+                var += pairs * (avoid(n, w, c + c2) - q[c] * q[c2])
+    return math.sqrt(max(var, 0.0))
+
+
 def set_baseline(
     counts: np.ndarray, n_null: int, n: int, w: int, max_size: int
 ) -> tuple[float, float, float, float]:
@@ -52,16 +64,7 @@ def set_baseline(
         )
 
     mu = mean_present(n)
-    sigma = 0.0
-    if max_size:
-        q = {c: avoid(n, w, c) for c in entries}
-        var = sum(m * q[c] * (1 - q[c]) for c, m in entries.items())
-        for c, m in entries.items():
-            for c2, m2 in entries.items():
-                pairs = m * (m2 - (c == c2))
-                if pairs:
-                    var += pairs * (avoid(n, w, c + c2) - q[c] * q[c2])
-        sigma = math.sqrt(max(var, 0.0))
+    sigma = std_present(entries, n, w) if max_size else 0.0
 
     def fits(mean: float) -> float:
         if not max_size:
