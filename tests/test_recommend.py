@@ -35,7 +35,7 @@ def recommend_frames(frames: dict, **params) -> pl.DataFrame:
 
 
 def by_type(r: dict) -> dict:
-    return {c["arrow_type"]: c for c in r["rec_candidates"]}
+    return {c["arrow_type"]: c for c in r["candidates"]}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,8 +54,8 @@ def test_schema_is_streamings_without_the_streaming_columns():
     assert out.to_arrow().num_rows == out.height
     assert out["column"].to_list() == frame.columns
     computed = out.filter(pl.col("status") == "computed")
-    assert computed["rec_arrow_type"].null_count() == 0
-    assert computed["rec_polars_type"].null_count() == 0
+    assert computed["datafusion_type"].null_count() == 0
+    assert computed["polars_type"].null_count() == 0
 
 
 def test_result_before_add_is_empty_with_the_full_schema():
@@ -116,7 +116,7 @@ def test_zero_row_frame():
     assert out["n_rows"].to_list() == [0] * frame.width
     # No column is ineligible for being empty: every one is computed and recommended.
     assert out["status"].to_list() == ["computed"] * frame.width
-    assert out["rec_arrow_type"].null_count() == 0
+    assert out["datafusion_type"].null_count() == 0
 
 
 def test_lazy_input_with_an_ineligible_column():
@@ -155,7 +155,7 @@ def test_ineligible_columns_are_listed():
         2,
         None,
     )
-    assert w["rec_arrow_type"] is None
+    assert w["datafusion_type"] is None
     assert (rows["obj"]["status"], rows["obj"]["dtype"]) == ("ineligible", "Object")
     n = rows["n"]
     assert (n["status"], n["dtype"], n["n_null"]) == ("ineligible", "null", 2)
@@ -165,7 +165,7 @@ def test_ineligible_columns_are_listed():
 def test_kept_original_names_its_polars_type():
     out = OneShotRecommender().add(pl.DataFrame({"f": F64_KEPT})).result()
     r = out.row(0, named=True)
-    assert (r["rec_arrow_type"], r["rec_polars_type"]) == ("double", "Float64")
+    assert (r["datafusion_type"], r["polars_type"]) == ("double", "Float64")
 
 
 def test_constructor_validates_boolean_pairs():
@@ -496,9 +496,9 @@ KNOWN = [
 @pytest.mark.parametrize("s, params, arrow_type, polars_type", KNOWN)
 def test_known_answers(s, params, arrow_type, polars_type):
     r = rec(s, **params)
-    assert (r["rec_arrow_type"], r["rec_polars_type"]) == (arrow_type, polars_type)
-    # rec_nullable: the recommended array has nulls — a list → scalar recast turns a [null] item into a null row.
-    assert r["rec_nullable"] == (_unlist(s, arrow_type).null_count() > 0)
+    assert (r["datafusion_type"], r["polars_type"]) == (arrow_type, polars_type)
+    # nullable: the recommended array has nulls — a list → scalar recast turns a [null] item into a null row.
+    assert r["nullable"] == (_unlist(s, arrow_type).null_count() > 0)
 
 
 def null_lists_holding_values(lists: list) -> pl.Series:
@@ -530,21 +530,21 @@ def null_lists_holding_values(lists: list) -> pl.Series:
 def test_null_lists_holding_values_are_narrowed(lists, arrow_type, polars_type):
     s = null_lists_holding_values(lists)
     r = rec(s)
-    assert (r["rec_arrow_type"], r["rec_polars_type"]) == (arrow_type, polars_type)
-    assert r["rec_nullable"] is True
-    assert _outer_chosen(r)["predicted_bytes"] == r["rec_arrow_size_bytes"]
+    assert (r["datafusion_type"], r["polars_type"]) == (arrow_type, polars_type)
+    assert r["nullable"] is True
+    assert _outer_chosen(r)["predicted_bytes"] == r["datafusion_size_bytes"]
 
 
 def test_lossy_formatting():
-    assert rec(pl.Series("x", ["1.50", "2.2"]))["rec_lossy_formatting"] is True
-    assert rec(pl.Series("x", ["1.5", "2.2"]))["rec_lossy_formatting"] is False
+    assert rec(pl.Series("x", ["1.50", "2.2"]))["lossy_formatting"] is True
+    assert rec(pl.Series("x", ["1.5", "2.2"]))["lossy_formatting"] is False
     negative_zero = rec(pl.Series("x", [-0.0, 1.0, 1.0]))
-    assert (negative_zero["rec_arrow_type"], negative_zero["rec_lossy_formatting"]) == (
+    assert (negative_zero["datafusion_type"], negative_zero["lossy_formatting"]) == (
         "bool",
         True,
     )
-    assert rec(pl.Series("x", [0, 1]))["rec_lossy_formatting"] is False
-    assert rec(pl.Series("x", ["true", "False"]))["rec_lossy_formatting"] is True
+    assert rec(pl.Series("x", [0, 1]))["lossy_formatting"] is False
+    assert rec(pl.Series("x", ["true", "False"]))["lossy_formatting"] is True
 
 
 def test_candidates_report_rule_evidence_and_outcomes():
@@ -555,7 +555,7 @@ def test_candidates_report_rule_evidence_and_outcomes():
     assert "max_frac_digits=9" in c["decimal128(20, 9)"]["evidence"]
     tried = [
         x["projected_population_bytes"]
-        for x in r["rec_candidates"]
+        for x in r["candidates"]
         if x["outcome"] != "rejected"
     ]
     assert tried == sorted(tried)
@@ -563,7 +563,7 @@ def test_candidates_report_rule_evidence_and_outcomes():
 
 def test_failed_cast_falls_back_to_the_next_candidate():
     r = rec(pl.Series("x", ["2300-01-01T00:00:00.123456789", "2024-01-05T10:00:00"]))
-    assert r["rec_arrow_type"] == "string"
+    assert r["datafusion_type"] == "string"
     failed = by_type(r)["timestamp[ns]"]
     assert failed["outcome"] == "failed"
     assert "row 0" in failed["reason"]
@@ -576,7 +576,7 @@ NUMERIC = re.compile(r"(u?int\d+|decimal\d+|float|double|halffloat)$|decimal\d+\
 def test_leading_zero_string_has_no_numeric_candidate():
     r = rec(pl.Series("x", ["007", "12"]))
     assert not [
-        c["arrow_type"] for c in r["rec_candidates"] if NUMERIC.match(c["arrow_type"])
+        c["arrow_type"] for c in r["candidates"] if NUMERIC.match(c["arrow_type"])
     ]
 
 
@@ -588,7 +588,7 @@ def test_over_15_significant_digits_has_no_float_candidate():
 def test_dictionary_polars_types():
     s = pl.Series("x", ["a", "b"] * 50)
     assert (
-        rec(s)["rec_polars_type"]
+        rec(s)["polars_type"]
         == 'Categorical(Categories(name="x", namespace="", physical=pl.UInt8))'
     )
 
@@ -610,15 +610,12 @@ def test_dictionary_key_widths(d, arrow_key):
     )
     r = rec(s, categorical_threshold=100_000)
     assert (
-        r["rec_arrow_type"]
+        r["datafusion_type"]
         == f"dictionary<values=string, indices={arrow_key}, ordered=0>"
     )
     # Polars reserves one key code: its own width (checked by casting) must match the measured layout.
     polars = s.cast(pl.Enum(s.unique(maintain_order=True).to_list()))
-    assert (
-        r["rec_polars_size_bytes"]
-        == _sizes.column_sizes(polars, 1)["size_polars_bytes"]
-    )
+    assert r["polars_size_bytes"] == _sizes.column_sizes(polars, 1)["size_polars_bytes"]
 
 
 def test_dictionary_keys_are_frequency_ordered():
@@ -627,13 +624,13 @@ def test_dictionary_keys_are_frequency_ordered():
     hot = np.random.default_rng(0).integers(230, 270, 20_000)
     s = pl.Series("x", [f"r{i}" for i in range(300)] * 2 + [f"r{i}" for i in hot])
     r = rec(s)
-    assert r["rec_arrow_type"].startswith("dictionary")
-    chosen = next(c for c in r["rec_candidates"] if c["outcome"] == "chosen")
+    assert r["datafusion_type"].startswith("dictionary")
+    chosen = next(c for c in r["candidates"] if c["outcome"] == "chosen")
     assert chosen["evidence"].endswith(" key_order=frequency")
     arrow = s.to_arrow(compat_level=pl.CompatLevel.oldest()).cast(
-        pa_type(r["rec_arrow_type"]), safe=False
+        pa_type(r["datafusion_type"]), safe=False
     )
-    want = r["rec_arrow_size_zstd_bytes"]
+    want = r["datafusion_size_zstd_bytes"]
     assert _sizes.ipc_body_bytes(frequency_ordered(arrow), 1) == pytest.approx(
         want, rel=0.01, abs=16
     )
@@ -642,9 +639,9 @@ def test_dictionary_keys_are_frequency_ordered():
 
 def test_dictionary_gate_rejects_above_threshold():
     r = rec(pl.Series("x", ["a", "b"] * 500), categorical_threshold=1)
-    assert r["rec_arrow_type"] == "string"
+    assert r["datafusion_type"] == "string"
     dictionary = next(
-        c for c in r["rec_candidates"] if c["arrow_type"].startswith("dictionary")
+        c for c in r["candidates"] if c["arrow_type"].startswith("dictionary")
     )
     assert dictionary["outcome"] == "rejected"
     assert "categorical_threshold=1" in dictionary["reason"]
@@ -655,7 +652,7 @@ def test_projection_scales_the_dictionary_by_the_estimate():
     s = pl.Series("x", ids[:600] + ids[600:800] * 2 + ids[800:] * 10)
     r = rec(s)
     dictionary = next(
-        c for c in r["rec_candidates"] if c["arrow_type"].startswith("dictionary")
+        c for c in r["candidates"] if c["arrow_type"].startswith("dictionary")
     )
     assert r["est_method"] in ("schnabel", "chao1")
     assert r["est_cardinality"] > 1_000
@@ -731,7 +728,7 @@ def _outer_chosen(r: dict) -> dict:
     """The chosen candidate for the column itself (list columns also report the inner level's, rule "inner: …")."""
     return next(
         c
-        for c in r["rec_candidates"]
+        for c in r["candidates"]
         if c["outcome"] == "chosen" and not c["rule"].startswith("inner: ")
     )
 
@@ -833,35 +830,35 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
         s = frames[r["frame"]][r["column"]].rechunk()
         chosen = _outer_chosen(r)
-        assert chosen["predicted_bytes"] == r["rec_arrow_size_bytes"], r["column"]
+        assert chosen["predicted_bytes"] == r["datafusion_size_bytes"], r["column"]
         original = chosen["rule"].endswith("original")
         if original:
-            assert (r["rec_arrow_size_bytes"], r["rec_polars_size_bytes"]) == (
+            assert (r["datafusion_size_bytes"], r["polars_size_bytes"]) == (
                 r["size_bytes"],
                 r["size_polars_bytes"],
             )
-            assert r["rec_polars_type"] == str(s.dtype), r[
+            assert r["polars_type"] == str(s.dtype), r[
                 "column"
             ]  # the Polars side is an identity cast
             # Kept-original columns go through the same identity cast and measurement below. The only skip is a
             # type pa_type cannot spell (e.g. a generic struct<...>), where there is no pyarrow type to cast to.
             try:
-                pa_type(r["rec_arrow_type"])
+                pa_type(r["datafusion_type"])
             except NotImplementedError:
                 continue
         skippable = _string_source(s.dtype) and not original
         try:
             arrow = (
-                _unlist(s, r["rec_arrow_type"])
+                _unlist(s, r["datafusion_type"])
                 .rechunk()
                 .to_arrow(compat_level=pl.CompatLevel.oldest())
             )
-            arrow = arrow.cast(pa_type(r["rec_arrow_type"]), safe=False)
+            arrow = arrow.cast(pa_type(r["datafusion_type"]), safe=False)
             polars = (
                 s
                 if original
-                else _unlist(s, r["rec_arrow_type"])
-                .cast(pl_dtype(r["rec_polars_type"]))
+                else _unlist(s, r["datafusion_type"])
+                .cast(pl_dtype(r["polars_type"]))
                 .rechunk()
             )
         except (
@@ -872,25 +869,25 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
         ):
             assert (
                 skippable
-            ), f"{r['column']}: pyarrow/Polars cannot cast a non-string column to {r['rec_arrow_type']}"
+            ), f"{r['column']}: pyarrow/Polars cannot cast a non-string column to {r['datafusion_type']}"
             continue
         if arrow.null_count != s.null_count() or polars.null_count() != s.null_count():
             assert skippable, f"{r['column']}: the library cast lost values"
             continue
         level = 1
-        assert _sizes.ipc_body_bytes(arrow, None) == r["rec_arrow_size_bytes"], r[
+        assert _sizes.ipc_body_bytes(arrow, None) == r["datafusion_size_bytes"], r[
             "column"
         ]
         assert _sizes.ipc_body_bytes(frequency_ordered(arrow), level) == pytest.approx(
-            r["rec_arrow_size_zstd_bytes"], rel=0.01, abs=16
+            r["datafusion_size_zstd_bytes"], rel=0.01, abs=16
         ), r["column"]
         native = _sizes.column_sizes(polars, level)
-        assert native["size_polars_bytes"] == r["rec_polars_size_bytes"], r["column"]
-        if "dictionary" not in r["rec_arrow_type"]:
+        assert native["size_polars_bytes"] == r["polars_size_bytes"], r["column"]
+        if "dictionary" not in r["datafusion_type"]:
             # The recommender measures its Polars layout in frequency order too; a Polars
             # cast assigns codes in first-seen order, so only other targets compare.
             assert native["size_polars_zstd_bytes"] == pytest.approx(
-                r["rec_polars_size_zstd_bytes"], rel=0.01, abs=16
+                r["polars_size_zstd_bytes"], rel=0.01, abs=16
             ), r["column"]
         checked += 1
     assert checked >= min(10, result.height)
@@ -906,7 +903,7 @@ def test_dictionary_evidence_reads_est_high():
     result = recommend_frames(frames)
     checked = 0
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
-        for c in r["rec_candidates"]:
+        for c in r["candidates"]:
             m = re.search(
                 r"c=(\S+) from (est_high|est_cardinality)", c["evidence"] or ""
             )
@@ -1004,7 +1001,9 @@ def test_top_k_default_limit_is_a_prefix_of_the_full_order():
     values = [f"v{i:03d}" for i in range(600) for _ in range((600 - i) % 37 + 1)]
     s = pl.Series("s", np.random.default_rng(0).permutation(np.array(values)))
     r = rec(s)
-    assert r["rec_arrow_type"] == "dictionary<values=string, indices=uint16, ordered=0>"
+    assert (
+        r["datafusion_type"] == "dictionary<values=string, indices=uint16, ordered=0>"
+    )
     full = top_k(rec(s, top_k=None))
     assert len(full) == 600
     assert len({v for v, _ in full}) == 600
@@ -1076,9 +1075,7 @@ def test_top_k_matches_polars(make):
         s = frames[r["frame"]][r["column"]]
         for column, prefix in (("top_k", ""), ("inner_top_k", "inner: ")):
             dictionary = [
-                c
-                for c in r["rec_candidates"]
-                if c["rule"] == f"{prefix}string→dictionary"
+                c for c in r["candidates"] if c["rule"] == f"{prefix}string→dictionary"
             ]
             expected = bool(dictionary) and dictionary[0]["outcome"] != "rejected"
             assert (r[column] is not None) == expected, (r["column"], column)

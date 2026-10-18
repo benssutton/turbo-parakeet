@@ -107,7 +107,7 @@ def dictionary_order(name: str, frame: pl.DataFrame) -> list[dict]:
     against pyarrow's dictionary_encode of the same column (first-seen order)."""
     out = []
     result = OneShotRecommender().add(frame).result()
-    chosen = result.filter(pl.col("rec_arrow_type").str.starts_with("dictionary"))
+    chosen = result.filter(pl.col("datafusion_type").str.starts_with("dictionary"))
     for r in chosen.iter_rows(named=True):
         first_seen = (
             frame[r["column"]]
@@ -117,7 +117,7 @@ def dictionary_order(name: str, frame: pl.DataFrame) -> list[dict]:
             .dictionary_encode()
         )
         index_type = (
-            r["rec_arrow_type"].split("<values=string, indices=")[1].split(",")[0]
+            r["datafusion_type"].split("<values=string, indices=")[1].split(",")[0]
         )
         first_seen = pa.DictionaryArray.from_arrays(
             first_seen.indices.cast(getattr(pa, index_type)()), first_seen.dictionary
@@ -128,9 +128,9 @@ def dictionary_order(name: str, frame: pl.DataFrame) -> list[dict]:
                 "dataset": name,
                 "column": r["column"],
                 "n_unique": r["n_unique"],
-                "frequency_order_zstd": r["rec_arrow_size_zstd_bytes"],
+                "frequency_order_zstd": r["datafusion_size_zstd_bytes"],
                 "first_seen_zstd": first_seen_zstd,
-                "gain": 1 - r["rec_arrow_size_zstd_bytes"] / first_seen_zstd,
+                "gain": 1 - r["datafusion_size_zstd_bytes"] / first_seen_zstd,
             }
         )
     return out

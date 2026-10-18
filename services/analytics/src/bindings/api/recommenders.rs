@@ -251,7 +251,7 @@ mod tests {
         rec.add(&b).unwrap();
         let out = rec.result().unwrap();
         assert_eq!(
-            out.column_by_name("rec_arrow_type")
+            out.column_by_name("datafusion_type")
                 .unwrap()
                 .as_string_view()
                 .value(0),
@@ -277,7 +277,7 @@ mod tests {
         let out = rec.result().unwrap();
         assert_eq!(out.num_rows(), 2);
         let types = out
-            .column_by_name("rec_arrow_type")
+            .column_by_name("datafusion_type")
             .unwrap()
             .as_string_view();
         assert_eq!(types.value(0), "uint8");

@@ -84,15 +84,15 @@ SCHEMA = {
     **{f"inner_{k}": v for k, v in VALUE_BLOCK.items()},
     "top_k": pl.List(pl.Struct({"key": pl.String, "value": pl.UInt64})),
     "inner_top_k": pl.List(pl.Struct({"key": pl.String, "value": pl.UInt64})),
-    "rec_nullable": pl.Boolean,
-    "rec_arrow_type": pl.String,
-    "rec_arrow_size_bytes": pl.UInt64,
-    "rec_arrow_size_zstd_bytes": pl.UInt64,
-    "rec_polars_type": pl.String,
-    "rec_polars_size_bytes": pl.UInt64,
-    "rec_polars_size_zstd_bytes": pl.UInt64,
-    "rec_lossy_formatting": pl.Boolean,
-    "rec_candidates": pl.List(CANDIDATE),
+    "nullable": pl.Boolean,
+    "lossy_formatting": pl.Boolean,
+    "datafusion_type": pl.String,
+    "datafusion_size_bytes": pl.UInt64,
+    "datafusion_size_zstd_bytes": pl.UInt64,
+    "polars_type": pl.String,
+    "polars_size_bytes": pl.UInt64,
+    "polars_size_zstd_bytes": pl.UInt64,
+    "candidates": pl.List(CANDIDATE),
     "n_sampled_rows": pl.UInt64,
     "n_sampled_blocks": pl.UInt64,
 }
@@ -112,8 +112,7 @@ def one_shot(frame: pl.DataFrame) -> dict[str, dict]:
 
 def kept_original(r: dict) -> bool:
     return any(
-        c["outcome"] == "chosen" and c["rule"] == "original"
-        for c in r["rec_candidates"]
+        c["outcome"] == "chosen" and c["rule"] == "original" for c in r["candidates"]
     )
 
 
@@ -136,7 +135,7 @@ def candidates(
                 else c["predicted_bytes"]
             ),
         )
-        for c in r["rec_candidates"]
+        for c in r["candidates"]
     ]
 
 
@@ -155,7 +154,7 @@ def per_batch_sum(r: dict) -> bool:
     deeper nesting): exact for one batch only."""
     return any(
         c["rule"] == "original" and "per-batch sum" in (c["evidence"] or "")
-        for c in r["rec_candidates"]
+        for c in r["candidates"]
     )
 
 
@@ -182,13 +181,13 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         original_sizes = (
             single_batch or not per_batch_sum(r)
         ) and not null_slots_hold_bytes(frame[name])
-        keys = ["rec_nullable", "rec_lossy_formatting", "rec_arrow_type"]
+        keys = ["nullable", "lossy_formatting", "datafusion_type"]
         if original_sizes or not kept_original(o):
-            keys += ["rec_arrow_size_bytes", "rec_polars_size_bytes"]
-            keys += ["rec_arrow_size_zstd_bytes", "rec_polars_size_zstd_bytes"]
+            keys += ["datafusion_size_bytes", "polars_size_bytes"]
+            keys += ["datafusion_size_zstd_bytes", "polars_size_zstd_bytes"]
         if original_sizes:
             keys += ["size_bytes", "size_polars_bytes"]
-        assert r["rec_polars_type"] == o["rec_polars_type"], name
+        assert r["polars_type"] == o["polars_type"], name
         for k in keys:
             assert r[k] == o[k], (name, k, r[k], o[k])
         got = candidates(r, original_sizes, not overflowed)
@@ -281,7 +280,7 @@ def test_ineligible_columns_are_listed():
     assert rows["w"]["status"] == "ineligible"
     assert rows["w"]["dtype"] == "Int128"
     assert rows["w"]["n_null"] is None
-    assert rows["w"]["rec_arrow_type"] is None
+    assert rows["w"]["datafusion_type"] is None
     assert rows["n"]["status"] == "ineligible"  # still the Null type
     assert rows["a"]["status"] == "computed"
 
@@ -370,10 +369,10 @@ def test_sampled_zstd_estimate_is_within_ten_percent():
     full = stream(frame, 10_000, block_rows=4_096, reservoir_rows=frame.height + 4_096)
     sampled = stream(frame, 10_000, block_rows=4_096, reservoir_rows=16_384)
     for a, b in zip(full.iter_rows(named=True), sampled.iter_rows(named=True)):
-        if a["status"] != "computed" or (a["rec_arrow_size_zstd_bytes"] or 0) < 1_000:
+        if a["status"] != "computed" or (a["datafusion_size_zstd_bytes"] or 0) < 1_000:
             continue
-        assert b["rec_arrow_size_zstd_bytes"] == pytest.approx(
-            a["rec_arrow_size_zstd_bytes"], rel=0.10
+        assert b["datafusion_size_zstd_bytes"] == pytest.approx(
+            a["datafusion_size_zstd_bytes"], rel=0.10
         ), a["column"]
 
 
@@ -386,14 +385,14 @@ def row(out: pl.DataFrame, column: str) -> dict:
 
 
 def by_rule(r: dict) -> dict:
-    return {c["rule"]: c for c in r["rec_candidates"]}
+    return {c["rule"]: c for c in r["candidates"]}
 
 
 def test_a_new_column_is_backfilled():
     rec = StreamingRecommender().add(pl.DataFrame({"a": [1, 2]}))
     out = rec.add(pl.DataFrame({"a": [3], "b": ["x"]})).result()
     b = row(out, "b")
-    assert (b["first_row"], b["n_rows"], b["n_null"], b["rec_nullable"]) == (
+    assert (b["first_row"], b["n_rows"], b["n_null"], b["nullable"]) == (
         2,
         3,
         2,
@@ -480,8 +479,8 @@ def test_no_sample_means_no_zstd_sizes():
     out = stream(pl.DataFrame({"a": [1, 2, 3]}), 2, reservoir_rows=0)
     a = row(out, "a")
     assert a["size_zstd_bytes"] is None
-    assert a["rec_arrow_size_zstd_bytes"] is None
-    assert (a["n_sampled_rows"], a["rec_arrow_type"]) == (0, "uint8")
+    assert a["datafusion_size_zstd_bytes"] is None
+    assert (a["n_sampled_rows"], a["datafusion_type"]) == (0, "uint8")
 
 
 def test_a_float_that_does_not_round_trip_fails_by_statistic():

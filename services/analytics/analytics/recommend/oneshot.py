@@ -27,9 +27,9 @@ class OneShotRecommender:
     so it can differ by input form (e.g. string_view from Polars, large_string from
     pyarrow).
 
-    `rec_arrow_type` is pyarrow's spelling, `rec_polars_type` Python's `str(dtype)` of
+    `datafusion_type` is pyarrow's spelling, `polars_type` Python's `str(dtype)` of
     the equivalent Polars type; sizes are Arrow IPC bodies (Polars: its native layout),
-    plain and ZSTD. `rec_candidates` lists every candidate with its rule, the metric
+    plain and ZSTD. `candidates` lists every candidate with its rule, the metric
     values it tested, its predicted / projected size and its outcome.
 
     `top_k` / `inner_top_k` (dictionary candidates only, else null): the level's

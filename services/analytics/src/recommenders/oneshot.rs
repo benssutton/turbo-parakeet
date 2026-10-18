@@ -224,12 +224,12 @@ mod tests {
         assert_eq!(texts(&out, "status"), vec![text("computed"); 3]);
         assert_eq!(texts(&out, "dtype")[..2], [text("int64"), text("string")]);
         assert_eq!(
-            texts(&out, "rec_arrow_type")[..2],
+            texts(&out, "datafusion_type")[..2],
             [text("uint8"), text("string")]
         );
         assert_eq!(texts(&out, "n_rows"), vec![text("3"); 3]);
         assert_eq!(texts(&out, "inner_n_values")[2], text("3"));
-        assert_eq!(texts(&out, "rec_polars_type").iter().flatten().count(), 3);
+        assert_eq!(texts(&out, "polars_type").iter().flatten().count(), 3);
     }
 
     #[test]
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(texts(&out, "dtype")[..2], [text("Int128"), text("null")]);
         assert_eq!(texts(&out, "n_rows"), vec![text("2"); 3]);
         assert_eq!(texts(&out, "n_null")[..2], [None, text("2")]);
-        assert_eq!(texts(&out, "rec_arrow_type")[..2], [None, None]);
+        assert_eq!(texts(&out, "datafusion_type")[..2], [None, None]);
     }
 
     #[test]
@@ -320,8 +320,8 @@ mod tests {
         // Beyond float32's range with ~200 integer digits: no narrower type holds it.
         let f: ArrayRef = Arc::new(Float64Array::from(vec![3.3e200 / 7.0, 9.9e200 / 7.0]));
         let out = added(&batch(vec![("f", f)])).result().unwrap();
-        assert_eq!(texts(&out, "rec_arrow_type"), [text("double")]);
-        assert_eq!(texts(&out, "rec_polars_type"), [text("Float64")]);
+        assert_eq!(texts(&out, "datafusion_type"), [text("double")]);
+        assert_eq!(texts(&out, "polars_type"), [text("Float64")]);
     }
 
     const WORDS: [Option<&str>; 7] = [

@@ -95,7 +95,7 @@ class StreamingRecommenderTest {
                 assertEquals(List.of("a", "s"), column(root, "column"));
                 assertEquals(List.of("computed", "computed"), column(root, "status"));
                 assertEquals(List.of("6", "6"), column(root, "n_rows"));
-                assertEquals("uint8", column(root, "rec_arrow_type").get(0));
+                assertEquals("uint8", column(root, "datafusion_type").get(0));
                 assertEquals(List.of("ordinal", "boolean"), column(root, "class"));
                 assertEquals(List.of("0", "x"), column(root, "min"));
                 // a: 3 distinct of 6 (≥ half) → observed; s: 2 of 6 → an estimator
@@ -116,7 +116,7 @@ class StreamingRecommenderTest {
                 assertEquals(List.of("a", "b"), column(root, "column"));
                 assertEquals(List.of("0", "3"), column(root, "first_row"));
                 assertEquals(List.of("0", "3"), column(root, "n_null"));
-                assertEquals("true", column(root, "rec_nullable").get(1));
+                assertEquals("true", column(root, "nullable").get(1));
                 return null;
             });
         }

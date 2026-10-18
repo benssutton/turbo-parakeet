@@ -432,7 +432,7 @@ mod tests {
         let out = unsafe { oneshot_result(h) };
         assert_eq!(out.num_rows(), 2);
         let rec = out
-            .column_by_name("rec_arrow_type")
+            .column_by_name("datafusion_type")
             .unwrap()
             .as_string_view();
         assert_eq!((rec.value(0), rec.value(1)), ("uint8", "string"));
@@ -524,7 +524,7 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         let rec = batches[0]
-            .column_by_name("rec_arrow_type")
+            .column_by_name("datafusion_type")
             .unwrap()
             .as_string_view();
         assert_eq!(rec.value(0), "uint8");

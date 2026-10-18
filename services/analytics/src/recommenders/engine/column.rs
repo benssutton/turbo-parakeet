@@ -170,13 +170,13 @@ pub(crate) fn rec_row(r: &Rec) -> Row {
     let text = |s: &str| AnyValue::StringOwned(s.into());
     vec![
         AnyValue::Boolean(r.nullable),
+        AnyValue::Boolean(r.lossy),
         text(&r.arrow_type),
         AnyValue::UInt64(r.arrow_size),
         r.arrow_zstd.map_or(AnyValue::Null, AnyValue::UInt64),
         r.polars_type.as_deref().map_or(AnyValue::Null, text),
         AnyValue::UInt64(r.polars_size),
         r.polars_zstd.map_or(AnyValue::Null, AnyValue::UInt64),
-        AnyValue::Boolean(r.lossy),
         AnyValue::List(candidates_series(&r.candidates)),
     ]
 }

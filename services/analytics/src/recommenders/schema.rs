@@ -24,15 +24,15 @@ pub(crate) fn candidate_type() -> PT {
 
 pub(crate) fn rec_fields() -> Vec<(String, PT)> {
     [
-        ("rec_nullable", PT::Boolean),
-        ("rec_arrow_type", PT::String),
-        ("rec_arrow_size_bytes", PT::UInt64),
-        ("rec_arrow_size_zstd_bytes", PT::UInt64),
-        ("rec_polars_type", PT::String),
-        ("rec_polars_size_bytes", PT::UInt64),
-        ("rec_polars_size_zstd_bytes", PT::UInt64),
-        ("rec_lossy_formatting", PT::Boolean),
-        ("rec_candidates", PT::List(Box::new(candidate_type()))),
+        ("nullable", PT::Boolean),
+        ("lossy_formatting", PT::Boolean),
+        ("datafusion_type", PT::String),
+        ("datafusion_size_bytes", PT::UInt64),
+        ("datafusion_size_zstd_bytes", PT::UInt64),
+        ("polars_type", PT::String),
+        ("polars_size_bytes", PT::UInt64),
+        ("polars_size_zstd_bytes", PT::UInt64),
+        ("candidates", PT::List(Box::new(candidate_type()))),
     ]
     .into_iter()
     .map(|(n, d)| (n.to_string(), d))

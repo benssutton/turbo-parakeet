@@ -275,14 +275,14 @@ fn fixed_list() -> FixedSizeListArray {
 }
 
 const REC: [&str; 12] = [
-    "rec_arrow_type",
-    "rec_nullable",
-    "rec_lossy_formatting",
-    "rec_arrow_size_bytes",
-    "rec_polars_size_bytes",
-    "rec_arrow_size_zstd_bytes",
-    "rec_polars_size_zstd_bytes",
-    "rec_polars_type",
+    "datafusion_type",
+    "nullable",
+    "lossy_formatting",
+    "datafusion_size_bytes",
+    "polars_size_bytes",
+    "datafusion_size_zstd_bytes",
+    "polars_size_zstd_bytes",
+    "polars_type",
     "size_bytes",
     "size_polars_bytes",
     "size_zstd_bytes",
@@ -443,7 +443,7 @@ fn polars_frame(columns: &[Series]) -> RecordBatch {
 
 /// The original candidate's predicted size, per column.
 fn original_predicted(b: &RecordBatch) -> Vec<Option<String>> {
-    let col = b.column_by_name("rec_candidates").unwrap().as_list::<i64>();
+    let col = b.column_by_name("candidates").unwrap().as_list::<i64>();
     (0..b.num_rows())
         .map(|row| {
             let v = col.value(row);
@@ -527,7 +527,7 @@ fn a_list_of_structs_keeps_its_inner_type() {
     let s = Series::new("s".into(), (0..100).map(row).collect::<Vec<_>>());
     let whole = polars_frame(&[s]);
     let reference = one_shot(&whole);
-    assert!(texts(&reference, "rec_arrow_type")[0]
+    assert!(texts(&reference, "datafusion_type")[0]
         .as_deref()
         .is_some_and(|t| t.contains("struct")));
     // One batch: every recommendation and size as one-shot's, but the original's
@@ -546,8 +546,8 @@ fn a_list_of_structs_keeps_its_inner_type() {
     st.add(&whole.slice(40, 60)).unwrap();
     let out = st.result().unwrap();
     assert_eq!(
-        texts(&out, "rec_arrow_type"),
-        texts(&reference, "rec_arrow_type")
+        texts(&out, "datafusion_type"),
+        texts(&reference, "datafusion_type")
     );
 }
 
@@ -633,11 +633,11 @@ fn no_sample_means_no_zstd_sizes() {
     let mut s = Streaming::new(params(), 0, 1 << 16);
     s.add(&mixed()).unwrap();
     let out = s.result().unwrap();
-    assert!(texts(&out, "rec_arrow_size_zstd_bytes")
+    assert!(texts(&out, "datafusion_size_zstd_bytes")
         .iter()
         .all(Option::is_none));
     assert_eq!(texts(&out, "n_sampled_blocks")[0].as_deref(), Some("0"));
-    assert!(texts(&out, "rec_arrow_type").iter().all(Option::is_some));
+    assert!(texts(&out, "datafusion_type").iter().all(Option::is_some));
 }
 
 /// Column "s" streamed with `categorical_threshold` 3.
@@ -652,7 +652,7 @@ fn threshold_3(v: &[Option<&str>]) -> RecordBatch {
 /// The first row's string→dictionary candidate outcome.
 fn dictionary_outcome(out: &RecordBatch) -> String {
     let list = out
-        .column_by_name("rec_candidates")
+        .column_by_name("candidates")
         .unwrap()
         .as_list::<i64>()
         .value(0);

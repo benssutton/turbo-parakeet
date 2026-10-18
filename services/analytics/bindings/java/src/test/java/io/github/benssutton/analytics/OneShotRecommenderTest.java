@@ -92,7 +92,7 @@ class OneShotRecommenderTest {
             result(rec, allocator, root -> {
                 assertEquals(List.of("a", "s"), column(root, "column"));
                 assertEquals(List.of("computed", "computed"), column(root, "status"));
-                assertEquals(List.of("uint8", "string"), column(root, "rec_arrow_type"));
+                assertEquals(List.of("uint8", "string"), column(root, "datafusion_type"));
                 assertEquals(List.of("categorical", "boolean"), column(root, "class"));
                 assertEquals(List.of("0", "x"), column(root, "min"));
                 assertEquals(List.of("7", "y"), column(root, "max"));
@@ -108,8 +108,8 @@ class OneShotRecommenderTest {
         try (BufferAllocator allocator = new RootAllocator();
              OneShotRecommender rec = new OneShotRecommender(OneShotParams.defaults())) {
             rec.add(toyData(allocator), allocator);
-            List<String> first = result(rec, allocator, root -> column(root, "rec_arrow_type"));
-            assertEquals(first, result(rec, allocator, root -> column(root, "rec_arrow_type")));
+            List<String> first = result(rec, allocator, root -> column(root, "datafusion_type"));
+            assertEquals(first, result(rec, allocator, root -> column(root, "datafusion_type")));
         }
     }
 
