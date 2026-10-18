@@ -21,6 +21,8 @@ pub(crate) struct Params {
     pub boolean_pairs: Vec<(String, String)>,
     /// Entries per `top_k` / `inner_top_k` cell: 0 none, u64::MAX every ranked value.
     pub top_k: u64,
+    /// Streaming: the entropy estimator past the exact phase (spec 2026-10-18 §3.3).
+    pub entropy_estimator: EntropyEstimator,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

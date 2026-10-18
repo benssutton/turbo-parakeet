@@ -163,7 +163,7 @@ fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
 #[pymethods]
 impl StreamingRecommender {
     #[new]
-    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs))]
+    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="sample"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -174,7 +174,17 @@ impl StreamingRecommender {
         zstd_level: i32,
         seed: u64,
         boolean_pairs: Vec<(String, String)>,
+        entropy_estimator: &str,
     ) -> PyResult<Self> {
+        let entropy_estimator = match entropy_estimator {
+            "sample" => api::EntropyEstimator::Sample,
+            "ams" => api::EntropyEstimator::Ams,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "entropy_estimator must be \"sample\" or \"ams\", got {other:?}"
+                )))
+            }
+        };
         let p = api::StreamingParams {
             reservoir_rows,
             block_rows,
@@ -184,6 +194,7 @@ impl StreamingRecommender {
             boolean_pairs,
             // None: every ranked value.
             top_k: top_k.unwrap_or(u64::MAX),
+            entropy_estimator,
         };
         run(py, || api::StreamingRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }

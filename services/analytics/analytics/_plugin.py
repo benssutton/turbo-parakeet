@@ -193,6 +193,7 @@ def streaming_recommender(
     zstd_level: int,
     seed: int,
     boolean_pairs: tuple[tuple[str, str], ...],
+    entropy_estimator: str,
 ):
     """The Rust streaming recommender (src/recommenders/streaming/): .add(data, ineligible), .result()."""
     return _rs.StreamingRecommender(
@@ -203,6 +204,7 @@ def streaming_recommender(
         zstd_level=zstd_level,
         seed=seed,
         boolean_pairs=[tuple(p) for p in boolean_pairs],
+        entropy_estimator=entropy_estimator,
     )
 
 

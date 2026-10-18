@@ -27,12 +27,13 @@ use crate::common::error::{Error, Result};
 use crate::common::ipc_sizes::{classic_layout, layout_sizes, sizes_of};
 use crate::recommenders::engine::{
     entropy_cells, enum_categories, exemplar_cells, exemplar_value, pa_name, pick_by_stats,
-    pick_list_by_stats, pl_name, rec_row, to_polars_layout, top_k_cell, Entropy, Exemplars, Params,
-    Rec, Target,
+    pick_list_by_stats, pl_name, rec_row, to_polars_layout, top_k_cell, Entropy, EntropyEstimator,
+    Exemplars, Params, Rec, Target,
 };
 use crate::recommenders::schema::{recommender_fields, with_maps};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
 use crate::recommenders::streaming::reservoir::{Block, Reservoir};
+use crate::techniques::ams_entropy::{name_key, sketch_seed, MARGINAL};
 use crate::techniques::describe::conclusions::conclude;
 use crate::techniques::describe::{assemble, flatten, value_fields, Row};
 
@@ -204,12 +205,20 @@ impl Streaming {
         let c = self.index.get(s.name().as_str()).map(|&i| &self.columns[i]);
         let seed = self.params.seed;
         let top = c.and_then(|c| c.outer.sample_top());
-        let outer = BatchStats::of(s, self.n_rows, seed, top)?;
+        let ams_seed = (self.params.entropy_estimator == EntropyEstimator::Ams)
+            .then(|| sketch_seed(seed, MARGINAL, name_key(s.name().as_str())));
+        let outer = BatchStats::of(s, self.n_rows, seed, top, ams_seed)?;
         let inner = match flatten(s)? {
             Some(v) => {
                 let prev = c.and_then(|c| c.inner.as_ref());
                 let top = prev.and_then(LevelStats::sample_top);
-                Some(BatchStats::of(&v, prev.map_or(0, |l| l.n), seed, top)?)
+                Some(BatchStats::of(
+                    &v,
+                    prev.map_or(0, |l| l.n),
+                    seed,
+                    top,
+                    None,
+                )?)
             }
             None => None,
         };
@@ -524,27 +533,33 @@ impl Streaming {
                 o.n_null,
                 o.n,
             )),
-            Some(d) => {
-                // D̂ is HyperLogLog's (accurate); `est_cardinality`'s Schnabel overshoots at d/n < 0.5.
-                let non_null = (o.n - o.n_null) as f64;
-                let dd = match p.freq.hll {
-                    Some((e, se, seen)) => {
-                        let seen = seen as f64;
-                        (
-                            e.max(seen).min(non_null),
-                            (e * (1.0 - 3.0 * se)).max(seen).min(non_null),
-                            (e * (1.0 + 3.0 * se)).max(seen).min(non_null),
-                        )
-                    }
-                    None => (
-                        oc.est.est_cardinality,
-                        oc.est.est_low.unwrap_or(oc.est.est_cardinality),
-                        oc.est.est_high.unwrap_or(oc.est.est_cardinality),
-                    ),
-                };
-                let counts = d.held_counts();
-                Some(Entropy::from_sample(&counts, dd, o.n_null, o.n))
-            }
+            Some(d) => match (&o.ams, self.params.entropy_estimator) {
+                (Some(a), EntropyEstimator::Ams) => {
+                    let (h, se) = a.estimate_with_se();
+                    Some(Entropy::from_ams(h, se, o.n))
+                }
+                _ => {
+                    // D̂ is HyperLogLog's (accurate); `est_cardinality`'s Schnabel overshoots at d/n < 0.5.
+                    let non_null = (o.n - o.n_null) as f64;
+                    let dd = match p.freq.hll {
+                        Some((e, se, seen)) => {
+                            let seen = seen as f64;
+                            (
+                                e.max(seen).min(non_null),
+                                (e * (1.0 - 3.0 * se)).max(seen).min(non_null),
+                                (e * (1.0 + 3.0 * se)).max(seen).min(non_null),
+                            )
+                        }
+                        None => (
+                            oc.est.est_cardinality,
+                            oc.est.est_low.unwrap_or(oc.est.est_cardinality),
+                            oc.est.est_high.unwrap_or(oc.est.est_cardinality),
+                        ),
+                    };
+                    let counts = d.held_counts();
+                    Some(Entropy::from_sample(&counts, dd, o.n_null, o.n))
+                }
+            },
         };
         row.extend(entropy_cells(entropy.as_ref()));
         row.extend(exemplar_cells(Some(&c.exemplars)));

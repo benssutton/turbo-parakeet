@@ -7,7 +7,6 @@ use crate::techniques::describe::Row;
 
 /// Streaming's estimator once the distinct sample overflows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[expect(dead_code, reason = "used by the streaming recommender (later task)")]
 pub enum EntropyEstimator {
     #[default]
     Sample,
@@ -96,10 +95,6 @@ impl Entropy {
     }
 
     /// AMS estimate with its standard error (spec §3.3), interval ±3σ.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the streaming recommender (later task)")
-    )]
     pub(crate) fn from_ams(value: f64, se: f64, n: u64) -> Self {
         Entropy {
             value: clamp(value, n),

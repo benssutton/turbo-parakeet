@@ -129,14 +129,12 @@ STREAMS = [
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("estimator", ["sample"])  # Task 7 adds "ams"
+@pytest.mark.parametrize("estimator", ["sample", "ams"])
 @pytest.mark.parametrize("make", STREAMS)
 def test_streaming_entropy_after_overflow(make, estimator):
     frame = make()
     exact = one_shot(frame)["x"]["entropy"]
-    rec = (
-        StreamingRecommender()
-    )  # Task 7: StreamingRecommender(entropy_estimator=estimator)
+    rec = StreamingRecommender(entropy_estimator=estimator)
     for off in range(0, frame.height, 50_000):
         rec.add(frame.slice(off, 50_000))
     r = rec.result().row(0, named=True)
@@ -146,3 +144,30 @@ def test_streaming_entropy_after_overflow(make, estimator):
     if not (estimator == "sample" and make is STREAMS[1].values[0]):
         assert r["entropy"] == pytest.approx(exact, rel=0.05)
     assert r["entropy_low"] <= exact <= r["entropy_high"]
+
+
+def test_entropy_estimator_is_validated():
+    with pytest.raises(ValueError, match="entropy_estimator"):
+        StreamingRecommender(entropy_estimator="exact")
+
+
+@pytest.mark.slow
+def test_ams_streaming_entropy_on_the_large_dataset():
+    frame = large_dataset()
+    exact = {
+        r["column"]: r
+        for r in OneShotRecommender().add(frame).result().iter_rows(named=True)
+    }
+    rec = StreamingRecommender(entropy_estimator="ams")
+    for off in range(0, frame.height, 10_000):
+        rec.add(frame.slice(off, 10_000))
+    seen = set()
+    for r in rec.result().iter_rows(named=True):
+        if r["status"] != "computed":
+            continue
+        seen.add(r["entropy_method"])
+        h = exact[r["column"]]["entropy"]
+        assert r["entropy_method"] in ("exact", "ams"), r["column"]
+        assert r["entropy_low"] - 1e-9 <= h <= r["entropy_high"] + 1e-9, r["column"]
+        assert r["entropy"] == pytest.approx(h, rel=0.05, abs=1e-9), r["column"]
+    assert "ams" in seen  # the float / string columns overflow the 10 000-value sample

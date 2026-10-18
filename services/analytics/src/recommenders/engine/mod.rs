@@ -21,6 +21,7 @@ pub(crate) use candidates::*;
 pub(crate) use cast::*;
 pub(crate) use choose::*;
 pub(crate) use column::*;
+pub use entropy::EntropyEstimator;
 pub(crate) use entropy::*;
 pub(crate) use exemplar::*;
 pub(crate) use polars_layout::*;

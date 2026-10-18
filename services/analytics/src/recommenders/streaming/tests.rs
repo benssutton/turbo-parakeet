@@ -23,6 +23,7 @@ pub(crate) fn params() -> Params {
         categorical_threshold: 10_000,
         boolean_pairs: vec![("true".into(), "false".into())],
         top_k: 256,
+        entropy_estimator: EntropyEstimator::Sample,
     }
 }
 

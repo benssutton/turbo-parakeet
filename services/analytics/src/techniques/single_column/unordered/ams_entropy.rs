@@ -138,6 +138,7 @@ pub(crate) fn ams_marginal_entropy_impl(
 }
 
 /// SplitMix64 generator.
+#[derive(Clone)]
 struct Rng(u64);
 
 impl Rng {
@@ -169,7 +170,7 @@ impl Rng {
 }
 
 /// Misra–Gries frequent-items summary with `MG_COUNTERS` counters.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct MisraGries(HashMap<u64, u64, FixedState>);
 
 impl MisraGries {
@@ -202,9 +203,9 @@ fn ccm_estimate(
     m: u64,
     mg: &MisraGries,
     samples: impl Iterator<Item = (u64, u64, Option<u64>)>,
-) -> f64 {
+) -> (f64, f64) {
     if m == 0 {
-        return 0.0;
+        return (0.0, 0.0);
     }
     let mf = m as f64;
     let lambda = |x: u64| {
@@ -217,25 +218,34 @@ fn ccm_estimate(
     let step = |r: u64| lambda(r) - lambda(r - 1); // r ≥ 1 always
     let (top, count) = mg.top();
     let p = count as f64 / mf;
-    let (mut sum, mut n) = (0.0, 0usize);
-    if p <= 0.5 {
-        for (_, r0, _) in samples {
-            sum += step(r0);
-            n += 1;
-        }
-        return sum / n as f64;
-    }
-    // The dominant item's term is computed from p̂; the rest is estimated from samples of the
-    // stream without it: the primary when it is not the dominant item, else the backup.
-    for (s0, r0, r1) in samples {
+    let (mut sum, mut sq, mut n) = (0.0, 0.0, 0usize);
+    let mut push = |x: f64| {
+        sum += x;
+        sq += x * x;
         n += 1;
-        if s0 != top {
-            sum += step(r0);
-        } else if let Some(r1) = r1 {
-            sum += step(r1);
-        }
+    };
+    // Up to p = 0.5 every primary counts. Above, the dominant item's term is computed from p̂
+    // and the rest is estimated from samples of the stream without it: the primary when it is
+    // not the dominant item, else the backup (0 when absent, still counted).
+    let dominant = p > 0.5;
+    for (s0, r0, r1) in samples {
+        push(if !dominant || s0 != top {
+            step(r0)
+        } else {
+            r1.map_or(0.0, step)
+        });
     }
-    (1.0 - p) * sum / n as f64 + p * (1.0 / p).log2()
+    let nf = n as f64;
+    let mean = sum / nf;
+    let se = if n > 1 {
+        ((sq - sum * sum / nf) / (nf - 1.0)).max(0.0).sqrt() / nf.sqrt()
+    } else {
+        0.0
+    };
+    if !dominant {
+        return (mean, se);
+    }
+    ((1.0 - p) * mean + p * (1.0 / p).log2(), (1.0 - p) * se)
 }
 
 /// A sampled row: its key, its label and the key's tracked count before that row.
@@ -272,6 +282,7 @@ impl Estimator {
 /// A key that some estimator holds. `count` and `start` cover the rows since tracking last
 /// began (the entry is dropped when `holders` reaches 0): from row `start` on, `count` rows
 /// held this key and the rest held other keys.
+#[derive(Clone)]
 struct Tracked {
     count: u64,
     start: u64,
@@ -315,6 +326,7 @@ fn min_valid_b(estimators: &[Estimator], key: u64, t: &mut Tracked) -> Option<(u
 /// (t1 − t0)/(1 − t0) per such row, given no A event). A events are processed before B events
 /// on the same row, and every event redraws both clocks. Rows of the primary's token never
 /// advance the B clock, so a dominant token costs no events.
+#[derive(Clone)]
 pub(crate) struct AmsEntropy {
     estimators: Vec<Estimator>,
     /// A clocks: (row, estimator), smallest first; entries not matching `next_a` are stale.
@@ -392,6 +404,12 @@ impl AmsEntropy {
 
     /// Entropy estimate in bits; 0 for an empty stream.
     pub(crate) fn estimate(&self) -> f64 {
+        self.estimate_with_se().0
+    }
+
+    /// The estimate and its standard error (sample standard deviation of the per-estimator
+    /// terms over √estimators; the recommenders' interval, spec 2026-10-18 §3.3).
+    pub(crate) fn estimate_with_se(&self) -> (f64, f64) {
         let r = |s: &Sample| self.tracked[&s.key].count - s.offset;
         ccm_estimate(
             self.m,
@@ -738,6 +756,19 @@ mod tests {
                 .zip(&b)
                 .map(|(p, b)| (p.0, p.2, (b.1 < 1.0).then_some(b.2))),
         )
+        .0
+    }
+
+    #[test]
+    fn standard_error_shrinks_with_more_estimators() {
+        let keys = zipf(200_000, 3);
+        let se = |s: usize| {
+            let mut a = AmsEntropy::new(s, 9);
+            keys.iter().for_each(|&k| a.update(k));
+            a.estimate_with_se().1
+        };
+        assert!(se(4_096) < se(256));
+        assert!(se(4_096) > 0.0);
     }
 
     #[test]

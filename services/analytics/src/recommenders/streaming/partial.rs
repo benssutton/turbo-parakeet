@@ -18,6 +18,7 @@ use crate::recommenders::engine::{
     body_size, is_text, to_polars_layout, Shape, VIEW_BLOCK, VIEW_MAX_BLOCK,
 };
 use crate::recommenders::streaming::distinct_sample::{sample_size, DistinctSample};
+use crate::techniques::ams_entropy::AmsEntropy;
 use crate::techniques::describe::{
     arg_extremes, byte_lengths, float_stats, frequency_map, frequency_map_below, lengths,
     n_midnight, strings, FloatStats, Frequencies, Profile, Range, StringStats,
@@ -325,8 +326,15 @@ impl TextSource {
     }
 }
 
+/// A null row's AMS key (a 64-bit hash collides with it at ~2⁻⁶⁴).
+const NULL_KEY: u64 = 0x5EED_0000_0000_0001;
+/// AMS estimators per column.
+pub(crate) const AMS_SAMPLES: usize = 4_096;
+
 /// One batch's statistics of one level.
 pub(crate) struct BatchStats {
+    /// AMS entropy estimator: (sketch seed, every row's key in order; null → `NULL_KEY`).
+    pub row_keys: Option<(u64, Vec<u64>)>,
     n: u64,
     n_null: u64,
     lo: Option<Ext>,
@@ -360,7 +368,13 @@ impl BatchStats {
     /// `s`: the level's values in one batch; `offset`: the level's global index of its
     /// first value; `top`: the level's distinct-sample top hash in the sampling phase
     /// (None while exact: then the keys' first-occurrence order matters).
-    pub(crate) fn of(s: &Series, offset: u64, seed: u64, top: Option<u64>) -> PolarsResult<Self> {
+    pub(crate) fn of(
+        s: &Series,
+        offset: u64,
+        seed: u64,
+        top: Option<u64>,
+        ams_seed: Option<u64>,
+    ) -> PolarsResult<Self> {
         let lens = byte_lengths(s)?;
         let classic = export_series(&s.slice(0, 0), CompatLevel::oldest())?
             .data_type()
@@ -424,7 +438,17 @@ impl BatchStats {
         }
         let keys = Some(keys);
         let (min_len, max_len) = lengths(s, lens.as_deref())?;
+        let row_keys = ams_seed.map(|seed| {
+            let keys = enc
+                .values
+                .iter()
+                .zip(&enc.is_null)
+                .map(|(&v, &null)| if null { NULL_KEY } else { hash_key(v) })
+                .collect();
+            (seed, keys)
+        });
         Ok(BatchStats {
+            row_keys,
             n: s.len() as u64,
             n_null: s.null_count() as u64,
             lo,
@@ -479,6 +503,8 @@ pub(crate) struct LevelStats {
     pub rebuilt_polars_bytes: u64,
     pub classic: Option<AT>,
     pub is_f32: bool,
+    /// AMS entropy sketch over every row (only with `EntropyEstimator::Ams`).
+    pub ams: Option<AmsEntropy>,
 }
 
 impl LevelStats {
@@ -486,9 +512,21 @@ impl LevelStats {
     pub(crate) fn nulls(&mut self, rows: u64) {
         self.n += rows;
         self.n_null += rows;
+        if let Some(a) = &mut self.ams {
+            (0..rows).for_each(|_| a.update(NULL_KEY));
+        }
     }
 
     pub(crate) fn absorb(&mut self, b: BatchStats, threshold: u64) {
+        if let Some((seed, keys)) = b.row_keys {
+            let prior = self.n; // every earlier row of this level was null (absent) unless fed
+            let a = self.ams.get_or_insert_with(|| {
+                let mut a = AmsEntropy::new(AMS_SAMPLES, seed);
+                (0..prior).for_each(|_| a.update(NULL_KEY));
+                a
+            });
+            keys.into_iter().for_each(|k| a.update(k));
+        }
         self.n += b.n;
         self.n_null += b.n_null;
         if b.lo
@@ -659,7 +697,7 @@ mod tests {
     fn absorbed(parts: &[Series], threshold: u64) -> LevelStats {
         let mut st = LevelStats::default();
         for p in parts {
-            let b = BatchStats::of(p, st.n, 7, st.sample_top()).unwrap();
+            let b = BatchStats::of(p, st.n, 7, st.sample_top(), None).unwrap();
             st.absorb(b, threshold);
         }
         st
@@ -827,7 +865,7 @@ mod tests {
             );
             let mut st = LevelStats::default();
             for p in chunks(&s, 10_000) {
-                let b = BatchStats::of(&p, st.n, seed, st.sample_top()).unwrap();
+                let b = BatchStats::of(&p, st.n, seed, st.sample_top(), None).unwrap();
                 st.absorb(b, 1_000);
             }
             let n = st.n - st.n_null;

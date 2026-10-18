@@ -181,6 +181,7 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
             zstd_level,
             seed,
             boolean_pairs: unsafe { boolean_pairs(bool_true, bool_false, n_bool_pairs) }?,
+            entropy_estimator: api::EntropyEstimator::Sample,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
