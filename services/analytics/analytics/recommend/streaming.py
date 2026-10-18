@@ -57,10 +57,12 @@ class StreamingRecommender:
     k = max(categorical_threshold, 1000) — ≈ 0.65 MB at the default 10 000, so
     ≈ 0.65 GB for 1 000 high-cardinality columns; text levels also keep their
     distinct values' text while exact. `entropy_estimator="ams"` adds an AMS sketch per
-    column (≈ 4 096 estimators, a few hundred KB, plus a per-row hash and update).
+    column (≈ 4 096 estimators, a few hundred KB, plus a per-row hash and update), and
+    each `add` holds one 8-byte key per row per column until its batch is absorbed
+    (≈ 8 MB per column per million-row batch): add smaller batches for wide frames.
 
     `entropy_estimator` (default `"ams"`, spec §8): past the exact phase, `"sample"` (the bottom-k distinct
-    sample: no extra per-row cost, weak on skewed columns whose heavy values fall
+    sample with the HyperLogLog distinct count: no extra per-row cost, weak on skewed columns whose heavy values fall
     outside the sample) or `"ams"` (an AMS sketch fed every row of every eligible
     column from the first batch: ≈ 4 096 estimators per column, accurate on skew).
     """
