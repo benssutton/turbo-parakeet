@@ -9,14 +9,14 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
-use arrow_schema::DataType as AT;
+use arrow_schema::{DataType as AT, SchemaRef};
 use polars::prelude::{AnyValue, DataType as PT, PolarsResult};
 use rayon::prelude::*;
 
 use crate::common::arrow_io::{export_struct, import_batch};
 use crate::common::error::{compute, Error, Result};
 use crate::recommenders::engine::{pa_name, prepare, Params, Prepared};
-use crate::recommenders::schema::{recommender_fields, with_maps};
+use crate::recommenders::schema::{id_schema, recommender_fields, with_ids, with_maps, IdCell};
 use crate::recommenders::streaming::holds_nested_null;
 use crate::techniques::describe::{assemble, Row};
 
@@ -41,6 +41,8 @@ pub(crate) struct OneShot {
     marked: Vec<(String, String)>,
     /// None until a frame is added.
     entries: Option<Vec<Entry>>,
+    /// The id columns' schema and values (spec 2026-10-18 §4.2); None without `id_columns`.
+    ids: Option<(SchemaRef, RecordBatch)>,
     result: OnceLock<RecordBatch>,
 }
 
@@ -51,6 +53,7 @@ impl OneShot {
             n_rows: 0,
             marked: Vec::new(),
             entries: None,
+            ids: None,
             result: OnceLock::new(),
         }
     }
@@ -90,6 +93,21 @@ impl OneShot {
                 f.name()
             )));
         }
+        let ids = if self.params.id_columns.is_empty() {
+            None
+        } else {
+            let ids_schema =
+                id_schema(&schema, &self.params.id_columns).map_err(Error::InvalidInput)?;
+            let indices: Vec<usize> = ids_schema
+                .fields()
+                .iter()
+                .map(|f| schema.index_of(f.name()).expect("checked by id_schema"))
+                .collect();
+            let projected = batch
+                .project(&indices)
+                .map_err(|e| Error::InvalidInput(e.to_string()))?;
+            Some((ids_schema, projected))
+        };
         let series = import_batch(batch).map_err(|e| Error::InvalidInput(e.to_string()))?;
         let types: Vec<&AT> = schema.fields().iter().map(|f| f.data_type()).collect();
         let rows = batch.num_rows() as u64;
@@ -118,6 +136,7 @@ impl OneShot {
             .map_err(compute)?;
         self.n_rows = rows;
         self.entries = Some(entries);
+        self.ids = ids;
         self.result = OnceLock::new();
         Ok(())
     }
@@ -165,10 +184,26 @@ impl OneShot {
                 .collect::<PolarsResult<Vec<Row>>>()
                 .map_err(compute)?,
         );
-        assemble("recommend", &fields, &rows)
+        let batch = assemble("recommend", &fields, &rows)
             .and_then(|s| export_struct(&s))
             .map_err(compute)
-            .and_then(|b| with_maps(b).map_err(|e| Error::Compute(e.to_string())))
+            .and_then(|b| with_maps(b).map_err(|e| Error::Compute(e.to_string())))?;
+        let Some((ids_schema, ids)) = &self.ids else {
+            return Ok(batch);
+        };
+        // Marked and ineligible columns have no exemplars: null structs.
+        let at = |r: Option<u64>| r.map(|r| ids.slice(r as usize, 1));
+        let cells: Vec<IdCell> = (0..self.marked.len())
+            .map(|_| (None, None))
+            .chain(entries.iter().map(|e| match e {
+                Entry::Computed(p) => {
+                    let (first, null) = p.exemplar_rows();
+                    (at(first), at(null))
+                }
+                Entry::Ineligible { .. } => (None, None),
+            }))
+            .collect();
+        with_ids(batch, ids_schema, &cells).map_err(|e| Error::Compute(e.to_string()))
     }
 }
 

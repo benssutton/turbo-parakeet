@@ -18,7 +18,7 @@ use sizing::*;
 use std::collections::{HashMap, HashSet};
 
 use arrow_array::RecordBatch;
-use arrow_schema::DataType as AT;
+use arrow_schema::{DataType as AT, SchemaRef};
 use polars::prelude::{AnyValue, DataType as PT, PolarsResult, Series};
 use rayon::prelude::*;
 
@@ -30,7 +30,7 @@ use crate::recommenders::engine::{
     pick_list_by_stats, pl_name, rec_row, to_polars_layout, top_k_cell, Entropy, EntropyEstimator,
     Exemplars, Params, Rec, Target,
 };
-use crate::recommenders::schema::{recommender_fields, with_maps};
+use crate::recommenders::schema::{id_schema, recommender_fields, with_ids, with_maps, IdCell};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
 use crate::recommenders::streaming::reservoir::{Block, Reservoir};
 use crate::techniques::ams_entropy::{name_key, sketch_seed, MARGINAL};
@@ -56,6 +56,9 @@ pub(crate) struct Column {
     pub views_input: (bool, bool),
     /// First non-null row (and its text) and first null row.
     pub exemplars: Exemplars,
+    /// The id columns' values at the exemplar row and the null exemplar row (one-row copies;
+    /// spec 2026-10-18 §4.2); None while the row is, and always without `id_columns`.
+    pub ids: IdCell,
 }
 
 fn is_view(t: &AT) -> bool {
@@ -80,6 +83,11 @@ pub(crate) struct Streaming {
     columns: Vec<Column>,
     index: HashMap<String, usize>,
     reservoir: Reservoir,
+    /// The id columns' schema, from the first batch; None without `id_columns`.
+    id_schema: Option<SchemaRef>,
+    /// The id columns' values at global row 0 (a one-row copy): the null exemplar of a
+    /// column that first appears later.
+    first_ids: Option<RecordBatch>,
 }
 
 /// Whether a batch's dtype `b` continues a column of dtype `a`: Categoricals always do
@@ -125,6 +133,8 @@ impl Streaming {
             n_rows: 0,
             columns: Vec::new(),
             index: HashMap::new(),
+            id_schema: None,
+            first_ids: None,
         }
     }
 
@@ -149,6 +159,7 @@ impl Streaming {
                         null_row: (self.n_rows > 0).then_some(0),
                         ..Exemplars::default()
                     },
+                    ids: (None, self.first_ids.clone().filter(|_| self.n_rows > 0)),
                 });
                 self.index.insert(name.to_string(), self.columns.len() - 1);
                 self.columns.len() - 1
@@ -304,8 +315,66 @@ impl Streaming {
             .collect::<PolarsResult<_>>()
             .map_err(|e| Error::Compute(e.to_string()))?;
         let rows = batch.num_rows() as u64;
+        // Id values (spec §4.2): one-row copies at the exemplar rows found above, and at
+        // this batch's row 0 for columns absent from it. Fallible, so before the commit.
+        let ids_schema = if self.params.id_columns.is_empty() {
+            None
+        } else {
+            let s = id_schema(&schema, &self.params.id_columns).map_err(Error::InvalidInput)?;
+            if let Some(prev) = &self.id_schema {
+                if let Some((a, b)) = prev
+                    .fields()
+                    .iter()
+                    .zip(s.fields())
+                    .find(|(a, b)| a.data_type() != b.data_type())
+                {
+                    return Err(Error::InvalidInput(format!(
+                        "id column {:?}: type changed from {} to {}",
+                        a.name(),
+                        pa_name(a.data_type()),
+                        pa_name(b.data_type())
+                    )));
+                }
+            }
+            Some(s)
+        };
+        let ids_at = |row: u64| -> Result<RecordBatch> {
+            let s = ids_schema.as_ref().expect("id columns are set");
+            let cols = s
+                .fields()
+                .iter()
+                .map(|f| {
+                    let c = batch
+                        .column_by_name(f.name())
+                        .expect("checked by id_schema");
+                    partial::copy_rows(c, (row - start) as usize, 1)
+                })
+                .collect::<std::result::Result<Vec<_>, String>>()
+                .map_err(Error::Compute)?;
+            RecordBatch::try_new(s.clone(), cols).map_err(|e| Error::Compute(e.to_string()))
+        };
+        let (new_ids, row0_ids): (Vec<IdCell>, Option<RecordBatch>) = if ids_schema.is_some() {
+            let cells = firsts
+                .iter()
+                .map(|(row, null)| {
+                    Ok((
+                        row.as_ref().map(|(r, _)| ids_at(*r)).transpose()?,
+                        null.map(&ids_at).transpose()?,
+                    ))
+                })
+                .collect::<Result<Vec<IdCell>>>()?;
+            (cells, (rows > 0).then(|| ids_at(start)).transpose()?)
+        } else {
+            (vec![(None, None); firsts.len()], None)
+        };
         self.reservoir.feed(&cols, rows).map_err(Error::Compute)?;
         // Commit: nothing below can fail.
+        if ids_schema.is_some() {
+            self.id_schema = ids_schema.clone();
+            if self.first_ids.is_none() {
+                self.first_ids = row0_ids.clone();
+            }
+        }
         let threshold = self.params.categorical_threshold;
         for ((s, f), _) in &nested_null {
             let c = self.column(s.name().as_str());
@@ -315,14 +384,17 @@ impl Streaming {
         // Serially: create new columns and adopt types; then absorb every column's
         // statistics in parallel (column names are unique, so each slot is one column).
         let mut placed = Vec::with_capacity(stats.len());
-        for (((s, f), st), (row, null)) in series.iter().zip(stats).zip(firsts) {
+        for ((((s, f), st), (row, null)), nid) in series.iter().zip(stats).zip(firsts).zip(new_ids)
+        {
             let c = self.column(s.name().as_str());
             if let (None, Some((r, v))) = (c.exemplars.row, row) {
                 c.exemplars.row = Some(r);
                 c.exemplars.value = v;
+                c.ids.0 = nid.0;
             }
-            if c.exemplars.null_row.is_none() {
+            if c.exemplars.null_row.is_none() && null.is_some() {
                 c.exemplars.null_row = null;
+                c.ids.1 = nid.1;
             }
             if st.is_some() && c.dtype.is_none() {
                 c.dtype = Some(s.dtype().clone());
@@ -359,7 +431,10 @@ impl Streaming {
                 .iter_mut()
                 .filter(|c| !present.contains(c.name.as_str()))
             {
-                c.exemplars.null_row.get_or_insert(start);
+                if c.exemplars.null_row.is_none() {
+                    c.exemplars.null_row = Some(start);
+                    c.ids.1 = row0_ids.clone();
+                }
             }
         }
         self.n_rows += rows;
@@ -376,10 +451,25 @@ impl Streaming {
             .map(|c| self.row(c, &blocks, sampled))
             .collect::<std::result::Result<Vec<Row>, String>>()
             .map_err(Error::Compute)?;
-        assemble("streaming_recommend", &recommender_fields(true), &rows)
+        let batch = assemble("streaming_recommend", &recommender_fields(true), &rows)
             .and_then(|s| export_struct(&s))
             .map_err(|e| Error::Compute(e.to_string()))
-            .and_then(|b| with_maps(b).map_err(|e| Error::Compute(e.to_string())))
+            .and_then(|b| with_maps(b).map_err(|e| Error::Compute(e.to_string())))?;
+        let Some(ids_schema) = &self.id_schema else {
+            return Ok(batch);
+        };
+        let cells: Vec<IdCell> = self
+            .columns
+            .iter()
+            .map(|c| {
+                if c.ineligible || c.dtype.is_none() {
+                    (None, None)
+                } else {
+                    c.ids.clone()
+                }
+            })
+            .collect();
+        with_ids(batch, ids_schema, &cells).map_err(|e| Error::Compute(e.to_string()))
     }
 
     fn row(&self, c: &Column, blocks: &[&Block], sampled: u64) -> std::result::Result<Row, String> {

@@ -26,6 +26,15 @@ pub(crate) fn validate_common(zstd_level: i32, boolean_pairs: &[(String, String)
     Ok(())
 }
 
+/// Duplicate id column names are InvalidInput.
+fn validate_ids(id_columns: &[String]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    match id_columns.iter().find(|n| !seen.insert(n.as_str())) {
+        Some(n) => Err(Error::InvalidInput(format!("duplicate id column {n:?}"))),
+        None => Ok(()),
+    }
+}
+
 /// Keywords of the one-shot recommender (spec 2026-10-04 §3.4).
 #[derive(Clone, Debug)]
 pub struct OneShotParams {
@@ -35,6 +44,8 @@ pub struct OneShotParams {
     pub boolean_pairs: Vec<(String, String)>,
     /// Entries per `top_k` / `inner_top_k` cell: 0 none, u64::MAX every ranked value.
     pub top_k: u64,
+    /// Columns identifying the exemplar rows (typed `exemplar_id` structs); may be empty.
+    pub id_columns: Vec<String>,
 }
 
 /// Recommends dtypes for one frame from exact statistics, each candidate verified on
@@ -44,6 +55,7 @@ pub struct OneShotRecommender(crate::recommenders::oneshot::OneShot);
 impl OneShotRecommender {
     pub fn new(p: OneShotParams) -> Result<Self> {
         validate_common(p.zstd_level, &p.boolean_pairs)?;
+        validate_ids(&p.id_columns)?;
         Ok(Self(crate::recommenders::oneshot::OneShot::new(Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
@@ -51,6 +63,7 @@ impl OneShotRecommender {
             boolean_pairs: p.boolean_pairs,
             top_k: p.top_k,
             entropy_estimator: EntropyEstimator::Sample,
+            id_columns: p.id_columns,
         })))
     }
 
@@ -87,6 +100,8 @@ pub struct StreamingParams {
     pub top_k: u64,
     /// The entropy estimator past the exact phase.
     pub entropy_estimator: EntropyEstimator,
+    /// Columns identifying the exemplar rows (typed `exemplar_id` structs); may be empty.
+    pub id_columns: Vec<String>,
 }
 
 /// Recommends dtypes from record batches added over time; all state stays in Rust.
@@ -104,6 +119,7 @@ impl StreamingRecommender {
             )));
         }
         validate_common(p.zstd_level, &p.boolean_pairs)?;
+        validate_ids(&p.id_columns)?;
         let params = Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
@@ -111,6 +127,7 @@ impl StreamingRecommender {
             boolean_pairs: p.boolean_pairs,
             top_k: p.top_k,
             entropy_estimator: p.entropy_estimator,
+            id_columns: p.id_columns,
         };
         Ok(Self(crate::recommenders::streaming::Streaming::new(
             params,
@@ -163,6 +180,7 @@ mod tests {
             boolean_pairs: vec![("true".into(), "false".into())],
             top_k: 256,
             entropy_estimator: EntropyEstimator::Sample,
+            id_columns: Vec::new(),
         }
     }
 
@@ -214,6 +232,7 @@ mod tests {
             seed: 0,
             boolean_pairs: vec![("true".into(), "false".into())],
             top_k: 256,
+            id_columns: Vec::new(),
         }
     }
 

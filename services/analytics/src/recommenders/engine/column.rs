@@ -207,6 +207,12 @@ pub(crate) fn prepare(s: Series, input_type: &AT, params: &Params) -> PolarsResu
 }
 
 impl Prepared {
+    /// The first non-null and first null row (spec 2026-10-18 §4).
+    pub(crate) fn exemplar_rows(&self) -> (Option<u64>, Option<u64>) {
+        let f = &self.described.outer.freq;
+        (f.first_row, f.first_null)
+    }
+
     /// The column's `recommender_fields(false)` row.
     pub(crate) fn row(&self, params: &Params) -> PolarsResult<Row> {
         let d = &self.described;

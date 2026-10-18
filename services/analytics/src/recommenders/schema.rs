@@ -5,9 +5,12 @@ use crate::techniques::describe::value_fields;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, MapArray, RecordBatch, RecordBatchOptions, StructArray};
+use arrow_array::{
+    new_empty_array, new_null_array, Array, ArrayRef, MapArray, RecordBatch, RecordBatchOptions,
+    StructArray,
+};
 use arrow_buffer::{OffsetBuffer, ScalarBuffer};
-use arrow_schema::{ArrowError, DataType as AT, Field, Fields, Schema};
+use arrow_schema::{ArrowError, DataType as AT, Field, Fields, Schema, SchemaRef};
 use polars::prelude::{DataType as PT, Field as PField};
 
 pub(crate) fn candidate_type() -> PT {
@@ -163,6 +166,78 @@ fn to_map(c: &ArrayRef) -> Result<ArrayRef, ArrowError> {
     Ok(Arc::new(map))
 }
 
+/// One output row's id values: (exemplar, null exemplar) one-row batches, None = no such row.
+pub(crate) type IdCell = (Option<RecordBatch>, Option<RecordBatch>);
+
+/// Replaces the Null-typed `exemplar_id` / `null_exemplar_id` columns by Structs of the id
+/// columns (spec 2026-10-18 §4.2). `ids[i]` = (exemplar, null exemplar) one-row batches of
+/// output row i, all with `schema`; None gives a null struct.
+pub(crate) fn with_ids(
+    b: RecordBatch,
+    schema: &SchemaRef,
+    ids: &[IdCell],
+) -> Result<RecordBatch, ArrowError> {
+    let fields = schema.fields().clone();
+    let struct_type = AT::Struct(fields.clone());
+    let column = |pick: &dyn Fn(&IdCell) -> Option<&RecordBatch>| -> Result<ArrayRef, ArrowError> {
+        let null_row = new_null_array(&struct_type, 1);
+        let parts: Vec<ArrayRef> = ids
+            .iter()
+            .map(|cell| match pick(cell) {
+                Some(r) => StructArray::try_new(fields.clone(), r.columns().to_vec(), None)
+                    .map(|s| Arc::new(s) as ArrayRef),
+                None => Ok(null_row.clone()),
+            })
+            .collect::<Result<_, _>>()?;
+        if parts.is_empty() {
+            return Ok(new_empty_array(&struct_type));
+        }
+        let refs: Vec<&dyn Array> = parts.iter().map(|a| a.as_ref()).collect();
+        arrow_select::concat::concat(&refs)
+    };
+    let exemplar = column(&|c| c.0.as_ref())?;
+    let null_exemplar = column(&|c| c.1.as_ref())?;
+    let out_schema = b.schema();
+    let mut out_fields = Vec::with_capacity(b.num_columns());
+    let mut out_columns = Vec::with_capacity(b.num_columns());
+    for (f, c) in out_schema.fields().iter().zip(b.columns()) {
+        let replaced = match f.name().as_str() {
+            "exemplar_id" => Some(exemplar.clone()),
+            "null_exemplar_id" => Some(null_exemplar.clone()),
+            _ => None,
+        };
+        match replaced {
+            Some(a) => {
+                out_fields.push(Field::new(f.name(), struct_type.clone(), true));
+                out_columns.push(a);
+            }
+            None => {
+                out_fields.push(f.as_ref().clone());
+                out_columns.push(c.clone());
+            }
+        }
+    }
+    let options = RecordBatchOptions::new().with_row_count(Some(b.num_rows()));
+    RecordBatch::try_new_with_options(Arc::new(Schema::new(out_fields)), out_columns, &options)
+}
+
+/// The id columns' sub-schema of `schema` (fields made nullable), checked (spec §4.2):
+/// duplicates and missing names are an Err message the caller maps to InvalidInput.
+pub(crate) fn id_schema(schema: &Schema, id_columns: &[String]) -> Result<SchemaRef, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut fields = Vec::with_capacity(id_columns.len());
+    for name in id_columns {
+        if !seen.insert(name.as_str()) {
+            return Err(format!("duplicate id column {name:?}"));
+        }
+        let f = schema
+            .field_with_name(name)
+            .map_err(|_| format!("id column {name:?} is not in the input"))?;
+        fields.push(f.clone().with_nullable(true));
+    }
+    Ok(Arc::new(Schema::new(fields)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +304,93 @@ mod tests {
         )])
         .unwrap();
         assert!(with_maps(b).is_err());
+    }
+
+    #[test]
+    fn with_ids_builds_typed_structs_and_null_cells() {
+        let ids_schema = Arc::new(Schema::new(vec![
+            Field::new("id", AT::Int64, true),
+            Field::new("tag", AT::Utf8, true),
+        ]));
+        let one = |id: i64, tag: &str| {
+            RecordBatch::try_new(
+                ids_schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![id])) as ArrayRef,
+                    Arc::new(arrow_array::StringArray::from(vec![tag])) as ArrayRef,
+                ],
+            )
+            .unwrap()
+        };
+        let other: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", AT::Int64, false),
+            Field::new("exemplar_id", AT::Null, true),
+            Field::new("null_exemplar_id", AT::Null, true),
+        ]));
+        let b = RecordBatch::try_new(
+            schema,
+            vec![
+                other.clone(),
+                new_null_array(&AT::Null, 2),
+                new_null_array(&AT::Null, 2),
+            ],
+        )
+        .unwrap();
+        let cells = vec![(Some(one(7, "a")), None), (None, Some(one(9, "b")))];
+        let out = with_ids(b, &ids_schema, &cells).unwrap();
+        assert_eq!(out.column(0), &other);
+        let e = out.column(1).as_struct();
+        assert!(e.is_valid(0) && e.is_null(1));
+        assert_eq!(
+            e.column(0)
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(0),
+            7
+        );
+        assert_eq!(e.column(1).as_string::<i32>().value(0), "a");
+        let n = out.column(2).as_struct();
+        assert!(n.is_null(0) && n.is_valid(1));
+        assert_eq!(n.column(1).as_string::<i32>().value(1), "b");
+        assert_eq!(
+            out.schema().field(1).data_type(),
+            &AT::Struct(ids_schema.fields().clone())
+        );
+    }
+
+    #[test]
+    fn with_ids_handles_zero_rows() {
+        let ids_schema = Arc::new(Schema::new(vec![Field::new("id", AT::Int64, true)]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("exemplar_id", AT::Null, true),
+            Field::new("null_exemplar_id", AT::Null, true),
+        ]));
+        let b = RecordBatch::try_new(
+            schema,
+            vec![new_null_array(&AT::Null, 0), new_null_array(&AT::Null, 0)],
+        )
+        .unwrap();
+        let out = with_ids(b, &ids_schema, &[]).unwrap();
+        assert_eq!(out.num_rows(), 0);
+        assert!(matches!(out.schema().field(0).data_type(), AT::Struct(_)));
+    }
+
+    #[test]
+    fn id_schema_checks_names_and_keeps_order() {
+        let schema = Schema::new(vec![
+            Field::new("a", AT::Int64, false),
+            Field::new("b", AT::Utf8, false),
+        ]);
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let got = id_schema(&schema, &names(&["b", "a"])).unwrap();
+        assert_eq!(got.field(0).name(), "b");
+        assert_eq!(got.field(1).name(), "a");
+        assert!(got.fields().iter().all(|f| f.is_nullable()));
+        assert!(id_schema(&schema, &names(&["a", "a"]))
+            .unwrap_err()
+            .contains("duplicate id column"));
+        assert!(id_schema(&schema, &names(&["z"]))
+            .unwrap_err()
+            .contains("not in the input"));
     }
 }

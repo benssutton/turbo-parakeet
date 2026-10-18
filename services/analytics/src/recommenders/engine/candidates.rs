@@ -23,6 +23,9 @@ pub(crate) struct Params {
     pub top_k: u64,
     /// Streaming: the entropy estimator past the exact phase (spec 2026-10-18 §3.3).
     pub entropy_estimator: EntropyEstimator,
+    /// Columns whose values at the exemplar rows fill `exemplar_id` / `null_exemplar_id`
+    /// (spec 2026-10-18 §4.2); empty: those columns stay Null-typed.
+    pub id_columns: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

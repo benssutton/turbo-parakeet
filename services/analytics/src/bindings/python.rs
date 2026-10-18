@@ -163,7 +163,7 @@ fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
 #[pymethods]
 impl StreamingRecommender {
     #[new]
-    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="sample"))]
+    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="sample", id_columns=Vec::new()))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -175,6 +175,7 @@ impl StreamingRecommender {
         seed: u64,
         boolean_pairs: Vec<(String, String)>,
         entropy_estimator: &str,
+        id_columns: Vec<String>,
     ) -> PyResult<Self> {
         let entropy_estimator = match entropy_estimator {
             "sample" => api::EntropyEstimator::Sample,
@@ -195,6 +196,7 @@ impl StreamingRecommender {
             // None: every ranked value.
             top_k: top_k.unwrap_or(u64::MAX),
             entropy_estimator,
+            id_columns,
         };
         run(py, || api::StreamingRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }
@@ -238,7 +240,7 @@ struct OneShotRecommender(Mutex<api::OneShotRecommender>);
 #[pymethods]
 impl OneShotRecommender {
     #[new]
-    #[pyo3(signature = (*, categorical_threshold, top_k, zstd_level, seed, boolean_pairs))]
+    #[pyo3(signature = (*, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, id_columns=Vec::new()))]
     fn new(
         py: Python<'_>,
         categorical_threshold: u64,
@@ -246,6 +248,7 @@ impl OneShotRecommender {
         zstd_level: i32,
         seed: u64,
         boolean_pairs: Vec<(String, String)>,
+        id_columns: Vec<String>,
     ) -> PyResult<Self> {
         let p = api::OneShotParams {
             categorical_threshold,
@@ -254,6 +257,7 @@ impl OneShotRecommender {
             boolean_pairs,
             // None: every ranked value.
             top_k: top_k.unwrap_or(u64::MAX),
+            id_columns,
         };
         run(py, || api::OneShotRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }

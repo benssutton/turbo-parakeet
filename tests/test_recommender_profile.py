@@ -171,3 +171,111 @@ def test_ams_streaming_entropy_on_the_large_dataset():
         assert r["entropy_low"] - 1e-9 <= h <= r["entropy_high"] + 1e-9, r["column"]
         assert r["entropy"] == pytest.approx(h, rel=0.05, abs=1e-9), r["column"]
     assert "ams" in seen  # the float / string columns overflow the 10 000-value sample
+
+
+def test_exemplar_ids_keep_their_types_and_nulls():
+    frame = pl.DataFrame(
+        {
+            "order": [10, 11, None, 13],
+            "line": ["a", "b", "c", "d"],
+            "price": [None, 1.5, None, 2.5],
+        }
+    )
+    for cls in (OneShotRecommender, StreamingRecommender):
+        out = cls(id_columns=["order", "line"]).add(frame).result()
+        assert out.schema["exemplar_id"] == pl.Struct(
+            {"order": pl.Int64, "line": pl.String}
+        )
+        price = out.filter(pl.col("column") == "price").row(0, named=True)
+        assert price["exemplar_id"] == {"order": 11, "line": "b"}
+        assert price["null_exemplar_id"] == {"order": 10, "line": "a"}
+        order = out.filter(pl.col("column") == "order").row(0, named=True)
+        assert order["null_exemplar_id"] == {"order": None, "line": "c"}
+        line = out.filter(pl.col("column") == "line").row(0, named=True)
+        assert line["null_exemplar_id"] is None
+
+
+def test_without_id_columns_the_id_columns_are_null_typed():
+    out = OneShotRecommender().add(pl.DataFrame({"a": [1, None]})).result()
+    assert out.schema["exemplar_id"] == pl.Null
+    assert out.schema["null_exemplar_id"] == pl.Null
+
+
+@pytest.mark.parametrize("batch_rows", [1, 2, 5])
+def test_streaming_ids_equal_one_shot(batch_rows):
+    frame = pl.DataFrame(
+        {
+            "k": list(range(10)),
+            "a": [None, None, 1, None, 2] * 2,
+            "s": ["x"] * 3 + [None] * 7,
+        }
+    )
+    want = {
+        r["column"]: r
+        for r in OneShotRecommender(id_columns=["k"])
+        .add(frame)
+        .result()
+        .iter_rows(named=True)
+    }
+    rec = StreamingRecommender(id_columns=["k"])
+    for off in range(0, frame.height, batch_rows):
+        rec.add(frame.slice(off, batch_rows))
+    for r in rec.result().iter_rows(named=True):
+        for k in ["exemplar_id", "null_exemplar_id"]:
+            assert r[k] == want[r["column"]][k], (r["column"], k)
+
+
+def test_streaming_late_column_null_exemplar_takes_row_zero_ids():
+    rec = StreamingRecommender(id_columns=["k"])
+    rec.add(pl.DataFrame({"k": [100, 101]}))
+    rec.add(pl.DataFrame({"k": [102], "b": ["x"]}))
+    b = rec.result().filter(pl.col("column") == "b").row(0, named=True)
+    assert (b["exemplar_id"], b["null_exemplar_id"]) == ({"k": 102}, {"k": 100})
+
+
+def test_streaming_absent_column_null_exemplar_takes_the_batch_start_ids():
+    rec = StreamingRecommender(id_columns=["k"])
+    rec.add(pl.DataFrame({"k": [100, 101], "a": [1, 2]}))
+    rec.add(pl.DataFrame({"k": [102, 103]}))
+    a = rec.result().filter(pl.col("column") == "a").row(0, named=True)
+    assert (a["exemplar_id"], a["null_exemplar_id"]) == ({"k": 100}, {"k": 102})
+
+
+@pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
+def test_id_column_errors(cls):
+    with pytest.raises(ValueError, match="not in the input"):
+        cls(id_columns=["missing"]).add(pl.DataFrame({"a": [1]}))
+    with pytest.raises(ValueError, match="duplicate id column"):
+        cls(id_columns=["a", "a"]).add(pl.DataFrame({"a": [1]}))
+
+
+def test_streaming_id_column_missing_from_a_later_batch():
+    rec = StreamingRecommender(id_columns=["k"])
+    rec.add(pl.DataFrame({"k": [1], "a": [2]}))
+    with pytest.raises(ValueError, match="not in the input"):
+        rec.add(pl.DataFrame({"a": [3]}))
+
+
+def test_streaming_failed_add_leaves_the_result_unchanged():
+    rec = StreamingRecommender(id_columns=["k"])
+    rec.add(pl.DataFrame({"k": [1, 2], "a": [None, 2]}))
+    before = rec.result()
+    with pytest.raises(ValueError):
+        rec.add(pl.DataFrame({"a": [3, None]}))
+    assert rec.result().equals(before)
+    rec.add(pl.DataFrame({"k": [3], "a": [4]}))
+    assert rec.result().row(0, named=True)["n_rows"] == 3
+
+
+def test_streaming_id_column_type_change_is_rejected():
+    rec = StreamingRecommender(id_columns=["k"])
+    rec.add(pl.DataFrame({"k": [1], "a": [2]}))
+    with pytest.raises(ValueError, match="type changed"):
+        rec.add(pl.DataFrame({"k": ["x"], "a": [3]}))
+
+
+@pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
+def test_ineligible_id_column_is_rejected(cls):
+    frame = pl.DataFrame({"k": pl.Series([1, 2], dtype=pl.Int128), "a": [1, 2]})
+    with pytest.raises(ValueError, match="ineligible"):
+        cls(id_columns=["k"]).add(frame)

@@ -47,6 +47,28 @@ def top_k(k) -> int | None:
     return n
 
 
+def id_columns(names) -> list[str]:
+    """`names` as a list of strings (None: no id columns), else ValueError."""
+    if names is None:
+        return []
+    if isinstance(names, str):
+        raise ValueError(f"id_columns must be a sequence of names, got {names!r}")
+    out = list(names)
+    if not all(isinstance(n, str) for n in out):
+        raise ValueError(f"id_columns must be strings, got {names!r}")
+    return out
+
+
+def check_ids(ids: list[str], ineligible: list[tuple[str, str]]) -> None:
+    """ValueError if an id column is among the `ineligible` (name, dtype) columns."""
+    dtypes = dict(ineligible)
+    for name in ids:
+        if name in dtypes:
+            raise ValueError(
+                f"id column {name!r} is ineligible ({dtypes[name]}): it cannot identify rows"
+            )
+
+
 def prepare(frame) -> tuple[object, list[tuple[str, str]]]:
     """`frame` as the Rust side reads it, and (name, dtype) of the columns dropped
     from it as ineligible: Int128 / UInt128, Object and nested-Null. Arrow objects

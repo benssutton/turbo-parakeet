@@ -24,6 +24,7 @@ pub(crate) fn params() -> Params {
         boolean_pairs: vec![("true".into(), "false".into())],
         top_k: 256,
         entropy_estimator: EntropyEstimator::Sample,
+        id_columns: Vec::new(),
     }
 }
 
