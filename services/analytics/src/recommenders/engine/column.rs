@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, layout_sizes, sizes_of, Sizes};
+use crate::recommenders::schema::profile_fields;
 use crate::techniques::describe::conclusions::Conclusions;
 use crate::techniques::describe::{describe_one, value_fields, Described, Row};
 use arrow_array::{Array, ArrayRef};
@@ -227,6 +228,7 @@ impl Prepared {
         row.push(AnyValue::StringOwned("computed".into()));
         row.push(AnyValue::StringOwned(self.dtype.as_str().into()));
         row.extend(base.by_ref().take(3 + value_fields().len())); // through n_midnight
+        row.extend(vec![AnyValue::Null; profile_fields().len()]); // filled in later tasks
         row.extend(self.sizes.iter().map(|&v| AnyValue::UInt64(v)));
         row.extend(base); // the inner block
         let inner_ranking = d.inner.as_ref().and_then(|i| i.profile.ranking.as_ref());

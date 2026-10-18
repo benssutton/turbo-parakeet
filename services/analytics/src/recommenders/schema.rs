@@ -39,6 +39,25 @@ pub(crate) fn rec_fields() -> Vec<(String, PT)> {
     .collect()
 }
 
+/// Entropy and exemplar columns (spec 2026-10-18 §3, §4), after `n_midnight`. The two
+/// `*_id` columns are Null-typed here; `with_ids` replaces them when there are id columns.
+pub(crate) fn profile_fields() -> Vec<(String, PT)> {
+    [
+        ("entropy", PT::Float64),
+        ("entropy_low", PT::Float64),
+        ("entropy_high", PT::Float64),
+        ("entropy_method", PT::String),
+        ("exemplar_row", PT::UInt64),
+        ("exemplar_id", PT::Null),
+        ("exemplar_value", PT::String),
+        ("null_exemplar_row", PT::UInt64),
+        ("null_exemplar_id", PT::Null),
+    ]
+    .into_iter()
+    .map(|(n, d)| (n.to_string(), d))
+    .collect()
+}
+
 /// The recommenders' output columns (spec 2026-10-04 §4), one definition for both:
 /// `streaming` adds `first_row` after `dtype` and the sample counts at the end.
 pub(crate) fn recommender_fields(streaming: bool) -> Vec<(String, PT)> {
@@ -54,6 +73,7 @@ pub(crate) fn recommender_fields(streaming: bool) -> Vec<(String, PT)> {
     f.push(("n_null".into(), PT::UInt64));
     f.extend(value_fields().into_iter().map(|(n, d)| (n.to_string(), d)));
     f.push(("n_midnight".into(), PT::UInt64));
+    f.extend(profile_fields());
     f.extend(SIZE_FIELDS.iter().map(|n| (n.to_string(), PT::UInt64)));
     f.push(("inner_n_values".into(), PT::UInt64));
     f.push(("inner_n_null".into(), PT::UInt64));

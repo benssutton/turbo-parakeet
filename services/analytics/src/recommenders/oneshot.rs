@@ -220,6 +220,10 @@ mod tests {
             .map(|(n, _)| n)
             .collect();
         assert_eq!(names, want);
+        for c in ["exemplar_id", "null_exemplar_id"] {
+            let f = out.schema().field_with_name(c).unwrap().clone();
+            assert_eq!(f.data_type(), &arrow_schema::DataType::Null, "{c}");
+        }
         assert_eq!(texts(&out, "column"), [text("a"), text("s"), text("l")]);
         assert_eq!(texts(&out, "status"), vec![text("computed"); 3]);
         assert_eq!(texts(&out, "dtype")[..2], [text("int64"), text("string")]);

@@ -29,7 +29,7 @@ use crate::recommenders::engine::{
     enum_categories, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row,
     to_polars_layout, top_k_cell, Params, Rec, Target,
 };
-use crate::recommenders::schema::{recommender_fields, with_maps};
+use crate::recommenders::schema::{profile_fields, recommender_fields, with_maps};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
 use crate::recommenders::streaming::reservoir::{Block, Reservoir};
 use crate::techniques::describe::conclusions::conclude;
@@ -451,6 +451,7 @@ impl Streaming {
         };
         row.extend(p.row(&oc));
         row.push(u(o.n_midnight));
+        row.extend(vec![AnyValue::Null; profile_fields().len()]); // filled in later tasks
         row.extend([
             AnyValue::UInt64(lvl.size_bytes),
             u(scale(z[0])),

@@ -178,7 +178,11 @@ pub(crate) fn export_struct(out: &Series) -> PolarsResult<RecordBatch> {
     let fields = out.struct_()?.fields_as_series();
     let columns = fields
         .iter()
-        .map(|s| export_series(s, CompatLevel::newest()))
+        .map(|s| match s.dtype() {
+            // Polars exports a Null array with a buffer, which arrow-rs rejects.
+            DataType::Null => Ok(Arc::new(arrow_array::NullArray::new(s.len())) as ArrayRef),
+            _ => export_series(s, CompatLevel::newest()),
+        })
         .collect::<PolarsResult<Vec<_>>>()?;
     let schema = Schema::new(
         fields
@@ -604,6 +608,20 @@ mod tests {
 
     use arrow_schema::DataType as AT;
     use polars::datatypes::{Categories, FrozenCategories};
+
+    #[test]
+    fn export_struct_keeps_null_typed_columns() {
+        let a = Series::new("a".into(), &[1i64, 2, 3]);
+        let n = Series::new_null("n".into(), 3);
+        let out = StructChunked::from_series("o".into(), 3, [a, n].iter())
+            .unwrap()
+            .into_series();
+        let batch = export_struct(&out).unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.column(0).data_type(), &AT::Int64);
+        assert_eq!(batch.column(1).data_type(), &AT::Null);
+        assert_eq!(batch.column(1).len(), 3);
+    }
 
     #[test]
     fn export_series_layouts() {
