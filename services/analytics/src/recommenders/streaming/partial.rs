@@ -586,6 +586,9 @@ impl LevelStats {
                 all_once,
                 hll,
                 ranked: None,
+                entropy: None,
+                first_row: None,
+                first_null: None,
             },
             range: Range {
                 argmin: None,

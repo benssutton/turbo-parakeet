@@ -1,5 +1,6 @@
 //! Value frequencies: counts, the frequency map, capture histories (describe group A).
 
+use crate::common::entropy_math::entropy_from_counts_iter;
 use crate::common::EncodedColumn;
 use crate::techniques::hll::{hash_key, Hll};
 use foldhash::fast::FixedState;
@@ -67,6 +68,25 @@ pub(crate) struct Frequencies {
     /// Every distinct value in `Ranked` order, when `frequencies` was given a `rank_up_to`
     /// and `n_unique` is within it.
     pub ranked: Option<Ranked>,
+    /// Shannon entropy in bits, null one category (spec 2026-10-18 §3.1); None when built by
+    /// streaming's `LevelStats::profile` (it estimates its own).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the one-shot recommender (next tasks)")
+    )]
+    pub entropy: Option<f64>,
+    /// Row of the first non-null / first null value (one-shot exemplars, spec §4); None from
+    /// streaming's profile, and when there is no such row.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the one-shot recommender (next tasks)")
+    )]
+    pub first_row: Option<u64>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the one-shot recommender (next tasks)")
+    )]
+    pub first_null: Option<u64>,
 }
 
 /// Split subset (0, 1 or 2) of `row`: the SplitMix64 finaliser of `seed + row`.
@@ -183,6 +203,24 @@ pub(crate) fn frequencies(
     rank_up_to: Option<u64>,
 ) -> Frequencies {
     let map = frequency_map(col, seed, 0);
+    let n = col.is_null.len() as u64;
+    let n_null = col.is_null.iter().filter(|&&b| b).count() as u64;
+    // The shared SIMD reduction over the counts the sweep already holds (no second pass).
+    let entropy = if n == 0 {
+        0.0
+    } else {
+        entropy_from_counts_iter(
+            map.values()
+                .map(|e| e.count)
+                .chain((n_null > 0).then_some(n_null)),
+            (n as f64).log2(),
+            n as f64,
+        )
+        // rounding can leave a constant column a few ulps below zero
+        .max(0.0)
+    };
+    let first_row = map.values().map(|e| e.first).min();
+    let first_null = col.is_null.iter().position(|&b| b).map(|i| i as u64);
     let (mut f1, mut f2, mut history) = (0u64, 0u64, [0u64; 7]);
     let n_unique = map.len() as u64;
     let rank = rank_up_to.is_some_and(|t| n_unique <= t);
@@ -219,6 +257,9 @@ pub(crate) fn frequencies(
         capture_history: history,
         sum_len_unique: lengths.map(|_| unique_len),
         ranked,
+        entropy: Some(entropy),
+        first_row,
+        first_null,
     }
 }
 
@@ -383,5 +424,37 @@ mod tests {
             &[Some(b"ab".as_ref()), Some(b"ab".as_ref()), None],
         );
         assert_eq!(freq(bin).n_unique, 1);
+    }
+
+    #[test]
+    fn entropy_counts_null_as_a_category() {
+        // [1, 1, null, null, 2]: counts (2, 2, 1) over 5 rows.
+        let f = freq(Series::new(
+            "a".into(),
+            &[Some(1i32), Some(1), None, None, Some(2)],
+        ));
+        let (p1, p2): (f64, f64) = (0.4, 0.2);
+        let want = -(2.0 * p1 * p1.log2() + p2 * p2.log2());
+        assert!((f.entropy.unwrap() - want).abs() < 1e-12);
+        assert_eq!((f.first_row, f.first_null), (Some(0), Some(2)));
+    }
+
+    #[test]
+    fn entropy_edge_cases() {
+        let constant = freq(Series::new("a".into(), &[7i64; 10]));
+        assert_eq!(constant.entropy, Some(0.0));
+        assert_eq!(constant.first_null, None);
+        let distinct = freq(Series::new("a".into(), &[1i64, 2, 3, 4]));
+        assert!((distinct.entropy.unwrap() - 2.0).abs() < 1e-12);
+        let empty = freq(Series::new("a".into(), Vec::<i64>::new()));
+        assert_eq!(
+            (empty.entropy, empty.first_row, empty.first_null),
+            (Some(0.0), None, None)
+        );
+        let all_null = freq(Series::new("a".into(), &[None::<i64>, None]));
+        assert_eq!(
+            (all_null.entropy, all_null.first_row, all_null.first_null),
+            (Some(0.0), None, Some(0))
+        );
     }
 }
