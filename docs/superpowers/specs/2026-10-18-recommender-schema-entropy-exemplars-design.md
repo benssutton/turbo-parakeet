@@ -79,8 +79,13 @@ Ineligible columns: all four null.
 
 ### 3.2 One-shot
 
-One pass over the frequency map that Describe's statistics already build (`techniques/.../describe/frequencies.rs`,
-reached through `recommenders::engine::prepare`), plus `n_null`; no re-hashing of the column.  Method `exact`.
+The counts come from the frequency map that Describe's statistics already build (`techniques/.../describe/frequencies.rs`,
+reached through `recommenders::engine::prepare`) — the same `encode_series` keys `marginal_entropy.rs` hashes — plus
+`n_null` as one more count.  They are reduced by the shared, SIMD `entropy_from_counts_iter`
+(`common/entropy_math.rs`), the reduction `marginal_entropy` uses: O(distinct), no second encode / hash pass over the
+rows (calling `marginal_entropy_impl` would repeat the O(rows) counting Describe has done).  Zero rows → 0 (the
+reduction needs r > 0).  Method `exact`.  The streaming exact phase (§3.3) feeds the sample's counts to the same
+reduction.
 
 ### 3.3 Streaming
 
@@ -153,8 +158,9 @@ written into this spec (§8) and CLAUDE.md.
 
 ## 6. Testing
 
-- **Entropy, one-shot:** against a Polars oracle (`value_counts` with nulls, exact sums) to RTOL 1e-12 on
-  `describe_mixed`, `large_dataset` and `large_dataset_mixed`; known answers (constant → 0, all distinct → log2 n,
+- **Entropy, one-shot:** against `marginal_entropy` (`analytics._plugin.marginal_entropy`, the independent
+  cross-check: same keys and null policy, its own counting) to RTOL 1e-12 on `describe_mixed`, `large_dataset` and
+  `large_dataset_mixed`; known answers (constant → 0, all distinct → log2 n,
   half null half one value → 1, zero rows → 0); ineligible → null.
 - **Entropy, streaming:** equal to one-shot (method `exact`) while the sample is exact, for several batch splits; after
   overflow, for each estimator on a uniform and a Zipf(1.1) stream (≥ 10⁵ distinct values): relative error ≤ 5% and
