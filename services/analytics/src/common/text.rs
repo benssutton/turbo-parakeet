@@ -130,6 +130,16 @@ pub(crate) fn render_value(a: &dyn Array) -> Option<String> {
     s.is_valid(0).then(|| s.value(0).to_string())
 }
 
+/// Row 0 of `a` as arrow-rs display text (`ArrayFormatter`): every type, nested included;
+/// binary as hex. None when the row is null.
+pub(crate) fn display_value(a: &dyn Array) -> Option<String> {
+    if a.is_empty() || a.is_null(0) {
+        return None;
+    }
+    let f = ::arrow_cast::display::ArrayFormatter::try_new(a, &Default::default()).ok()?;
+    Some(f.value(0).to_string())
+}
+
 pub(crate) fn render(a: &ArrayRef, i: usize) -> String {
     render_value(a.slice(i, 1).as_ref()).unwrap_or_else(|| "null".into())
 }
@@ -138,6 +148,17 @@ pub(crate) fn render(a: &ArrayRef, i: usize) -> String {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn display_value_renders_every_type() {
+        use arrow_array::{types::Int64Type, BinaryArray, Int64Array, ListArray};
+        let list =
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![Some(1), Some(2)])]);
+        assert_eq!(display_value(&list).as_deref(), Some("[1, 2]"));
+        let bin = BinaryArray::from(vec![&b"\x01\xff"[..]]);
+        assert_eq!(display_value(&bin).as_deref(), Some("01ff"));
+        assert_eq!(display_value(&Int64Array::from(vec![None::<i64>])), None);
+    }
 
     #[test]
     fn render_value_is_arrow_rs_text() {

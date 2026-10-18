@@ -237,6 +237,25 @@ mod tests {
     }
 
     #[test]
+    fn entropy_and_exemplar_cells_follow_the_frame() {
+        let out = added(&toy()).result().unwrap();
+        let num = |c: &str| -> Vec<Option<u64>> {
+            texts(&out, c)
+                .into_iter()
+                .map(|v| v.map(|t| t.parse().unwrap()))
+                .collect()
+        };
+        assert_eq!(num("exemplar_row")[..2], [Some(0), Some(0)]);
+        assert_eq!(num("null_exemplar_row")[..2], [Some(2), None]);
+        assert_eq!(texts(&out, "exemplar_value")[..2], [text("0"), text("x")]);
+        let h: f64 = texts(&out, "entropy")[1].as_ref().unwrap().parse().unwrap();
+        let p = 2.0f64 / 3.0;
+        let want = -p * p.log2() - (1.0 - p) * (1.0 - p).log2();
+        assert!((h - want).abs() < 1e-12);
+        assert_eq!(texts(&out, "entropy_method")[1], text("exact"));
+    }
+
+    #[test]
     fn result_is_cached_and_repeatable() {
         let r = added(&toy());
         let first = r.result().unwrap();

@@ -70,22 +70,10 @@ pub(crate) struct Frequencies {
     pub ranked: Option<Ranked>,
     /// Shannon entropy in bits, null one category (spec 2026-10-18 §3.1); None when built by
     /// streaming's `LevelStats::profile` (it estimates its own).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the one-shot recommender (next tasks)")
-    )]
     pub entropy: Option<f64>,
     /// Row of the first non-null / first null value (one-shot exemplars, spec §4); None from
     /// streaming's profile, and when there is no such row.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the one-shot recommender (next tasks)")
-    )]
     pub first_row: Option<u64>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the one-shot recommender (next tasks)")
-    )]
     pub first_null: Option<u64>,
 }
 
