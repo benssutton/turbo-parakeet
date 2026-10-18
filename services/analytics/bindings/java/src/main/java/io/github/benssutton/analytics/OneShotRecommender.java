@@ -32,6 +32,8 @@ public final class OneShotRecommender extends NativeRecommender {
             ADDRESS,    // const char *const *bool_true
             ADDRESS,    // const char *const *bool_false
             JAVA_LONG,  // size_t n_bool_pairs
+            ADDRESS,    // const char *const *id_columns
+            JAVA_LONG,  // size_t n_id_columns
             ADDRESS,    // void **out
             ADDRESS));  // char **error
 
@@ -54,6 +56,8 @@ public final class OneShotRecommender extends NativeRecommender {
                     pairs[0],
                     pairs[1],
                     (long) params.booleanPairs().size(),
+                    Native.cStrings(arena, params.idColumns()),
+                    (long) params.idColumns().size(),
                     out,
                     error);
                 if (code != 0) {

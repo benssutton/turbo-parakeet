@@ -23,6 +23,7 @@ import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
@@ -217,5 +218,51 @@ class OneShotRecommenderTest {
         }
         assertThrows(IllegalArgumentException.class, () ->
             new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs(), OptionalLong.of(-1)));
+    }
+
+    /** `k: Int64 [10, 20, 30]`, `a: Int64 [null, 5, 7]`. */
+    private static ArrowReader idData(BufferAllocator allocator) throws IOException {
+        BigIntVector a = new BigIntVector("a", allocator);
+        a.allocateNew(3);
+        a.setNull(0);
+        a.set(1, 5);
+        a.set(2, 7);
+        a.setValueCount(3);
+        return reader(allocator, ints(allocator, "k", 10, 20, 30), a);
+    }
+
+    private static OneShotParams withIds(List<String> ids) {
+        OneShotParams d = OneShotParams.defaults();
+        return new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs(), d.topK(), ids);
+    }
+
+    @Test
+    void idColumnsGiveStructExemplarIds() throws IOException {
+        try (BufferAllocator allocator = new RootAllocator();
+             OneShotRecommender rec = new OneShotRecommender(withIds(List.of("k")))) {
+            rec.add(idData(allocator), allocator);
+            result(rec, allocator, root -> {
+                assertEquals(List.of("k", "a"), column(root, "column"));
+                assertEquals(List.of("0", "1"), column(root, "exemplar_row"));
+                assertEquals(List.of("null", "0"), column(root, "null_exemplar_row"));
+                StructVector id = (StructVector) root.getVector("exemplar_id");
+                BigIntVector k = id.getChild("k", BigIntVector.class);
+                assertEquals(10L, k.get(0));
+                assertEquals(20L, k.get(1));
+                StructVector nullId = (StructVector) root.getVector("null_exemplar_id");
+                assertTrue(nullId.isNull(0));
+                assertEquals(10L, nullId.getChild("k", BigIntVector.class).get(1));
+                return null;
+            });
+        }
+    }
+
+    @Test
+    void aMissingIdColumnIsIllegalArgument() throws IOException {
+        try (BufferAllocator allocator = new RootAllocator();
+             OneShotRecommender rec = new OneShotRecommender(withIds(List.of("nope")))) {
+            ArrowReader data = idData(allocator);
+            assertThrows(IllegalArgumentException.class, () -> rec.add(data, allocator));
+        }
     }
 }

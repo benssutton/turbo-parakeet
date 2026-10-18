@@ -14,22 +14,36 @@ import java.util.OptionalLong;
  * @param categoricalThreshold the dictionary gate; also sizes each level's distinct sample,
  *                      k = max(categoricalThreshold, 1000), ≈ 65 bytes per sampled value
  * @param topK          entries per {@code top_k} / {@code inner_top_k} map (0: null cells; empty: every ranked value)
+ * @param idColumns     columns whose values identify an exemplar row ({@code exemplar_id} /
+ *                      {@code null_exemplar_id} become structs of them; empty: Null-typed)
+ * @param entropyEstimator the entropy estimate once the exact phase overflows
  */
 public record StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
-                              int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK) {
+                              int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK,
+                              List<String> idColumns, EntropyEstimator entropyEstimator) {
 
     public StreamingParams {
         booleanPairs = List.copyOf(booleanPairs);
         Objects.requireNonNull(topK, "topK");
+        idColumns = List.copyOf(Objects.requireNonNull(idColumns, "idColumns"));
+        Objects.requireNonNull(entropyEstimator, "entropyEstimator");
         if (topK.isPresent() && topK.getAsLong() < 0) {
             throw new IllegalArgumentException("topK must be non-negative, got " + topK.getAsLong());
         }
     }
 
-    /** As the canonical constructor, with {@code topK} 256. */
+    /** As the canonical constructor, with no id columns and the {@code SAMPLE} estimator. */
+    public StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
+                           int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK) {
+        this(reservoirRows, blockRows, categoricalThreshold, zstdLevel, seed, booleanPairs, topK,
+            List.of(), EntropyEstimator.SAMPLE);
+    }
+
+    /** As the canonical constructor, with {@code topK} 256, no id columns and the {@code SAMPLE} estimator. */
     public StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
                            int zstdLevel, long seed, List<BooleanPair> booleanPairs) {
-        this(reservoirRows, blockRows, categoricalThreshold, zstdLevel, seed, booleanPairs, OptionalLong.of(256));
+        this(reservoirRows, blockRows, categoricalThreshold, zstdLevel, seed, booleanPairs, OptionalLong.of(256),
+            List.of(), EntropyEstimator.SAMPLE);
     }
 
     /** 524 288 reservoir rows in blocks of 65 536, threshold 10 000, ZSTD 1, seed 0, ("true", "false"), top 256. */

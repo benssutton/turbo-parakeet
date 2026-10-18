@@ -41,23 +41,23 @@ unsafe fn report(result: api::Result<()>, error: *mut *mut c_char) -> c_int {
 ///
 /// SAFETY: when `n > 0`, `ptrs` is null or points to `n` pointers, each null or a
 /// NUL-terminated string.
-unsafe fn strings(ptrs: *const *const c_char, n: usize) -> api::Result<Vec<String>> {
+unsafe fn strings(ptrs: *const *const c_char, n: usize, what: &str) -> api::Result<Vec<String>> {
     if n == 0 {
         return Ok(Vec::new());
     }
     if ptrs.is_null() {
-        return Err(Error::InvalidInput("boolean-pair array is null".into()));
+        return Err(Error::InvalidInput(format!("{what} array is null")));
     }
     unsafe { std::slice::from_raw_parts(ptrs, n) }
         .iter()
         .map(|&p| {
             if p.is_null() {
-                return Err(Error::InvalidInput("boolean-pair string is null".into()));
+                return Err(Error::InvalidInput(format!("{what} string is null")));
             }
             unsafe { CStr::from_ptr(p) }
                 .to_str()
                 .map(str::to_owned)
-                .map_err(|e| Error::InvalidInput(format!("boolean-pair string is not UTF-8: {e}")))
+                .map_err(|e| Error::InvalidInput(format!("{what} string is not UTF-8: {e}")))
         })
         .collect()
 }
@@ -70,8 +70,8 @@ unsafe fn boolean_pairs(
     bool_false: *const *const c_char,
     n: usize,
 ) -> api::Result<Vec<(String, String)>> {
-    let trues = unsafe { strings(bool_true, n) }?;
-    let falses = unsafe { strings(bool_false, n) }?;
+    let trues = unsafe { strings(bool_true, n, "boolean-pair") }?;
+    let falses = unsafe { strings(bool_false, n, "boolean-pair") }?;
     Ok(trues.into_iter().zip(falses).collect())
 }
 
@@ -152,8 +152,13 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 ///
 /// # Safety
 /// `out` is null or valid for one pointer write. When `n_bool_pairs > 0`, `bool_true`
-/// and `bool_false` each point to `n_bool_pairs` NUL-terminated UTF-8 strings. `error`
-/// is null or valid for one pointer write.
+/// and `bool_false` each point to `n_bool_pairs` NUL-terminated UTF-8 strings; likewise
+/// `id_columns` to `n_id_columns` names when `n_id_columns > 0` (the columns whose values
+/// identify an exemplar row; none: the `*_id` outputs are Null-typed). `error` is null or
+/// valid for one pointer write.
+///
+/// `entropy_estimator`: 0 the bottom-k distinct sample, 1 the AMS sketch (past the exact
+/// phase); any other value returns 1 (invalid input).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn analytics_streaming_recommender_new(
@@ -166,6 +171,9 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
     bool_true: *const *const c_char,
     bool_false: *const *const c_char,
     n_bool_pairs: usize,
+    id_columns: *const *const c_char,
+    n_id_columns: usize,
+    entropy_estimator: u8,
     out: *mut *mut c_void,
     error: *mut *mut c_char,
 ) -> c_int {
@@ -181,8 +189,16 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
             zstd_level,
             seed,
             boolean_pairs: unsafe { boolean_pairs(bool_true, bool_false, n_bool_pairs) }?,
-            entropy_estimator: api::EntropyEstimator::Sample,
-            id_columns: Vec::new(),
+            entropy_estimator: match entropy_estimator {
+                0 => api::EntropyEstimator::Sample,
+                1 => api::EntropyEstimator::Ams,
+                v => {
+                    return Err(Error::InvalidInput(format!(
+                        "entropy_estimator must be 0 (sample) or 1 (ams), got {v}"
+                    )))
+                }
+            },
+            id_columns: unsafe { strings(id_columns, n_id_columns, "id-column") }?,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -270,6 +286,8 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
     bool_true: *const *const c_char,
     bool_false: *const *const c_char,
     n_bool_pairs: usize,
+    id_columns: *const *const c_char,
+    n_id_columns: usize,
     out: *mut *mut c_void,
     error: *mut *mut c_char,
 ) -> c_int {
@@ -283,7 +301,7 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
             zstd_level,
             seed,
             boolean_pairs: unsafe { boolean_pairs(bool_true, bool_false, n_bool_pairs) }?,
-            id_columns: Vec::new(),
+            id_columns: unsafe { strings(id_columns, n_id_columns, "id-column") }?,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -392,6 +410,8 @@ mod tests {
                 trues.as_ptr(),
                 falses.as_ptr(),
                 1,
+                ptr::null(),
+                0,
                 &mut h,
                 error,
             )
@@ -498,6 +518,9 @@ mod tests {
                 trues.as_ptr(),
                 falses.as_ptr(),
                 1,
+                ptr::null(),
+                0,
+                0,
                 &mut h,
                 error,
             )
@@ -585,6 +608,9 @@ mod tests {
                 trues.as_ptr(),
                 falses.as_ptr(),
                 1,
+                ptr::null(),
+                0,
+                0,
                 ptr::null_mut(),
                 &mut error,
             )
@@ -690,6 +716,74 @@ mod tests {
         assert_eq!(code, INVALID_INPUT);
         assert!(message(error).contains("handle"));
         assert!(released(&mut input));
+    }
+
+    #[test]
+    fn streaming_recommender_rejects_an_unknown_entropy_estimator() {
+        let mut error = ptr::null_mut();
+        let mut h = ptr::null_mut();
+        let code = unsafe {
+            analytics_streaming_recommender_new(
+                1 << 20,
+                1 << 16,
+                10_000,
+                256,
+                1,
+                0,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                2,
+                &mut h,
+                &mut error,
+            )
+        };
+        assert_eq!((code, h.is_null()), (INVALID_INPUT, true));
+        assert!(message(error).contains("entropy_estimator"));
+    }
+
+    #[test]
+    fn oneshot_recommender_id_columns_give_struct_ids() {
+        let ids = [c"a".as_ptr()];
+        let mut error = ptr::null_mut();
+        let mut h = ptr::null_mut();
+        let code = unsafe {
+            analytics_oneshot_recommender_new(
+                10_000,
+                256,
+                1,
+                0,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ids.as_ptr(),
+                1,
+                &mut h,
+                &mut error,
+            )
+        };
+        assert_eq!(code, OK);
+        let mut input = stream(vec![
+            ("a", ints(&[0, 5, 7])),
+            (
+                "s",
+                Arc::new(StringArray::from(vec!["x", "y", "x"])) as ArrayRef,
+            ),
+        ]);
+        assert_eq!(
+            unsafe { analytics_oneshot_recommender_add(h, &mut input, &mut error) },
+            OK
+        );
+        let out = unsafe { oneshot_result(h) };
+        let id = out.column_by_name("exemplar_id").unwrap();
+        assert!(
+            matches!(id.data_type(), DataType::Struct(_)),
+            "{:?}",
+            id.data_type()
+        );
+        unsafe { analytics_oneshot_recommender_free(h) };
     }
 
     #[test]

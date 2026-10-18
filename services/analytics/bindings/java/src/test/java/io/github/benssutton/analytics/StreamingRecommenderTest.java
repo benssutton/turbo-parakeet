@@ -23,6 +23,8 @@ import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.Float8Vector;
+import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
@@ -222,6 +224,51 @@ class StreamingRecommenderTest {
                 assertEquals(4L, ((Number) only.get("value")).longValue());
                 return null;
             });
+        }
+    }
+
+    /** `k: Int64 [10, 20, 30, 40]`, `a: Int64 [1, 1, 2, 2]`. */
+    private static ArrowReader idData(BufferAllocator allocator) throws IOException {
+        BigIntVector a = new BigIntVector("a", allocator);
+        a.allocateNew(4);
+        a.set(0, 1);
+        a.set(1, 1);
+        a.set(2, 2);
+        a.set(3, 2);
+        a.setValueCount(4);
+        return reader(allocator, ints(allocator, "k", 10, 20, 30, 40), a);
+    }
+
+    private static StreamingParams withIds(List<String> ids) {
+        StreamingParams d = StreamingParams.defaults();
+        return new StreamingParams(d.reservoirRows(), d.blockRows(), d.categoricalThreshold(), d.zstdLevel(),
+            d.seed(), d.booleanPairs(), d.topK(), ids, EntropyEstimator.AMS);
+    }
+
+    @Test
+    void amsEstimatorAndIdColumnsOnASmallFrame() throws IOException {
+        try (BufferAllocator allocator = new RootAllocator();
+             StreamingRecommender rec = new StreamingRecommender(withIds(List.of("k")))) {
+            rec.add(idData(allocator), allocator);
+            result(rec, allocator, root -> {
+                assertEquals(List.of("exact", "exact"), column(root, "entropy_method"));
+                assertEquals(2.0, ((Float8Vector) root.getVector("entropy")).get(0), 1e-12);  // k: 4 distinct
+                assertEquals(1.0, ((Float8Vector) root.getVector("entropy")).get(1), 1e-12);  // a: two halves
+                assertEquals(List.of("0", "0"), column(root, "exemplar_row"));
+                StructVector id = (StructVector) root.getVector("exemplar_id");
+                assertEquals(10L, id.getChild("k", BigIntVector.class).get(1));
+                assertEquals(List.of("null", "null"), column(root, "null_exemplar_row"));
+                return null;
+            });
+        }
+    }
+
+    @Test
+    void aMissingIdColumnIsIllegalArgument() throws IOException {
+        try (BufferAllocator allocator = new RootAllocator();
+             StreamingRecommender rec = new StreamingRecommender(withIds(List.of("nope")))) {
+            ArrowReader data = idData(allocator);
+            assertThrows(IllegalArgumentException.class, () -> rec.add(data, allocator));
         }
     }
 }

@@ -1,6 +1,7 @@
 package io.github.benssutton.analytics;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
@@ -37,6 +38,9 @@ public final class StreamingRecommender extends NativeRecommender {
             ADDRESS,    // const char *const *bool_true
             ADDRESS,    // const char *const *bool_false
             JAVA_LONG,  // size_t n_bool_pairs
+            ADDRESS,    // const char *const *id_columns
+            JAVA_LONG,  // size_t n_id_columns
+            JAVA_BYTE,  // uint8_t entropy_estimator
             ADDRESS,    // void **out
             ADDRESS));  // char **error
 
@@ -61,6 +65,9 @@ public final class StreamingRecommender extends NativeRecommender {
                     pairs[0],
                     pairs[1],
                     (long) params.booleanPairs().size(),
+                    Native.cStrings(arena, params.idColumns()),
+                    (long) params.idColumns().size(),
+                    params.entropyEstimator().nativeValue(),
                     out,
                     error);
                 if (code != 0) {
