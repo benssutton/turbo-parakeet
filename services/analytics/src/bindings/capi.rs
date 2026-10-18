@@ -158,7 +158,7 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 /// valid for one pointer write.
 ///
 /// `entropy_estimator`: 0 the bottom-k distinct sample, 1 the AMS sketch (past the exact
-/// phase); any other value returns 1 (invalid input).
+/// phase; the Java default is 1); any other value returns 1 (invalid input).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn analytics_streaming_recommender_new(

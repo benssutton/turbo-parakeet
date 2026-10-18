@@ -92,7 +92,7 @@ reduction.
 - **While the distinct sample is exact** (it holds every distinct value's count): the same formula over the sample's
   counts plus the running `n_null`.  Method `exact`; equal to one-shot.
 - **After it overflows**, keyword `entropy_estimator` ∈ {`"sample"`, `"ams"`} chooses the estimator.  The default is
-  set by the benchmark (§3.4); until then it is `"sample"`.
+  `"ams"`, decided by the benchmark (§3.4, outcome in §8).
   - `sample`: the bottom-k distinct sample holds exact counts for a uniform random sample of k′ distinct values
     (`recommenders/streaming/distinct_sample.rs`).  `T = Σ c·log2 c` over all non-null values is estimated as
     `T̂ = (D̂ / k′)·Σ_sample c·log2 c`, D̂ the HyperLogLog estimate (p = 14) of the non-null distinct values, NOT `est_cardinality` (Describe's Schnabel/Chao1 rule overshoots at d/n < 0.5: measured 17% on uniform, 44% on Zipf 1.1).  Interval: ±3σ with
@@ -183,4 +183,23 @@ ClickHouse mapping, thresholds, cost model and handoff move to ToDo 1's specs".
 
 ## 8. Benchmark outcome
 
-To be filled in by the implementation (§3.4): per-shape errors, coverage, cost, and the chosen default.
+Run 2026-10-18 on 4 logical CPUs (Windows 10), `tests/performance/benchmark_streaming_entropy.py`: one column of 10^6 rows (large_dataset_mixed: 50 000 rows x 101 columns, error = max over columns), 10 batches, `reservoir_rows=0`, each estimator in its own process. Errors are against the one-shot exact entropy; coverage is the share of columns whose interval contains it.
+
+| shape | estimator | max rel. error | coverage | add (s) | peak above data (MB) |
+|---|---|---|---|---|---|
+| uniform 1e5 | sample | 0.19% | 100% | 0.044 | 28.6 |
+| uniform 1e5 | ams | 0.26% | 100% | 0.123 | 31.8 |
+| uniform 1e6 | sample | 0.07% | 100% | 0.047 | 30.2 |
+| uniform 1e6 | ams | 0.02% | 100% | 0.145 | 35.3 |
+| zipf 0.8 | sample | 9.64% | 100% | 0.044 | 30.4 |
+| zipf 0.8 | ams | 0.06% | 100% | 0.122 | 30.4 |
+| zipf 1.1 | sample | 9.63% | 100% | 0.037 | 30.4 |
+| zipf 1.1 | ams | 0.10% | 100% | 0.121 | 30.4 |
+| zipf 1.5 | sample | 2.70% | 100% | 0.029 | 30.4 |
+| zipf 1.5 | ams | 0.53% | 100% | 0.087 | 30.4 |
+| large_dataset_mixed | sample | 0.12% | 100% | 0.159 | 150.8 |
+| large_dataset_mixed | ams | 0.75% | 100% | 0.936 | 271.8 |
+
+Never overflowed (the sample held every distinct value, method `exact`, nothing estimated): uniform 1e4 and near-constant.
+
+**Decision: the default is `ams`.** The rule fires: `sample` exceeds 5% on Zipf 0.8 and Zipf 1.1 (9.6%) where `ams` stays below 0.2%, and `ams` is within 0.8% everywhere. Cost: `ams` adds a per-row hash and update, so `add()` is about 2.5-3x slower on single columns and ~6x on the 101-column frame (0.94 s vs 0.16 s), and uses ~120 MB more peak memory on that frame (sketches for 101 columns); `sample` stays available for callers who cannot afford it.

@@ -163,7 +163,7 @@ fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
 #[pymethods]
 impl StreamingRecommender {
     #[new]
-    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="sample", id_columns=Vec::new()))]
+    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="ams", id_columns=Vec::new()))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,

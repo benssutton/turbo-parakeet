@@ -98,7 +98,7 @@ pub struct StreamingParams {
     pub boolean_pairs: Vec<(String, String)>,
     /// Entries per `top_k` / `inner_top_k` cell: 0 none, u64::MAX every ranked value.
     pub top_k: u64,
-    /// The entropy estimator past the exact phase.
+    /// The entropy estimator past the exact phase (the bindings default to `Ams`).
     pub entropy_estimator: EntropyEstimator,
     /// Columns identifying the exemplar rows (typed `exemplar_id` structs); may be empty.
     pub id_columns: Vec<String>,

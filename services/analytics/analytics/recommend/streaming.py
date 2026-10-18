@@ -59,7 +59,7 @@ class StreamingRecommender:
     distinct values' text while exact. `entropy_estimator="ams"` adds an AMS sketch per
     column (≈ 4 096 estimators, a few hundred KB, plus a per-row hash and update).
 
-    `entropy_estimator`: past the exact phase, `"sample"` (the bottom-k distinct
+    `entropy_estimator` (default `"ams"`, spec §8): past the exact phase, `"sample"` (the bottom-k distinct
     sample: no extra per-row cost, weak on skewed columns whose heavy values fall
     outside the sample) or `"ams"` (an AMS sketch fed every row of every eligible
     column from the first batch: ≈ 4 096 estimators per column, accurate on skew).
@@ -75,7 +75,7 @@ class StreamingRecommender:
         zstd_level: int = 1,
         seed: int = 0,
         boolean_pairs: tuple[tuple[str, str], ...] = (("true", "false"),),
-        entropy_estimator: str = "sample",
+        entropy_estimator: str = "ams",
         id_columns: Sequence[str] | None = None,
     ) -> None:
         self._ids = _input.id_columns(id_columns)

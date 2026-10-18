@@ -8,8 +8,8 @@ use crate::techniques::describe::Row;
 /// Streaming's estimator once the distinct sample overflows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EntropyEstimator {
-    #[default]
     Sample,
+    #[default]
     Ams,
 }
 

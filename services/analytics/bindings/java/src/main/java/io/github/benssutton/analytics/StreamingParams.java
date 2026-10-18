@@ -32,21 +32,21 @@ public record StreamingParams(long reservoirRows, long blockRows, long categoric
         }
     }
 
-    /** As the canonical constructor, with no id columns and the {@code SAMPLE} estimator. */
+    /** As the canonical constructor, with no id columns and the {@code AMS} estimator. */
     public StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
                            int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK) {
         this(reservoirRows, blockRows, categoricalThreshold, zstdLevel, seed, booleanPairs, topK,
-            List.of(), EntropyEstimator.SAMPLE);
+            List.of(), EntropyEstimator.AMS);
     }
 
-    /** As the canonical constructor, with {@code topK} 256, no id columns and the {@code SAMPLE} estimator. */
+    /** As the canonical constructor, with {@code topK} 256, no id columns and the {@code AMS} estimator. */
     public StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
                            int zstdLevel, long seed, List<BooleanPair> booleanPairs) {
         this(reservoirRows, blockRows, categoricalThreshold, zstdLevel, seed, booleanPairs, OptionalLong.of(256),
-            List.of(), EntropyEstimator.SAMPLE);
+            List.of(), EntropyEstimator.AMS);
     }
 
-    /** 524 288 reservoir rows in blocks of 65 536, threshold 10 000, ZSTD 1, seed 0, ("true", "false"), top 256. */
+    /** 524 288 reservoir rows in blocks of 65 536, threshold 10 000, ZSTD 1, seed 0, ("true", "false"), top 256, no id columns, the {@code AMS} entropy estimator. */
     public static StreamingParams defaults() {
         return new StreamingParams(524_288, 65_536, 10_000, 1, 0,
             List.of(new BooleanPair("true", "false")));
