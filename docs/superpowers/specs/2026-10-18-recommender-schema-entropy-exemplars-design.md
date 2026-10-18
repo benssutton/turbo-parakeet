@@ -95,9 +95,8 @@ reduction.
   set by the benchmark (§3.4); until then it is `"sample"`.
   - `sample`: the bottom-k distinct sample holds exact counts for a uniform random sample of k′ distinct values
     (`recommenders/streaming/distinct_sample.rs`).  `T = Σ c·log2 c` over all non-null values is estimated as
-    `T̂ = (D̂ / k′)·Σ_sample c·log2 c`, D̂ the column's distinct estimate (`est_cardinality`).  Interval: ±3σ with
-    `Var(T̂) = D̂²·(1 − k′/D̂)·s²/k′`, s² the sample variance of the terms `c·log2 c`, evaluated at D̂ = `est_low` and
-    `est_high` as well; the interval is the envelope of the three.  The null term is exact.  No extra per-row work.
+    `T̂ = (D̂ / k′)·Σ_sample c·log2 c`, D̂ the HyperLogLog estimate (p = 14) of the non-null distinct values, NOT `est_cardinality` (Describe's Schnabel/Chao1 rule overshoots at d/n < 0.5: measured 17% on uniform, 44% on Zipf 1.1).  Interval: ±3σ with
+    `Var(T̂) = D̂²·(1 − k′/D̂)·s²/k′`, s² the sample variance of the terms `c·log2 c`, evaluated at D̂ ± 3σ_HLL as well (floored at the distinct values proven seen, capped at the non-null rows); the interval is the envelope of the three.  The null term is exact.  No extra per-row work.
   - `ams`: the CCM sketch of `techniques/single_column/unordered/ams_entropy.rs` (`AmsEntropy`, 4 096 estimators),
     fed every row of every eligible column from the first batch (null → one reserved key); discarded when the
     sample stays exact.  The estimate is the mean of the per-estimator terms; interval ±3σ from their sample

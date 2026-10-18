@@ -235,6 +235,11 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
             assert r["entropy"] == pytest.approx(
                 o["entropy"], rel=1e-12, abs=1e-12
             ), name
+        else:
+            assert r["entropy_method"] in ("sample", "ams"), name
+            assert (
+                r["entropy_low"] - 1e-9 <= o["entropy"] <= r["entropy_high"] + 1e-9
+            ), (name, r["entropy_low"], o["entropy"], r["entropy_high"])
         if overflowed:
             sigma = 3 * 1.04 / 128  # p = 14
             assert abs(r["n_unique"] - o["n_unique"]) <= sigma * o["n_unique"] + 1, name

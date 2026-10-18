@@ -53,10 +53,6 @@ impl Entropy {
 
     /// Bottom-k sample estimate (spec §3.3): `counts` are the k' held values' exact counts,
     /// `d` = (est_cardinality, est_low, est_high) of the non-null distinct values.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the streaming recommender (later task)")
-    )]
     pub(crate) fn from_sample(counts: &[u64], d: (f64, f64, f64), n_null: u64, n: u64) -> Self {
         let k = counts.len() as f64;
         if n == 0 || counts.is_empty() {

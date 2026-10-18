@@ -524,7 +524,27 @@ impl Streaming {
                 o.n_null,
                 o.n,
             )),
-            Some(_) => None, // past the exact phase: the sample / AMS estimators, later tasks
+            Some(d) => {
+                // D̂ is HyperLogLog's (accurate); `est_cardinality`'s Schnabel overshoots at d/n < 0.5.
+                let non_null = (o.n - o.n_null) as f64;
+                let dd = match p.freq.hll {
+                    Some((e, se, seen)) => {
+                        let seen = seen as f64;
+                        (
+                            e.max(seen).min(non_null),
+                            (e * (1.0 - 3.0 * se)).max(seen).min(non_null),
+                            (e * (1.0 + 3.0 * se)).max(seen).min(non_null),
+                        )
+                    }
+                    None => (
+                        oc.est.est_cardinality,
+                        oc.est.est_low.unwrap_or(oc.est.est_cardinality),
+                        oc.est.est_high.unwrap_or(oc.est.est_cardinality),
+                    ),
+                };
+                let counts = d.held_counts();
+                Some(Entropy::from_sample(&counts, dd, o.n_null, o.n))
+            }
         };
         row.extend(entropy_cells(entropy.as_ref()));
         row.extend(exemplar_cells(Some(&c.exemplars)));

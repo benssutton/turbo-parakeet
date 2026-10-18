@@ -3,6 +3,7 @@
 import math
 from datetime import date
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -108,3 +109,40 @@ def test_streaming_late_and_missing_columns_count_as_null():
     assert rows["b"]["entropy"] == pytest.approx(
         -(2 / 3) * math.log2(2 / 3) - (1 / 3) * math.log2(1 / 3)
     )
+
+
+def zipf_frame(n: int, d: int, alpha: float, seed: int = 0) -> pl.DataFrame:
+    rng = np.random.default_rng(seed)
+    w = 1.0 / np.arange(1, d + 1) ** alpha
+    return pl.DataFrame({"x": rng.choice(d, size=n, p=w / w.sum())})
+
+
+STREAMS = [
+    pytest.param(
+        lambda: pl.DataFrame(
+            {"x": np.random.default_rng(0).integers(0, 200_000, 400_000)}
+        ),
+        id="uniform",
+    ),
+    pytest.param(lambda: zipf_frame(400_000, 200_000, 1.1), id="zipf1.1"),
+]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("estimator", ["sample"])  # Task 7 adds "ams"
+@pytest.mark.parametrize("make", STREAMS)
+def test_streaming_entropy_after_overflow(make, estimator):
+    frame = make()
+    exact = one_shot(frame)["x"]["entropy"]
+    rec = (
+        StreamingRecommender()
+    )  # Task 7: StreamingRecommender(entropy_estimator=estimator)
+    for off in range(0, frame.height, 50_000):
+        rec.add(frame.slice(off, 50_000))
+    r = rec.result().row(0, named=True)
+    assert r["entropy_method"] == estimator
+    # Spec 2026-10-18 §3.3: the sample estimator is weak on skewed columns (heavy values outside the
+    # sample); only its interval coverage is asserted there (the AMS estimator must meet the 5% bar).
+    if not (estimator == "sample" and make is STREAMS[1].values[0]):
+        assert r["entropy"] == pytest.approx(exact, rel=0.05)
+    assert r["entropy_low"] <= exact <= r["entropy_high"]
