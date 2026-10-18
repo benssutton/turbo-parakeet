@@ -160,6 +160,11 @@ impl DistinctSample {
     }
 
     /// Every held value occurred exactly once.
+    /// Every held value's count (all values while exact; the sample after).
+    pub(crate) fn held_counts(&self) -> Vec<u64> {
+        self.map.values().map(|s| s.count).collect()
+    }
+
     pub(crate) fn all_once(&self) -> bool {
         self.map.values().all(|s| s.count == 1)
     }

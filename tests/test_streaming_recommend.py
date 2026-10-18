@@ -228,6 +228,13 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         ]
         for k in exact_cols:
             assert r[k] == o[k], (name, k, r[k], o[k])
+        for k in ["exemplar_row", "exemplar_value", "null_exemplar_row"]:
+            assert r[k] == o[k], (name, k, r[k], o[k])
+        if not overflowed:
+            assert r["entropy_method"] == "exact", name
+            assert r["entropy"] == pytest.approx(
+                o["entropy"], rel=1e-12, abs=1e-12
+            ), name
         if overflowed:
             sigma = 3 * 1.04 / 128  # p = 14
             assert abs(r["n_unique"] - o["n_unique"]) <= sigma * o["n_unique"] + 1, name

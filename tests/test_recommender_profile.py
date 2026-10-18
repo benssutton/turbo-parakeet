@@ -1,12 +1,13 @@
 """Entropy and exemplar columns of both recommenders (spec 2026-10-18 §3, §4)."""
 
+import math
 from datetime import date
 
 import polars as pl
 import pytest
 
 from analytics import _plugin
-from analytics.recommend import OneShotRecommender
+from analytics.recommend import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, large_dataset, large_dataset_mixed
 
 FRAMES = [
@@ -71,3 +72,39 @@ def test_exemplar_value_matches_min_max_rendering_for_scalars():
     frame = pl.DataFrame({"x": [2.5], "d": [date(2024, 1, 2)], "s": ["hi"]})
     for r in one_shot(frame).values():
         assert r["exemplar_value"] == r["min"], r["column"]
+
+
+@pytest.mark.parametrize("batch_rows", [1, 3, 1_000])
+def test_streaming_exemplars_and_exact_entropy_equal_one_shot(batch_rows):
+    frame = pl.DataFrame(
+        {
+            "a": [None, None, None, 5, None, 6] * 3,
+            "s": ["x", "y", None, "z", "w", "v"] * 3,
+            "l": [[1], None, [2, None], [3], [], None] * 3,
+        }
+    )
+    want = one_shot(frame)
+    rec = StreamingRecommender()
+    for off in range(0, frame.height, batch_rows):
+        rec.add(frame.slice(off, batch_rows))
+    for r in rec.result().iter_rows(named=True):
+        o = want[r["column"]]
+        for k in [
+            "exemplar_row",
+            "exemplar_value",
+            "null_exemplar_row",
+            "entropy_method",
+        ]:
+            assert r[k] == o[k], (r["column"], k)
+        assert r["entropy"] == pytest.approx(o["entropy"], rel=1e-12, abs=1e-12)
+
+
+def test_streaming_late_and_missing_columns_count_as_null():
+    rec = StreamingRecommender()
+    rec.add(pl.DataFrame({"a": [1, 2]}))
+    rec.add(pl.DataFrame({"a": [3], "b": ["x"]}))
+    rows = {r["column"]: r for r in rec.result().iter_rows(named=True)}
+    assert (rows["b"]["exemplar_row"], rows["b"]["null_exemplar_row"]) == (2, 0)
+    assert rows["b"]["entropy"] == pytest.approx(
+        -(2 / 3) * math.log2(2 / 3) - (1 / 3) * math.log2(1 / 3)
+    )

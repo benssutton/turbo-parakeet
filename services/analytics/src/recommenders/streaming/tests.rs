@@ -952,3 +952,29 @@ fn top_k_is_null_past_the_sample() {
     let v: Vec<Option<&str>> = v.iter().map(|x| Some(x.as_str())).collect();
     assert_eq!(top_k(&threshold_3(&v), "top_k"), [None]);
 }
+
+#[test]
+fn exemplars_are_first_seen_across_batches() {
+    let mut r = streaming();
+    r.add(&batch(vec![("a", ints(&[None, None]))])).unwrap();
+    r.add(&batch(vec![
+        ("a", ints(&[Some(3), None])),
+        ("b", strs(&[Some("x"), Some("y")])),
+    ]))
+    .unwrap();
+    r.add(&batch(vec![("a", ints(&[Some(4)]))])).unwrap();
+    let out = r.result().unwrap();
+    // a: rows 0,1 null; 2 = 3; 3 null; 4 = 4.  b appears at row 2 (rows 0-1 and 4 are null).
+    assert_eq!(
+        texts(&out, "exemplar_row"),
+        [Some("2".into()), Some("2".into())]
+    );
+    assert_eq!(
+        texts(&out, "exemplar_value"),
+        [Some("3".into()), Some("x".into())]
+    );
+    assert_eq!(
+        texts(&out, "null_exemplar_row"),
+        [Some("0".into()), Some("0".into())]
+    );
+}

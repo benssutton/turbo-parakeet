@@ -26,10 +26,11 @@ use crate::common::arrow_io::{export_struct, import_batch};
 use crate::common::error::{Error, Result};
 use crate::common::ipc_sizes::{classic_layout, layout_sizes, sizes_of};
 use crate::recommenders::engine::{
-    enum_categories, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row,
-    to_polars_layout, top_k_cell, Params, Rec, Target,
+    entropy_cells, enum_categories, exemplar_cells, exemplar_value, pa_name, pick_by_stats,
+    pick_list_by_stats, pl_name, rec_row, to_polars_layout, top_k_cell, Entropy, Exemplars, Params,
+    Rec, Target,
 };
-use crate::recommenders::schema::{profile_fields, recommender_fields, with_maps};
+use crate::recommenders::schema::{recommender_fields, with_maps};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
 use crate::recommenders::streaming::reservoir::{Block, Reservoir};
 use crate::techniques::describe::conclusions::conclude;
@@ -52,6 +53,8 @@ pub(crate) struct Column {
     /// Whether the first concrete batch held the (outer, inner) level as Utf8View /
     /// BinaryView — as a Polars frame exports through `__arrow_c_stream__`.
     pub views_input: (bool, bool),
+    /// First non-null row (and its text) and first null row.
+    pub exemplars: Exemplars,
 }
 
 fn is_view(t: &AT) -> bool {
@@ -105,6 +108,9 @@ pub(crate) fn holds_nested_null(t: &PT) -> bool {
 /// for List / Array, its inner values'.
 type Stats = Option<(BatchStats, Option<BatchStats>)>;
 
+/// A batch column's first non-null row (with its text) and first null row.
+type Firsts = (Option<(u64, Option<String>)>, Option<u64>);
+
 impl Streaming {
     pub(crate) fn new(params: Params, reservoir_rows: u64, block_rows: u64) -> Self {
         let block_rows = block_rows.max(1);
@@ -137,6 +143,11 @@ impl Streaming {
                     outer,
                     inner: None,
                     views_input: (false, false),
+                    exemplars: Exemplars {
+                        // A late column's earlier rows are nulls: its first null is row 0.
+                        null_row: (self.n_rows > 0).then_some(0),
+                        ..Exemplars::default()
+                    },
                 });
                 self.index.insert(name.to_string(), self.columns.len() - 1);
                 self.columns.len() - 1
@@ -246,6 +257,43 @@ impl Streaming {
             .map(|(s, _)| self.batch_stats(s))
             .collect::<PolarsResult<_>>()
             .map_err(|e| Error::Compute(e.to_string()))?;
+        // Exemplars (spec 2026-10-18 §4): per series, the first non-null row (and its text)
+        // and first null row this batch adds, for columns still missing them.
+        let start = self.n_rows;
+        let firsts: Vec<Firsts> = series
+            .par_iter()
+            .map(|(s, _)| {
+                let known = self
+                    .index
+                    .get(s.name().as_str())
+                    .map(|&i| &self.columns[i].exemplars);
+                let need_row = known.is_none_or(|e| e.row.is_none());
+                // A column new at start > 0 already has null row 0.
+                let need_null = match known {
+                    None => start == 0,
+                    Some(e) => e.null_row.is_none(),
+                };
+                let nulls = s.is_null();
+                let row = if need_row {
+                    nulls.iter().position(|v| v == Some(false))
+                } else {
+                    None
+                };
+                let row = row
+                    .map(|i| exemplar_value(s, i as u64).map(|v| (start + i as u64, v)))
+                    .transpose()?;
+                let null = if need_null {
+                    nulls
+                        .iter()
+                        .position(|v| v == Some(true))
+                        .map(|i| start + i as u64)
+                } else {
+                    None
+                };
+                Ok((row, null))
+            })
+            .collect::<PolarsResult<_>>()
+            .map_err(|e| Error::Compute(e.to_string()))?;
         let rows = batch.num_rows() as u64;
         self.reservoir.feed(&cols, rows).map_err(Error::Compute)?;
         // Commit: nothing below can fail.
@@ -258,8 +306,15 @@ impl Streaming {
         // Serially: create new columns and adopt types; then absorb every column's
         // statistics in parallel (column names are unique, so each slot is one column).
         let mut placed = Vec::with_capacity(stats.len());
-        for ((s, f), st) in series.iter().zip(stats) {
+        for (((s, f), st), (row, null)) in series.iter().zip(stats).zip(firsts) {
             let c = self.column(s.name().as_str());
+            if let (None, Some((r, v))) = (c.exemplars.row, row) {
+                c.exemplars.row = Some(r);
+                c.exemplars.value = v;
+            }
+            if c.exemplars.null_row.is_none() {
+                c.exemplars.null_row = null;
+            }
             if st.is_some() && c.dtype.is_none() {
                 c.dtype = Some(s.dtype().clone());
                 c.input_type = pa_name(f.data_type());
@@ -287,6 +342,17 @@ impl Streaming {
                     }
                 }
             });
+        if rows > 0 {
+            // Columns absent from the batch: their first null may be here.
+            let present: HashSet<&str> = series.iter().map(|(s, _)| s.name().as_str()).collect();
+            for c in self
+                .columns
+                .iter_mut()
+                .filter(|c| !present.contains(c.name.as_str()))
+            {
+                c.exemplars.null_row.get_or_insert(start);
+            }
+        }
         self.n_rows += rows;
         Ok(())
     }
@@ -451,7 +517,17 @@ impl Streaming {
         };
         row.extend(p.row(&oc));
         row.push(u(o.n_midnight));
-        row.extend(vec![AnyValue::Null; profile_fields().len()]); // filled in later tasks
+        let entropy = match &o.sample {
+            None => Some(Entropy::from_counts(std::iter::empty(), o.n_null, o.n)),
+            Some(d) if d.is_exact() => Some(Entropy::from_counts(
+                d.held_counts().into_iter(),
+                o.n_null,
+                o.n,
+            )),
+            Some(_) => None, // past the exact phase: the sample / AMS estimators, later tasks
+        };
+        row.extend(entropy_cells(entropy.as_ref()));
+        row.extend(exemplar_cells(Some(&c.exemplars)));
         row.extend([
             AnyValue::UInt64(lvl.size_bytes),
             u(scale(z[0])),
