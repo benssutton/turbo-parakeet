@@ -5,13 +5,13 @@ The objectives these serve (target engines, formats, row order, queries, validat
 
 ToDos are broken into thematic sections in a suggested priority order, but items within each section are in no priority order.  The order in which these are implemented should favour efficiency and code quality.  Item numbers are stable: CLAUDE.md and the specs refer to them.
 
-**Agreed starting order:** 1.0 (spec) → 4 + 2 (the spec's first increment) → 1a–g (6 + 5g done).  Do 5c (rename) just before the first new Python package (ToDo 3 or 8).
+**Agreed starting order:** 1a–g next (1.0 skeleton, 4 and 2 done; 6 + 5g done).  Do 5c (rename) just before the first new Python package (ToDo 3 or 8).
 
 ---
 The following ToDos 1 to 7 are largely intended as a clean up of existing code and implementation of encoding and skipping index recommendations.
 
 1. Extend the Recommenders to extend encoding recommendations and provide skipping index recommendations.  Currently the only encoding recommendation made is dictionary encoding.  We should now have the statistics and techniques in this project to extend this to the following:
-1.0. **First: one output-schema spec covering ToDos 1, 2, 3 and 4**, so the schema (recommenders/schema.rs, both recommenders, the Java binding, the parity tests) changes once rather than four times.  It is written before ToDo 4, which is implemented as its first increment (with 2).  It defines:
+1.0. **Skeleton done** (spec 2026-10-18-recommender-schema-entropy-exemplars-design.md): the layout, the renames and the reserved columns. The ClickHouse type mapping, decision thresholds, cost model, REE / LZ4 size measurement and the `CREATE TABLE` handoff move to the specs of ToDo 1's sub-items.  Original text: **one output-schema spec covering ToDos 1, 2, 3 and 4**, so the schema (recommenders/schema.rs, both recommenders, the Java binding, the parity tests) changes once rather than four times.  It is written before ToDo 4, which is implemented as its first increment (with 2).  It defines:
 - one block per engine (DataFusion, Polars, ClickHouse);
 - the Arrow → ClickHouse type mapping (LowCardinality, Nullable, Enum8/16, Date32, DateTime64, Decimal …) and the Arrow → Polars mapping;
 - the handoff to clickhouse_benchmark: the Arrow result written as IPC, plus a helper that renders it as `CREATE TABLE`;
@@ -30,14 +30,14 @@ For d and e in the StreamingRecommender (skip-index spec 2026-10-16 §5):
 f. General compression choice: LZ4 or ZSTD plus level per column, for both the ClickHouse codec chain tail and Arrow IPC buffer compression (DataFusion / Polars).
 g. Later: range queries (`col BETWEEN a AND b`) in the MinMax technique, where MinMax indexes earn most of their value.  Point queries are the current assumption.
 
-2. Extend the Recommenders to provide a) Exemplars and b) Null Exemplars.  An optional parameter comprising of a list of column names is passed to the Recommenders which serve as the identifier for the Exemplars result.  For each column, the Recommenders identify 1 row where the column value is Not Null, and 1 row where the column value is Null, where applicable, and return the identifier for those rows as well as the value in the Exemplar case.
+2. **Done** (spec 2026-10-18): `exemplar_*` / `null_exemplar_*` columns in both recommenders, first-seen rows, optional `id_columns`.  Extend the Recommenders to provide a) Exemplars and b) Null Exemplars.  An optional parameter comprising of a list of column names is passed to the Recommenders which serve as the identifier for the Exemplars result.  For each column, the Recommenders identify 1 row where the column value is Not Null, and 1 row where the column value is Null, where applicable, and return the identifier for those rows as well as the value in the Exemplar case.
 - The exemplar is the **first-seen** non-null row and the null exemplar the first-seen null row, in frame / stream order: deterministic, identical in one-shot and streaming, O(1) memory (streaming already tracks `first_row`).
 - Values are rendered as text the same way as min / max (`common::text::render_value`).
 - Still to decide: identifier columns that are themselves null or ineligible (Int128 / UInt128, Object); List columns with nulls inside.
 
 3. Add techniques to identify candidates for delta and double-delta encoding, and if ToDo #1 above is already implemented, add to the Recommenders.  Calculating the delta and double-delta between consecutive rows and their value range and entropies should indicate candidates.  These are ClickHouse codec recommendations only (Arrow IPC has no delta encoding).
 
-4. Extend the Recommenders to return the entropy of each column.
+4. **Done** (spec 2026-10-18): `entropy*` columns, exact in one-shot and in streaming's exact phase, `sample` / `ams` (default) estimates past it; entropy of list inner values is not done.  Extend the Recommenders to return the entropy of each column.
 - OneShotRecommender: compute it from Describe's existing frequency map (techniques/single_column/unordered/describe/frequencies.rs), one pass over the distinct values with nulls as one category, rather than re-hashing the column with marginal_entropy.rs.
 - StreamingRecommender: exact while the distinct sample is exact (it holds every value's count), then an estimate once it overflows — the same rule as `est_cardinality`.  Two candidates, to benchmark against each other:
   - the AMS sketch (ams_entropy.rs).  AMS cannot take over at the overflow: it must see the stream from its first row, so it is fed from the first batch for every eligible column and discarded if the sample stays exact (cost: per-row work and ≈ 4 096 samples per column);
@@ -55,7 +55,7 @@ g. **Done** (spec 2026-10-17-generated-dataset-design.md): benchmark results are
 6. **Done** (spec 2026-10-17-generated-dataset-design.md): `datagen.large_dataset(n_rows, seed, null_rate, mean_run, clustering)` and `large_dataset_mixed()` replace tests/data/large_dataset.arrow.  The git pack still holds the old blob (history not rewritten).
 
 7. Any remaining follow-ups tracked in CLAUDE.md.  The Bloom and MinHash follow-ups are prerequisites for ToDo 10: BloomRust is ≈ 6× slower than exact sets on the wide benchmark, and MinHash misses containment pairs (overlap 1, low Jaccard) — exactly the foreign-key → primary-key case.
-- Recommender parity, string columns whose null slots hold bytes (e.g. built with `pl.when(...).then(None)` or `Series.set`): one-shot measures those bytes in its cast candidates (`rec_arrow_size_bytes`), streaming does not; `assert_parity` excuses the gap only for the original type.  Decide which is right (an Arrow cast keeps the bytes; a writer may not) and align them.
+- Recommender parity, string columns whose null slots hold bytes (e.g. built with `pl.when(...).then(None)` or `Series.set`): one-shot measures those bytes in its cast candidates (`datafusion_size_bytes`), streaming does not; `assert_parity` excuses the gap only for the original type.  Decide which is right (an Arrow cast keeps the bytes; a writer may not) and align them.
 
 ---
 The following ToDo 8 is largely aimed at identifying an optimal sort-order on the dataset to increase the efficiency of sparse indexes such as the ClickHouse primary key.
@@ -95,3 +95,10 @@ Performance.
 Refactoring and more aspiration!
 
 14. This project is a sibling of another project in github named 'clickhouse_benchmark' which is the start of a framework for generating synthetic datasets and testing the effectiveness of dtype shrinking, codecs, skipping indexes and sort ordering in Clickhouse, i.e. the empirical analogue of this project.  The end goal is to create a comprehensive toolset for optimising ClickHouse through identification of candidate columns and techniques and empirical benchmarking.  The handoff is agreed (CLAUDE.md § Project Objectives, Validation): the recommender's Arrow result written as IPC, plus a `CREATE TABLE` helper (ToDo 1.0).
+
+---
+Manually added 18th Oct and to be worked into the plan above.
+
+15. Extend the accuracy and performance benchmarks to include DataFusion. On deterministic techniques, the benchmark is Rust (Deterministic) Technique vs Python Polars vs Python DataFusion.  On probabilistic techniques the benchmarks are: a) Rust Probabilistic vs Rust Deterministic, b) Rust (Probabilistic) Technique vs Python Probabilistic Techniques vs Python Deterministic Techniques.
+
+16. Review and consolidate counting methods: frequency counts take place in Describe, Entropy etc.
