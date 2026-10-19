@@ -372,6 +372,73 @@ pub fn ipc_body_sizes(batch: &RecordBatch, codec: &str) -> Result<RecordBatch> {
     .map_err(|e| Error::Compute(e.to_string()))
 }
 
+/// The codec chain written in DDL: "LZ4", "ZSTD(3)", "GCD, LZ4", "GCD, ZSTD(3)".
+fn parse_chain(codecs: &str) -> Result<crate::common::clickhouse_sizes::Chain> {
+    use crate::common::clickhouse_sizes::{Chain, Compression};
+    let bad = || Error::InvalidInput(format!("unparsable codecs {codecs:?}"));
+    let (gcd, rest) = match codecs.strip_prefix("GCD,") {
+        Some(rest) => (true, rest.trim()),
+        None => (false, codecs.trim()),
+    };
+    let compression = match rest {
+        "LZ4" => Compression::Lz4,
+        z => match z
+            .strip_prefix("ZSTD(")
+            .and_then(|l| l.strip_suffix(')'))
+            .and_then(|l| l.trim().parse().ok())
+        {
+            Some(level) => Compression::Zstd(level),
+            None => return Err(bad()),
+        },
+    };
+    Ok(Chain { gcd, compression })
+}
+
+/// One row: `clickhouse_type` (the type of `column`'s own Arrow type, nullable when it has
+/// nulls) and `bytes` (its emulated ClickHouse size under the chain `codecs`); both null
+/// when the type has no ClickHouse type, `bytes` null also when GCD does not apply.
+/// Private: tests and `to_chbench`.
+pub fn clickhouse_profile(batch: &RecordBatch, column: &str, codecs: &str) -> Result<RecordBatch> {
+    use crate::common::clickhouse_sizes::{emulate, streams, ChLayout};
+    use crate::recommenders::engine::{clickhouse_type, physical_stats};
+    let chain = parse_chain(codecs)?;
+    let arr = batch
+        .column_by_name(column)
+        .ok_or_else(|| Error::InvalidInput(format!("unknown column {column:?}")))?;
+    let range = physical_stats(arr.as_ref()).map(|s| s.range);
+    let mut ty = None;
+    let mut bytes = None;
+    if let Ok((t, layout)) = clickhouse_type(arr.data_type(), range, arr.null_count() > 0, None) {
+        let applies = matches!(
+            &layout,
+            ChLayout::Fixed {
+                gcd_applies: true,
+                ..
+            }
+        ) || matches!(
+            &layout,
+            ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { gcd_applies: true, .. })
+        );
+        if !chain.gcd || applies {
+            let st = streams(arr.as_ref(), &layout).map_err(Error::Compute)?;
+            bytes = Some(emulate(&st, chain).map_err(Error::Compute)?.bytes);
+        }
+        ty = Some(t);
+    }
+    RecordBatch::try_from_iter([
+        (
+            "clickhouse_type",
+            std::sync::Arc::new(arrow_array::StringArray::from(vec![ty])) as arrow_array::ArrayRef,
+        ),
+        (
+            "bytes",
+            std::sync::Arc::new(arrow_array::UInt64Array::from(vec![bytes]))
+                as arrow_array::ArrayRef,
+        ),
+    ])
+    .map_err(|e| Error::Compute(e.to_string()))
+}
+
 /// Every value of every column as text (`recommend::render_value`): the canonical
 /// rendering of `min` / `max`, for the Python reference implementations. Meant for a
 /// few values per column: each value is cast on its own.
@@ -409,6 +476,19 @@ mod tests {
     use polars::prelude::PolarsError;
 
     use super::*;
+
+    #[test]
+    fn chain_parser() {
+        use crate::common::clickhouse_sizes::Compression;
+        let c = parse_chain("GCD, ZSTD(3)").unwrap();
+        assert!(c.gcd && c.compression == Compression::Zstd(3));
+        let c = parse_chain("LZ4").unwrap();
+        assert!(!c.gcd && c.compression == Compression::Lz4);
+        assert_eq!(parse_chain("GCD, LZ4").unwrap().ddl(), "GCD, LZ4");
+        for bad in ["", "GCD", "ZSTD", "ZSTD(x)", "Delta, LZ4"] {
+            assert!(parse_chain(bad).is_err(), "{bad}");
+        }
+    }
 
     fn ints(v: &[i64]) -> ArrayRef {
         Arc::new(Int64Array::from(v.to_vec()))

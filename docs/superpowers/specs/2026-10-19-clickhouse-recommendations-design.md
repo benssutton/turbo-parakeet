@@ -178,8 +178,10 @@ original type are expressible as `chbench` base types, it writes:
     samples: 10
   results: {percentiles: [50, 90, 99]}
   ```
-- `<name>.predicted.json`: our predicted `clickhouse_size_bytes` for every grid cell the suite will build (the
-  emulator run for each (type, codec, compression) of the grid), for comparison with `chbench`'s measured bytes.
+- `<name>.predicted.json`: `{"<type>|<codec>|<compression>": bytes or null}` for every cell of the grid the suite will build.
+  Recommended-type cells take the predicted bytes of the matching `clickhouse_candidates` chain (null when that chain was
+  pruned or not measured); original-type cells are emulated on the original column through a private binding, which also
+  gives the original's ClickHouse type.
 
 It returns the skipped columns with reasons (nested, no ClickHouse type, ineligible).  Grid cells `chbench`'s rules
 reject are skipped by `chbench` itself, with the server's reason.

@@ -535,6 +535,17 @@ fn ipc_body_sizes(py: Python<'_>, data: &Bound<'_, PyAny>, codec: &str) -> PyRes
 }
 
 #[pyfunction]
+fn clickhouse_profile(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    column: &str,
+    codecs: &str,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::clickhouse_profile(&batch, column, codecs)).map(ArrowTable)
+}
+
+#[pyfunction]
 fn render(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::render(&batch)).map(ArrowTable)
@@ -574,6 +585,7 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(describe_columns, m)?)?;
     m.add_function(wrap_pyfunction!(column_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(ipc_body_sizes, m)?)?;
+    m.add_function(wrap_pyfunction!(clickhouse_profile, m)?)?;
     m.add_function(wrap_pyfunction!(render, m)?)?;
     m.add_function(wrap_pyfunction!(checked_table, m)?)?;
     Ok(())

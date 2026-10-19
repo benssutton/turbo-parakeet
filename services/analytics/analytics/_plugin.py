@@ -185,6 +185,14 @@ def ipc_body_sizes(table, codec: str) -> dict[str, int]:
     return dict(zip(out["column"], out["bytes"]))
 
 
+def clickhouse_profile(table, column: str, codecs: str) -> dict:
+    """ClickHouse type of `column`'s own Arrow type (None: unmappable) and its emulated size
+    under the codec chain `codecs` ("LZ4", "ZSTD(3)", "GCD, LZ4", "GCD, ZSTD(3)"; None when
+    unmappable or GCD does not apply). Private: tests and `to_chbench` only."""
+    row = pl.DataFrame(_rs.clickhouse_profile(table, column, codecs)).row(0, named=True)
+    return {"clickhouse_type": row["clickhouse_type"], "bytes": row["bytes"]}
+
+
 def render(s: pl.Series) -> list[str | None]:
     """`s`'s values as text, rendered by arrow-rs's cast to Utf8 — the one format of
     Describe's / Recommend's min and max (recommend.rs `render_value`)."""
