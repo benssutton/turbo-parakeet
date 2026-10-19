@@ -314,3 +314,23 @@ def test_clickhouse_profile_binding():
         _plugin.clickhouse_profile(t, "nope", "LZ4")
     with pytest.raises(ValueError):
         _plugin.clickhouse_profile(t, "a", "Delta")
+
+
+def test_to_chbench_bool_over_integers_uses_boolean_dataset(tmp_path):
+    import json
+
+    import yaml
+
+    from analytics.recommend import to_chbench
+
+    frame = pl.DataFrame({"flag": pl.Series([0, 1] * 5_000, dtype=pl.Int32)})
+    result = OneShotRecommender().add(frame).result()
+    to_chbench(result, frame, tmp_path)
+    suite = yaml.safe_load((tmp_path / "flag.yaml").read_text())
+    assert suite["clickhouse"]["type"] == ["Bool"]
+    with pa.ipc.open_file(tmp_path / "flag.arrow") as f:
+        assert f.get_batch(0).schema.field("flag").type == pa.bool_()
+    assert all(
+        k.startswith("Bool|")
+        for k in json.loads((tmp_path / "flag.predicted.json").read_text())
+    )

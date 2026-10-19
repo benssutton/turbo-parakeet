@@ -129,6 +129,14 @@ def _write(out: Path, name: str, col: str, one, r: dict, orig: dict) -> None:
         else "GCD" if chosen.startswith("GCD") else "none"
     )
     types = list(dict.fromkeys([rec_base, orig_base]))
+    if rec_base == "Bool" and one.schema.field(col).type != pa.bool_():
+        # chbench admits Bool only over a boolean dataset: measure the recommended type on the
+        # recommended (cast) values; the original type cannot share that dataset.
+        try:
+            one = pa.table({col: one[col].cast(pa.bool_())})
+            types = [rec_base]
+        except pa.ArrowInvalid:
+            types = [orig_base]
     codecs = list(dict.fromkeys([rec_codec, "none"]))
     comps = list(dict.fromkeys([comp, "LZ4"]))
 
