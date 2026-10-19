@@ -188,6 +188,57 @@ def per_batch_sum(r: dict) -> bool:
     )
 
 
+def assert_compression_parity(name: str, r: dict, o: dict):
+    """ClickHouse and Arrow IPC compression columns (spec 2026-10-19 §6): equal when the
+    sampled block is the whole column; else sizes within 2% and the same codecs unless
+    the best chains are within 2%."""
+    whole = r["n_sampled_rows"] == r["n_rows"] and r["n_sampled_blocks"] == 1
+    # Streaming cannot offer GCD for numbers derived from text.
+    gcd_unknown = any(
+        "GCD unknown" in (c["evidence"] or "")
+        for c in (r["clickhouse_candidates"] or [])
+    )
+    pairs = [
+        ("datafusion_ipc_compression", "datafusion_ipc_zstd_level"),
+        ("polars_ipc_compression", "polars_ipc_zstd_level"),
+    ]
+    ipc = [
+        "datafusion_size_lz4_bytes",
+        "polars_size_lz4_bytes",
+        "datafusion_ipc_size_bytes",
+        "polars_ipc_size_bytes",
+    ]
+    if r["n_sampled_rows"] == 0:
+        return
+    # With GCD unknown, one-shot's GCD chain may win: ClickHouse sizes and codecs differ.
+    ch = [] if gcd_unknown else ["clickhouse_size_bytes"]
+    if whole:
+        exact = ipc + [x for p in pairs for x in p]
+        if not gcd_unknown:
+            exact += ["clickhouse_codecs", *ch]
+        for k in exact:
+            assert r[k] == o[k], (name, k, r[k], o[k])
+        return
+    for k in ipc + ch:
+        if o[k] is None:
+            assert r[k] is None, (name, k, r[k])
+        else:
+            assert r[k] == pytest.approx(o[k], rel=0.02), (name, k, r[k], o[k])
+    if not gcd_unknown:
+        best = sorted(
+            c["predicted_bytes"]
+            for c in r["clickhouse_candidates"]
+            if c["predicted_bytes"] is not None
+        )
+        if r["clickhouse_codecs"] != o["clickhouse_codecs"]:
+            assert len(best) > 1 and best[1] <= best[0] * 1.02, (
+                name,
+                r["clickhouse_codecs"],
+                o["clickhouse_codecs"],
+                r["clickhouse_candidates"],
+            )
+
+
 def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: bool):
     """Parity spec (docs/superpowers/specs/2026-10-01-recommender-parity-design.md)
     §7 / §10: equal recommendations, sizes, candidates and shared value columns; ZSTD
@@ -223,6 +274,8 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         got = candidates(r, original_sizes, not overflowed)
         want = candidates(o, original_sizes, not overflowed)
         assert got == want, name
+        assert r["clickhouse_type"] == o["clickhouse_type"], (name, r, o)
+        assert_compression_parity(name, r, o)
         # Both rank by exact counts while the dictionary is a candidate (spec 2026-10-07 §4).
         for k in ("top_k", "inner_top_k"):
             assert r[k] == o[k], (name, k, r[k], o[k])

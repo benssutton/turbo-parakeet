@@ -121,3 +121,46 @@ def test_unmappable_type_has_a_reason():
     r = one_shot(frame)["d"]
     assert r["clickhouse_type"] is None and r["clickhouse_codecs"] is None
     assert r["clickhouse_candidates"][0]["outcome"] == "pruned"
+
+
+def test_streaming_matches_one_shot_on_ch_frame():
+    frame = ch_frame()
+    streamed = StreamingRecommender(reservoir_rows=frame.height + 65_536)
+    for batch in frame.iter_slices(50_000):
+        streamed.add(batch)
+    got = {r["column"]: r for r in streamed.result().iter_rows(named=True)}
+    want = one_shot(frame)
+    for name, r in got.items():
+        o = want[name]
+        assert r["n_sampled_rows"] == frame.height, name
+        assert r["clickhouse_type"] == o["clickhouse_type"], name
+        for k in (
+            "clickhouse_size_bytes",
+            "datafusion_size_lz4_bytes",
+            "polars_size_lz4_bytes",
+            "datafusion_ipc_size_bytes",
+            "polars_ipc_size_bytes",
+        ):
+            assert r[k] == pytest.approx(o[k], rel=0.02), (name, k)
+    gcd_rows = [
+        c for c in got["threes"]["clickhouse_candidates"] if c["codecs"] == "GCD"
+    ]
+    assert gcd_rows and gcd_rows[0]["outcome"] == "pruned"
+    assert got["thousands"]["clickhouse_codecs"].startswith("GCD")
+    assert got["noise"]["clickhouse_codecs"] == "LZ4"
+
+
+def test_streaming_without_sample():
+    frame = ch_frame(1_000)
+    out = StreamingRecommender(reservoir_rows=0).add(frame).result()
+    for r in out.iter_rows(named=True):
+        assert r["clickhouse_type"] is not None, r["column"]
+        for k in (
+            "clickhouse_codecs",
+            "clickhouse_size_bytes",
+            "clickhouse_candidates",
+            "datafusion_ipc_compression",
+            "datafusion_size_lz4_bytes",
+            "polars_ipc_compression",
+        ):
+            assert not r[k], (r["column"], k)

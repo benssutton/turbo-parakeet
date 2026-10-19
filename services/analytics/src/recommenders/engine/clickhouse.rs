@@ -181,6 +181,51 @@ pub(crate) fn clickhouse_type(
     }
 }
 
+/// The factor by which a column's original physical values (integers; decimal unscaled
+/// values; Date days; Datetime values in their unit) divide to give the recommended type's
+/// physical values, so the running GCD and range carry over. None when the recommended
+/// values are not an exact rescaling of the original ones (text-derived numbers, float →
+/// decimal, ...).
+pub(crate) fn rescale(original: &polars::prelude::DataType, recommended: &AT) -> Option<i128> {
+    use polars::prelude::{DataType as PT, TimeUnit as PU};
+    let ns = |u: &PU| match u {
+        PU::Nanoseconds => 1i128,
+        PU::Microseconds => 1_000,
+        PU::Milliseconds => 1_000_000,
+    };
+    match (original, recommended) {
+        (
+            PT::Int8
+            | PT::Int16
+            | PT::Int32
+            | PT::Int64
+            | PT::UInt8
+            | PT::UInt16
+            | PT::UInt32
+            | PT::UInt64,
+            AT::Int8
+            | AT::Int16
+            | AT::Int32
+            | AT::Int64
+            | AT::UInt8
+            | AT::UInt16
+            | AT::UInt32
+            | AT::UInt64,
+        )
+        | (PT::Date, AT::Date32) => Some(1),
+        (PT::Decimal(_, s), AT::Decimal32(_, r) | AT::Decimal64(_, r) | AT::Decimal128(_, r)) => {
+            let d = i32::try_from(s.unwrap_or(0)).ok()? - i32::from(*r);
+            u32::try_from(d).ok().and_then(|d| 10i128.checked_pow(d))
+        }
+        (PT::Datetime(u, _), AT::Timestamp(r, _)) => {
+            let (o, r) = (ns(u), super::unit_ns(r));
+            (r >= o).then_some(r / o)
+        }
+        (PT::Datetime(u, _), AT::Date32) => Some(86_400 * 1_000_000_000 / ns(u)),
+        _ => None,
+    }
+}
+
 /// Statistics of an integer-backed column's raw physical values (non-null ones).
 pub(crate) struct PhysicalStats {
     pub gcd: u128,
@@ -275,6 +320,30 @@ pub(crate) fn physical_stats(a: &dyn Array) -> Option<PhysicalStats> {
 mod tests {
     use super::*;
     use arrow_schema::{Field as AField, Fields};
+
+    #[test]
+    fn rescale_cases() {
+        use polars::prelude::{DataType as PT, TimeUnit as PU};
+        assert_eq!(rescale(&PT::Int64, &AT::Int8), Some(1));
+        assert_eq!(rescale(&PT::Date, &AT::Date32), Some(1));
+        assert_eq!(
+            rescale(&PT::Decimal(Some(10), Some(4)), &AT::Decimal32(7, 2)),
+            Some(100)
+        );
+        assert_eq!(
+            rescale(
+                &PT::Datetime(PU::Nanoseconds, None),
+                &AT::Timestamp(TimeUnit::Second, None)
+            ),
+            Some(1_000_000_000)
+        );
+        assert_eq!(
+            rescale(&PT::Datetime(PU::Milliseconds, None), &AT::Date32),
+            Some(86_400_000)
+        );
+        assert_eq!(rescale(&PT::String, &AT::Int32), None);
+        assert_eq!(rescale(&PT::Float64, &AT::Decimal64(10, 2)), None);
+    }
 
     #[test]
     fn physical_stats_cases() {

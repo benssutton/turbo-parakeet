@@ -139,9 +139,9 @@ pub(crate) fn recommend(
         d.outer.freq.n_unique as f64 / non_null as f64
     };
     let (arrow_lz4, arrow_ipc) =
-        ipc_choice(chosen.array.as_ref(), distinct_ratio, params).map_err(err)?;
+        ipc_choice(&[chosen.array.as_ref()], &|b| b, distinct_ratio, params).map_err(err)?;
     let (polars_lz4, polars_ipc) =
-        ipc_choice(polars_arr.as_ref(), distinct_ratio, params).map_err(err)?;
+        ipc_choice(&[polars_arr.as_ref()], &|b| b, distinct_ratio, params).map_err(err)?;
     let nullable = chosen.array.logical_null_count() > 0;
     let ch = clickhouse_choice(
         chosen.array.as_ref(),
@@ -172,10 +172,13 @@ pub(crate) fn recommend(
     })
 }
 
-/// The Arrow IPC compression for `arr` (spec 2026-10-19 §5): its LZ4_FRAME body size and the
-/// choice with its size.
-fn ipc_choice(
-    arr: &dyn Array,
+/// The Arrow IPC compression for a column held as `arrs` (one array one-shot, the sampled
+/// blocks streaming; spec 2026-10-19 §5): its LZ4_FRAME body size and the choice with its
+/// size. Byte counts are summed over the arrays, then passed through `scale` (the sample →
+/// column factor); the histograms stay unscaled.
+pub(crate) fn ipc_choice(
+    arrs: &[&dyn Array],
+    scale: &dyn Fn(u64) -> u64,
     distinct_ratio: f64,
     params: &Params,
 ) -> Result<(u64, (Compression, u64)), String> {
@@ -186,11 +189,17 @@ fn ipc_choice(
                 Compression::Lz4 => Codec::Lz4Frame,
                 Compression::Zstd(l) => Codec::Zstd(l),
             };
-            let m = ipc_body(arr, codec).map_err(|e| e.to_string())?;
-            if codec == Codec::Lz4Frame {
-                lz4 = m.0;
+            let (mut bytes, mut hist) = (0u64, [0u64; 256]);
+            for a in arrs {
+                let (b, h) = ipc_body(*a, codec).map_err(|e| e.to_string())?;
+                bytes += b;
+                hist.iter_mut().zip(h).for_each(|(x, y)| *x += y);
             }
-            Ok(m)
+            let bytes = scale(bytes);
+            if codec == Codec::Lz4Frame {
+                lz4 = bytes;
+            }
+            Ok((bytes, hist))
         },
         None,
         "",
@@ -201,11 +210,11 @@ fn ipc_choice(
 }
 
 /// A column's ClickHouse type, chain, emulated size and every chain considered.
-struct ChChoice {
-    ty: Option<String>,
-    chain: Option<Chain>,
-    size: Option<u64>,
-    candidates: Vec<CodecCandidate>,
+pub(crate) struct ChChoice {
+    pub ty: Option<String>,
+    pub chain: Option<Chain>,
+    pub size: Option<u64>,
+    pub candidates: Vec<CodecCandidate>,
 }
 
 fn clickhouse_choice(
@@ -215,29 +224,79 @@ fn clickhouse_choice(
     distinct_ratio: f64,
     params: &Params,
 ) -> Result<ChChoice, String> {
-    let stats = physical_stats(arr);
-    let (ty, layout) = match clickhouse_type(
+    let running = physical_stats(arr).map(|s| RunningStats {
+        range: Some(s.range),
+        gcd: Some(s.gcd),
+        max_abs: s.max_abs,
+        signed: s.signed,
+    });
+    clickhouse_choice_over(
         arr.data_type(),
-        stats.as_ref().map(|s| s.range),
         nullable,
         enum_values,
-    ) {
-        Ok(t) => t,
-        Err(reason) => {
-            return Ok(ChChoice {
-                ty: None,
-                chain: None,
-                size: None,
-                candidates: vec![CodecCandidate {
-                    codecs: String::new(),
-                    predicted_bytes: None,
-                    outcome: "pruned",
-                    evidence: reason,
-                }],
-            })
-        }
+        running.as_ref(),
+        "",
+        Some(&[arr]),
+        &|b| b,
+        distinct_ratio,
+        params,
+    )
+}
+
+/// The physical statistics of the recommended values: from the array (one-shot) or the
+/// exact running statistics (streaming).
+pub(crate) struct RunningStats {
+    pub range: Option<(i128, i128)>,
+    pub gcd: Option<u128>,
+    pub max_abs: u128,
+    pub signed: bool,
+}
+
+/// The ClickHouse choice for a column of Arrow type `t` held as `arrs` (None: no sample, so
+/// only the type). `running` None means the physical statistics are unknown; `gcd_note`
+/// then explains the missing GCD candidate when the layout would take one. Emulated byte
+/// counts, summed over the arrays, pass through `scale`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clickhouse_choice_over(
+    t: &AT,
+    nullable: bool,
+    enum_values: Option<&[String]>,
+    running: Option<&RunningStats>,
+    gcd_note: &str,
+    arrs: Option<&[&dyn Array]>,
+    scale: &dyn Fn(u64) -> u64,
+    distinct_ratio: f64,
+    params: &Params,
+) -> Result<ChChoice, String> {
+    let (ty, layout) =
+        match clickhouse_type(t, running.and_then(|r| r.range), nullable, enum_values) {
+            Ok(t) => t,
+            Err(reason) => {
+                return Ok(ChChoice {
+                    ty: None,
+                    chain: None,
+                    size: None,
+                    candidates: vec![CodecCandidate {
+                        codecs: String::new(),
+                        predicted_bytes: None,
+                        outcome: "pruned",
+                        evidence: reason,
+                    }],
+                })
+            }
+        };
+    let Some(arrs) = arrs else {
+        return Ok(ChChoice {
+            ty: Some(ty),
+            chain: None,
+            size: None,
+            candidates: Vec::new(),
+        });
     };
-    let st = streams(arr, &layout)?;
+    let st = arrs
+        .iter()
+        .map(|a| streams(*a, &layout))
+        .collect::<Result<Vec<_>, _>>()?;
     let applies = matches!(
         &layout,
         ChLayout::Fixed {
@@ -248,14 +307,27 @@ fn clickhouse_choice(
         &layout,
         ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { gcd_applies: true, .. })
     );
-    let gcd = match (&stats, applies) {
-        (Some(s), true) => Some((s.gcd, s.max_abs, s.signed)),
+    let gcd = match (running, applies) {
+        (Some(r), true) => r.gcd.map(|g| (g, r.max_abs, r.signed)),
         _ => None,
     };
+    let note = if running.is_none() && applies {
+        gcd_note
+    } else {
+        ""
+    };
     let decision = decide(
-        |c| emulate(&st, c).map(|e| (e.bytes, e.histogram)),
+        |c| {
+            let (mut bytes, mut hist) = (0u64, [0u64; 256]);
+            for s in &st {
+                let e = emulate(s, c)?;
+                bytes += e.bytes;
+                hist.iter_mut().zip(e.histogram).for_each(|(x, y)| *x += y);
+            }
+            Ok((scale(bytes), hist))
+        },
         gcd,
-        "",
+        note,
         distinct_ratio,
         &params.compression,
     )?;

@@ -17,18 +17,21 @@ use sizing::*;
 
 use std::collections::{HashMap, HashSet};
 
-use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
+use arrow_array::{make_array, Array, ArrayRef, RecordBatch};
+use arrow_data::ArrayData;
 use arrow_schema::{DataType as AT, SchemaRef};
-use polars::prelude::{AnyValue, DataType as PT, PolarsResult, Series};
+use polars::prelude::{AnyValue, CompatLevel, DataType as PT, PolarsResult, Series};
 use rayon::prelude::*;
 
-use crate::common::arrow_io::{export_struct, import_batch};
+use crate::common::arrow_io::{export_series, export_struct, import_batch};
 use crate::common::error::{Error, Result};
 use crate::common::ipc_sizes::{classic_layout, layout_sizes, sizes_of};
 use crate::recommenders::engine::{
-    entropy_cells, enum_categories, exemplar_cells, exemplar_value, pa_name, pick_by_stats,
-    pick_list_by_stats, pl_name, rec_row, to_polars_layout, top_k_cell, Entropy, EntropyEstimator,
-    Exemplars, Params, Rec, Target,
+    clickhouse_choice_over, entropy_cells, enum_categories, exemplar_cells, exemplar_value,
+    ipc_choice, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row, rescale,
+    to_polars_layout, top_k_cell, Entropy, EntropyEstimator, Exemplars, Params, Rec, RunningStats,
+    Target,
 };
 use crate::recommenders::schema::{id_schema, recommender_fields, with_ids, with_maps, IdCell};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
@@ -119,6 +122,38 @@ type Stats = Option<(BatchStats, Option<BatchStats>)>;
 
 /// A batch column's first non-null row (with its text) and first null row.
 type Firsts = (Option<(u64, Option<String>)>, Option<u64>);
+
+/// The blocks' arrays as one array. Dictionary arrays sharing one dictionary keep it (the
+/// library concat would offset the keys of copies it does not recognise as equal).
+fn concat_blocks(blocks: &[ArrayRef]) -> std::result::Result<ArrayRef, String> {
+    let err = |e: arrow_schema::ArrowError| e.to_string();
+    if let Some(d0) = blocks[0].as_any_dictionary_opt() {
+        let values = d0.values().to_data();
+        let same = blocks.iter().all(|b| {
+            b.data_type() == blocks[0].data_type()
+                && b.as_any_dictionary_opt()
+                    .is_some_and(|d| d.values().to_data() == values)
+        });
+        if same {
+            let keys: Vec<&dyn Array> = blocks
+                .iter()
+                .filter_map(|b| b.as_any_dictionary_opt())
+                .map(|d| d.keys() as &dyn Array)
+                .collect();
+            let keys = arrow_select::concat::concat(&keys).map_err(err)?.to_data();
+            let data = ArrayData::builder(blocks[0].data_type().clone())
+                .len(keys.len())
+                .add_buffer(keys.buffers()[0].clone())
+                .nulls(keys.nulls().cloned())
+                .add_child_data(values)
+                .build()
+                .map_err(err)?;
+            return Ok(make_array(data));
+        }
+    }
+    let refs: Vec<&dyn Array> = blocks.iter().map(|a| a.as_ref()).collect();
+    arrow_select::concat::concat(&refs).map_err(err)
+}
 
 impl Streaming {
     pub(crate) fn new(params: Params, reservoir_rows: u64, block_rows: u64) -> Self {
@@ -560,6 +595,10 @@ impl Streaming {
 
         // ZSTD sizes and the cross-check on the sampled blocks.
         let mut z = [0u64; 4]; // original Arrow, original Polars, recommended Arrow, recommended Polars
+                               // Each block's recommended Arrow array and Polars layout, kept for the compression
+                               // and ClickHouse choices (the sample is bounded by `reservoir_rows`).
+        let mut arrow_blocks: Vec<ArrayRef> = Vec::with_capacity(blocks.len());
+        let mut polars_blocks: Vec<ArrayRef> = Vec::with_capacity(blocks.len());
         for b in blocks {
             let s = block_series(b, &c.name, dtype, c.views_input).map_err(err)?;
             let bc = classic_layout(&s).map_err(err)?;
@@ -569,6 +608,8 @@ impl Streaming {
             if original {
                 z[2] += sz[1];
                 z[3] += sz[3];
+                polars_blocks.push(export_series(&s, CompatLevel::newest()).map_err(err)?);
+                arrow_blocks.push(bc);
                 continue;
             }
             let a = recast(
@@ -590,16 +631,71 @@ impl Streaming {
                 layout_sizes(a.as_ref(), polars.as_ref(), self.params.zstd_level).map_err(err)?;
             z[2] += rz[1];
             z[3] += rz[3];
+            arrow_blocks.push(a);
+            polars_blocks.push(polars);
         }
         let scale = |x: u64| {
             (sampled > 0).then(|| (x as f64 * self.n_rows as f64 / sampled as f64).round() as u64)
         };
+        let scale_up = |x: u64| scale(x).unwrap_or(x);
 
         let rec_t = pick.target.arrow_type();
         // A kept Enum (at any depth) is named with its categories.
         let enum_values = enum_categories(dtype);
+        let nullable = nullable(&pick.target, o, inner.map(|(i, _)| i));
+
+        // Arrow IPC compression and the ClickHouse column, from the sampled blocks.
+        let non_null = o.n - o.n_null;
+        let distinct_ratio = if non_null == 0 {
+            1.0
+        } else {
+            p.freq.n_unique as f64 / non_null as f64
+        };
+        let has_sample = sampled > 0 && !arrow_blocks.is_empty();
+        let (arrow_lz4, arrow_ipc, polars_lz4, polars_ipc) = if has_sample {
+            // The sampled blocks as one array: the IPC buffers compress as the column's do.
+            let (a, p_) = (
+                concat_blocks(&arrow_blocks)?,
+                concat_blocks(&polars_blocks)?,
+            );
+            let (al, ai) = ipc_choice(&[a.as_ref()], &scale_up, distinct_ratio, &self.params)?;
+            let (pl, pi) = ipc_choice(&[p_.as_ref()], &scale_up, distinct_ratio, &self.params)?;
+            (Some(al), Some(ai), Some(pl), Some(pi))
+        } else {
+            (None, None, None, None)
+        };
+        // The recommended values' running statistics: a list recast to scalars reads its
+        // inner level.
+        let (stats_level, src) = match (inner, &rec_t) {
+            (Some((i, it)), t)
+                if !matches!(t, AT::List(_) | AT::LargeList(_) | AT::FixedSizeList(..)) =>
+            {
+                (i, it)
+            }
+            _ => (o, dtype),
+        };
+        let running = rescale(src, &rec_t).map(|f| RunningStats {
+            range: stats_level.int_range().map(|(a, b)| (a / f, b / f)),
+            gcd: stats_level.gcd.map(|g| g.unsigned_abs() / f.unsigned_abs()),
+            max_abs: stats_level.int_range().map_or(0, |(a, b)| {
+                (a / f).unsigned_abs().max((b / f).unsigned_abs())
+            }),
+            signed: !matches!(rec_t, AT::UInt8 | AT::UInt16 | AT::UInt32 | AT::UInt64),
+        });
+        let a: Vec<&dyn Array> = arrow_blocks.iter().map(|a| a.as_ref()).collect();
+        let ch = clickhouse_choice_over(
+            &rec_t,
+            nullable,
+            enum_values.as_deref(),
+            running.as_ref(),
+            &format!("GCD unknown in streaming for values derived from {src}"),
+            has_sample.then_some(a.as_slice()),
+            &scale_up,
+            distinct_ratio,
+            &self.params,
+        )?;
         let rec = Rec {
-            nullable: nullable(&pick.target, o, inner.map(|(i, _)| i)),
+            nullable,
             arrow_type: pa_name(&rec_t),
             arrow_size: rec_size,
             arrow_zstd: scale(z[2]),
@@ -613,14 +709,14 @@ impl Streaming {
             polars_zstd: scale(z[3]),
             lossy: pick.lossy,
             candidates: pick.candidates,
-            arrow_lz4: None,
-            arrow_ipc: None,
-            polars_lz4: None,
-            polars_ipc: None,
-            ch_type: None,
-            ch_chain: None,
-            ch_size: None,
-            ch_candidates: Vec::new(),
+            arrow_lz4,
+            arrow_ipc,
+            polars_lz4,
+            polars_ipc,
+            ch_type: ch.ty,
+            ch_chain: ch.chain,
+            ch_size: ch.size,
+            ch_candidates: ch.candidates,
         };
         row.extend(p.row(&oc));
         row.push(u(o.n_midnight));
