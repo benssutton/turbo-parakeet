@@ -81,7 +81,9 @@ Thresholds are recommender keywords (decisions belong to the recommenders; techn
   strings, enums, nested).
 - **g** is the GCD of the **ClickHouse physical values** (the recommended type's: e.g. after a decimal rescale or a
   timestamp unit change, which already used part of the original GCD).  One-shot computes it on the recommended
-  array; streaming derives it from the running GCD divided by the type rule's rescale factor.
+  array; streaming derives it from the running GCD divided by the type rule's rescale factor.  In streaming, a
+  numeric type derived from text (a numeric-string column) has no running GCD: its GCD candidate is not offered
+  (`clickhouse_candidates` says why); one-shot computes it.  Parity tests exclude that case.
 - **Pruning rule (O(1), from g and the min / max).**  With `bytes_needed(x)` the number of bytes holding the
   magnitude of x (plus a sign bit for signed types; 0 → 1 byte), GCD is a candidate only if
   `bytes_needed(max(|min|, |max|) / g) < bytes_needed(max(|min|, |max|))`.  Rationale: dividing by g shortens every
@@ -152,7 +154,9 @@ within the tolerance measured by the parity tests (target 2%).
 helper, not a recommender).  For each computed column of `result` (or the named `columns`) whose ClickHouse type and
 original type are expressible as `chbench` base types, it writes:
 - `<name>.arrow`: the original column, its exact Arrow type, one uncompressed record batch (Feather v2, as `chbench`
-  caches datasets);
+  caches datasets).  Types `chbench` cannot parse are normalised losslessly before writing: string_view /
+  large_string → string, binary_view / large_binary → binary, Polars Categorical → its strings (dictionary dropped;
+  the recommended `LowCardinality` is a type-axis value, not the stored type);
 - `<name>.yaml`: a suite —
   ```yaml
   name: <name, sanitised to [a-z0-9_]>
@@ -200,7 +204,11 @@ A suite's `dataset` block may instead be `{path: <file>.arrow, column: <name>}` 
 optionally with `decimal_places` (else taken from a decimal column's scale).  The column is loaded with its exact
 Arrow type; rows, null count and the manifest metrics are computed from the data with `chbench`'s existing metrics
 functions; the dataset id is a content hash; generation, caching and tolerances do not apply.  Parse-time checks
-(`_check_dataset_against_type_axis`) work from the file's type.
+(`_check_dataset_against_type_axis`) work from the file's type.  Implementation: a path dataset is a `DatasetSpec`
+whose fields are measured from the file (`rows`, `arrow_type`, `null_count`, `decimal_places`, `value_range`), plus
+`path` and `column`; `load_or_generate` loads the file instead of generating when `path` is set, and the manifest
+holds the measured `cardinality_ratio` / `entropy_bits`, no targets and no warnings.  The harness, which reads
+`DatasetSpec`, is otherwise unchanged.
 
 ### 9.2 Vocabulary spike
 
