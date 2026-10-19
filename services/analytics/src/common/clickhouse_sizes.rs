@@ -289,9 +289,24 @@ fn list_parts(a: &dyn Array) -> Result<(Vec<u64>, ArrayRef), String> {
         }
         t => return Err(format!("type {t} is not a list")),
     };
+    // ClickHouse stores a null list as an empty array: skip its items, repeat the offset.
     if let Some(nb) = a.nulls() {
         if (0..n).any(|i| nb.is_null(i) && offsets[i + 1] != offsets[i]) {
-            return Err("a null list holds items".to_string());
+            let (mut ends, mut keep, mut total) = (vec![0u64], Vec::new(), 0u64);
+            for i in 0..n {
+                if nb.is_valid(i) {
+                    keep.extend(offsets[i]..offsets[i + 1]);
+                    total += offsets[i + 1] - offsets[i];
+                }
+                ends.push(total);
+            }
+            let child = arrow_select::take::take(
+                child.as_ref(),
+                &arrow_array::UInt64Array::from(keep),
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok((ends, child));
         }
     }
     Ok((offsets, child))
@@ -660,6 +675,24 @@ mod tests {
             Some(vec![]),
             Some(vec![Some(3)]),
         ]);
+        let l = ChLayout::Array(Box::new(fx(1, true)));
+        let s = streams(&a, &l).unwrap();
+        let off: Vec<u8> = [2u64, 2, 3].iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(s[0].bytes, off);
+        assert_eq!(s[1].bytes, [1, 2, 3]);
+        assert_eq!(s[1].row_ends, [2, 2, 3]);
+    }
+
+    #[test]
+    fn null_list_is_stored_empty() {
+        let a = ListArray::from_iter_primitive::<Int8Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(9), Some(9)]),
+            Some(vec![Some(3)]),
+        ]);
+        let (f, o, v, _) = a.into_parts();
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let a = ListArray::new(f, o, v, Some(nulls));
         let l = ChLayout::Array(Box::new(fx(1, true)));
         let s = streams(&a, &l).unwrap();
         let off: Vec<u8> = [2u64, 2, 3].iter().flat_map(|v| v.to_le_bytes()).collect();
