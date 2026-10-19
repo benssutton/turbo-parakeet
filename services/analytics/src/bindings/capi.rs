@@ -62,6 +62,20 @@ unsafe fn strings(ptrs: *const *const c_char, n: usize, what: &str) -> api::Resu
         .collect()
 }
 
+/// The ZSTD levels of a `_new` call: `n` of them at `ptr` (none when `n == 0`, which the
+/// API then rejects).
+///
+/// SAFETY: when `n > 0`, `ptr` is null or points to `n` readable `i32`s.
+unsafe fn levels(ptr: *const i32, n: usize) -> api::Result<Vec<i32>> {
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if ptr.is_null() {
+        return Err(Error::InvalidInput("zstd_levels is null".into()));
+    }
+    Ok(unsafe { std::slice::from_raw_parts(ptr, n) }.to_vec())
+}
+
 /// The boolean pairs of a `_new` call.
 ///
 /// SAFETY: as for `strings`, for both arrays.
@@ -157,6 +171,11 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 /// identify an exemplar row; none: the `*_id` outputs are Null-typed). `error` is null or
 /// valid for one pointer write.
 ///
+/// `zstd_levels` points to `n_zstd_levels` ZSTD levels to try (non-empty, distinct, within
+/// ZSTD's range; 0 or an invalid list returns 1); `zstd_level_tolerance`, `zstd_min_saving`
+/// and `gcd_min_saving` are fractions in [0, 1) (defaults 0.01, 0.10, 0.01; spec
+/// 2026-10-19 §4.3). A null `zstd_levels` with `n_zstd_levels > 0` returns 1.
+///
 /// `entropy_estimator`: 0 the bottom-k distinct sample, 1 the AMS sketch (past the exact
 /// phase; the Java default is 1); any other value returns 1 (invalid input).
 #[no_mangle]
@@ -174,6 +193,11 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
     id_columns: *const *const c_char,
     n_id_columns: usize,
     entropy_estimator: u8,
+    zstd_levels: *const i32,
+    n_zstd_levels: usize,
+    zstd_level_tolerance: f64,
+    zstd_min_saving: f64,
+    gcd_min_saving: f64,
     out: *mut *mut c_void,
     error: *mut *mut c_char,
 ) -> c_int {
@@ -181,7 +205,7 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
         if out.is_null() {
             return Err(Error::InvalidInput("out is null".into()));
         }
-        let defaults = crate::recommenders::engine::CompressionParams::default();
+        let zstd_levels = unsafe { levels(zstd_levels, n_zstd_levels) }?;
         let r = api::StreamingRecommender::new(api::StreamingParams {
             reservoir_rows,
             block_rows,
@@ -200,11 +224,10 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
                 }
             },
             id_columns: unsafe { strings(id_columns, n_id_columns, "id-column") }?,
-            // The keywords reach the C ABI and Java in a later task: the defaults for now.
-            zstd_levels: defaults.zstd_levels,
-            zstd_level_tolerance: defaults.zstd_level_tolerance,
-            zstd_min_saving: defaults.zstd_min_saving,
-            gcd_min_saving: defaults.gcd_min_saving,
+            zstd_levels,
+            zstd_level_tolerance,
+            zstd_min_saving,
+            gcd_min_saving,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -294,6 +317,11 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
     n_bool_pairs: usize,
     id_columns: *const *const c_char,
     n_id_columns: usize,
+    zstd_levels: *const i32,
+    n_zstd_levels: usize,
+    zstd_level_tolerance: f64,
+    zstd_min_saving: f64,
+    gcd_min_saving: f64,
     out: *mut *mut c_void,
     error: *mut *mut c_char,
 ) -> c_int {
@@ -301,7 +329,7 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
         if out.is_null() {
             return Err(Error::InvalidInput("out is null".into()));
         }
-        let defaults = crate::recommenders::engine::CompressionParams::default();
+        let zstd_levels = unsafe { levels(zstd_levels, n_zstd_levels) }?;
         let r = api::OneShotRecommender::new(api::OneShotParams {
             categorical_threshold,
             top_k,
@@ -309,11 +337,10 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
             seed,
             boolean_pairs: unsafe { boolean_pairs(bool_true, bool_false, n_bool_pairs) }?,
             id_columns: unsafe { strings(id_columns, n_id_columns, "id-column") }?,
-            // The keywords reach the C ABI and Java in a later task: the defaults for now.
-            zstd_levels: defaults.zstd_levels,
-            zstd_level_tolerance: defaults.zstd_level_tolerance,
-            zstd_min_saving: defaults.zstd_min_saving,
-            gcd_min_saving: defaults.gcd_min_saving,
+            zstd_levels,
+            zstd_level_tolerance,
+            zstd_min_saving,
+            gcd_min_saving,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -424,6 +451,11 @@ mod tests {
                 1,
                 ptr::null(),
                 0,
+                [1, 3, 9].as_ptr(),
+                3,
+                0.01,
+                0.10,
+                0.01,
                 &mut h,
                 error,
             )
@@ -483,6 +515,101 @@ mod tests {
         unsafe { analytics_oneshot_recommender_free(ptr::null_mut()) };
     }
 
+    /// A one-shot `_new` with explicit compression keywords.
+    unsafe fn new_with_compression(
+        levels: &[i32],
+        zstd_min_saving: f64,
+        error: *mut *mut c_char,
+    ) -> (c_int, *mut c_void) {
+        let mut h = ptr::null_mut();
+        let code = unsafe {
+            analytics_oneshot_recommender_new(
+                10_000,
+                256,
+                1,
+                0,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                levels.as_ptr(),
+                levels.len(),
+                0.01,
+                zstd_min_saving,
+                0.01,
+                &mut h,
+                error,
+            )
+        };
+        (code, h)
+    }
+
+    #[test]
+    fn oneshot_recommender_rejects_bad_compression_keywords() {
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_with_compression(&[], 0.10, &mut error) };
+        assert_eq!((code, h.is_null()), (INVALID_INPUT, true));
+        assert!(message(error).contains("zstd_levels"));
+
+        let (code, h) = unsafe { new_with_compression(&[1], 1.0, &mut error) };
+        assert_eq!((code, h.is_null()), (INVALID_INPUT, true));
+        assert!(message(error).contains("zstd_min_saving"));
+
+        let mut h = ptr::null_mut();
+        let code = unsafe {
+            analytics_oneshot_recommender_new(
+                10_000,
+                256,
+                1,
+                0,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                3,
+                0.01,
+                0.10,
+                0.01,
+                &mut h,
+                &mut error,
+            )
+        };
+        assert_eq!(code, INVALID_INPUT);
+        assert!(message(error).contains("zstd_levels is null"));
+    }
+
+    #[test]
+    fn oneshot_recommender_codecs_use_the_requested_levels() {
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_with_compression(&[3], 0.10, &mut error) };
+        assert_eq!(code, OK);
+        let mut input = stream(vec![
+            ("a", ints(&[0, 5, 7])),
+            (
+                "s",
+                Arc::new(StringArray::from(vec!["x", "y", "x"])) as ArrayRef,
+            ),
+        ]);
+        assert_eq!(
+            unsafe { analytics_oneshot_recommender_add(h, &mut input, &mut error) },
+            OK
+        );
+        let out = unsafe { oneshot_result(h) };
+        let codecs = out.column_by_name("clickhouse_codecs").unwrap();
+        let codecs = codecs.as_string_view();
+        for i in 0..out.num_rows() {
+            let c = codecs.value(i);
+            assert!(
+                c == "LZ4" || c == "GCD, LZ4" || c.ends_with("ZSTD(3)"),
+                "{c}"
+            );
+        }
+        unsafe { analytics_oneshot_recommender_free(h) };
+    }
+
     #[test]
     fn oneshot_recommender_errors() {
         let mut error = ptr::null_mut();
@@ -533,6 +660,11 @@ mod tests {
                 ptr::null(),
                 0,
                 0,
+                [1, 3, 9].as_ptr(),
+                3,
+                0.01,
+                0.10,
+                0.01,
                 &mut h,
                 error,
             )
@@ -623,6 +755,11 @@ mod tests {
                 ptr::null(),
                 0,
                 0,
+                [1, 3, 9].as_ptr(),
+                3,
+                0.01,
+                0.10,
+                0.01,
                 ptr::null_mut(),
                 &mut error,
             )
@@ -748,6 +885,11 @@ mod tests {
                 ptr::null(),
                 0,
                 2,
+                [1, 3, 9].as_ptr(),
+                3,
+                0.01,
+                0.10,
+                0.01,
                 &mut h,
                 &mut error,
             )
@@ -772,6 +914,11 @@ mod tests {
                 0,
                 ids.as_ptr(),
                 1,
+                [1, 3, 9].as_ptr(),
+                3,
+                0.01,
+                0.10,
+                0.01,
                 &mut h,
                 &mut error,
             )

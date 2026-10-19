@@ -265,4 +265,32 @@ class OneShotRecommenderTest {
             assertThrows(IllegalArgumentException.class, () -> rec.add(data, allocator));
         }
     }
+
+    private static OneShotParams withCompression(List<Integer> levels, double zstdMinSaving) {
+        OneShotParams d = OneShotParams.defaults();
+        return new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs(), d.topK(),
+            d.idColumns(), levels, 0.01, zstdMinSaving, 0.01);
+    }
+
+    @Test
+    void compressionKeywordsReachTheClickHouseColumns() throws IOException {
+        try (BufferAllocator allocator = new RootAllocator();
+             OneShotRecommender rec = new OneShotRecommender(withCompression(List.of(3), 0.10))) {
+            rec.add(toyData(allocator), allocator);
+            result(rec, allocator, root -> {
+                for (String codecs : column(root, "clickhouse_codecs")) {
+                    assertTrue(codecs.equals("LZ4") || codecs.equals("GCD, LZ4") || codecs.endsWith("ZSTD(3)"), codecs);
+                }
+                assertTrue(column(root, "clickhouse_type").get(0).matches("U?Int[0-9]+"),
+                    column(root, "clickhouse_type").toString());
+                return null;
+            });
+        }
+    }
+
+    @Test
+    void anInvalidCompressionKeywordIsIllegalArgument() {
+        assertThrows(IllegalArgumentException.class, () -> new OneShotRecommender(withCompression(List.of(3), 1.0)));
+        assertThrows(IllegalArgumentException.class, () -> new OneShotRecommender(withCompression(List.of(), 0.10)));
+    }
 }

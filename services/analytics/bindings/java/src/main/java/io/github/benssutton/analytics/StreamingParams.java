@@ -17,19 +17,36 @@ import java.util.OptionalLong;
  * @param idColumns     columns whose values identify an exemplar row ({@code exemplar_id} /
  *                      {@code null_exemplar_id} become structs of them; empty: Null-typed)
  * @param entropyEstimator the entropy estimate once the exact phase overflows
+ * @param zstdLevels   ZSTD levels tried for the ClickHouse codec chain and the IPC buffer compression
+ *                      (non-empty, distinct, within ZSTD's range; default 1, 3, 9)
+ * @param zstdLevelTolerance a higher level wins only if it is smaller by more than this fraction (default 0.01)
+ * @param zstdMinSaving ZSTD replaces LZ4 only if it saves at least this fraction (default 0.10)
+ * @param gcdMinSaving  the GCD codec is chosen only if it saves at least this fraction (default 0.01)
+ * (spec 2026-10-19-clickhouse-recommendations-design.md §4.3; each fraction in [0, 1))
  */
 public record StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
                               int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK,
-                              List<String> idColumns, EntropyEstimator entropyEstimator) {
+                              List<String> idColumns, EntropyEstimator entropyEstimator,
+                              List<Integer> zstdLevels, double zstdLevelTolerance, double zstdMinSaving,
+                              double gcdMinSaving) {
 
     public StreamingParams {
         booleanPairs = List.copyOf(booleanPairs);
         Objects.requireNonNull(topK, "topK");
         idColumns = List.copyOf(Objects.requireNonNull(idColumns, "idColumns"));
         Objects.requireNonNull(entropyEstimator, "entropyEstimator");
+        zstdLevels = List.copyOf(Objects.requireNonNull(zstdLevels, "zstdLevels"));
         if (topK.isPresent() && topK.getAsLong() < 0) {
             throw new IllegalArgumentException("topK must be non-negative, got " + topK.getAsLong());
         }
+    }
+
+    /** As the canonical constructor, with the default compression keywords. */
+    public StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
+                           int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK,
+                           List<String> idColumns, EntropyEstimator entropyEstimator) {
+        this(reservoirRows, blockRows, categoricalThreshold, zstdLevel, seed, booleanPairs, topK, idColumns,
+            entropyEstimator, List.of(1, 3, 9), 0.01, 0.10, 0.01);
     }
 
     /** As the canonical constructor, with no id columns and the {@code AMS} estimator. */

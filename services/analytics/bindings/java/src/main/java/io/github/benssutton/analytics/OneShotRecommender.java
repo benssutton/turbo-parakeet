@@ -1,6 +1,7 @@
 package io.github.benssutton.analytics;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
@@ -34,6 +35,11 @@ public final class OneShotRecommender extends NativeRecommender {
             JAVA_LONG,  // size_t n_bool_pairs
             ADDRESS,    // const char *const *id_columns
             JAVA_LONG,  // size_t n_id_columns
+            ADDRESS,    // const int32_t *zstd_levels
+            JAVA_LONG,  // size_t n_zstd_levels
+            JAVA_DOUBLE,  // double zstd_level_tolerance
+            JAVA_DOUBLE,  // double zstd_min_saving
+            JAVA_DOUBLE,  // double gcd_min_saving
             ADDRESS,    // void **out
             ADDRESS));  // char **error
 
@@ -58,6 +64,11 @@ public final class OneShotRecommender extends NativeRecommender {
                     (long) params.booleanPairs().size(),
                     Native.cStrings(arena, params.idColumns()),
                     (long) params.idColumns().size(),
+                    arena.allocateFrom(JAVA_INT, params.zstdLevels().stream().mapToInt(Integer::intValue).toArray()),
+                    (long) params.zstdLevels().size(),
+                    params.zstdLevelTolerance(),
+                    params.zstdMinSaving(),
+                    params.gcdMinSaving(),
                     out,
                     error);
                 if (code != 0) {

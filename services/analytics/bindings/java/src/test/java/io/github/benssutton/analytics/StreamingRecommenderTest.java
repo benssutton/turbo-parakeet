@@ -271,4 +271,24 @@ class StreamingRecommenderTest {
             assertThrows(IllegalArgumentException.class, () -> rec.add(data, allocator));
         }
     }
+
+    @Test
+    void compressionKeywordsAreAccepted() throws IOException {
+        StreamingParams d = StreamingParams.defaults();
+        StreamingParams p = new StreamingParams(d.reservoirRows(), d.blockRows(), d.categoricalThreshold(),
+            d.zstdLevel(), d.seed(), d.booleanPairs(), d.topK(), d.idColumns(), d.entropyEstimator(),
+            List.of(3), 0.02, 0.2, 0.02);
+        try (BufferAllocator allocator = new RootAllocator();
+             StreamingRecommender rec = new StreamingRecommender(p)) {
+            rec.add(reader(allocator, ints(allocator, "a", 0, 5, 7)), allocator);
+            result(rec, allocator, root -> {
+                assertEquals(1, root.getRowCount());
+                return null;
+            });
+        }
+        StreamingParams bad = new StreamingParams(d.reservoirRows(), d.blockRows(), d.categoricalThreshold(),
+            d.zstdLevel(), d.seed(), d.booleanPairs(), d.topK(), d.idColumns(), d.entropyEstimator(),
+            List.of(3), 0.01, 1.0, 0.01);
+        assertThrows(IllegalArgumentException.class, () -> new StreamingRecommender(bad));
+    }
 }
