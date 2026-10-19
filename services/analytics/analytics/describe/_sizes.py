@@ -25,11 +25,15 @@ SIZE_KEYS = (
 )
 
 
-def ipc_body_bytes(arr: pa.Array, zstd_level: int | None) -> int:
+def ipc_body_bytes(arr: pa.Array, zstd_level: int | str | None) -> int:
+    """`zstd_level`: None (uncompressed), a ZSTD level, or "lz4" (LZ4_FRAME)."""
     batch = pa.record_batch([arr], names=["x"])
-    codec = (
-        None if zstd_level is None else pa.Codec("zstd", compression_level=zstd_level)
-    )
+    if zstd_level is None:
+        codec = None
+    elif zstd_level == "lz4":
+        codec = pa.Codec("lz4")
+    else:
+        codec = pa.Codec("zstd", compression_level=zstd_level)
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(
         sink, batch.schema, options=pa.ipc.IpcWriteOptions(compression=codec)

@@ -24,9 +24,76 @@ use arrow_schema::DataType as AT;
 use polars::prelude::*;
 use rayon::prelude::*;
 
+/// An Arrow IPC buffer compression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Codec {
+    None,
+    Zstd(i32),
+    /// LZ4_FRAME: per non-empty buffer an 8-byte uncompressed length + one LZ4 frame, as
+    /// pyarrow writes it.
+    Lz4Frame,
+}
+
 struct Body {
-    level: Option<i32>,
+    codec: Codec,
     bytes: u64,
+    /// Counts of every byte value in the uncompressed buffers (padding excluded).
+    histogram: [u64; 256],
+}
+
+/// Length of the LZ4 frame Arrow C++'s `Lz4FrameCodec` writes for `data`: what
+/// `LZ4F_compressFrame` does with default preferences (64 KB blocks, no checksums, no
+/// content size, auto-flush; blocks linked unless the input fits one block), as one
+/// `LZ4F_compressUpdate` over the whole input — the `lz4` crate's `Encoder` feeds 64 KB
+/// pieces, which compresses a few bytes differently.
+fn lz4_frame_len(data: &[u8]) -> PolarsResult<usize> {
+    use lz4::liblz4::*;
+    let err = |e: usize| -> PolarsResult<usize> {
+        check_error(e).map_err(|e| polars_err!(ComputeError: "lz4: {e}"))
+    };
+    let prefs = LZ4FPreferences {
+        frame_info: LZ4FFrameInfo {
+            block_size_id: BlockSize::Max64KB,
+            block_mode: if data.len() <= 1 << 16 {
+                BlockMode::Independent
+            } else {
+                BlockMode::Linked
+            },
+            content_checksum_flag: ContentChecksum::NoChecksum,
+            frame_type: FrameType::Frame,
+            content_size: 0,
+            dict_id: 0,
+            block_checksum_flag: BlockChecksum::NoBlockChecksum,
+        },
+        compression_level: 0,
+        auto_flush: 1,
+        favor_dec_speed: 0,
+        reserved: [0; 3],
+    };
+    let mut ctx = LZ4FCompressionContext(std::ptr::null_mut());
+    err(unsafe { LZ4F_createCompressionContext(&mut ctx, LZ4F_VERSION) })?;
+    let run = || -> PolarsResult<usize> {
+        let cap = err(unsafe { LZ4F_compressBound(data.len(), &prefs) })? + 64;
+        let mut out = vec![0u8; cap];
+        let mut n = err(unsafe { LZ4F_compressBegin(ctx, out.as_mut_ptr(), cap, &prefs) })?;
+        n += err(unsafe {
+            LZ4F_compressUpdate(
+                ctx,
+                out[n..].as_mut_ptr(),
+                cap - n,
+                data.as_ptr(),
+                data.len(),
+                std::ptr::null(),
+            )
+        })?;
+        n += err(unsafe {
+            LZ4F_compressEnd(ctx, out[n..].as_mut_ptr(), cap - n, std::ptr::null())
+        })?;
+        Ok(n)
+    };
+    let n = run();
+    unsafe { LZ4F_freeCompressionContext(ctx) };
+    n
 }
 
 impl Body {
@@ -34,13 +101,17 @@ impl Body {
         if data.is_empty() {
             return Ok(());
         }
-        let len = match self.level {
-            None => data.len(),
-            Some(level) => {
+        for &b in data {
+            self.histogram[b as usize] += 1;
+        }
+        let len = match self.codec {
+            Codec::None => data.len(),
+            Codec::Zstd(level) => {
                 8 + zstd::bulk::compress(data, level)
                     .map_err(|e| polars_err!(ComputeError: "zstd: {e}"))?
                     .len()
             }
+            Codec::Lz4Frame => 8 + lz4_frame_len(data)?,
         };
         self.bytes += len.next_multiple_of(8) as u64;
         Ok(())
@@ -158,9 +229,19 @@ impl Body {
 
 /// Arrow IPC body bytes of `arr`: uncompressed (`level` None) or ZSTD at `level`.
 pub(crate) fn ipc_body_bytes(arr: &dyn Array, level: Option<i32>) -> PolarsResult<u64> {
-    let mut body = Body { level, bytes: 0 };
+    let codec = level.map_or(Codec::None, Codec::Zstd);
+    Ok(ipc_body(arr, codec)?.0)
+}
+
+/// Body bytes and the uncompressed bytes' histogram of `arr` under `codec`.
+pub(crate) fn ipc_body(arr: &dyn Array, codec: Codec) -> PolarsResult<(u64, [u64; 256])> {
+    let mut body = Body {
+        codec,
+        bytes: 0,
+        histogram: [0; 256],
+    };
     body.array(&arr.to_data())?;
-    Ok(body.bytes)
+    Ok((body.bytes, body.histogram))
 }
 
 pub(crate) type Sizes = [u64; 4];
@@ -255,6 +336,18 @@ mod tests {
         assert!((1_890..=1_935).contains(&zstd), "{zstd}"); // pyarrow: 1912
         let one = Series::new("x".into(), &[1i32]);
         assert_eq!(ipc_body_bytes(arrow(&one).as_ref(), Some(1)).unwrap(), 24);
+    }
+
+    #[test]
+    fn lz4_and_histogram() {
+        let zeros = Series::new("x".into(), vec![0i64; 10_000]);
+        let (raw, _) = ipc_body(arrow(&zeros).as_ref(), Codec::None).unwrap();
+        let (lz4, h) = ipc_body(arrow(&zeros).as_ref(), Codec::Lz4Frame).unwrap();
+        assert!(lz4 * 20 < raw, "{lz4} vs {raw}");
+        assert_eq!(h[0], 80_000);
+        let small = Series::new("x".into(), &[0i8, 1, 1]);
+        let (_, h) = ipc_body(arrow(&small).as_ref(), Codec::None).unwrap();
+        assert_eq!((h[0], h[1], h.iter().sum::<u64>()), (1, 2, 3));
     }
 
     #[test]

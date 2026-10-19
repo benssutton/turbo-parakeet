@@ -62,6 +62,7 @@ dependencies = [
  "foldhash",
  "gcd",
  "libm",
+ "lz4",
  "mimalloc",
  "polars",
  "polars-arrow",

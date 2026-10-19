@@ -40,6 +40,8 @@ gcd = "2.3"
 
 #describe: IPC ZSTD sizes, shortest float repr, time zones, buffer casts
 zstd = "0.14"
+#ClickHouse / Arrow IPC LZ4 sizes: liblz4 (the library ClickHouse and pyarrow use)
+lz4 = "1.28"
 ryu = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"

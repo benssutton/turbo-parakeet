@@ -337,6 +337,41 @@ pub fn column_sizes(batch: &RecordBatch, zstd_level: i32) -> Result<RecordBatch>
     ))
 }
 
+/// `column`, `bytes`: each column's Arrow IPC body size under `codec` (`"none"`, `"lz4"`,
+/// `"zstd:<level>"`). Private: tests and the calibration script.
+pub fn ipc_body_sizes(batch: &RecordBatch, codec: &str) -> Result<RecordBatch> {
+    use crate::common::ipc_sizes::{ipc_body, Codec};
+    let codec = match codec {
+        "none" => Codec::None,
+        "lz4" => Codec::Lz4Frame,
+        c => match c.strip_prefix("zstd:").and_then(|l| l.parse().ok()) {
+            Some(level) => Codec::Zstd(level),
+            None => return Err(Error::InvalidInput(format!("unknown codec {c:?}"))),
+        },
+    };
+    let schema = batch.schema();
+    let bytes = batch
+        .columns()
+        .iter()
+        .map(|a| ipc_body(a.as_ref(), codec).map(|r| r.0))
+        .collect::<PolarsResult<Vec<u64>>>()
+        .map_err(compute)?;
+    let names = arrow_array::StringArray::from_iter_values(
+        schema.fields().iter().map(|f| f.name().as_str()),
+    );
+    RecordBatch::try_from_iter([
+        (
+            "column",
+            std::sync::Arc::new(names) as arrow_array::ArrayRef,
+        ),
+        (
+            "bytes",
+            std::sync::Arc::new(arrow_array::UInt64Array::from(bytes)) as arrow_array::ArrayRef,
+        ),
+    ])
+    .map_err(|e| Error::Compute(e.to_string()))
+}
+
 /// Every value of every column as text (`recommend::render_value`): the canonical
 /// rendering of `min` / `max`, for the Python reference implementations. Meant for a
 /// few values per column: each value is cast on its own.

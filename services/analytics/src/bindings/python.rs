@@ -512,6 +512,12 @@ fn column_sizes(py: Python<'_>, data: &Bound<'_, PyAny>, zstd_level: i32) -> PyR
 }
 
 #[pyfunction]
+fn ipc_body_sizes(py: Python<'_>, data: &Bound<'_, PyAny>, codec: &str) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::ipc_body_sizes(&batch, codec)).map(ArrowTable)
+}
+
+#[pyfunction]
 fn render(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::render(&batch)).map(ArrowTable)
@@ -550,6 +556,7 @@ fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lsh_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(describe_columns, m)?)?;
     m.add_function(wrap_pyfunction!(column_sizes, m)?)?;
+    m.add_function(wrap_pyfunction!(ipc_body_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(render, m)?)?;
     m.add_function(wrap_pyfunction!(checked_table, m)?)?;
     Ok(())
