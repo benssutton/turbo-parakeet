@@ -67,7 +67,7 @@ class StreamingRecommender:
     column from the first batch: ≈ 4 096 estimators per column, accurate on skew).
 
     Compression (spec docs/superpowers/specs/2026-10-19-clickhouse-recommendations-design.md
-    §4): `zstd_levels` are the ZSTD levels tried (distinct, within the zstd range);
+    §4): `zstd_levels` are the ZSTD levels tried (distinct, each in 1…22);
     `zstd_level_tolerance` the relative size slack within which the lowest level wins;
     `zstd_min_saving` the smallest relative saving that makes ZSTD preferable to LZ4;
     `gcd_min_saving` the smallest relative saving that keeps a GCD codec. The three

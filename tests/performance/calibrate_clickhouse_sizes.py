@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -103,7 +104,13 @@ def run_suite(chbench_root: Path, yaml_path: Path, work: Path) -> tuple[str, str
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--chbench", default="c:/Users/Alexander/clickhouse_benchmark")
+    ap.add_argument(
+        "--chbench",
+        default=os.environ.get(
+            "CHBENCH_DIR", str(ROOT.parent / "clickhouse_benchmark")
+        ),
+        help="the clickhouse_benchmark checkout (env CHBENCH_DIR; default: next to this repo)",
+    )
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--keep", action="store_true")
     args = ap.parse_args()

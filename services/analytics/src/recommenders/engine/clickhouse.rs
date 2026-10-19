@@ -81,8 +81,8 @@ pub(crate) fn clickhouse_type(
         AT::Dictionary(_, _) if enum_values.is_some() => enum_type(enum_values.unwrap_or(&[])),
         AT::Dictionary(_, v) if matches!(**v, AT::Utf8 | AT::LargeUtf8) => {
             // LowCardinality cannot sit inside Nullable: the nullable form is
-            // LowCardinality(Nullable(String)), laid out as Nullable(LowCardinality) so the
-            // emulator adds the null-map stream.
+            // LowCardinality(Nullable(String)). The layout only tells the emulator that nulls
+            // occur: it stores no null map (null is dictionary key 0).
             return Ok(if nullable {
                 (
                     "LowCardinality(Nullable(String))".to_string(),
@@ -227,7 +227,6 @@ pub(crate) fn rescale(original: &polars::prelude::DataType, recommended: &AT) ->
 pub(crate) struct PhysicalStats {
     pub gcd: u128,
     pub max_abs: u128,
-    pub signed: bool,
     pub range: (i128, i128),
 }
 
@@ -254,7 +253,6 @@ fn binary_gcd(mut a: u128, mut b: u128) -> u128 {
 
 fn stats_of<T: arrow_array::ArrowPrimitiveType>(
     a: &dyn Array,
-    signed: bool,
     wide: impl Fn(T::Native) -> i128,
 ) -> Option<PhysicalStats> {
     let a = a
@@ -272,43 +270,42 @@ fn stats_of<T: arrow_array::ArrowPrimitiveType>(
     (lo <= hi).then_some(PhysicalStats {
         gcd,
         max_abs,
-        signed,
         range: (lo, hi),
     })
 }
 
-/// GCD, largest magnitude, signedness and range of the non-null physical values of an
+/// GCD, largest magnitude and range of the non-null physical values of an
 /// integer, decimal (unscaled), Date32 (days), Timestamp (unit values) or Time array; None
 /// for other types or when there are no non-null values.
 pub(crate) fn physical_stats(a: &dyn Array) -> Option<PhysicalStats> {
     use arrow_array::types::*;
     match a.data_type() {
-        AT::Int8 => stats_of::<Int8Type>(a, true, i128::from),
-        AT::Int16 => stats_of::<Int16Type>(a, true, i128::from),
-        AT::Int32 => stats_of::<Int32Type>(a, true, i128::from),
-        AT::Int64 => stats_of::<Int64Type>(a, true, i128::from),
-        AT::UInt8 => stats_of::<UInt8Type>(a, false, i128::from),
-        AT::UInt16 => stats_of::<UInt16Type>(a, false, i128::from),
-        AT::UInt32 => stats_of::<UInt32Type>(a, false, i128::from),
-        AT::UInt64 => stats_of::<UInt64Type>(a, false, i128::from),
-        AT::Decimal32(..) => stats_of::<Decimal32Type>(a, true, i128::from),
-        AT::Decimal64(..) => stats_of::<Decimal64Type>(a, true, i128::from),
-        AT::Decimal128(..) => stats_of::<Decimal128Type>(a, true, |v| v),
-        AT::Date32 => stats_of::<Date32Type>(a, true, i128::from),
-        AT::Timestamp(TimeUnit::Second, _) => stats_of::<TimestampSecondType>(a, true, i128::from),
+        AT::Int8 => stats_of::<Int8Type>(a, i128::from),
+        AT::Int16 => stats_of::<Int16Type>(a, i128::from),
+        AT::Int32 => stats_of::<Int32Type>(a, i128::from),
+        AT::Int64 => stats_of::<Int64Type>(a, i128::from),
+        AT::UInt8 => stats_of::<UInt8Type>(a, i128::from),
+        AT::UInt16 => stats_of::<UInt16Type>(a, i128::from),
+        AT::UInt32 => stats_of::<UInt32Type>(a, i128::from),
+        AT::UInt64 => stats_of::<UInt64Type>(a, i128::from),
+        AT::Decimal32(..) => stats_of::<Decimal32Type>(a, i128::from),
+        AT::Decimal64(..) => stats_of::<Decimal64Type>(a, i128::from),
+        AT::Decimal128(..) => stats_of::<Decimal128Type>(a, |v| v),
+        AT::Date32 => stats_of::<Date32Type>(a, i128::from),
+        AT::Timestamp(TimeUnit::Second, _) => stats_of::<TimestampSecondType>(a, i128::from),
         AT::Timestamp(TimeUnit::Millisecond, _) => {
-            stats_of::<TimestampMillisecondType>(a, true, i128::from)
+            stats_of::<TimestampMillisecondType>(a, i128::from)
         }
         AT::Timestamp(TimeUnit::Microsecond, _) => {
-            stats_of::<TimestampMicrosecondType>(a, true, i128::from)
+            stats_of::<TimestampMicrosecondType>(a, i128::from)
         }
         AT::Timestamp(TimeUnit::Nanosecond, _) => {
-            stats_of::<TimestampNanosecondType>(a, true, i128::from)
+            stats_of::<TimestampNanosecondType>(a, i128::from)
         }
-        AT::Time32(TimeUnit::Second) => stats_of::<Time32SecondType>(a, true, i128::from),
-        AT::Time32(_) => stats_of::<Time32MillisecondType>(a, true, i128::from),
-        AT::Time64(TimeUnit::Microsecond) => stats_of::<Time64MicrosecondType>(a, true, i128::from),
-        AT::Time64(_) => stats_of::<Time64NanosecondType>(a, true, i128::from),
+        AT::Time32(TimeUnit::Second) => stats_of::<Time32SecondType>(a, i128::from),
+        AT::Time32(_) => stats_of::<Time32MillisecondType>(a, i128::from),
+        AT::Time64(TimeUnit::Microsecond) => stats_of::<Time64MicrosecondType>(a, i128::from),
+        AT::Time64(_) => stats_of::<Time64NanosecondType>(a, i128::from),
         _ => None,
     }
 }
@@ -346,12 +343,9 @@ mod tests {
     fn physical_stats_cases() {
         use arrow_array::{Decimal128Array, Int64Array, NullArray, StringArray, UInt8Array};
         let s = physical_stats(&Int64Array::from(vec![Some(1000), Some(-3000), None])).unwrap();
-        assert_eq!(
-            (s.gcd, s.max_abs, s.signed, s.range),
-            (1000, 3000, true, (-3000, 1000))
-        );
+        assert_eq!((s.gcd, s.max_abs, s.range), (1000, 3000, (-3000, 1000)));
         let s = physical_stats(&UInt8Array::from(vec![4, 8])).unwrap();
-        assert_eq!((s.gcd, s.signed), (4, false));
+        assert_eq!(s.gcd, 4);
         let d = Decimal128Array::from(vec![150, 300])
             .with_precision_and_scale(10, 2)
             .unwrap();

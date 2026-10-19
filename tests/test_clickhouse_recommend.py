@@ -35,7 +35,8 @@ def test_lz4_frame_body_sizes_equal_pyarrow(make_frame):
     [
         ({"zstd_levels": ()}, "zstd_levels"),
         ({"zstd_levels": (1, 1)}, "zstd_levels"),
-        ({"zstd_levels": (99,)}, "zstd_levels"),
+        ({"zstd_levels": (0,)}, "zstd_levels"),
+        ({"zstd_levels": (23,)}, "zstd_levels"),
         ({"zstd_min_saving": 1.0}, "zstd_min_saving"),
         ({"gcd_min_saving": -0.1}, "gcd_min_saving"),
         ({"zstd_level_tolerance": float("nan")}, "zstd_level_tolerance"),
@@ -142,6 +143,24 @@ def test_streaming_matches_one_shot_on_ch_frame():
     assert gcd_rows and gcd_rows[0]["outcome"] == "pruned"
     assert got["thousands"]["clickhouse_codecs"].startswith("GCD")
     assert got["noise"]["clickhouse_codecs"] == "LZ4"
+
+
+def test_streaming_low_cardinality_counts_one_dictionary():
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    vals = np.array([f"value-{i:05d}" for i in range(5_000)])
+    frame = pl.DataFrame({"s": rng.choice(vals, 200_000)})
+    streamed = StreamingRecommender(reservoir_rows=frame.height + 65_536)
+    for batch in frame.iter_slices(50_000):
+        streamed.add(batch)
+    got = streamed.result().row(0, named=True)
+    want = one_shot(frame)["s"]
+    assert "LowCardinality" in want["clickhouse_type"]
+    assert got["clickhouse_type"] == want["clickhouse_type"]
+    assert got["clickhouse_size_bytes"] == pytest.approx(
+        want["clickhouse_size_bytes"], rel=0.02
+    )
 
 
 def test_streaming_without_sample():

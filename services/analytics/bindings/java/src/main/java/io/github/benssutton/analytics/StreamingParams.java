@@ -18,7 +18,7 @@ import java.util.OptionalLong;
  *                      {@code null_exemplar_id} become structs of them; empty: Null-typed)
  * @param entropyEstimator the entropy estimate once the exact phase overflows
  * @param zstdLevels   ZSTD levels tried for the ClickHouse codec chain and the IPC buffer compression
- *                      (non-empty, distinct, within ZSTD's range; default 1, 3, 9)
+ *                      (non-empty, distinct, each in 1..22; default 1, 3, 9)
  * @param zstdLevelTolerance a higher level wins only if it is smaller by more than this fraction (default 0.01)
  * @param zstdMinSaving ZSTD replaces LZ4 only if it saves at least this fraction (default 0.10)
  * @param gcdMinSaving  the GCD codec is chosen only if it saves at least this fraction (default 0.01)

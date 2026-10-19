@@ -652,6 +652,7 @@ impl Streaming {
             p.freq.n_unique as f64 / non_null as f64
         };
         let has_sample = sampled > 0 && !arrow_blocks.is_empty();
+        let mut whole: Option<ArrayRef> = None;
         let (arrow_lz4, arrow_ipc, polars_lz4, polars_ipc) = if has_sample {
             // The sampled blocks as one array: the IPC buffers compress as the column's do.
             let (a, p_) = (
@@ -659,6 +660,7 @@ impl Streaming {
                 concat_blocks(&polars_blocks)?,
             );
             let (al, ai) = ipc_choice(&[a.as_ref()], &scale_up, distinct_ratio, &self.params)?;
+            whole = Some(a);
             let (pl, pi) = ipc_choice(&[p_.as_ref()], &scale_up, distinct_ratio, &self.params)?;
             (Some(al), Some(ai), Some(pl), Some(pi))
         } else {
@@ -680,9 +682,15 @@ impl Streaming {
             max_abs: stats_level.int_range().map_or(0, |(a, b)| {
                 (a / f).unsigned_abs().max((b / f).unsigned_abs())
             }),
-            signed: !matches!(rec_t, AT::UInt8 | AT::UInt16 | AT::UInt32 | AT::UInt64),
         });
-        let a: Vec<&dyn Array> = arrow_blocks.iter().map(|a| a.as_ref()).collect();
+        // A LowCardinality dictionary is written once per part: emulate it on the whole sample
+        // (one dictionary), not per block, which would count it once per block.
+        let low_card = enum_values.is_none()
+            && matches!(&rec_t, AT::Dictionary(_, v) if matches!(**v, AT::Utf8 | AT::LargeUtf8));
+        let a: Vec<&dyn Array> = match (&whole, low_card) {
+            (Some(w), true) => vec![w.as_ref()],
+            _ => arrow_blocks.iter().map(|a| a.as_ref()).collect(),
+        };
         let ch = clickhouse_choice_over(
             &rec_t,
             nullable,

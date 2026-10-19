@@ -228,7 +228,6 @@ fn clickhouse_choice(
         range: Some(s.range),
         gcd: Some(s.gcd),
         max_abs: s.max_abs,
-        signed: s.signed,
     });
     clickhouse_choice_over(
         arr.data_type(),
@@ -249,7 +248,6 @@ pub(crate) struct RunningStats {
     pub range: Option<(i128, i128)>,
     pub gcd: Option<u128>,
     pub max_abs: u128,
-    pub signed: bool,
 }
 
 /// The ClickHouse choice for a column of Arrow type `t` held as `arrs` (None: no sample, so
@@ -307,8 +305,14 @@ pub(crate) fn clickhouse_choice_over(
         &layout,
         ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { gcd_applies: true, .. })
     );
+    // Signedness is the ClickHouse layout's (Date / DateTime are unsigned), not the Arrow type's.
+    let layout_signed = match &layout {
+        ChLayout::Fixed { signed, .. } => *signed,
+        ChLayout::Nullable(inner) => matches!(**inner, ChLayout::Fixed { signed: true, .. }),
+        _ => false,
+    };
     let gcd = match (running, applies) {
-        (Some(r), true) => r.gcd.map(|g| (g, r.max_abs, r.signed)),
+        (Some(r), true) => r.gcd.map(|g| (g, r.max_abs, layout_signed)),
         _ => None,
     };
     let note = if running.is_none() && applies {
@@ -548,6 +552,22 @@ mod tests {
             &params(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn gcd_pruning_uses_the_layout_signedness() {
+        // Date is unsigned (UInt16 days): max 40 000 needs 2 bytes, 20 000 still 2, so GCD 2 is
+        // pruned. Read as signed it would be 3 → 2 bytes and survive.
+        let a = arrow_array::Date32Array::from((0..=20_000).map(|i| i * 2).collect::<Vec<i32>>());
+        let ch = clickhouse_choice(&a, false, None, 1.0, &params()).unwrap();
+        assert_eq!(ch.ty.as_deref(), Some("Date"));
+        let gcd = ch
+            .candidates
+            .iter()
+            .find(|c| c.codecs == "GCD")
+            .expect("pruned GCD row");
+        assert_eq!(gcd.outcome, "pruned");
+        assert!(gcd.evidence.contains("2 → 2 bytes"), "{}", gcd.evidence);
     }
 
     fn chosen(r: &Rec) -> &Candidate {

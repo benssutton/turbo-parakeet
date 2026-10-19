@@ -33,7 +33,8 @@ fn compression(
     zstd_min_saving: f64,
     gcd_min_saving: f64,
 ) -> Result<CompressionParams> {
-    let range = zstd::compression_level_range();
+    // ClickHouse accepts ZSTD(1) … ZSTD(22).
+    let range = 1..=22;
     if zstd_levels.is_empty() {
         return Err(Error::InvalidInput("zstd_levels must be non-empty".into()));
     }
@@ -289,6 +290,14 @@ mod tests {
             },
             StreamingParams {
                 zstd_levels: vec![99],
+                ..streaming_params()
+            },
+            StreamingParams {
+                zstd_levels: vec![0],
+                ..streaming_params()
+            },
+            StreamingParams {
+                zstd_levels: vec![23],
                 ..streaming_params()
             },
             StreamingParams {

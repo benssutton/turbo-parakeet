@@ -37,8 +37,9 @@ pub(crate) enum Codec {
 struct Body {
     codec: Codec,
     bytes: u64,
-    /// Counts of every byte value in the uncompressed buffers (padding excluded).
-    histogram: [u64; 256],
+    /// Counts of every byte value in the uncompressed buffers (padding excluded); counted
+    /// only when Some.
+    histogram: Option<Box<[u64; 256]>>,
 }
 
 /// Length of the LZ4 frame Arrow C++'s `Lz4FrameCodec` writes for `data`: what
@@ -71,11 +72,19 @@ fn lz4_frame_len(data: &[u8]) -> PolarsResult<usize> {
         reserved: [0; 3],
     };
     let mut ctx = LZ4FCompressionContext(std::ptr::null_mut());
+    // SAFETY: `ctx` is a valid out-pointer to a null context; on success liblz4 stores a
+    // context that is freed exactly once below, after `run` (also on its error paths).
     err(unsafe { LZ4F_createCompressionContext(&mut ctx, LZ4F_VERSION) })?;
     let run = || -> PolarsResult<usize> {
+        // SAFETY: a pure size computation on valid, initialised preferences.
         let cap = err(unsafe { LZ4F_compressBound(data.len(), &prefs) })? + 64;
         let mut out = vec![0u8; cap];
+        // SAFETY: `ctx` is the live context; `out` is `cap` bytes, which holds the frame
+        // header (the `+ 64` margin covers it on top of the bound for the data).
         let mut n = err(unsafe { LZ4F_compressBegin(ctx, out.as_mut_ptr(), cap, &prefs) })?;
+        // SAFETY: `out[n..]` is valid for `cap - n` bytes and `data` for `data.len()` bytes,
+        // which `LZ4F_compressBound` sized the output for; `ctx` has begun a frame; the null
+        // options pointer is allowed.
         n += err(unsafe {
             LZ4F_compressUpdate(
                 ctx,
@@ -86,12 +95,14 @@ fn lz4_frame_len(data: &[u8]) -> PolarsResult<usize> {
                 std::ptr::null(),
             )
         })?;
+        // SAFETY: as above; the remaining `cap - n` bytes hold the end mark (bound includes it).
         n += err(unsafe {
             LZ4F_compressEnd(ctx, out[n..].as_mut_ptr(), cap - n, std::ptr::null())
         })?;
         Ok(n)
     };
     let n = run();
+    // SAFETY: `ctx` was created above, is not used after this call and is freed once.
     unsafe { LZ4F_freeCompressionContext(ctx) };
     n
 }
@@ -101,8 +112,10 @@ impl Body {
         if data.is_empty() {
             return Ok(());
         }
-        for &b in data {
-            self.histogram[b as usize] += 1;
+        if let Some(h) = self.histogram.as_mut() {
+            for &b in data {
+                h[b as usize] += 1;
+            }
         }
         let len = match self.codec {
             Codec::None => data.len(),
@@ -230,7 +243,18 @@ impl Body {
 /// Arrow IPC body bytes of `arr`: uncompressed (`level` None) or ZSTD at `level`.
 pub(crate) fn ipc_body_bytes(arr: &dyn Array, level: Option<i32>) -> PolarsResult<u64> {
     let codec = level.map_or(Codec::None, Codec::Zstd);
-    Ok(ipc_body(arr, codec)?.0)
+    ipc_body_size(arr, codec)
+}
+
+/// Body bytes of `arr` under `codec` (no byte histogram).
+pub(crate) fn ipc_body_size(arr: &dyn Array, codec: Codec) -> PolarsResult<u64> {
+    let mut body = Body {
+        codec,
+        bytes: 0,
+        histogram: None,
+    };
+    body.array(&arr.to_data())?;
+    Ok(body.bytes)
 }
 
 /// Body bytes and the uncompressed bytes' histogram of `arr` under `codec`.
@@ -238,10 +262,10 @@ pub(crate) fn ipc_body(arr: &dyn Array, codec: Codec) -> PolarsResult<(u64, [u64
     let mut body = Body {
         codec,
         bytes: 0,
-        histogram: [0; 256],
+        histogram: Some(Box::new([0; 256])),
     };
     body.array(&arr.to_data())?;
-    Ok((body.bytes, body.histogram))
+    Ok((body.bytes, *body.histogram.expect("counted")))
 }
 
 pub(crate) type Sizes = [u64; 4];

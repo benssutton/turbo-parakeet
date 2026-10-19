@@ -340,7 +340,7 @@ pub fn column_sizes(batch: &RecordBatch, zstd_level: i32) -> Result<RecordBatch>
 /// `column`, `bytes`: each column's Arrow IPC body size under `codec` (`"none"`, `"lz4"`,
 /// `"zstd:<level>"`). Private: tests and the calibration script.
 pub fn ipc_body_sizes(batch: &RecordBatch, codec: &str) -> Result<RecordBatch> {
-    use crate::common::ipc_sizes::{ipc_body, Codec};
+    use crate::common::ipc_sizes::{ipc_body_size, Codec};
     let codec = match codec {
         "none" => Codec::None,
         "lz4" => Codec::Lz4Frame,
@@ -353,7 +353,7 @@ pub fn ipc_body_sizes(batch: &RecordBatch, codec: &str) -> Result<RecordBatch> {
     let bytes = batch
         .columns()
         .iter()
-        .map(|a| ipc_body(a.as_ref(), codec).map(|r| r.0))
+        .map(|a| ipc_body_size(a.as_ref(), codec))
         .collect::<PolarsResult<Vec<u64>>>()
         .map_err(compute)?;
     let names = arrow_array::StringArray::from_iter_values(

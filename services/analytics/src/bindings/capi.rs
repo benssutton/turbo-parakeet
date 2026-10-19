@@ -171,8 +171,8 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 /// identify an exemplar row; none: the `*_id` outputs are Null-typed). `error` is null or
 /// valid for one pointer write.
 ///
-/// `zstd_levels` points to `n_zstd_levels` ZSTD levels to try (non-empty, distinct, within
-/// ZSTD's range; 0 or an invalid list returns 1); `zstd_level_tolerance`, `zstd_min_saving`
+/// `zstd_levels` points to `n_zstd_levels` ZSTD levels to try (non-empty, distinct, each in
+/// 1..=22; 0 or an invalid list returns 1); `zstd_level_tolerance`, `zstd_min_saving`
 /// and `gcd_min_saving` are fractions in [0, 1) (defaults 0.01, 0.10, 0.01; spec
 /// 2026-10-19 §4.3). A null `zstd_levels` with `n_zstd_levels > 0` returns 1.
 ///
