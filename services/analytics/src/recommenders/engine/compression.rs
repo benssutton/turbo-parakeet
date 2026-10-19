@@ -1,5 +1,4 @@
 //! Analytic pruning, then emulation: GCD and compression choices (spec 2026-10-19 §4).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use crate::common::clickhouse_sizes::{Chain, Compression};
 

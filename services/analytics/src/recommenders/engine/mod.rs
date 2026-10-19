@@ -22,7 +22,6 @@ pub(crate) use analytic_sizes::*;
 pub(crate) use candidates::*;
 pub(crate) use cast::*;
 pub(crate) use choose::*;
-#[expect(unused_imports, reason = "used by the recommenders (later task)")]
 pub(crate) use clickhouse::*;
 pub(crate) use column::*;
 pub(crate) use compression::*;

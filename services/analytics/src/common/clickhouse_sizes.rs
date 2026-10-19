@@ -1,6 +1,4 @@
 //! ClickHouse on-disk size emulation (spec 2026-10-19 §3).
-// Nothing calls this yet (later task); removed when the recommenders use it.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;

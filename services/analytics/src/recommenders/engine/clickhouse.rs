@@ -1,12 +1,12 @@
 //! Arrow → ClickHouse column types (spec 2026-10-19 §2).
-// Nothing calls this yet (later task); `allow`, not `expect`: an allowed item counts as used.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use super::*;
 use crate::common::clickhouse_sizes::ChLayout;
+use arrow_array::Array;
 use arrow_schema::{DataType as AT, TimeUnit};
 
 /// Whether the server accepts `Time64` (a later task flips it once a spike confirms it).
+#[cfg(test)]
 pub(crate) const TIME64_SUPPORTED: bool = false;
 
 /// Last day number `Date` holds here (2149-06-06, UInt16 days).
@@ -181,10 +181,124 @@ pub(crate) fn clickhouse_type(
     }
 }
 
+/// Statistics of an integer-backed column's raw physical values (non-null ones).
+pub(crate) struct PhysicalStats {
+    pub gcd: u128,
+    pub max_abs: u128,
+    pub signed: bool,
+    pub range: (i128, i128),
+}
+
+fn binary_gcd(mut a: u128, mut b: u128) -> u128 {
+    if a == 0 {
+        return b;
+    }
+    if b == 0 {
+        return a;
+    }
+    let shift = (a | b).trailing_zeros();
+    a >>= a.trailing_zeros();
+    loop {
+        b >>= b.trailing_zeros();
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        b -= a;
+        if b == 0 {
+            return a << shift;
+        }
+    }
+}
+
+fn stats_of<T: arrow_array::ArrowPrimitiveType>(
+    a: &dyn Array,
+    signed: bool,
+    wide: impl Fn(T::Native) -> i128,
+) -> Option<PhysicalStats> {
+    let a = a
+        .as_any()
+        .downcast_ref::<arrow_array::PrimitiveArray<T>>()?;
+    let (mut gcd, mut max_abs, mut lo, mut hi) = (0u128, 0u128, i128::MAX, i128::MIN);
+    for v in a.iter().flatten() {
+        let v = wide(v);
+        let m = v.unsigned_abs();
+        gcd = binary_gcd(gcd, m);
+        max_abs = max_abs.max(m);
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    (lo <= hi).then_some(PhysicalStats {
+        gcd,
+        max_abs,
+        signed,
+        range: (lo, hi),
+    })
+}
+
+/// GCD, largest magnitude, signedness and range of the non-null physical values of an
+/// integer, decimal (unscaled), Date32 (days), Timestamp (unit values) or Time array; None
+/// for other types or when there are no non-null values.
+pub(crate) fn physical_stats(a: &dyn Array) -> Option<PhysicalStats> {
+    use arrow_array::types::*;
+    match a.data_type() {
+        AT::Int8 => stats_of::<Int8Type>(a, true, i128::from),
+        AT::Int16 => stats_of::<Int16Type>(a, true, i128::from),
+        AT::Int32 => stats_of::<Int32Type>(a, true, i128::from),
+        AT::Int64 => stats_of::<Int64Type>(a, true, i128::from),
+        AT::UInt8 => stats_of::<UInt8Type>(a, false, i128::from),
+        AT::UInt16 => stats_of::<UInt16Type>(a, false, i128::from),
+        AT::UInt32 => stats_of::<UInt32Type>(a, false, i128::from),
+        AT::UInt64 => stats_of::<UInt64Type>(a, false, i128::from),
+        AT::Decimal32(..) => stats_of::<Decimal32Type>(a, true, i128::from),
+        AT::Decimal64(..) => stats_of::<Decimal64Type>(a, true, i128::from),
+        AT::Decimal128(..) => stats_of::<Decimal128Type>(a, true, |v| v),
+        AT::Date32 => stats_of::<Date32Type>(a, true, i128::from),
+        AT::Timestamp(TimeUnit::Second, _) => stats_of::<TimestampSecondType>(a, true, i128::from),
+        AT::Timestamp(TimeUnit::Millisecond, _) => {
+            stats_of::<TimestampMillisecondType>(a, true, i128::from)
+        }
+        AT::Timestamp(TimeUnit::Microsecond, _) => {
+            stats_of::<TimestampMicrosecondType>(a, true, i128::from)
+        }
+        AT::Timestamp(TimeUnit::Nanosecond, _) => {
+            stats_of::<TimestampNanosecondType>(a, true, i128::from)
+        }
+        AT::Time32(TimeUnit::Second) => stats_of::<Time32SecondType>(a, true, i128::from),
+        AT::Time32(_) => stats_of::<Time32MillisecondType>(a, true, i128::from),
+        AT::Time64(TimeUnit::Microsecond) => stats_of::<Time64MicrosecondType>(a, true, i128::from),
+        AT::Time64(_) => stats_of::<Time64NanosecondType>(a, true, i128::from),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_schema::{Field as AField, Fields};
+
+    #[test]
+    fn physical_stats_cases() {
+        use arrow_array::{Decimal128Array, Int64Array, NullArray, StringArray, UInt8Array};
+        let s = physical_stats(&Int64Array::from(vec![Some(1000), Some(-3000), None])).unwrap();
+        assert_eq!(
+            (s.gcd, s.max_abs, s.signed, s.range),
+            (1000, 3000, true, (-3000, 1000))
+        );
+        let s = physical_stats(&UInt8Array::from(vec![4, 8])).unwrap();
+        assert_eq!((s.gcd, s.signed), (4, false));
+        let d = Decimal128Array::from(vec![150, 300])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        assert_eq!(physical_stats(&d).unwrap().gcd, 150);
+        assert!(physical_stats(&Int64Array::from(vec![None, None])).is_none());
+        assert!(physical_stats(&StringArray::from(vec!["a"])).is_none());
+        assert!(physical_stats(&NullArray::new(2)).is_none());
+        assert_eq!(
+            physical_stats(&UInt8Array::from(vec![0, 0])).unwrap().gcd,
+            0
+        );
+    }
+
     use std::sync::Arc;
 
     fn ty(t: &AT) -> String {

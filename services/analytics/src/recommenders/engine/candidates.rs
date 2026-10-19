@@ -27,7 +27,6 @@ pub(crate) struct Params {
     /// (spec 2026-10-18 §4.2); empty: those columns stay Null-typed.
     pub id_columns: Vec<String>,
     /// The compression keywords (spec 2026-10-19 §4.3).
-    #[allow(dead_code)] // read by the compression choice (later task)
     pub compression: CompressionParams,
 }
 

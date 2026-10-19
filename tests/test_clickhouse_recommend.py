@@ -50,3 +50,74 @@ def test_lz4_frame_body_sizes_equal_pyarrow(make_frame):
 def test_compression_keywords_are_validated(cls, kw, word):
     with pytest.raises(ValueError, match=word):
         cls(**kw)
+
+
+def one_shot(frame: pl.DataFrame, **kw) -> dict[str, dict]:
+    out = OneShotRecommender(**kw).add(frame).result()
+    return {r["column"]: r for r in out.iter_rows(named=True)}
+
+
+def ch_frame(n: int = 200_000) -> pl.DataFrame:
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    return pl.DataFrame(
+        {
+            "small": rng.integers(0, 200, n).astype(np.int64),  # -> UInt8
+            "thousands": (rng.integers(1, 10**9, n) * 1_000).astype(
+                np.int64
+            ),  # GCD 1000
+            "threes": (rng.integers(1, 2**38, n) * 3).astype(np.int64),  # GCD 3: pruned
+            "noise": rng.random(n),  # near-incompressible
+            "text": rng.choice(["alpha", "beta", "gamma"], n),  # LowCardinality(String)
+            "maybe": pl.Series(([None, 1, 2] * (n // 3 + 1))[:n], dtype=pl.Int64),
+        }
+    )
+
+
+def test_clickhouse_types_and_codecs():
+    rows = one_shot(ch_frame())
+    assert rows["small"]["clickhouse_type"] == "UInt8"
+    assert rows["text"]["clickhouse_type"] == "LowCardinality(String)"
+    assert rows["maybe"]["clickhouse_type"] == "Nullable(UInt8)"
+    assert rows["thousands"]["clickhouse_codecs"].startswith("GCD")
+    gcd_rows = [
+        c for c in rows["threes"]["clickhouse_candidates"] if c["codecs"] == "GCD"
+    ]
+    assert gcd_rows and gcd_rows[0]["outcome"] == "pruned"
+    assert rows["noise"]["clickhouse_codecs"] == "LZ4"
+    assert any(
+        c["outcome"] == "pruned" and c["codecs"].startswith("ZSTD")
+        for c in rows["noise"]["clickhouse_candidates"]
+    )
+    for r in rows.values():
+        assert r["clickhouse_size_bytes"] > 0
+        assert sum(c["outcome"] == "chosen" for c in r["clickhouse_candidates"]) == 1
+        assert r["datafusion_ipc_compression"] in ("LZ4_FRAME", "ZSTD")
+        assert r["polars_ipc_compression"] in ("LZ4_FRAME", "ZSTD")
+        assert (r["datafusion_ipc_zstd_level"] is None) == (
+            r["datafusion_ipc_compression"] == "LZ4_FRAME"
+        )
+
+
+def test_compression_keywords_change_choices():
+    base = one_shot(ch_frame())
+    assert not one_shot(ch_frame(), gcd_min_saving=0.99)["thousands"][
+        "clickhouse_codecs"
+    ].startswith("GCD")
+    levels = one_shot(ch_frame(), zstd_levels=(3,))
+    for r in levels.values():
+        if r["clickhouse_codecs"] and "ZSTD" in r["clickhouse_codecs"]:
+            assert r["clickhouse_codecs"].endswith("ZSTD(3)")
+    eager = one_shot(ch_frame(), zstd_min_saving=0.0)
+    assert "ZSTD" in eager["small"]["clickhouse_codecs"]
+    assert base["small"]["clickhouse_type"] == eager["small"]["clickhouse_type"]
+
+
+def test_unmappable_type_has_a_reason():
+    from datetime import timedelta
+
+    frame = pl.DataFrame({"d": [timedelta(seconds=1), timedelta(seconds=2)]})
+    r = one_shot(frame)["d"]
+    assert r["clickhouse_type"] is None and r["clickhouse_codecs"] is None
+    assert r["clickhouse_candidates"][0]["outcome"] == "pruned"

@@ -19,6 +19,7 @@ import pytest
 from analytics.describe import _sizes
 from analytics.recommend import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, large_dataset, stringified
+from test_clickhouse_recommend import pyarrow_body
 
 
 def rec(s: pl.Series, **params) -> dict:
@@ -881,6 +882,13 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
         assert _sizes.ipc_body_bytes(frequency_ordered(arrow), level) == pytest.approx(
             r["datafusion_size_zstd_bytes"], rel=0.01, abs=16
         ), r["column"]
+        lz4 = pyarrow_body(frequency_ordered(arrow), "lz4")
+        # As ZSTD: a cast leaves other bytes under nulls, and the oracle's frequency order breaks ties differently.
+        assert r["datafusion_size_lz4_bytes"] == pytest.approx(
+            lz4, rel=0.01, abs=16
+        ), r["column"]
+        if r["datafusion_ipc_compression"] == "LZ4_FRAME":
+            assert r["datafusion_ipc_size_bytes"] == r["datafusion_size_lz4_bytes"]
         native = _sizes.column_sizes(polars, level)
         assert native["size_polars_bytes"] == r["polars_size_bytes"], r["column"]
         if "dictionary" not in r["datafusion_type"]:

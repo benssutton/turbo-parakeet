@@ -1,14 +1,17 @@
 //! The recommendation for one column: `recommend`, `Rec`, `Prepared`.
 
 use super::*;
-use crate::common::clickhouse_sizes::{Chain, Compression};
-use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, layout_sizes, sizes_of, Sizes};
+use crate::common::arrow_io::export_series;
+use crate::common::clickhouse_sizes::{emulate, streams, ChLayout, Chain, Compression};
+use crate::common::ipc_sizes::{
+    classic_layout, ipc_body, ipc_body_bytes, layout_sizes, sizes_of, Codec, Sizes,
+};
 use crate::techniques::describe::conclusions::Conclusions;
 use crate::techniques::describe::{describe_one, value_fields, Described, Row};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType as AT;
 use polars::prelude::{
-    polars_err, AnyValue, DataType as PT, Float64Chunked, IntoSeries, NewChunkedArray,
+    polars_err, AnyValue, CompatLevel, DataType as PT, Float64Chunked, IntoSeries, NewChunkedArray,
     PolarsResult, Series, StringChunked, StructChunked, UInt64Chunked,
 };
 
@@ -103,7 +106,7 @@ pub(crate) fn recommend(
         _ => choose(&outer, params).map_err(err)?,
     };
     let t = chosen.array.data_type().clone();
-    let (polars_type, sizes) = if matches!(chosen.target, Target::Original(_)) {
+    let (polars_type, sizes, polars_arr) = if matches!(chosen.target, Target::Original(_)) {
         // The original's Polars type, spelled as the streaming recommender spells it.
         let enum_values = enum_categories(s.dtype());
         // The kept original is `values`, which `sz` measured.
@@ -111,6 +114,7 @@ pub(crate) fn recommend(
         (
             Some(pl_name(&t, name, enum_values.as_deref(), &AT::UInt32)),
             *sz,
+            export_series(s, CompatLevel::newest())?,
         )
     } else {
         let key = chosen.target.polars_key().unwrap_or(AT::UInt32);
@@ -124,11 +128,31 @@ pub(crate) fn recommend(
         (
             Some(pl_name(&t, name, None, &key)),
             layout_sizes(chosen.array.as_ref(), layout.as_ref(), params.zstd_level)?,
+            layout,
         )
     };
     let [arrow_size, arrow_zstd, polars_size, polars_zstd] = sizes;
+    let non_null = d.n_rows - d.n_null;
+    let distinct_ratio = if non_null == 0 {
+        1.0
+    } else {
+        d.outer.freq.n_unique as f64 / non_null as f64
+    };
+    let (arrow_lz4, arrow_ipc) =
+        ipc_choice(chosen.array.as_ref(), distinct_ratio, params).map_err(err)?;
+    let (polars_lz4, polars_ipc) =
+        ipc_choice(polars_arr.as_ref(), distinct_ratio, params).map_err(err)?;
+    let nullable = chosen.array.logical_null_count() > 0;
+    let ch = clickhouse_choice(
+        chosen.array.as_ref(),
+        nullable,
+        enum_categories(s.dtype()).as_deref(),
+        distinct_ratio,
+        params,
+    )
+    .map_err(err)?;
     Ok(Rec {
-        nullable: chosen.array.logical_null_count() > 0,
+        nullable,
         arrow_type: pa_name(&t),
         arrow_size,
         arrow_zstd: Some(arrow_zstd),
@@ -137,14 +161,109 @@ pub(crate) fn recommend(
         polars_zstd: Some(polars_zstd),
         lossy: chosen.lossy,
         candidates: chosen.candidates,
-        arrow_lz4: None,
-        arrow_ipc: None,
-        polars_lz4: None,
-        polars_ipc: None,
-        ch_type: None,
-        ch_chain: None,
-        ch_size: None,
-        ch_candidates: Vec::new(),
+        arrow_lz4: Some(arrow_lz4),
+        arrow_ipc: Some(arrow_ipc),
+        polars_lz4: Some(polars_lz4),
+        polars_ipc: Some(polars_ipc),
+        ch_type: ch.ty,
+        ch_chain: ch.chain,
+        ch_size: ch.size,
+        ch_candidates: ch.candidates,
+    })
+}
+
+/// The Arrow IPC compression for `arr` (spec 2026-10-19 §5): its LZ4_FRAME body size and the
+/// choice with its size.
+fn ipc_choice(
+    arr: &dyn Array,
+    distinct_ratio: f64,
+    params: &Params,
+) -> Result<(u64, (Compression, u64)), String> {
+    let mut lz4 = 0;
+    let decision = decide(
+        |c| {
+            let codec = match c.compression {
+                Compression::Lz4 => Codec::Lz4Frame,
+                Compression::Zstd(l) => Codec::Zstd(l),
+            };
+            let m = ipc_body(arr, codec).map_err(|e| e.to_string())?;
+            if codec == Codec::Lz4Frame {
+                lz4 = m.0;
+            }
+            Ok(m)
+        },
+        None,
+        "",
+        distinct_ratio,
+        &params.compression,
+    )?;
+    Ok((lz4, (decision.chain.compression, decision.bytes)))
+}
+
+/// A column's ClickHouse type, chain, emulated size and every chain considered.
+struct ChChoice {
+    ty: Option<String>,
+    chain: Option<Chain>,
+    size: Option<u64>,
+    candidates: Vec<CodecCandidate>,
+}
+
+fn clickhouse_choice(
+    arr: &dyn Array,
+    nullable: bool,
+    enum_values: Option<&[String]>,
+    distinct_ratio: f64,
+    params: &Params,
+) -> Result<ChChoice, String> {
+    let stats = physical_stats(arr);
+    let (ty, layout) = match clickhouse_type(
+        arr.data_type(),
+        stats.as_ref().map(|s| s.range),
+        nullable,
+        enum_values,
+    ) {
+        Ok(t) => t,
+        Err(reason) => {
+            return Ok(ChChoice {
+                ty: None,
+                chain: None,
+                size: None,
+                candidates: vec![CodecCandidate {
+                    codecs: String::new(),
+                    predicted_bytes: None,
+                    outcome: "pruned",
+                    evidence: reason,
+                }],
+            })
+        }
+    };
+    let st = streams(arr, &layout)?;
+    let applies = matches!(
+        &layout,
+        ChLayout::Fixed {
+            gcd_applies: true,
+            ..
+        }
+    ) || matches!(
+        &layout,
+        ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { gcd_applies: true, .. })
+    );
+    let gcd = match (&stats, applies) {
+        (Some(s), true) => Some((s.gcd, s.max_abs, s.signed)),
+        _ => None,
+    };
+    let decision = decide(
+        |c| emulate(&st, c).map(|e| (e.bytes, e.histogram)),
+        gcd,
+        "",
+        distinct_ratio,
+        &params.compression,
+    )?;
+    Ok(ChChoice {
+        ty: Some(ty),
+        chain: Some(decision.chain),
+        size: Some(decision.bytes),
+        candidates: decision.candidates,
     })
 }
 
