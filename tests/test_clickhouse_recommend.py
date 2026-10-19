@@ -287,9 +287,6 @@ def test_to_chbench_normalises_categorical_and_columns(tmp_path):
         assert f.get_batch(0).schema.field("c").type == pa.string()
 
 
-@pytest.mark.skip(
-    reason="chbench path datasets and vocabulary land in plan Tasks 12-13"
-)
 def test_to_chbench_suites_parse_in_chbench(chbench_out):
     import sys
     from pathlib import Path

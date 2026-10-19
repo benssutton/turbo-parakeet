@@ -5,10 +5,6 @@ use crate::common::clickhouse_sizes::ChLayout;
 use arrow_array::Array;
 use arrow_schema::{DataType as AT, TimeUnit};
 
-/// Whether the server accepts `Time64` (a later task flips it once a spike confirms it).
-#[cfg(test)]
-pub(crate) const TIME64_SUPPORTED: bool = false;
-
 /// Last day number `Date` holds here (2149-06-06, UInt16 days).
 const DATE_MAX_DAYS: i128 = 65_535;
 /// Last second `DateTime` holds (2106-02-07 06:28:15).
@@ -133,9 +129,10 @@ pub(crate) fn clickhouse_type(
                 (ty, fixed(8, true, true))
             }
         }
-        AT::Time32(_) | AT::Time64(_) => {
-            return Err("Time64 not yet confirmed on the server (spec §2)".to_string());
-        }
+        AT::Time32(u) | AT::Time64(u) => (
+            format!("Time64({})", precision_digits(u)),
+            fixed(8, true, false),
+        ),
         AT::Utf8 | AT::LargeUtf8 | AT::Utf8View | AT::Binary | AT::LargeBinary | AT::BinaryView => {
             ("String".to_string(), ChLayout::String)
         }
@@ -468,13 +465,16 @@ mod tests {
     }
 
     #[test]
-    fn time_is_unsupported_for_now() {
-        if !TIME64_SUPPORTED {
-            let e =
-                clickhouse_type(&AT::Time64(TimeUnit::Nanosecond), None, false, None).unwrap_err();
-            assert!(e.contains("Time64"));
+    fn time_maps_to_time64() {
+        let f = |t: AT| clickhouse_type(&t, None, false, None).unwrap();
+        for (t, name) in [
+            (AT::Time32(TimeUnit::Second), "Time64(0)"),
+            (AT::Time32(TimeUnit::Millisecond), "Time64(3)"),
+            (AT::Time64(TimeUnit::Microsecond), "Time64(6)"),
+            (AT::Time64(TimeUnit::Nanosecond), "Time64(9)"),
+        ] {
+            assert_eq!(f(t), (name.to_string(), fixed(8, true, false)));
         }
-        assert!(clickhouse_type(&AT::Time32(TimeUnit::Second), None, false, None).is_err());
     }
 
     #[test]

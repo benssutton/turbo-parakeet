@@ -35,7 +35,7 @@ Applied to the **recommended** Arrow type (`datafusion_type`) and its statistics
 | decimal128(p, s) | `Decimal32(s)` if p ≤ 9, `Decimal64(s)` if p ≤ 18, else `Decimal128(s)` |
 | date32 | `Date` (2 bytes) if min and max lie in 1970-01-01 … 2149-06-06, else `Date32` |
 | timestamp(unit, tz) | `DateTime('tz')` if the unit is seconds and min / max lie in 1970-01-01 … 2106-02-07; else `DateTime64(p, 'tz')`, p = 0 / 3 / 6 / 9 for s / ms / µs / ns (no tz → no tz argument) |
-| time32 / time64 | `Time64(p)` if the vocabulary spike (§9.2) shows the server accepts it (it needs `enable_time_time64_type`); else null with the reason |
+| time32 / time64 | `Time64(p)`, p = 0 / 3 / 6 / 9 for s / ms / µs / ns — accepted without a setting (chbench R36); 8-byte signed, GCD not applied |
 | string, large_string, string_view, binary, large_binary, binary_view | `String` |
 | dictionary<K, string> (the recommender's string→dictionary candidate) | `LowCardinality(String)` |
 | a Polars Enum kept as the original | `Enum8(...)` if ≤ 127 categories, else `Enum16(...)`, categories in order, codes 1… |

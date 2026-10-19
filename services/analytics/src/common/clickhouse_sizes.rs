@@ -623,6 +623,20 @@ mod tests {
     }
 
     #[test]
+    fn time32_widens_to_eight_bytes() {
+        let a = Time32MillisecondArray::from(vec![1500, -1]);
+        let l = ChLayout::Fixed {
+            width: 8,
+            signed: true,
+            gcd_applies: false,
+        };
+        let s = streams(&a, &l).unwrap();
+        assert_eq!(s[0].bytes[..8], 1500i64.to_le_bytes());
+        assert_eq!(s[0].bytes[8..], (-1i64).to_le_bytes());
+        assert_eq!(s[0].gcd_width, None);
+    }
+
+    #[test]
     fn strings() {
         let a = StringArray::from(vec![Some("a"), Some(""), None]);
         let s = streams(&a, &ChLayout::String).unwrap();
