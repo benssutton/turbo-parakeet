@@ -25,6 +25,7 @@ pub(crate) fn params() -> Params {
         top_k: 256,
         entropy_estimator: EntropyEstimator::Sample,
         id_columns: Vec::new(),
+        compression: crate::recommenders::engine::CompressionParams::default(),
     }
 }
 

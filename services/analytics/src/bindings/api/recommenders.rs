@@ -5,7 +5,7 @@ use super::*;
 use arrow_array::RecordBatch;
 
 pub use crate::recommenders::engine::EntropyEstimator;
-use crate::recommenders::engine::Params;
+use crate::recommenders::engine::{CompressionParams, Params};
 
 /// The checks both recommenders' constructors share.
 pub(crate) fn validate_common(zstd_level: i32, boolean_pairs: &[(String, String)]) -> Result<()> {
@@ -24,6 +24,49 @@ pub(crate) fn validate_common(zstd_level: i32, boolean_pairs: &[(String, String)
         )));
     }
     Ok(())
+}
+
+/// The compression keywords (spec 2026-10-19 §4.3) as engine parameters, checked.
+fn compression(
+    zstd_levels: Vec<i32>,
+    zstd_level_tolerance: f64,
+    zstd_min_saving: f64,
+    gcd_min_saving: f64,
+) -> Result<CompressionParams> {
+    let range = zstd::compression_level_range();
+    if zstd_levels.is_empty() {
+        return Err(Error::InvalidInput("zstd_levels must be non-empty".into()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for l in &zstd_levels {
+        if !range.contains(l) {
+            return Err(Error::InvalidInput(format!(
+                "zstd_levels: {l} is outside {range:?}"
+            )));
+        }
+        if !seen.insert(*l) {
+            return Err(Error::InvalidInput(format!(
+                "zstd_levels must be distinct, {l} repeats"
+            )));
+        }
+    }
+    for (name, v) in [
+        ("zstd_level_tolerance", zstd_level_tolerance),
+        ("zstd_min_saving", zstd_min_saving),
+        ("gcd_min_saving", gcd_min_saving),
+    ] {
+        if !(v.is_finite() && (0.0..1.0).contains(&v)) {
+            return Err(Error::InvalidInput(format!(
+                "{name} must be in [0, 1), got {v}"
+            )));
+        }
+    }
+    Ok(CompressionParams {
+        zstd_levels,
+        zstd_level_tolerance,
+        zstd_min_saving,
+        gcd_min_saving,
+    })
 }
 
 /// Duplicate id column names are InvalidInput.
@@ -46,6 +89,11 @@ pub struct OneShotParams {
     pub top_k: u64,
     /// Columns identifying the exemplar rows (typed `exemplar_id` structs); may be empty.
     pub id_columns: Vec<String>,
+    /// ZSTD levels tried for the Arrow IPC / ClickHouse choices (spec 2026-10-19 §4.3).
+    pub zstd_levels: Vec<i32>,
+    pub zstd_level_tolerance: f64,
+    pub zstd_min_saving: f64,
+    pub gcd_min_saving: f64,
 }
 
 /// Recommends dtypes for one frame from exact statistics, each candidate verified on
@@ -56,6 +104,12 @@ impl OneShotRecommender {
     pub fn new(p: OneShotParams) -> Result<Self> {
         validate_common(p.zstd_level, &p.boolean_pairs)?;
         validate_ids(&p.id_columns)?;
+        let compression = compression(
+            p.zstd_levels,
+            p.zstd_level_tolerance,
+            p.zstd_min_saving,
+            p.gcd_min_saving,
+        )?;
         Ok(Self(crate::recommenders::oneshot::OneShot::new(Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
@@ -64,6 +118,7 @@ impl OneShotRecommender {
             top_k: p.top_k,
             entropy_estimator: EntropyEstimator::Sample,
             id_columns: p.id_columns,
+            compression,
         })))
     }
 
@@ -102,6 +157,11 @@ pub struct StreamingParams {
     pub entropy_estimator: EntropyEstimator,
     /// Columns identifying the exemplar rows (typed `exemplar_id` structs); may be empty.
     pub id_columns: Vec<String>,
+    /// ZSTD levels tried for the Arrow IPC / ClickHouse choices (spec 2026-10-19 §4.3).
+    pub zstd_levels: Vec<i32>,
+    pub zstd_level_tolerance: f64,
+    pub zstd_min_saving: f64,
+    pub gcd_min_saving: f64,
 }
 
 /// Recommends dtypes from record batches added over time; all state stays in Rust.
@@ -120,6 +180,12 @@ impl StreamingRecommender {
         }
         validate_common(p.zstd_level, &p.boolean_pairs)?;
         validate_ids(&p.id_columns)?;
+        let compression = compression(
+            p.zstd_levels,
+            p.zstd_level_tolerance,
+            p.zstd_min_saving,
+            p.gcd_min_saving,
+        )?;
         let params = Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
@@ -128,6 +194,7 @@ impl StreamingRecommender {
             top_k: p.top_k,
             entropy_estimator: p.entropy_estimator,
             id_columns: p.id_columns,
+            compression,
         };
         Ok(Self(crate::recommenders::streaming::Streaming::new(
             params,
@@ -181,6 +248,10 @@ mod tests {
             top_k: 256,
             entropy_estimator: EntropyEstimator::Sample,
             id_columns: Vec::new(),
+            zstd_levels: vec![1, 3, 9],
+            zstd_level_tolerance: 0.01,
+            zstd_min_saving: 0.10,
+            gcd_min_saving: 0.01,
         }
     }
 
@@ -208,6 +279,30 @@ mod tests {
                 boolean_pairs: vec![("".into(), "n".into())],
                 ..streaming_params()
             },
+            StreamingParams {
+                zstd_levels: vec![],
+                ..streaming_params()
+            },
+            StreamingParams {
+                zstd_levels: vec![3, 3],
+                ..streaming_params()
+            },
+            StreamingParams {
+                zstd_levels: vec![99],
+                ..streaming_params()
+            },
+            StreamingParams {
+                zstd_min_saving: 1.0,
+                ..streaming_params()
+            },
+            StreamingParams {
+                gcd_min_saving: -0.1,
+                ..streaming_params()
+            },
+            StreamingParams {
+                zstd_level_tolerance: f64::NAN,
+                ..streaming_params()
+            },
         ];
         for p in bad {
             assert!(
@@ -233,6 +328,10 @@ mod tests {
             boolean_pairs: vec![("true".into(), "false".into())],
             top_k: 256,
             id_columns: Vec::new(),
+            zstd_levels: vec![1, 3, 9],
+            zstd_level_tolerance: 0.01,
+            zstd_min_saving: 0.10,
+            gcd_min_saving: 0.01,
         }
     }
 
@@ -249,6 +348,14 @@ mod tests {
             },
             OneShotParams {
                 boolean_pairs: vec![("".into(), "n".into())],
+                ..oneshot_params()
+            },
+            OneShotParams {
+                zstd_levels: vec![],
+                ..oneshot_params()
+            },
+            OneShotParams {
+                zstd_min_saving: 1.0,
                 ..oneshot_params()
             },
         ];

@@ -7,6 +7,7 @@ from datagen import describe_mixed, large_dataset_mixed
 
 from analytics import _plugin
 from analytics.describe._sizes import ipc_body_bytes
+from analytics.recommend import OneShotRecommender, StreamingRecommender
 
 
 def pyarrow_body(arr: pa.Array, compression: str | int | None) -> int:
@@ -32,3 +33,20 @@ def test_lz4_frame_body_sizes_equal_pyarrow(make_frame):
         assert _plugin.ipc_body_sizes(t, "lz4")["x"] == pyarrow_body(arr, "lz4"), name
         assert _plugin.ipc_body_sizes(t, "none")["x"] == pyarrow_body(arr, None), name
         assert _plugin.ipc_body_sizes(t, "zstd:1")["x"] == pyarrow_body(arr, 1), name
+
+
+@pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
+@pytest.mark.parametrize(
+    "kw, word",
+    [
+        ({"zstd_levels": ()}, "zstd_levels"),
+        ({"zstd_levels": (1, 1)}, "zstd_levels"),
+        ({"zstd_levels": (99,)}, "zstd_levels"),
+        ({"zstd_min_saving": 1.0}, "zstd_min_saving"),
+        ({"gcd_min_saving": -0.1}, "gcd_min_saving"),
+        ({"zstd_level_tolerance": float("nan")}, "zstd_level_tolerance"),
+    ],
+)
+def test_compression_keywords_are_validated(cls, kw, word):
+    with pytest.raises(ValueError, match=word):
+        cls(**kw)

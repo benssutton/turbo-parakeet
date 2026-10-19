@@ -25,7 +25,6 @@ pub(crate) use choose::*;
 #[expect(unused_imports, reason = "used by the recommenders (later task)")]
 pub(crate) use clickhouse::*;
 pub(crate) use column::*;
-#[expect(unused_imports, reason = "used by the recommenders (later task)")]
 pub(crate) use compression::*;
 pub use entropy::EntropyEstimator;
 pub(crate) use entropy::*;

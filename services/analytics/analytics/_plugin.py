@@ -202,6 +202,10 @@ def streaming_recommender(
     boolean_pairs: tuple[tuple[str, str], ...],
     entropy_estimator: str,
     id_columns: list[str],
+    zstd_levels: list[int],
+    zstd_level_tolerance: float,
+    zstd_min_saving: float,
+    gcd_min_saving: float,
 ):
     """The Rust streaming recommender (src/recommenders/streaming/): .add(data, ineligible), .result()."""
     return _rs.StreamingRecommender(
@@ -214,6 +218,10 @@ def streaming_recommender(
         boolean_pairs=[tuple(p) for p in boolean_pairs],
         entropy_estimator=entropy_estimator,
         id_columns=id_columns,
+        zstd_levels=zstd_levels,
+        zstd_level_tolerance=zstd_level_tolerance,
+        zstd_min_saving=zstd_min_saving,
+        gcd_min_saving=gcd_min_saving,
     )
 
 
@@ -225,6 +233,10 @@ def oneshot_recommender(
     seed: int,
     boolean_pairs: tuple[tuple[str, str], ...],
     id_columns: list[str],
+    zstd_levels: list[int],
+    zstd_level_tolerance: float,
+    zstd_min_saving: float,
+    gcd_min_saving: float,
 ):
     """The Rust one-shot recommender (src/recommenders/oneshot.rs): .add(data, ineligible), .result()."""
     return _rs.OneShotRecommender(
@@ -234,4 +246,8 @@ def oneshot_recommender(
         zstd_level=zstd_level,
         seed=seed,
         boolean_pairs=[tuple(p) for p in boolean_pairs],
+        zstd_levels=zstd_levels,
+        zstd_level_tolerance=zstd_level_tolerance,
+        zstd_min_saving=zstd_min_saving,
+        gcd_min_saving=gcd_min_saving,
     )

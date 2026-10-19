@@ -181,6 +181,7 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
         if out.is_null() {
             return Err(Error::InvalidInput("out is null".into()));
         }
+        let defaults = crate::recommenders::engine::CompressionParams::default();
         let r = api::StreamingRecommender::new(api::StreamingParams {
             reservoir_rows,
             block_rows,
@@ -199,6 +200,11 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
                 }
             },
             id_columns: unsafe { strings(id_columns, n_id_columns, "id-column") }?,
+            // The keywords reach the C ABI and Java in a later task: the defaults for now.
+            zstd_levels: defaults.zstd_levels,
+            zstd_level_tolerance: defaults.zstd_level_tolerance,
+            zstd_min_saving: defaults.zstd_min_saving,
+            gcd_min_saving: defaults.gcd_min_saving,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -295,6 +301,7 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
         if out.is_null() {
             return Err(Error::InvalidInput("out is null".into()));
         }
+        let defaults = crate::recommenders::engine::CompressionParams::default();
         let r = api::OneShotRecommender::new(api::OneShotParams {
             categorical_threshold,
             top_k,
@@ -302,6 +309,11 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
             seed,
             boolean_pairs: unsafe { boolean_pairs(bool_true, bool_false, n_bool_pairs) }?,
             id_columns: unsafe { strings(id_columns, n_id_columns, "id-column") }?,
+            // The keywords reach the C ABI and Java in a later task: the defaults for now.
+            zstd_levels: defaults.zstd_levels,
+            zstd_level_tolerance: defaults.zstd_level_tolerance,
+            zstd_min_saving: defaults.zstd_min_saving,
+            gcd_min_saving: defaults.gcd_min_saving,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())

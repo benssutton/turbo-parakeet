@@ -98,9 +98,30 @@ SCHEMA = {
     "datafusion_type": pl.String,
     "datafusion_size_bytes": pl.UInt64,
     "datafusion_size_zstd_bytes": pl.UInt64,
+    "datafusion_size_lz4_bytes": pl.UInt64,
+    "datafusion_ipc_compression": pl.String,
+    "datafusion_ipc_zstd_level": pl.Int32,
+    "datafusion_ipc_size_bytes": pl.UInt64,
     "polars_type": pl.String,
     "polars_size_bytes": pl.UInt64,
     "polars_size_zstd_bytes": pl.UInt64,
+    "polars_size_lz4_bytes": pl.UInt64,
+    "polars_ipc_compression": pl.String,
+    "polars_ipc_zstd_level": pl.Int32,
+    "polars_ipc_size_bytes": pl.UInt64,
+    "clickhouse_type": pl.String,
+    "clickhouse_codecs": pl.String,
+    "clickhouse_size_bytes": pl.UInt64,
+    "clickhouse_candidates": pl.List(
+        pl.Struct(
+            {
+                "codecs": pl.String,
+                "predicted_bytes": pl.UInt64,
+                "outcome": pl.String,
+                "evidence": pl.String,
+            }
+        )
+    ),
     "candidates": pl.List(CANDIDATE),
     "n_sampled_rows": pl.UInt64,
     "n_sampled_blocks": pl.UInt64,

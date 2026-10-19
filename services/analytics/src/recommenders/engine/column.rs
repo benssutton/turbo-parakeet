@@ -1,6 +1,7 @@
 //! The recommendation for one column: `recommend`, `Rec`, `Prepared`.
 
 use super::*;
+use crate::common::clickhouse_sizes::{Chain, Compression};
 use crate::common::ipc_sizes::{classic_layout, ipc_body_bytes, layout_sizes, sizes_of, Sizes};
 use crate::techniques::describe::conclusions::Conclusions;
 use crate::techniques::describe::{describe_one, value_fields, Described, Row};
@@ -27,6 +28,17 @@ pub(crate) struct Rec {
     pub polars_zstd: Option<u64>,
     pub lossy: bool,
     pub candidates: Vec<Candidate>,
+    /// LZ4_FRAME body size of the Arrow layout; the Arrow IPC compression chosen and its
+    /// size (spec 2026-10-19 §5). None until the compression choice lands.
+    pub arrow_lz4: Option<u64>,
+    pub arrow_ipc: Option<(Compression, u64)>,
+    pub polars_lz4: Option<u64>,
+    pub polars_ipc: Option<(Compression, u64)>,
+    /// The ClickHouse column type, codec chain, emulated size and every chain considered.
+    pub ch_type: Option<String>,
+    pub ch_chain: Option<Chain>,
+    pub ch_size: Option<u64>,
+    pub ch_candidates: Vec<CodecCandidate>,
 }
 
 /// An Enum's categories, found through lists and arrays.
@@ -125,6 +137,14 @@ pub(crate) fn recommend(
         polars_zstd: Some(polars_zstd),
         lossy: chosen.lossy,
         candidates: chosen.candidates,
+        arrow_lz4: None,
+        arrow_ipc: None,
+        polars_lz4: None,
+        polars_ipc: None,
+        ch_type: None,
+        ch_chain: None,
+        ch_size: None,
+        ch_candidates: Vec::new(),
     })
 }
 
@@ -166,19 +186,67 @@ pub(crate) fn candidates_series(c: &[Candidate]) -> Series {
         .into_series()
 }
 
+/// `clickhouse_candidates` cell: one struct per chain considered.
+fn clickhouse_candidates_series(c: &[CodecCandidate]) -> Series {
+    let text = |name: &str, v: Vec<String>| {
+        StringChunked::from_iter_values(name.into(), v.into_iter()).into_series()
+    };
+    let cols = [
+        text("codecs", c.iter().map(|x| x.codecs.clone()).collect()),
+        UInt64Chunked::from_iter_options(
+            "predicted_bytes".into(),
+            c.iter().map(|x| x.predicted_bytes),
+        )
+        .into_series(),
+        text("outcome", c.iter().map(|x| x.outcome.to_string()).collect()),
+        text("evidence", c.iter().map(|x| x.evidence.clone()).collect()),
+    ];
+    StructChunked::from_series("candidate".into(), c.len(), cols.iter())
+        .expect("equal-length fields")
+        .into_series()
+}
+
+/// The (compression name, level, size) cells of an `*_ipc_*` column group.
+fn ipc_cells(ipc: Option<(Compression, u64)>) -> [AnyValue<'static>; 3] {
+    match ipc {
+        None => [AnyValue::Null, AnyValue::Null, AnyValue::Null],
+        Some((Compression::Lz4, n)) => [
+            AnyValue::StringOwned("LZ4_FRAME".into()),
+            AnyValue::Null,
+            AnyValue::UInt64(n),
+        ],
+        Some((Compression::Zstd(l), n)) => [
+            AnyValue::StringOwned("ZSTD".into()),
+            AnyValue::Int32(l),
+            AnyValue::UInt64(n),
+        ],
+    }
+}
+
 pub(crate) fn rec_row(r: &Rec) -> Row {
     let text = |s: &str| AnyValue::StringOwned(s.into());
-    vec![
+    let mut row: Row = vec![
         AnyValue::Boolean(r.nullable),
         AnyValue::Boolean(r.lossy),
         text(&r.arrow_type),
         AnyValue::UInt64(r.arrow_size),
         r.arrow_zstd.map_or(AnyValue::Null, AnyValue::UInt64),
-        r.polars_type.as_deref().map_or(AnyValue::Null, text),
-        AnyValue::UInt64(r.polars_size),
-        r.polars_zstd.map_or(AnyValue::Null, AnyValue::UInt64),
-        AnyValue::List(candidates_series(&r.candidates)),
-    ]
+        r.arrow_lz4.map_or(AnyValue::Null, AnyValue::UInt64),
+    ];
+    row.extend(ipc_cells(r.arrow_ipc));
+    row.push(r.polars_type.as_deref().map_or(AnyValue::Null, text));
+    row.push(AnyValue::UInt64(r.polars_size));
+    row.push(r.polars_zstd.map_or(AnyValue::Null, AnyValue::UInt64));
+    row.push(r.polars_lz4.map_or(AnyValue::Null, AnyValue::UInt64));
+    row.extend(ipc_cells(r.polars_ipc));
+    row.push(r.ch_type.as_deref().map_or(AnyValue::Null, text));
+    row.push(r.ch_chain.map_or(AnyValue::Null, |c| text(&c.ddl())));
+    row.push(r.ch_size.map_or(AnyValue::Null, AnyValue::UInt64));
+    row.push(AnyValue::List(clickhouse_candidates_series(
+        &r.ch_candidates,
+    )));
+    row.push(AnyValue::List(candidates_series(&r.candidates)));
+    row
 }
 
 /// One column's statistics, collected by the one-shot recommender's `add` (spec

@@ -65,6 +65,13 @@ class StreamingRecommender:
     sample with the HyperLogLog distinct count: no extra per-row cost, weak on skewed columns whose heavy values fall
     outside the sample) or `"ams"` (an AMS sketch fed every row of every eligible
     column from the first batch: ≈ 4 096 estimators per column, accurate on skew).
+
+    Compression (spec docs/superpowers/specs/2026-10-19-clickhouse-recommendations-design.md
+    §4): `zstd_levels` are the ZSTD levels tried (distinct, within the zstd range);
+    `zstd_level_tolerance` the relative size slack within which the lowest level wins;
+    `zstd_min_saving` the smallest relative saving that makes ZSTD preferable to LZ4;
+    `gcd_min_saving` the smallest relative saving that keeps a GCD codec. The three
+    fractions lie in [0, 1).
     """
 
     def __init__(
@@ -79,6 +86,10 @@ class StreamingRecommender:
         boolean_pairs: tuple[tuple[str, str], ...] = (("true", "false"),),
         entropy_estimator: str = "ams",
         id_columns: Sequence[str] | None = None,
+        zstd_levels: Sequence[int] = (1, 3, 9),
+        zstd_level_tolerance: float = 0.01,
+        zstd_min_saving: float = 0.10,
+        gcd_min_saving: float = 0.01,
     ) -> None:
         self._ids = _input.id_columns(id_columns)
         self._rs = _plugin.streaming_recommender(
@@ -91,6 +102,10 @@ class StreamingRecommender:
             boolean_pairs=_input.boolean_pairs(boolean_pairs),
             entropy_estimator=entropy_estimator,
             id_columns=self._ids,
+            zstd_levels=list(zstd_levels),
+            zstd_level_tolerance=zstd_level_tolerance,
+            zstd_min_saving=zstd_min_saving,
+            gcd_min_saving=gcd_min_saving,
         )
 
     def add(self, frame) -> StreamingRecommender:

@@ -25,6 +25,15 @@ pub(crate) fn candidate_type() -> PT {
     ])
 }
 
+pub(crate) fn clickhouse_candidate_type() -> PT {
+    PT::Struct(vec![
+        PField::new("codecs".into(), PT::String),
+        PField::new("predicted_bytes".into(), PT::UInt64),
+        PField::new("outcome".into(), PT::String),
+        PField::new("evidence".into(), PT::String),
+    ])
+}
+
 pub(crate) fn rec_fields() -> Vec<(String, PT)> {
     [
         ("nullable", PT::Boolean),
@@ -32,9 +41,24 @@ pub(crate) fn rec_fields() -> Vec<(String, PT)> {
         ("datafusion_type", PT::String),
         ("datafusion_size_bytes", PT::UInt64),
         ("datafusion_size_zstd_bytes", PT::UInt64),
+        ("datafusion_size_lz4_bytes", PT::UInt64),
+        ("datafusion_ipc_compression", PT::String),
+        ("datafusion_ipc_zstd_level", PT::Int32),
+        ("datafusion_ipc_size_bytes", PT::UInt64),
         ("polars_type", PT::String),
         ("polars_size_bytes", PT::UInt64),
         ("polars_size_zstd_bytes", PT::UInt64),
+        ("polars_size_lz4_bytes", PT::UInt64),
+        ("polars_ipc_compression", PT::String),
+        ("polars_ipc_zstd_level", PT::Int32),
+        ("polars_ipc_size_bytes", PT::UInt64),
+        ("clickhouse_type", PT::String),
+        ("clickhouse_codecs", PT::String),
+        ("clickhouse_size_bytes", PT::UInt64),
+        (
+            "clickhouse_candidates",
+            PT::List(Box::new(clickhouse_candidate_type())),
+        ),
         ("candidates", PT::List(Box::new(candidate_type()))),
     ]
     .into_iter()

@@ -163,7 +163,7 @@ fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
 #[pymethods]
 impl StreamingRecommender {
     #[new]
-    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="ams", id_columns=Vec::new()))]
+    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="ams", id_columns=Vec::new(), zstd_levels=vec![1, 3, 9], zstd_level_tolerance=0.01, zstd_min_saving=0.10, gcd_min_saving=0.01))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -176,6 +176,10 @@ impl StreamingRecommender {
         boolean_pairs: Vec<(String, String)>,
         entropy_estimator: &str,
         id_columns: Vec<String>,
+        zstd_levels: Vec<i32>,
+        zstd_level_tolerance: f64,
+        zstd_min_saving: f64,
+        gcd_min_saving: f64,
     ) -> PyResult<Self> {
         let entropy_estimator = match entropy_estimator {
             "sample" => api::EntropyEstimator::Sample,
@@ -197,6 +201,10 @@ impl StreamingRecommender {
             top_k: top_k.unwrap_or(u64::MAX),
             entropy_estimator,
             id_columns,
+            zstd_levels,
+            zstd_level_tolerance,
+            zstd_min_saving,
+            gcd_min_saving,
         };
         run(py, || api::StreamingRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }
@@ -240,7 +248,8 @@ struct OneShotRecommender(Mutex<api::OneShotRecommender>);
 #[pymethods]
 impl OneShotRecommender {
     #[new]
-    #[pyo3(signature = (*, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, id_columns=Vec::new()))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (*, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, id_columns=Vec::new(), zstd_levels=vec![1, 3, 9], zstd_level_tolerance=0.01, zstd_min_saving=0.10, gcd_min_saving=0.01))]
     fn new(
         py: Python<'_>,
         categorical_threshold: u64,
@@ -249,6 +258,10 @@ impl OneShotRecommender {
         seed: u64,
         boolean_pairs: Vec<(String, String)>,
         id_columns: Vec<String>,
+        zstd_levels: Vec<i32>,
+        zstd_level_tolerance: f64,
+        zstd_min_saving: f64,
+        gcd_min_saving: f64,
     ) -> PyResult<Self> {
         let p = api::OneShotParams {
             categorical_threshold,
@@ -258,6 +271,10 @@ impl OneShotRecommender {
             // None: every ranked value.
             top_k: top_k.unwrap_or(u64::MAX),
             id_columns,
+            zstd_levels,
+            zstd_level_tolerance,
+            zstd_min_saving,
+            gcd_min_saving,
         };
         run(py, || api::OneShotRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }

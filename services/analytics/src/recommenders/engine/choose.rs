@@ -471,6 +471,7 @@ pub(in crate::recommenders::engine) mod tests {
             top_k: 256,
             entropy_estimator: EntropyEstimator::Sample,
             id_columns: Vec::new(),
+            compression: CompressionParams::default(),
         }
     }
 

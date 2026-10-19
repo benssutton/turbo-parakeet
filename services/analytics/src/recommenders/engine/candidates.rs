@@ -26,6 +26,9 @@ pub(crate) struct Params {
     /// Columns whose values at the exemplar rows fill `exemplar_id` / `null_exemplar_id`
     /// (spec 2026-10-18 §4.2); empty: those columns stay Null-typed.
     pub id_columns: Vec<String>,
+    /// The compression keywords (spec 2026-10-19 §4.3).
+    #[allow(dead_code)] // read by the compression choice (later task)
+    pub compression: CompressionParams,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

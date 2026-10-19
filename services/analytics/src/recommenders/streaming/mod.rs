@@ -613,6 +613,14 @@ impl Streaming {
             polars_zstd: scale(z[3]),
             lossy: pick.lossy,
             candidates: pick.candidates,
+            arrow_lz4: None,
+            arrow_ipc: None,
+            polars_lz4: None,
+            polars_ipc: None,
+            ch_type: None,
+            ch_chain: None,
+            ch_size: None,
+            ch_candidates: Vec::new(),
         };
         row.extend(p.row(&oc));
         row.push(u(o.n_midnight));
