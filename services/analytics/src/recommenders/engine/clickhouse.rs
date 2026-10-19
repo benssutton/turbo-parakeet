@@ -9,8 +9,8 @@ use arrow_schema::{DataType as AT, TimeUnit};
 /// Whether the server accepts `Time64` (a later task flips it once a spike confirms it).
 pub(crate) const TIME64_SUPPORTED: bool = false;
 
-/// Last day number `Date` holds here (2106-02-07, where DateTime conversion still fits).
-const DATE_MAX_DAYS: i128 = 49_710;
+/// Last day number `Date` holds here (2149-06-06, UInt16 days).
+const DATE_MAX_DAYS: i128 = 65_535;
 /// Last second `DateTime` holds (2106-02-07 06:28:15).
 const DATETIME_MAX_SECONDS: i128 = 4_294_967_295;
 
@@ -233,11 +233,11 @@ mod tests {
     fn dates() {
         let d = |r| clickhouse_type(&AT::Date32, r, false, None).unwrap();
         assert_eq!(
-            d(Some((0, 49_710))),
+            d(Some((0, 65_535))),
             ("Date".to_string(), fixed(2, false, true))
         );
         assert_eq!(
-            d(Some((0, 49_711))),
+            d(Some((0, 65_536))),
             ("Date32".to_string(), fixed(4, true, true))
         );
         assert_eq!(d(Some((-1, 5))).0, "Date32");
