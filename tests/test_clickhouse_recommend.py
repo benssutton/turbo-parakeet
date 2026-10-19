@@ -4,16 +4,10 @@ import polars as pl
 import pyarrow as pa
 import pytest
 from datagen import describe_mixed, large_dataset_mixed
+from harness import pyarrow_body
 
 from analytics import _plugin
-from analytics.describe._sizes import ipc_body_bytes
 from analytics.recommend import OneShotRecommender, StreamingRecommender
-
-
-def pyarrow_body(arr: pa.Array, compression: str | int | None) -> int:
-    """Body length of the record-batch IPC messages pyarrow writes for one column
-    (`compression`: None, a ZSTD level, or "lz4" = LZ4_FRAME)."""
-    return ipc_body_bytes(arr, compression)
 
 
 @pytest.mark.parametrize(
@@ -203,7 +197,19 @@ def chbench_out(tmp_path_factory):
 def test_to_chbench_files_and_skips(chbench_out):
     out, skipped, suites = chbench_out
     assert [c for c, _ in skipped] == ["items"]
-    assert set(suites) == {"id", "price", "tag", "maybe", "c_2_col_", "c_2_col__2"}
+    assert set(suites) == {
+        "id",
+        "id_original",
+        "price",
+        "price_original",
+        "tag",
+        "maybe",
+        "maybe_original",
+        "c_2_col_",
+        "c_2_col__original",
+        "c_2_col__2",
+        "c_2_col__2_original",
+    }
     for name in suites:
         assert (out / f"{name}.arrow").exists()
         assert (out / f"{name}.predicted.json").exists()
@@ -228,9 +234,10 @@ def test_to_chbench_yaml_axes(chbench_out):
     assert tag["clickhouse"]["nullable"] == [False]
     assert [k["kind"] for k in tag["queries"]["kinds"]] == ["full_scan", "filter"]
     price = suites["price"]
-    assert price["clickhouse"]["type"][0] in ("Decimal32", "Decimal64")
-    assert price["clickhouse"]["type"][1] == "Float64"
+    assert price["clickhouse"]["type"] in (["Decimal32"], ["Decimal64"])
+    assert suites["price_original"]["clickhouse"]["type"] == ["Float64"]
     assert price["dataset"]["decimal_places"] == 2
+    assert "decimal_places" not in suites["price_original"]["dataset"]
     assert price["queries"]["kinds"][-1]["predicate"] == "range"
     assert suites["maybe"]["clickhouse"]["nullable"] == [True]
     assert set(suites["id"]["clickhouse"]) == {
@@ -242,7 +249,9 @@ def test_to_chbench_yaml_axes(chbench_out):
         "skip_index",
         "compression",
     }
-    assert suites["id"]["clickhouse"]["type"] == ["UInt8", "Int64"]
+    assert suites["id"]["clickhouse"]["type"] == ["UInt8"]
+    assert suites["id_original"]["clickhouse"]["type"] == ["Int64"]
+    assert suites["id_original"]["dataset"]["path"] == "id_original.arrow"
     assert suites["id"]["clickhouse"]["compression"][-1] == "LZ4" or suites["id"][
         "clickhouse"
     ]["compression"] == ["LZ4"]
@@ -265,7 +274,10 @@ def test_to_chbench_predicted_and_arrow(chbench_out):
     ident = json.loads((out / "id.predicted.json").read_text())
     comp = suites["id"]["clickhouse"]["compression"][0]
     assert ident[f"UInt8|none|{comp}"] > 0
-    assert ident["Int64|none|LZ4"] > 0
+    assert (
+        json.loads((out / "id_original.predicted.json").read_text())["Int64|none|LZ4"]
+        > 0
+    )
     assert json.loads((out / "tag.predicted.json").read_text())["String|none|LZ4"] > 0
     with pa.ipc.open_file(out / "tag.arrow") as f:
         assert f.num_record_batches == 1
@@ -316,21 +328,107 @@ def test_clickhouse_profile_binding():
         _plugin.clickhouse_profile(t, "a", "Delta")
 
 
+def _suite(path, name):
+    import yaml
+
+    return yaml.safe_load((path / f"{name}.yaml").read_text())
+
+
+def _arrow_type(path, name, col):
+    with pa.ipc.open_file(path / f"{name}.arrow") as f:
+        return f.get_batch(0).schema.field(col).type
+
+
 def test_to_chbench_bool_over_integers_uses_boolean_dataset(tmp_path):
     import json
-
-    import yaml
 
     from analytics.recommend import to_chbench
 
     frame = pl.DataFrame({"flag": pl.Series([0, 1] * 5_000, dtype=pl.Int32)})
     result = OneShotRecommender().add(frame).result()
     to_chbench(result, frame, tmp_path)
-    suite = yaml.safe_load((tmp_path / "flag.yaml").read_text())
-    assert suite["clickhouse"]["type"] == ["Bool"]
-    with pa.ipc.open_file(tmp_path / "flag.arrow") as f:
-        assert f.get_batch(0).schema.field("flag").type == pa.bool_()
+    assert _suite(tmp_path, "flag")["clickhouse"]["type"] == ["Bool"]
+    assert _suite(tmp_path, "flag_original")["clickhouse"]["type"] == ["Int32"]
+    assert _arrow_type(tmp_path, "flag", "flag") == pa.bool_()
+    assert _arrow_type(tmp_path, "flag_original", "flag") == pa.int32()
     assert all(
         k.startswith("Bool|")
         for k in json.loads((tmp_path / "flag.predicted.json").read_text())
     )
+
+
+def test_to_chbench_recommended_dataset_carries_recommended_type(tmp_path):
+    from datetime import date, datetime, timedelta
+    from decimal import Decimal
+
+    from analytics.recommend import to_chbench
+
+    n = 6_000
+    frame = pl.DataFrame(
+        {
+            "dec": pl.Series(
+                [Decimal(i % 500) / 100 for i in range(n)], dtype=pl.Decimal(10, 4)
+            ),
+            "ts": pl.Series(
+                [
+                    datetime(2024, 1, 1 + i % 20, 1, 2, 3, (i % 900) * 1000)
+                    for i in range(n)
+                ],
+                dtype=pl.Datetime("ns"),
+            ),
+            "small": pl.Series([i % 200 for i in range(n)], dtype=pl.Int64),
+            "cat": pl.Series([f"v{i % 40}" for i in range(n)]),
+            "dates": pl.Series(
+                [(date(2000, 1, 1) + timedelta(i)).isoformat() for i in range(n)]
+            ),
+        }
+    )
+    result = OneShotRecommender().add(frame).result()
+    skipped = dict(to_chbench(result, frame, tmp_path))
+    rec = {r["column"]: r for r in result.iter_rows(named=True)}
+    assert rec["dec"]["datafusion_type"] == "decimal32(3, 2)"
+    assert _arrow_type(tmp_path, "dec", "dec") == pa.decimal32(3, 2)
+    assert _suite(tmp_path, "dec")["dataset"]["decimal_places"] == 2
+    assert _arrow_type(tmp_path, "dec_original", "dec") == pa.decimal128(10, 4)
+    assert _suite(tmp_path, "dec_original")["dataset"]["decimal_places"] == 4
+    assert rec["ts"]["datafusion_type"] == "timestamp[ms]"
+    assert _arrow_type(tmp_path, "ts", "ts") == pa.timestamp("ms")
+    assert _arrow_type(tmp_path, "ts_original", "ts") == pa.timestamp("ns")
+    assert rec["small"]["datafusion_type"] == "uint8"
+    assert _arrow_type(tmp_path, "small", "small") == pa.uint8()
+    assert _arrow_type(tmp_path, "small_original", "small") == pa.int64()
+    assert "LowCardinality" in rec["cat"]["clickhouse_type"]
+    assert rec["cat"]["datafusion_type"].startswith("dictionary<")
+    assert _arrow_type(tmp_path, "cat", "cat") == pa.string()
+    assert _suite(tmp_path, "cat")["clickhouse"]["codec"][0] == "LowCardinality"
+    assert not (tmp_path / "cat_original.yaml").exists()
+    # pyarrow parses ISO text to a date, so the text -> date recommendation is reproducible.
+    assert rec["dates"]["datafusion_type"] == "date32[day]"
+    assert "dates" not in skipped
+    assert _arrow_type(tmp_path, "dates", "dates") == pa.date32()
+    assert _arrow_type(tmp_path, "dates_original", "dates") == pa.string()
+
+
+def test_to_chbench_skips_unreproducible_recommended_type(tmp_path, monkeypatch):
+    from analytics.recommend import chbench, to_chbench
+
+    frame = pl.DataFrame({"small": pl.Series([i % 200 for i in range(6_000)])})
+    result = OneShotRecommender().add(frame).result()
+    monkeypatch.setattr(chbench, "_arrow_type", lambda name: pa.date32())
+    skipped = to_chbench(result, frame, tmp_path)
+    assert len(skipped) == 1 and skipped[0][1].startswith(
+        "recommended type not reproducible by a lossless pyarrow cast: "
+    )
+    assert not (tmp_path / "small.yaml").exists()
+    assert (tmp_path / "small_original.yaml").exists()
+
+
+def test_to_chbench_skips_a_row_without_a_sample(tmp_path):
+    from analytics.recommend import to_chbench
+
+    frame = pl.DataFrame({"a": [i % 7 for i in range(2_000)]})
+    rec = StreamingRecommender(reservoir_rows=0)
+    result = rec.add(frame).result()
+    assert result["clickhouse_codecs"].null_count() == 1
+    assert to_chbench(result, frame, tmp_path) == [("a", "no codec chosen (no sample)")]
+    assert not list(tmp_path.glob("*.yaml"))

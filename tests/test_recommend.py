@@ -19,7 +19,7 @@ import pytest
 from analytics.describe import _sizes
 from analytics.recommend import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, large_dataset, stringified
-from test_clickhouse_recommend import pyarrow_body
+from harness import pyarrow_body
 
 
 def rec(s: pl.Series, **params) -> dict:

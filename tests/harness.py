@@ -15,9 +15,11 @@ from __future__ import annotations
 import importlib
 
 import polars as pl
+import pyarrow as pa
 import pytest
 
 from analytics.base import STATUS, Technique
+from analytics.describe._sizes import ipc_body_bytes
 
 
 def implementation_params(package: str, include_reference: bool = True) -> list:
@@ -97,3 +99,9 @@ def with_metrics(base: type[Technique], **metrics: list) -> type[Technique]:
 
     Fixed.__name__ = f"Fixed{base.__name__}"
     return Fixed
+
+
+def pyarrow_body(arr: pa.Array, compression: str | int | None) -> int:
+    """Body length of the record-batch IPC messages pyarrow writes for one column
+    (`compression`: None, a ZSTD level, or "lz4" = LZ4_FRAME)."""
+    return ipc_body_bytes(arr, compression)
