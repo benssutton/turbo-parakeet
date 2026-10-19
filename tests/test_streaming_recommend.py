@@ -188,13 +188,36 @@ def per_batch_sum(r: dict) -> bool:
     )
 
 
+def wide_temporal(r: dict, o: dict) -> bool:
+    """A temporal type derived from text has no exact range in streaming: it maps to the
+    wide type (Date32 / DateTime64(0)) where one-shot may prove Date / DateTime."""
+    if r["dtype"] not in ("string", "large_string", "string_view"):
+        return False
+    a, b = r["clickhouse_type"], o["clickhouse_type"]
+    if a is None or b is None:
+        return False
+    for pre, post in (("", ""), ("Nullable(", ")")):
+        if not (a.startswith(pre) and a.endswith(post) and b.startswith(pre)):
+            continue
+        ia, ib = a[len(pre) : len(a) - len(post)], b[len(pre) : len(b) - len(post)]
+        if ia == "Date32" and ib == "Date":
+            return True
+        if (
+            ia.startswith("DateTime64(0")
+            and ib.startswith("DateTime")
+            and not ib.startswith("DateTime64")
+        ):
+            return True
+    return False
+
+
 def assert_compression_parity(name: str, r: dict, o: dict):
     """ClickHouse and Arrow IPC compression columns (spec 2026-10-19 §6): equal when the
     sampled block is the whole column; else sizes within 2% and the same codecs unless
     the best chains are within 2%."""
     whole = r["n_sampled_rows"] == r["n_rows"] and r["n_sampled_blocks"] == 1
     # Streaming cannot offer GCD for numbers derived from text.
-    gcd_unknown = any(
+    gcd_unknown = wide_temporal(r, o) or any(
         "GCD unknown" in (c["evidence"] or "")
         for c in (r["clickhouse_candidates"] or [])
     )
@@ -274,7 +297,11 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         got = candidates(r, original_sizes, not overflowed)
         want = candidates(o, original_sizes, not overflowed)
         assert got == want, name
-        assert r["clickhouse_type"] == o["clickhouse_type"], (name, r, o)
+        assert r["clickhouse_type"] == o["clickhouse_type"] or wide_temporal(r, o), (
+            name,
+            r["clickhouse_type"],
+            o["clickhouse_type"],
+        )
         assert_compression_parity(name, r, o)
         # Both rank by exact counts while the dictionary is a candidate (spec 2026-10-07 §4).
         for k in ("top_k", "inner_top_k"):

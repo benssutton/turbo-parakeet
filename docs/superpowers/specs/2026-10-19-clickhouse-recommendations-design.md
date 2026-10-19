@@ -147,6 +147,7 @@ running statistics (exact).  `reservoir_rows = 0` → the sizes, choices and `cl
 (`clickhouse_type` is still given).  Parity with one-shot: exact when one batch holds every row, `block_rows` is a
 multiple of 8 192 and the type is fixed-width (compression blocks then never straddle a sampled block); otherwise
 within the tolerance measured by the parity tests (target 2%).
+The Arrow IPC sizes are measured on the sampled blocks concatenated into one array (the single body one-shot measures), scaled by `n_rows / sampled_rows`; the ClickHouse emulator runs per sampled block (its blocks are granule-aligned) and sums. A temporal type derived from text has no exact range in streaming, so it maps to the always-valid wide type (`Date32`, `DateTime64(p)`) where one-shot may prove `Date` / `DateTime`; parity tests allow exactly this difference.
 
 ## 7. Handoff: `to_chbench`
 
