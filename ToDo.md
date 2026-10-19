@@ -57,6 +57,8 @@ g. **Done** (spec 2026-10-17-generated-dataset-design.md): benchmark results are
 7. Any remaining follow-ups tracked in CLAUDE.md.  The Bloom and MinHash follow-ups are prerequisites for ToDo 10: BloomRust is ≈ 6× slower than exact sets on the wide benchmark, and MinHash misses containment pairs (overlap 1, low Jaccard) — exactly the foreign-key → primary-key case.
 - Consolidate the synthetic data generators (`tests/datagen.py` and `chbench.datagen`) when turbo-parakeet and clickhouse_benchmark merge.
 - ClickHouse String size emulation: LZ4 over-predicts (median +19%), small ZSTD(1) columns under-predict (up to 78%) — calibrate the String layout (spec 2026-10-19 §11).
+- ClickHouse Date32 / DateTime64 range limits (1900–2299) are not checked by the type mapping (spec 2026-10-19 §2).
+- Emulator block cutting: a granule over 1 MiB closes the open block early (ClickHouse fills it first) — matters only for rows averaging > 128 bytes.
 - Recommender parity, string columns whose null slots hold bytes (e.g. built with `pl.when(...).then(None)` or `Series.set`): one-shot measures those bytes in its cast candidates (`datafusion_size_bytes`), streaming does not; `assert_parity` excuses the gap only for the original type.  Decide which is right (an Arrow cast keeps the bytes; a writer may not) and align them.
 
 ---

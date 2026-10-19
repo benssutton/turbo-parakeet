@@ -44,7 +44,7 @@ Applied to the **recommended** Arrow type (`datafusion_type`) and its statistics
 | struct | `Tuple(name T′, …)` |
 | timestamp_with_offset, null, anything else | null (`clickhouse_candidates` names the reason) |
 
-`T′` is the mapping of the child type (nullable inside when the child holds nulls).  The mapping is one Rust function
+`T′` is the mapping of the child type (nullable inside when the child field is nullable (Arrow field metadata; Polars marks list items nullable by default)).  The mapping is one Rust function
 (`recommenders/engine/clickhouse.rs`) with a unit test per row of this table.
 
 ## 3. ClickHouse size emulator
@@ -118,7 +118,7 @@ Thresholds are recommender keywords (decisions belong to the recommenders; techn
 
 | keyword | default | meaning |
 |---|---|---|
-| `zstd_levels` | `(1, 3, 9)` | ZSTD levels emulated; each within the zstd crate's range, distinct, non-empty |
+| `zstd_levels` | `(1, 3, 9)` | ZSTD levels emulated; each in 1…22 (ClickHouse's range), distinct, non-empty |
 | `zstd_level_tolerance` | `0.01` | the lowest level within this fraction of the best ZSTD size wins |
 | `zstd_min_saving` | `0.10` | ZSTD must save this fraction over LZ4; also the shortcut's bound |
 | `gcd_min_saving` | `0.01` | GCD must save this fraction over the chain without it |
@@ -236,14 +236,14 @@ than 10% on a fixed-width type, the approximation in §3 is revised before the t
 
 ## 11. Outcome
 
-**Vocabulary (chbench R36, ClickHouse 26.8.31.2).** The server accepted every type the mapping emits (UInt8/16/64, Int8/16/64, Float32, Bool, Decimal, Date32, DateTime, DateTime64(0/6/9, tz), FixedString, Enum8/16, Time64(3)); `Time64(p)` needs no setting (`enable_time_time64_type` makes no difference), so the mapping now emits it for time32 / time64. `GCD` is accepted on integer, Bool, decimal, Date, Date32, DateTime and DateTime64 columns, and rejected (code 36) on floats, Enum, Time64, strings. On disk it never narrows the column (Int64 stays 8 bytes uncompressed): on multiples of 1 000 `GCD, <c>` lands within 0.1 to 1.9 % of plain `<c>` on the divided values (13 to 45 % smaller than `<c>` alone), and where the GCD is 1 it costs 0.1 to 1.9 % more. Calibration (`tests/performance/calibrate_clickhouse_sizes.py`, 237 cells over `large_dataset_mixed` and four 1 000 000-row GCD frames, chbench `full_scan`, `warm`, one sample; measured = `column_data_compressed_bytes`; predicted = `<name>.predicted.json`; results in `tests/performance/results/clickhouse_calibration.arrow`, git-ignored). |rel_error| by type family x codec x compression:
+**Vocabulary (chbench R36, ClickHouse 26.8.31.2).** The server accepted every type the mapping emits (UInt8/16/64, Int8/16/64, Float32, Bool, Decimal, Date32, DateTime, DateTime64(0/6/9, tz), FixedString, Enum8/16, Time64(3)); `Time64(p)` needs no setting (`enable_time_time64_type` makes no difference), so the mapping now emits it for time32 / time64. `GCD` is accepted on integer, Bool, decimal, Date, Date32, DateTime and DateTime64 columns, and rejected (code 36) on floats, Enum, Time64, strings. On disk it never narrows the column (Int64 stays 8 bytes uncompressed): on multiples of 1 000 `GCD, <c>` lands within 0.1 to 1.9 % of plain `<c>` on the divided values (13 to 45 % smaller than `<c>` alone), and where the GCD is 1 it costs 0.1 to 1.9 % more. Calibration (`tests/performance/calibrate_clickhouse_sizes.py`, 269 cells over `large_dataset_mixed` and four 1 000 000-row GCD frames, chbench `full_scan`, `warm`, one sample; each column whose recommended Arrow type differs from the original has a recommended suite over the cast dataset and an `_original` suite (§7), so the types' parameters match what chbench reads from the file; measured = `column_data_compressed_bytes`; predicted = `<name>.predicted.json`; results in `tests/performance/results/clickhouse_calibration.arrow`, git-ignored). |rel_error| by type family x codec x compression:
 
 | family | codec | compression | n | median | max |
 |---|---|---|---|---|---|
-| Int / UInt | none | LZ4 / ZSTD(1) / ZSTD(9) | 22 / 4 / 16 | 0 | 0 |
+| Int / UInt | none | LZ4 / ZSTD(1) / ZSTD(9) | 39 / 4 / 33 | 0 | 19.1 / 0 / 2.2 (6 near-empty columns: LZ4 925 predicted, 46 measured bytes; ZSTD(9) 176 vs 55) |
 | Int / UInt | GCD | LZ4 / ZSTD(9) | 1 / 1 | 1.86 % / 0.08 % | 1.86 % / 0.08 % |
 | Float | none | LZ4 / ZSTD(1) / ZSTD(9) | 25 / 5 / 5 | 0 | 0 |
-| Decimal | none | LZ4 / ZSTD(1) | 1 / 1 | 0.02 % | 0.02 % |
+| Decimal | none | — | 0 | — | — (not calibrated: chbench's dataset cache cannot load a `decimal32` / `decimal64` file, `pc.dictionary_encode`; the one decimal suite failed) |
 | Date / DateTime / DateTime64 | none | LZ4 / ZSTD(1) / ZSTD(3) / ZSTD(9) | 27 / 9 / 1 / 15 | 0 | 0 |
 | Bool | none | LZ4 | 17 | 0 | 402 % (6 columns: 231 predicted, 46 measured bytes) |
 | Bool | none | ZSTD(9) | 17 | 0 | 20 % (6 columns: 44 predicted, 55 measured bytes) |
@@ -252,7 +252,7 @@ than 10% on a fixed-width type, the approximation in §3 is revised before the t
 | String | none | ZSTD(9) | 5 | 6.6 % | 6.8 % |
 | LowCardinality(String) | LowCardinality | LZ4 / ZSTD(1) / ZSTD(9) | 10 / 5 / 5 | 0.9 % / 2.2 % / 0.3 % | 1.3 % / 2.5 % / 0.4 % |
 
-Overall (all 237 cells): median 0, p90 20 %, max 402 %. No fixed-width type has a median above 0.03 %, so the approximation of §3 stands. **Adopted tolerance policy.** The literal rule of §10 (the maximum |rel_error| rounded up) gives 403 %, set entirely by Bool columns of 46 to 231 bytes whose absolute error is under 200 bytes, so it is meaningless. Adopted instead: **fixed-width types: |predicted − measured| ≤ max(2 % × measured, 256 bytes)** (every calibrated fixed-width cell meets it; without Bool the relative maximum is 1.86 %); **`LowCardinality(String)`: ≤ 2.5 %**; **String: no tolerance yet** — its layout approximation is weaker (LZ4 median +19 %, max 31.3 %; small ZSTD(1) columns of 3.6 KB under-predicted by up to 78.2 %; ZSTD(9) within 6.8 %). Calibrating the String layout is a follow-up (ToDo 7). The calibration measured the chosen codec chain and compression per column plus `none` / `LZ4` (cells `to_chbench` writes); the GCD codec is therefore covered by one chosen cell (multiples of 1 000: predicted 5 941 912 vs measured 6 054 348 for `GCD, LZ4`), while the even-values and multiples-of-3 frames correctly leave GCD out (pruned or under 1 %).
+Overall (all 269 cells): median 0, p90 31 %, max 1 911 %. No fixed-width type has a median above 0.03 %, so the approximation of §3 stands. Before the handoff fix (one suite per column, types sharing one dataset) the figures were 237 cells, p90 20 %, max 402 %; the extra cells are the `_original` suites, which now measure the original type (Int32 where the recommendation was Bool or UInt8) on its own dataset. **Adopted tolerance policy.** The literal rule of §10 (the maximum |rel_error| rounded up) gives 403 %, set entirely by Bool columns of 46 to 231 bytes whose absolute error is under 200 bytes, so it is meaningless. Adopted instead: **fixed-width types: |predicted − measured| ≤ max(2 % × measured, 256 bytes)** (every calibrated fixed-width cell meets it except six Int32 / LZ4 cells of near-empty columns, 925 predicted vs 46 measured bytes, 879 bytes over the 256-byte floor; the same columns as Bool are within it, 231 vs 46; without these columns the relative maximum is 1.86 %); **`LowCardinality(String)`: ≤ 2.5 %**; **String: no tolerance yet** — its layout approximation is weaker (LZ4 median +19 %, max 31.3 %; small ZSTD(1) columns of 3.6 KB under-predicted by up to 78.2 %; ZSTD(9) within 6.8 %). Calibrating the String layout is a follow-up (ToDo 7). The calibration measured the chosen codec chain and compression per column plus `none` / `LZ4` (cells `to_chbench` writes); the GCD codec is therefore covered by one chosen cell (multiples of 1 000: predicted 5 941 912 vs measured 6 054 348 for `GCD, LZ4`), while the even-values and multiples-of-3 frames correctly leave GCD out (pruned or under 1 %).
 
 ## 12. Testing and documentation
 

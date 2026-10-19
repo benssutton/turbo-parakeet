@@ -183,7 +183,7 @@ Private — reached only through `analytics._plugin`, only by the `*Rust` classe
 `ams_marginal_entropy`, `ams_pairwise_joint_entropy`, `ams_threeway_joint_entropy`,
 `space_saving_top_k`, `heavy_keeper_top_k`,
 `bloom_filter` + `membership_ratio` (the bit array crosses as `bytes`), `minhash` + `lsh_candidates`,
-`describe_columns` + `column_sizes`; `render` (arrow-rs text of min / max, used by
+`describe_columns` + `column_sizes`; `ipc_body_sizes` + `clickhouse_profile` (used by `analytics.recommend.chbench` and tests); `render` (arrow-rs text of min / max, used by
 `analytics.describe.base` and `analytics.top_k.base`); `checked_table` (the checked Arrow import, used by
 `analytics.base` before py-polars reads Arrow input — handed over as a pyarrow Table when pyarrow is installed);
 `StreamingRecommender` / `OneShotRecommender` (via `_plugin.streaming_recommender` / `_plugin.oneshot_recommender`, used only by `analytics.recommend`).
