@@ -9,6 +9,7 @@ mod cast;
 mod choose;
 mod clickhouse;
 mod column;
+mod compression;
 mod entropy;
 mod exemplar;
 mod polars_layout;
@@ -24,6 +25,8 @@ pub(crate) use choose::*;
 #[expect(unused_imports, reason = "used by the recommenders (later task)")]
 pub(crate) use clickhouse::*;
 pub(crate) use column::*;
+#[expect(unused_imports, reason = "used by the recommenders (later task)")]
+pub(crate) use compression::*;
 pub use entropy::EntropyEstimator;
 pub(crate) use entropy::*;
 pub(crate) use exemplar::*;

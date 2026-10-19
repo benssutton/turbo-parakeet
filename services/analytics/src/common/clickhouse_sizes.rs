@@ -392,14 +392,14 @@ pub(crate) fn streams(a: &dyn Array, layout: &ChLayout) -> Result<Vec<Stream>, S
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Compression {
     Lz4,
     Zstd(i32),
 }
 
 /// A codec chain: optional GCD, then a compression.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Chain {
     pub gcd: bool,
     pub compression: Compression,
