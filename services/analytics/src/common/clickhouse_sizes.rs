@@ -7,6 +7,8 @@ use arrow_array::types::*;
 use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType as AT, TimeUnit};
+use rayon::prelude::*;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// How a ClickHouse column is laid out on disk (MergeTree Wide parts).
@@ -375,6 +377,209 @@ pub(crate) fn streams(a: &dyn Array, layout: &ChLayout) -> Result<Vec<Stream>, S
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Compression {
+    Lz4,
+    Zstd(i32),
+}
+
+/// A codec chain: optional GCD, then a compression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Chain {
+    pub gcd: bool,
+    pub compression: Compression,
+}
+
+impl Chain {
+    /// As written in DDL: "LZ4", "ZSTD(3)", "GCD, LZ4", "GCD, ZSTD(3)".
+    pub(crate) fn ddl(&self) -> String {
+        let c = match self.compression {
+            Compression::Lz4 => "LZ4".to_string(),
+            Compression::Zstd(l) => format!("ZSTD({l})"),
+        };
+        if self.gcd {
+            format!("GCD, {c}")
+        } else {
+            c
+        }
+    }
+}
+
+/// Emulated size of the streams under `chain`, and the histogram of the uncompressed bytes
+/// the compressor sees (after GCD).
+pub(crate) struct Emulated {
+    pub bytes: u64,
+    pub histogram: [u64; 256],
+}
+
+pub(crate) const GRANULE_ROWS: u64 = 8_192;
+pub(crate) const MIN_BLOCK: u64 = 65_536;
+pub(crate) const MAX_BLOCK: u64 = 1_048_576;
+/// 16-byte checksum + 9-byte header.
+pub(crate) const BLOCK_HEADER: u64 = 25;
+
+/// Byte ranges of a stream's compression blocks: granules of top-level rows are appended to
+/// the open block, which closes once it holds at least `MIN_BLOCK` bytes; a granule over
+/// `MAX_BLOCK` closes the open block and is split into `MAX_BLOCK` pieces, each a block.
+/// A stream whose `row_ends` are all equal (a LowCardinality dictionary) is one granule.
+fn block_ranges(s: &Stream) -> Vec<(usize, usize)> {
+    let total = s.bytes.len() as u64;
+    let n = s.row_ends.len();
+    let whole = n == 0 || s.row_ends.iter().all(|&e| e == s.row_ends[0]);
+    let mut granules: Vec<(u64, u64)> = Vec::new();
+    if whole {
+        granules.push((0, total));
+    } else {
+        let g = GRANULE_ROWS as usize;
+        let mut start = 0;
+        for k in 0..n.div_ceil(g) {
+            let end = s.row_ends[((k + 1) * g).min(n) - 1];
+            granules.push((start, end));
+            start = end;
+        }
+    }
+    let (mut blocks, mut open) = (Vec::new(), None::<(u64, u64)>);
+    for (gs, ge) in granules {
+        if ge == gs {
+            continue;
+        }
+        if ge - gs > MAX_BLOCK {
+            blocks.extend(open.take());
+            let mut p = gs;
+            while p < ge {
+                let q = (p + MAX_BLOCK).min(ge);
+                blocks.push((p, q));
+                p = q;
+            }
+            continue;
+        }
+        let b = open.get_or_insert((gs, gs));
+        b.1 = ge;
+        if b.1 - b.0 >= MIN_BLOCK {
+            blocks.extend(open.take());
+        }
+    }
+    blocks.extend(open);
+    blocks
+        .into_iter()
+        .map(|(a, b)| (a as usize, b as usize))
+        .collect()
+}
+
+/// Uncompressed byte length of each block of a stream.
+#[cfg(test)]
+fn block_sizes(s: &Stream) -> Vec<u64> {
+    block_ranges(s)
+        .iter()
+        .map(|&(a, b)| (b - a) as u64)
+        .collect()
+}
+
+/// The GCD codec on one block of `width`-byte values: `[gcd] + values / gcd`. The GCD is of
+/// the values' magnitudes (zeros skipped); GCD 0 or 1 leaves the block unchanged. (An
+/// approximation of the real layout, to be checked by a spike.)
+fn gcd_transform(block: &[u8], width: usize, signed: bool) -> Cow<'_, [u8]> {
+    if width == 0 || width > 16 || !block.len().is_multiple_of(width) {
+        return Cow::Borrowed(block);
+    }
+    let read = |c: &[u8]| -> u128 {
+        let mut buf = [0u8; 16];
+        buf[..width].copy_from_slice(c);
+        if signed && c[width - 1] & 0x80 != 0 {
+            buf[width..].fill(0xFF);
+        }
+        u128::from_le_bytes(buf)
+    };
+    let magnitude = |v: u128| {
+        if signed {
+            (v as i128).unsigned_abs()
+        } else {
+            v
+        }
+    };
+    let mut g = 0u128;
+    for c in block.chunks_exact(width) {
+        let m = magnitude(read(c));
+        if m == 0 {
+            continue;
+        }
+        g = if g == 0 { m } else { binary_gcd(g, m) };
+        if g == 1 {
+            return Cow::Borrowed(block);
+        }
+    }
+    if g <= 1 || (signed && g > i128::MAX as u128) {
+        return Cow::Borrowed(block);
+    }
+    let mut out = Vec::with_capacity(block.len() + width);
+    out.extend_from_slice(&g.to_le_bytes()[..width]);
+    for c in block.chunks_exact(width) {
+        let v = read(c);
+        let q = if signed {
+            ((v as i128) / g as i128) as u128
+        } else {
+            v / g
+        };
+        out.extend_from_slice(&q.to_le_bytes()[..width]);
+    }
+    Cow::Owned(out)
+}
+
+fn binary_gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+fn compressed_len(bytes: &[u8], c: Compression) -> Result<u64, String> {
+    match c {
+        Compression::Lz4 => {
+            lz4::block::compress(bytes, Some(lz4::block::CompressionMode::DEFAULT), false)
+                .map(|v| v.len() as u64)
+                .map_err(|e| e.to_string())
+        }
+        Compression::Zstd(l) => zstd::bulk::compress(bytes, l)
+            .map(|v| v.len() as u64)
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// Emulated size of the streams under `chain` (every block costs `BLOCK_HEADER` + its
+/// compressed payload) and the histogram of the bytes the compressor sees.
+pub(crate) fn emulate(streams: &[Stream], chain: Chain) -> Result<Emulated, String> {
+    let work: Vec<(&Stream, (usize, usize))> = streams
+        .iter()
+        .flat_map(|s| block_ranges(s).into_iter().map(move |r| (s, r)))
+        .collect();
+    let parts = work
+        .par_iter()
+        .map(|&(s, (a, b))| {
+            let raw = &s.bytes[a..b];
+            let data = match s.gcd_width {
+                Some((w, signed)) if chain.gcd => gcd_transform(raw, w, signed),
+                _ => Cow::Borrowed(raw),
+            };
+            let mut h = [0u64; 256];
+            for &x in data.iter() {
+                h[x as usize] += 1;
+            }
+            Ok((BLOCK_HEADER + compressed_len(&data, chain.compression)?, h))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut out = Emulated {
+        bytes: 0,
+        histogram: [0; 256],
+    };
+    for (n, h) in parts {
+        out.bytes += n;
+        for (t, v) in out.histogram.iter_mut().zip(h) {
+            *t += v;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +712,100 @@ mod tests {
         let s = streams(&st, &l).unwrap();
         assert_eq!(s[0].bytes, [5, 0]);
         assert_eq!(s[1].bytes, [1, b'u', 0]);
+    }
+
+    fn plain(bytes: Vec<u8>, width: usize) -> Stream {
+        let n = bytes.len() / width;
+        stream(bytes, fixed_ends(n, width))
+    }
+
+    #[test]
+    fn blocks_cut_on_granules() {
+        let a = UInt64Array::from_iter_values(0..20_000u64);
+        let s = streams(&a, &fx(8, false)).unwrap();
+        assert_eq!(block_sizes(&s[0]), [65_536, 65_536, 3_616 * 8]);
+        let a = UInt8Array::from(vec![7u8; 100_000]);
+        let s = streams(&a, &fx(1, false)).unwrap();
+        assert_eq!(block_sizes(&s[0]), [65_536, 100_000 - 65_536]);
+    }
+
+    #[test]
+    fn oversize_granule_is_split() {
+        // 3-byte varint + value = 2 MiB - 1 bytes.
+        let v = "x".repeat((2 << 20) - 4);
+        let a = StringArray::from(vec![v.as_str()]);
+        let s = streams(&a, &ChLayout::String).unwrap();
+        assert_eq!(block_sizes(&s[0]), [MAX_BLOCK, MAX_BLOCK - 1]);
+        // A dictionary is cut by bytes alone.
+        let s = streams(&a, &ChLayout::LowCardinality).unwrap();
+        assert_eq!(block_sizes(&s[0]), [MAX_BLOCK, MAX_BLOCK - 1]);
+    }
+
+    fn i64s(v: &[i64]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn gcd_transform_cases() {
+        let input = i64s(&[1000, 2000, 3000]);
+        let t = gcd_transform(&input, 8, true);
+        assert_eq!(&t[..8], [0xE8, 3, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(t.as_ref(), i64s(&[1000, 1, 2, 3]).as_slice());
+        let input = i64s(&[-6, 9]);
+        let t = gcd_transform(&input, 8, true);
+        assert_eq!(t.as_ref(), i64s(&[3, -2, 3]).as_slice());
+        let z = i64s(&[0, 0]);
+        assert_eq!(gcd_transform(&z, 8, true).as_ref(), z.as_slice());
+        let one = i64s(&[2, 3]);
+        assert_eq!(gcd_transform(&one, 8, true).as_ref(), one.as_slice());
+        // Zeros are skipped; unsigned narrow width.
+        assert_eq!(
+            gcd_transform(&[0, 10, 20], 1, false).as_ref(),
+            [10, 0, 1, 2]
+        );
+        // Signed narrow width sign-extends: -6 and 9.
+        assert_eq!(gcd_transform(&[0xFA, 9], 1, true).as_ref(), [3, 0xFE, 3]);
+    }
+
+    #[test]
+    fn histogram_and_sizes() {
+        let lz4 = Chain {
+            gcd: false,
+            compression: Compression::Lz4,
+        };
+        let e = emulate(&[plain(vec![0u8; 10], 1)], lz4).unwrap();
+        assert_eq!(e.histogram[0], 10);
+        assert!(e.histogram[1..].iter().all(|&c| c == 0));
+        let payload = lz4::block::compress(
+            &[0u8; 10],
+            Some(lz4::block::CompressionMode::DEFAULT),
+            false,
+        )
+        .unwrap()
+        .len() as u64;
+        assert_eq!(e.bytes, BLOCK_HEADER + payload);
+        // The histogram counts the post-GCD bytes: header 1000 = E8 03, then 1, 2, 3.
+        let mut s = plain(i64s(&[1000, 2000, 3000]), 8);
+        s.gcd_width = Some((8, true));
+        let e = emulate(&[s], Chain { gcd: true, ..lz4 }).unwrap();
+        assert_eq!(e.histogram.iter().sum::<u64>(), 32);
+        assert_eq!(
+            (e.histogram[0xE8], e.histogram[3], e.histogram[1]),
+            (1, 2, 1)
+        );
+        let z = Chain {
+            gcd: false,
+            compression: Compression::Zstd(3),
+        };
+        assert!(emulate(&[plain(vec![1; 100], 1)], z).unwrap().bytes > BLOCK_HEADER);
+    }
+
+    #[test]
+    fn chain_ddl() {
+        let c = |gcd, compression| Chain { gcd, compression }.ddl();
+        assert_eq!(c(false, Compression::Lz4), "LZ4");
+        assert_eq!(c(false, Compression::Zstd(3)), "ZSTD(3)");
+        assert_eq!(c(true, Compression::Lz4), "GCD, LZ4");
+        assert_eq!(c(true, Compression::Zstd(3)), "GCD, ZSTD(3)");
     }
 }
