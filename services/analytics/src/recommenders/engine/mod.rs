@@ -7,6 +7,7 @@ mod analytic_sizes;
 mod candidates;
 mod cast;
 mod choose;
+mod clickhouse;
 mod column;
 mod entropy;
 mod exemplar;
@@ -20,6 +21,8 @@ pub(crate) use analytic_sizes::*;
 pub(crate) use candidates::*;
 pub(crate) use cast::*;
 pub(crate) use choose::*;
+#[expect(unused_imports, reason = "used by the recommenders (later task)")]
+pub(crate) use clickhouse::*;
 pub(crate) use column::*;
 pub use entropy::EntropyEstimator;
 pub(crate) use entropy::*;

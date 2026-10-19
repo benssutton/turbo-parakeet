@@ -3,6 +3,7 @@
 //! scripts/check_layering.py).
 
 pub(crate) mod arrow_io;
+pub(crate) mod clickhouse_sizes;
 pub(crate) mod encode;
 pub(crate) mod entropy_math;
 pub(crate) mod error;
