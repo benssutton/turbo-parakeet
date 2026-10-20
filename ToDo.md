@@ -55,6 +55,7 @@ g. **Done** (spec 2026-10-17-generated-dataset-design.md): benchmark results are
 6. **Done** (spec 2026-10-17-generated-dataset-design.md): `datagen.large_dataset(n_rows, seed, null_rate, mean_run, clustering)` and `large_dataset_mixed()` replace tests/data/large_dataset.arrow.  The git pack still holds the old blob (history not rewritten).
 
 7. Any remaining follow-ups tracked in CLAUDE.md.  The Bloom and MinHash follow-ups are prerequisites for ToDo 10: BloomRust is ≈ 6× slower than exact sets on the wide benchmark, and MinHash misses containment pairs (overlap 1, low Jaccard) — exactly the foreign-key → primary-key case.
+   Skip-index cost: one-shot runs ≈ 4 granularities × 3 window scans plus ≈ 12 index-size emulations per column (bloom adds 4); not yet benchmarked — add a line to `tests/performance/benchmark_recommend.py` before large frames.
 - Polars' process-global categorical mapping: a user's Categorical columns share it, so other Categorical data alive in the same process can inflate a column's measured dictionary size (found while fixing the skip-index flake, commit 3ccc998).
 - Skip-index calibration is thin: one column per kind at G ≥ 2, only bloom fpr 0.025 chosen, point queries on Date / Decimal literals not parsed by the calibration script (spec 2026-10-20 §10).
 - Streaming skip indexes: inject running counts into the population / baselines instead of the sample's (spec 2026-10-20 §7).

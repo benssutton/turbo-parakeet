@@ -139,8 +139,9 @@ Calibration run: `tests/performance/calibrate_skip_indexes.py` (ClickHouse 26.8 
 `skip-index-sizes`; ~3 min for 40 suites, 3 workers), result `tests/performance/results/skip_index_calibration.arrow`
 (666 cells = 333 `none` controls + 333 indexed). Frames: the four known-answer shapes at 1 000 000 rows (clustered ids
 in runs of 1 000, grouped hashes in runs of 10; random 50 values chooses no index, sorted unique ids chooses `minmax`)
-and `large_dataset_mixed(200 000)`; 40 suites had a chosen index (37 from `large`, 3 from the shapes) (14 columns `minmax`, 10 `set`, 10 `bloom_filter`,
-and one column each at G = 2 / 2 / 4). One type, the first codec's `none`, one compression. Queries: the three `in`
+and `large_dataset_mixed(200 000)`; 40 suites had a chosen index; 37 tables produced skip cells (G = 1: 14 `minmax`, 10 `set`, 10 `bloom_filter`; and one
+table each at G = 2 / 2 / 4), and the other 3 suites (Date / Decimal columns) produced none, because the script does
+not parse their point-query literals. One type, the first codec's `none`, one compression. Queries: the three `in`
 point queries of `to_chbench` plus six extra fractions (more distinct values), one sample each. The predicted skip is
 computed exactly in Python from the suite's dataset in stored order; measured = `1 − selected_marks / total_marks`.
 
@@ -203,6 +204,10 @@ No systematic deviation found. Caveats: few distinct queried values per column (
 target fractions, so 91 of 333 cells are distinct points), 25 marks per `large` table, one fpr, G ≥ 2 on one column
 each, and 54 point queries on Date / Decimal-typed columns whose literals the script does not parse (skipped, not
 counted); the `large` frame uses 200 000 rows rather than 50 000 for mark resolution.
+
+The calibration validates the exact per-value block model; the recommender's decision input `skip_rows` is the
+row-weighted mean over sliding windows at every alignment, which ClickHouse's aligned blocks sample — only the
+thresholds and the choice depend on that difference.
 
 ## 11. Documentation
 
