@@ -50,8 +50,21 @@ pub(crate) fn skip_choice(
     if arr.data_type().is_nested() || matches!(arr.data_type(), arrow_schema::DataType::Null) {
         return none;
     }
-    let field = Field::new("x", arr.data_type().clone(), true);
-    let Ok(series) = import_array(&field, &arrow_array::make_array(arr.to_data())) else {
+    // A dictionary is decoded first: Polars would import it as a Categorical in the process-global
+    // category mapping, and a global Categorical column's exported size counts every category in
+    // it, so the size of unrelated columns would depend on which columns were imported before.
+    // The population ranks values (a Categorical by string) either way.
+    let decoded = match arr.data_type() {
+        arrow_schema::DataType::Dictionary(_, values) => {
+            let Ok(a) = arrow_cast::cast(arr, values) else {
+                return none;
+            };
+            a
+        }
+        _ => arrow_array::make_array(arr.to_data()),
+    };
+    let field = Field::new("x", decoded.data_type().clone(), true);
+    let Ok(series) = import_array(&field, &decoded) else {
         return none;
     };
     let Ok(pop) = population(&series) else {
@@ -200,5 +213,45 @@ fn measured(
                 per_window(sums.overflowed as f64),
             )
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::types::Int32Type;
+    use arrow_array::DictionaryArray;
+    use polars::prelude::{Categories, DataType, NamedFrom, Series};
+
+    /// A global Categorical column exports every category of the process-wide mapping, so the
+    /// skip-index import of a dictionary candidate must not register its values there (it made
+    /// a Categorical column's size depend on what ran beside it: flaky size parity).
+    #[test]
+    fn dictionary_values_stay_out_of_the_global_categories() {
+        let cats = Categories::global();
+        // Keeps the global mapping alive (it is dropped with its last column).
+        let _held = Series::new("held".into(), &["keep"])
+            .cast(&DataType::Categorical(cats.clone(), cats.mapping()))
+            .unwrap();
+        let probes: Vec<String> = (0..3).map(|i| format!("skip-choice-probe-{i}")).collect();
+        let d: DictionaryArray<Int32Type> = probes
+            .iter()
+            .flat_map(|p| std::iter::repeat_n(Some(p.as_str()), 50))
+            .collect();
+        let layout = ChLayout::LowCardinality;
+        let (_, candidates) = skip_choice(
+            &d,
+            Some(("LowCardinality(String)", &layout)),
+            Some(1_000),
+            &[(0, 150)],
+            &SkipParams::default(),
+            1.0,
+            Vec::new(),
+        );
+        assert!(!candidates.is_empty(), "the column was not measured");
+        let global = cats.mapping();
+        for p in &probes {
+            assert!(global.get_cat(p).is_none(), "{p} leaked");
+        }
     }
 }
