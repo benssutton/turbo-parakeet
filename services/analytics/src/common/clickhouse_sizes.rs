@@ -593,6 +593,270 @@ pub(crate) fn emulate(streams: &[Stream], chain: Chain) -> Result<Emulated, Stri
     Ok(out)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Skip indexes (chbench R37)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Bloom filter bits per distinct value of an index block, by false-positive rate (chbench R37).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const BLOOM_BITS_PER_VALUE: [(f64, u64); 4] =
+    [(0.001, 15), (0.01, 10), (0.025, 8), (0.05, 7)];
+
+/// A skip index's kind for size emulation.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum IndexKind {
+    MinMax,
+    Set { max_size: u64 },
+    Bloom { fpr: f64 },
+}
+
+/// How a value's bytes order (minmax).
+#[derive(Clone, Copy)]
+enum Order {
+    Unsigned,
+    Signed,
+    Float,
+    /// String bytes after the varint, or the FixedString bytes.
+    Bytes,
+}
+
+/// The column's value stream and its row accessors, for the index builders.
+struct Rows {
+    st: Stream,
+    order: Order,
+    /// String layout: each row's slice starts with a varint length.
+    varint: bool,
+    default: Vec<u8>,
+}
+
+impl Rows {
+    fn new(a: &dyn Array, layout: &ChLayout) -> Result<Self, String> {
+        const NESTED: &str = "skip indexes on nested types are not modelled";
+        let inner = match layout {
+            ChLayout::Nullable(i) => i.as_ref(),
+            l => l,
+        };
+        let (base, order, varint) = match inner {
+            ChLayout::Fixed { signed, .. } => {
+                let o = match a.data_type() {
+                    AT::Float16 | AT::Float32 | AT::Float64 => Order::Float,
+                    _ if *signed => Order::Signed,
+                    _ => Order::Unsigned,
+                };
+                (inner.clone(), o, false)
+            }
+            ChLayout::String | ChLayout::LowCardinality => (ChLayout::String, Order::Bytes, true),
+            ChLayout::FixedString(_) => (inner.clone(), Order::Bytes, false),
+            _ => return Err(NESTED.to_string()),
+        };
+        let st = streams(a, &base)?.pop().ok_or(NESTED)?;
+        let default = if varint {
+            vec![0]
+        } else {
+            vec![0; st.row_ends.first().copied().unwrap_or(0) as usize]
+        };
+        Ok(Self {
+            st,
+            order,
+            varint,
+            default,
+        })
+    }
+
+    /// Row `i`'s bytes as written to an index.
+    fn written(&self, i: usize) -> &[u8] {
+        let a = if i == 0 { 0 } else { self.st.row_ends[i - 1] } as usize;
+        &self.st.bytes[a..self.st.row_ends[i] as usize]
+    }
+
+    /// Row `i`'s bytes as compared.
+    fn value(&self, i: usize) -> &[u8] {
+        let w = self.written(i);
+        if self.varint {
+            let skip = w
+                .iter()
+                .position(|b| b & 0x80 == 0)
+                .map_or(w.len(), |p| p + 1);
+            &w[skip..]
+        } else {
+            w
+        }
+    }
+
+    fn key(&self, i: usize) -> u128 {
+        let v = self.value(i);
+        let bits = v.iter().rev().fold(0u128, |a, &b| a << 8 | u128::from(b));
+        let sign = 1u128 << (8 * v.len() - 1);
+        match self.order {
+            Order::Unsigned | Order::Bytes => bits,
+            Order::Signed => bits ^ sign,
+            Order::Float if bits & sign != 0 => !bits & (sign | (sign - 1)),
+            Order::Float => bits | sign,
+        }
+    }
+
+    fn less(&self, i: usize, j: usize) -> bool {
+        match self.order {
+            Order::Bytes => self.value(i) < self.value(j),
+            _ => self.key(i) < self.key(j),
+        }
+    }
+}
+
+fn index_blocks(n: usize, block_rows: u64) -> Result<Vec<std::ops::Range<usize>>, String> {
+    if block_rows == 0 {
+        return Err("index block of zero rows".to_string());
+    }
+    let b = block_rows as usize;
+    Ok((0..n.div_ceil(b))
+        .map(|k| k * b..((k + 1) * b).min(n))
+        .collect())
+}
+
+/// One stream, a row per index block.
+fn block_stream(parts: Vec<Vec<u8>>) -> Stream {
+    let mut bytes = Vec::new();
+    let mut ends = Vec::with_capacity(parts.len());
+    for p in parts {
+        bytes.extend_from_slice(&p);
+        ends.push(bytes.len() as u64);
+    }
+    stream(bytes, ends)
+}
+
+/// The uncompressed minmax index: per block the min and max of the non-null values (defaults
+/// for an all-null block), plus one byte per block when the column is nullable.
+#[cfg_attr(not(test), allow(dead_code))]
+fn minmax_stream(a: &dyn Array, layout: &ChLayout, block_rows: u64) -> Result<Stream, String> {
+    let rows = Rows::new(a, layout)?;
+    let nullable = matches!(layout, ChLayout::Nullable(_));
+    let parts = index_blocks(a.len(), block_rows)?
+        .into_iter()
+        .map(|r| {
+            let mut ext: Option<(usize, usize)> = None;
+            for i in r.filter(|&i| a.is_valid(i)) {
+                let (lo, hi) = ext.get_or_insert((i, i));
+                if rows.less(i, *lo) {
+                    *lo = i;
+                }
+                if rows.less(*hi, i) {
+                    *hi = i;
+                }
+            }
+            let mut out = Vec::new();
+            match ext {
+                Some((lo, hi)) => {
+                    out.extend_from_slice(rows.written(lo));
+                    out.extend_from_slice(rows.written(hi));
+                }
+                None => {
+                    out.extend_from_slice(&rows.default);
+                    out.extend_from_slice(&rows.default);
+                }
+            }
+            if nullable {
+                out.push(0);
+            }
+            out
+        })
+        .collect();
+    Ok(block_stream(parts))
+}
+
+/// A block's distinct non-null values (first-seen order, as written) and whether it holds a null.
+fn block_distinct<'a>(
+    rows: &'a Rows,
+    a: &dyn Array,
+    r: std::ops::Range<usize>,
+) -> (Vec<&'a [u8]>, bool) {
+    let mut seen = std::collections::HashSet::with_hasher(foldhash::fast::RandomState::default());
+    let (mut out, mut null) = (Vec::new(), false);
+    for i in r {
+        if a.is_null(i) {
+            null = true;
+        } else if seen.insert(rows.value(i)) {
+            out.push(rows.written(i));
+        }
+    }
+    (out, null)
+}
+
+/// The uncompressed set(`max_size`) index: per block an 8-byte count and, unless the block
+/// overflows (distinct values + NULL > `max_size`; 0 = unlimited), its distinct values.
+#[cfg_attr(not(test), allow(dead_code))]
+fn set_stream(
+    a: &dyn Array,
+    layout: &ChLayout,
+    max_size: u64,
+    block_rows: u64,
+) -> Result<Stream, String> {
+    let rows = Rows::new(a, layout)?;
+    let parts = index_blocks(a.len(), block_rows)?
+        .into_par_iter()
+        .map(|r| {
+            let (vals, null) = block_distinct(&rows, a, r);
+            let entries = vals.len() as u64 + u64::from(null);
+            let mut out = entries.to_le_bytes().to_vec();
+            if max_size == 0 || entries <= max_size {
+                vals.iter().for_each(|v| out.extend_from_slice(v));
+            }
+            out
+        })
+        .collect();
+    Ok(block_stream(parts))
+}
+
+/// Emulated bytes of a skip index on `a` (the column in its recommended Arrow type, ClickHouse
+/// physical values per `layout`) with index blocks of `block_rows` rows (G × 8 192); Err for an
+/// fpr not in `BLOOM_BITS_PER_VALUE`. minmax and set: the per-block entries concatenated and
+/// LZ4-compressed like a column stream; bloom_filter: ⌈D·b/8⌉ + v(D) bytes per block,
+/// uncompressed (random bits).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn skip_index_bytes(
+    a: &dyn Array,
+    layout: &ChLayout,
+    kind: IndexKind,
+    block_rows: u64,
+) -> Result<u64, String> {
+    let lz4 = Chain {
+        gcd: false,
+        compression: Compression::Lz4,
+    };
+    match kind {
+        IndexKind::MinMax => Ok(emulate(&[minmax_stream(a, layout, block_rows)?], lz4)?.bytes),
+        IndexKind::Set { max_size } => {
+            Ok(emulate(&[set_stream(a, layout, max_size, block_rows)?], lz4)?.bytes)
+        }
+        IndexKind::Bloom { fpr } => {
+            let bits = BLOOM_BITS_PER_VALUE
+                .iter()
+                .find(|(f, _)| *f == fpr)
+                .ok_or_else(|| {
+                    format!(
+                        "bloom_filter fpr {fpr} not measured (chbench R37: 0.001, 0.01, 0.025, 0.05)"
+                    )
+                })?
+                .1;
+            let rows = Rows::new(a, layout)?;
+            Ok(index_blocks(a.len(), block_rows)?
+                .into_par_iter()
+                .map(|r| {
+                    let d = block_distinct(&rows, a, r).0.len() as u64;
+                    let v = if d < 128 {
+                        1
+                    } else if d < 16_384 {
+                        2
+                    } else {
+                        3
+                    };
+                    (d * bits).div_ceil(8) + v
+                })
+                .sum())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,5 +1116,85 @@ mod tests {
         assert_eq!(c(false, Compression::Zstd(3)), "ZSTD(3)");
         assert_eq!(c(true, Compression::Lz4), "GCD, LZ4");
         assert_eq!(c(true, Compression::Zstd(3)), "GCD, ZSTD(3)");
+    }
+
+    fn ints(f: impl Fn(usize) -> i64, n: usize) -> Int64Array {
+        Int64Array::from((0..n).map(f).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn minmax_index_stream_and_size() {
+        let a = ints(|i| (i / 8192) as i64 * 100 + (i % 8192) as i64, 4 * 8192);
+        let s = minmax_stream(&a, &fx(8, true), 8192).unwrap();
+        assert_eq!(s.bytes.len(), 4 * 16);
+        assert_eq!(s.bytes[..8], 0i64.to_le_bytes());
+        assert_eq!(s.bytes[8..16], 8191i64.to_le_bytes());
+        assert_eq!(s.bytes[16..24], 100i64.to_le_bytes());
+        let b = skip_index_bytes(&a, &fx(8, true), IndexKind::MinMax, 8192).unwrap();
+        assert!(b > BLOCK_HEADER && b < BLOCK_HEADER + 64 + 16, "{b}");
+        // negatives order below positives; nullable adds a byte; all-null block = defaults
+        let a = Int64Array::from(vec![Some(5), Some(-3), None, None]);
+        let s = minmax_stream(&a, &nullable(fx(8, true)), 2).unwrap();
+        assert_eq!(s.bytes.len(), 2 * 17);
+        assert_eq!(s.bytes[..8], (-3i64).to_le_bytes());
+        assert_eq!(s.bytes[8..16], 5i64.to_le_bytes());
+        assert_eq!(s.bytes[17..33], [0u8; 16]);
+        let f = Float64Array::from(vec![1.5, -2.5, 0.0]);
+        let s = minmax_stream(&f, &fx(8, false), 8192).unwrap();
+        assert_eq!(s.bytes[..8], (-2.5f64).to_le_bytes());
+        assert_eq!(s.bytes[8..], 1.5f64.to_le_bytes());
+        let t = StringArray::from(vec!["b", "abc", "c"]);
+        let s = minmax_stream(&t, &ChLayout::String, 8192).unwrap();
+        assert_eq!(s.bytes, [3, b'a', b'b', b'c', 1, b'c']);
+    }
+
+    #[test]
+    fn set_index_stream() {
+        let a = Int32Array::from((0..4 * 8192).map(|i| i % 3).collect::<Vec<_>>());
+        let s = set_stream(&a, &fx(4, true), 125, 8192).unwrap();
+        assert_eq!(s.bytes.len(), 4 * (8 + 3 * 4));
+        assert_eq!(s.bytes[..8], 3u64.to_le_bytes());
+        let a = Int32Array::from((0..4 * 8192).map(|i| i % 200).collect::<Vec<_>>());
+        let s = set_stream(&a, &fx(4, true), 125, 8192).unwrap();
+        assert_eq!(s.bytes.len(), 4 * 8);
+        assert_eq!(s.bytes[..8], 200u64.to_le_bytes());
+        // NULL counts toward the limit but is not written
+        let a = Int32Array::from(vec![Some(1), Some(2), None]);
+        let l = nullable(fx(4, true));
+        assert_eq!(set_stream(&a, &l, 2, 8192).unwrap().bytes.len(), 8);
+        assert_eq!(set_stream(&a, &l, 3, 8192).unwrap().bytes.len(), 16);
+        let t = StringArray::from(vec!["x", "x", "yz"]);
+        let s = set_stream(&t, &ChLayout::String, 0, 8192).unwrap();
+        assert_eq!(s.bytes[8..], [1, b'x', 2, b'y', b'z']);
+        let k = IndexKind::Set { max_size: 3 };
+        assert!(skip_index_bytes(&a, &l, k, 8192).is_ok());
+    }
+
+    #[test]
+    fn bloom_index_bytes() {
+        let k = IndexKind::Bloom { fpr: 0.025 };
+        let l = fx(8, true);
+        let b = |d: i64, n: usize| skip_index_bytes(&ints(|i| i as i64 % d, n), &l, k, 8192);
+        assert_eq!(b(10, 4 * 8192), Ok(4 * 11));
+        assert_eq!(b(200, 4 * 8192), Ok(4 * 202));
+        assert_eq!(b(1 << 40, 8192), Ok(8194));
+        // partial last block counted with its own D
+        assert_eq!(b(10, 8192 + 5), Ok(11 + 6));
+        let e = skip_index_bytes(
+            &ints(|i| i as i64, 4),
+            &l,
+            IndexKind::Bloom { fpr: 0.5 },
+            8192,
+        )
+        .unwrap_err();
+        assert!(e.contains("fpr 0.5 not measured"), "{e}");
+    }
+
+    #[test]
+    fn skip_index_rejects_nested() {
+        let a = ListArray::from_iter_primitive::<Int8Type, _, _>(vec![Some(vec![Some(1)])]);
+        let l = ChLayout::Array(Box::new(fx(1, true)));
+        let e = skip_index_bytes(&a, &l, IndexKind::MinMax, 8192).unwrap_err();
+        assert_eq!(e, "skip indexes on nested types are not modelled");
     }
 }
