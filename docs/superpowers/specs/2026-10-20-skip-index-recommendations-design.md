@@ -68,8 +68,13 @@ Emulated, per index block of G granules (`common/clickhouse_sizes.rs` convention
   with LZ4;
 - `set(N)`: per block its distinct values (String layout for strings) or an empty set when it overflows, plus a count
   per block, compressed with LZ4;
-- `bloom_filter(fpr)`: per block ⌈rows × bits_per_row(fpr) / 8⌉ bytes, uncompressed (random bits); `bits_per_row`
-  from a table measured by chbench (§8.1), one entry per supported fpr (fprs outside the table → a `pruned` row).
+- `bloom_filter(fpr)`: sized by the **distinct values D of each index block**, not its rows (measured, chbench R37 /
+  FINDINGS §10): per block ⌈D × b / 8⌉ + v(D) bytes, b = 15 / 10 / 8 / 7 bits for fpr 0.001 / 0.01 / 0.025 / 0.05,
+  v(D) = 1 byte for D < 128, 2 for D < 16 384, else 3; stored effectively uncompressed (random bits; compression
+  only collapses byte-identical blocks).  An fpr outside the table → a `pruned` row.  So a bloom filter is cheap on
+  clustered data and costs about a byte per row only where every row of a block is distinct.
+- Measured per-block constants (R37): `minmax` 2 × value width (16 bytes for Int64); `set(N)` 8 bytes plus
+  value width × D, 8 bytes when the block overflows; index marks (121–305 bytes) are not modelled.
 
 Approximate by design; calibrated (§8.3).
 
