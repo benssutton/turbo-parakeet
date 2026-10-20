@@ -1,5 +1,18 @@
 """`to_chbench`: a recommender result as runnable suites for the sibling benchmark project
-`clickhouse_benchmark` (`chbench`) — spec 2026-10-19 §7. A helper, not a recommender."""
+`clickhouse_benchmark` (`chbench`) — spec 2026-10-19 §7, skip indexes 2026-10-20 §8.2. A helper,
+not a recommender.
+
+Skip index: when the result chose one (`clickhouse_skip_index`, e.g. `"set(125) GRANULARITY 4"`),
+the recommended suite's `skip_index` axis is `[<chosen in chbench's grammar>, "none"]`, e.g.
+`["set(125):4", "none"]` (chbench ruling R38: `<index>[:<G>]`); the original suite keeps `["none"]`.
+Queries: full_scan, point `in` filters (`values: 1`) at target fractions 0.001, 0.01 and 0.05,
+and a range filter on range-capable types.
+
+`<name>.predicted.json` maps `"<type>|<codec>|<compression>"` to the predicted column bytes, as
+before (also the `skip = none` cells, so the calibration script is unchanged), and for the cells of
+the chosen index `"<type>|<codec>|<compression>|<skip>"` to
+`{"column_bytes": …, "index_bytes": …}` (the chosen candidate's predicted index size).
+"""
 
 import json
 import re
@@ -84,6 +97,21 @@ def _table(frame):
     if isinstance(frame, pl.DataFrame):
         return frame.to_arrow()
     return pa.table(frame)
+
+
+def _skip_axis(text: str | None) -> str | None:
+    """`"set(125) GRANULARITY 4"` -> chbench's `"set(125):4"`; None when no index was chosen."""
+    if not text:
+        return None
+    index, _, g = text.partition(" GRANULARITY ")
+    return f"{index}:{g}" if g else index
+
+
+def _index_bytes(r: dict) -> int | None:
+    chosen = [
+        c for c in r.get("clickhouse_skip_indexes") or [] if c["outcome"] == "chosen"
+    ]
+    return chosen[0]["bytes"] if chosen else None
 
 
 def _compression(codecs: str) -> str:
@@ -209,14 +237,23 @@ def _write(
         return candidates.get(chain)
 
     predicted = {f"{base}|{k}|{c}": predict(k, c) for k in codecs for c in comps}
+    skip = None if original else _skip_axis(r.get("clickhouse_skip_index"))
+    if skip:
+        index_bytes = _index_bytes(r)
+        for k in codecs:
+            for c in comps:
+                predicted[f"{base}|{k}|{c}|{skip}"] = {
+                    "column_bytes": predict(k, c),
+                    "index_bytes": index_bytes,
+                }
 
     dataset = {"path": f"{name}.arrow", "column": col}
     t = one.schema.field(col).type
     if base.startswith("Decimal") and pa.types.is_decimal(t):
         dataset["decimal_places"] = t.scale
-    kinds = [
-        {"kind": "full_scan"},
-        {"kind": "filter", "target_fraction": 0.05, "predicate": "in", "values": 1},
+    kinds = [{"kind": "full_scan"}] + [
+        {"kind": "filter", "target_fraction": f, "predicate": "in", "values": 1}
+        for f in (0.001, 0.01, 0.05)
     ]
     if _RANGE_TYPES.match(base):
         kinds.append({"kind": "filter", "target_fraction": 0.10, "predicate": "range"})
@@ -229,7 +266,7 @@ def _write(
             "primary_key": [False],
             "projection": [False],
             "codec": codecs,
-            "skip_index": ["none"],
+            "skip_index": [skip, "none"] if skip else ["none"],
             "compression": comps,
         },
         "queries": {

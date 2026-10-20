@@ -166,3 +166,108 @@ def test_streaming_granularity_capped_by_block_rows():
     assert {r["granularity"] for r in rows if r["skip_rows"] is not None} <= {1, 2}
     assert any(r["skip_rows"] is not None for r in rows), show(rows)
     assert {4, 8} <= {r["granularity"] for r in rows if r["outcome"] == "pruned"}
+
+
+# ---- to_chbench: the skip-index axis and point queries (spec §8.2) ------------------------
+
+
+def chbench_suites(tmp_path, frames, **kw):
+    import json
+
+    import yaml
+
+    from analytics.recommend import to_chbench
+
+    frame = pl.DataFrame(frames)
+    result = OneShotRecommender(**kw).add(frame).result()
+    to_chbench(result, frame, tmp_path)
+    suites = {p.stem: yaml.safe_load(p.read_text()) for p in tmp_path.glob("*.yaml")}
+    predicted = {
+        p.name.removesuffix(".predicted.json"): json.loads(p.read_text())
+        for p in tmp_path.glob("*.predicted.json")
+    }
+    return result, suites, predicted
+
+
+def test_to_chbench_skip_index_axis_and_predictions(tmp_path):
+    result, suites, predicted = chbench_suites(
+        tmp_path,
+        {
+            "sorted": sorted_ids(),
+            "clustered": clustered(),
+            "bloom": grouped_hashes(),
+            "random": random_50(),
+        },
+    )
+    rows = {r["column"]: r for r in result.iter_rows(named=True)}
+    assert suites["sorted"]["clickhouse"]["skip_index"] == ["minmax:1", "none"]
+    assert suites["clustered"]["clickhouse"]["skip_index"] == ["set(125):1", "none"]
+    assert suites["bloom"]["clickhouse"]["skip_index"] == [
+        "bloom_filter(0.025):1",
+        "none",
+    ]
+    assert suites["random"]["clickhouse"]["skip_index"] == ["none"]
+    for name, skip in (("sorted", "minmax:1"), ("clustered", "set(125):1")):
+        ch = suites[name]["clickhouse"]
+        chosen = [
+            c for c in rows[name]["clickhouse_skip_indexes"] if c["outcome"] == "chosen"
+        ][0]
+        for k in predicted[name]:
+            parts = k.split("|")
+            if len(parts) == 4:
+                assert parts[3] == skip
+                assert predicted[name][k]["index_bytes"] == chosen["bytes"] > 0
+                assert (
+                    predicted[name]["|".join(parts[:3])]
+                    == predicted[name][k]["column_bytes"]
+                )
+        assert any(len(k.split("|")) == 4 for k in predicted[name])
+        cells = {
+            f"{t}|{k}|{c}"
+            for t in ch["type"]
+            for k in ch["codec"]
+            for c in ch["compression"]
+        }
+        assert {k for k in predicted[name] if k.count("|") == 2} == cells
+    assert all(k.count("|") == 2 for k in predicted["random"])
+    for name, s in suites.items():
+        assert s["queries"]["kinds"][0] == {"kind": "full_scan"}
+        ins = [k for k in s["queries"]["kinds"] if k.get("predicate") == "in"]
+        assert [k["target_fraction"] for k in ins] == [0.001, 0.01, 0.05]
+        assert all(k["values"] == 1 for k in ins)
+
+
+def test_to_chbench_original_suite_keeps_no_index(tmp_path):
+    _, suites, predicted = chbench_suites(tmp_path, {"sorted": sorted_ids()})
+    assert suites["sorted"]["clickhouse"]["skip_index"][0].startswith("minmax")
+    assert suites["sorted_original"]["clickhouse"]["skip_index"] == ["none"]
+    assert all(k.count("|") == 2 for k in predicted["sorted_original"])
+
+
+def test_to_chbench_granularity_suffix(tmp_path):
+    _, suites, predicted = chbench_suites(
+        tmp_path, {"sorted": sorted_ids()}, skip_granularities=(4,)
+    )
+    assert suites["sorted"]["clickhouse"]["skip_index"] == ["minmax:4", "none"]
+    assert any(k.endswith("|minmax:4") for k in predicted["sorted"])
+
+
+def test_to_chbench_skip_suites_load_in_chbench(tmp_path):
+    import sys
+    from pathlib import Path
+
+    root = Path("c:/Users/Alexander/clickhouse_benchmark")
+    if not root.exists():
+        pytest.skip("clickhouse_benchmark not found")
+    sys.path.insert(0, str(root))
+    pytest.importorskip("chbench")
+    from chbench.harness.suite import load_suite
+
+    _, suites, _ = chbench_suites(
+        tmp_path,
+        {"sorted": sorted_ids(), "clustered": clustered(), "bloom": grouped_hashes()},
+        skip_granularities=(1, 4),
+    )
+    for name in suites:
+        s = load_suite(tmp_path / f"{name}.yaml")
+        assert s.clickhouse.skip_index[-1] == "none"

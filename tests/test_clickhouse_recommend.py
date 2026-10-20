@@ -251,7 +251,15 @@ def test_to_chbench_yaml_axes(chbench_out):
     assert tag["clickhouse"]["type"] == ["String"]
     assert tag["clickhouse"]["codec"] == ["LowCardinality", "none"]
     assert tag["clickhouse"]["nullable"] == [False]
-    assert [k["kind"] for k in tag["queries"]["kinds"]] == ["full_scan", "filter"]
+    assert [k["kind"] for k in tag["queries"]["kinds"]] == ["full_scan"] + [
+        "filter"
+    ] * 3
+    assert [k["target_fraction"] for k in tag["queries"]["kinds"][1:]] == [
+        0.001,
+        0.01,
+        0.05,
+    ]
+    assert {k["predicate"] for k in tag["queries"]["kinds"][1:]} == {"in"}
     price = suites["price"]
     assert price["clickhouse"]["type"] in (["Decimal32"], ["Decimal64"])
     assert suites["price_original"]["clickhouse"]["type"] == ["Float64"]
