@@ -69,6 +69,12 @@ class OneShotRecommender:
     rows a point query must skip, `min_gain` the smallest gain over a random row order,
     and `max_overflow` the largest share of windows whose distinct values may exceed a
     set's size; the three lie in [0, 1].
+
+    Run-end encoding: never recommended. DataFusion 54 rejects MIN / MAX aggregates over a
+    run-end-encoded column ("Min/Max accumulator not implemented"), while every other operator
+    probed works and returns identical results, and Arrow IPC files with REE columns read fine; an
+    REE recommendation would break common queries. Re-run tests/performance/spike_datafusion_ree.py
+    after a DataFusion upgrade; REE is added (spec 2026-10-21) once MIN / MAX work.
     """
 
     def __init__(

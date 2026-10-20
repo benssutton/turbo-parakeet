@@ -648,6 +648,9 @@ impl Rules<'_, '_> {
 
 /// Every candidate for one level, in rule order (Spec B §4.2–4.3, §5.2); the
 /// original type last.
+///
+/// No run-end-encoded (REE) candidate exists: DataFusion 54 rejects MIN / MAX over REE columns,
+/// so REE is not recommended (spec 2026-10-21; re-check with tests/performance/spike_datafusion_ree.py).
 pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>, String> {
     let mut r = Rules {
         lvl,
