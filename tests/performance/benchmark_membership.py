@@ -10,7 +10,7 @@ from datagen import related_frames, similar_frames
 
 if __name__ == "__main__":
     run(
-        "analytics.membership",
+        "turbo_parakeet.techniques.membership",
         [
             large_dataset(),
             Dataset(

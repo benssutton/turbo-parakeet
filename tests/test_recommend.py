@@ -16,8 +16,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 
-from analytics.describe import _sizes
-from analytics.recommend import OneShotRecommender, StreamingRecommender
+from turbo_parakeet.techniques.describe import _sizes
+from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, large_dataset, stringified
 from harness import pyarrow_body
 
@@ -929,7 +929,7 @@ def test_dictionary_evidence_reads_est_high():
 
 
 def test_rust_conclusions_match_describe():
-    from analytics.describe import CONCLUSIONS, DescribeRust
+    from turbo_parakeet.techniques.describe import CONCLUSIONS, DescribeRust
 
     frame = describe_mixed(2_000)
     a = OneShotRecommender().add(frame).result()
@@ -1039,7 +1039,7 @@ def test_top_k_accepts_numpy_integers(cls):
 
 
 def test_to_arrow_restores_the_map_type():
-    from analytics.recommend import to_arrow
+    from turbo_parakeet.recommenders import to_arrow
 
     frame = pl.DataFrame(
         {"s": WORDS, "l": [["x"], None, ["y", "x"], [], None, None, None]}

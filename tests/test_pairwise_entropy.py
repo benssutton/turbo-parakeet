@@ -1,6 +1,6 @@
 """
 Pairwise joint entropy / mutual information accuracy tests — every implementation
-in analytics.pairwise_entropy.
+in turbo_parakeet.techniques.pairwise_entropy.
 
 Reference: PairwiseEntropyPolars (value_counts → entropy(base=2)); null is its own
 category. mixed_dtypes: all 18 columns eligible → C(18,2) = 153 pairs.
@@ -11,7 +11,7 @@ import math
 import polars as pl
 import pytest
 
-from analytics.pairwise_entropy import PairwiseEntropy
+from turbo_parakeet.techniques.pairwise_entropy import PairwiseEntropy
 from datagen import mixed_dtypes
 from harness import (
     assert_agrees,
@@ -23,7 +23,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.pairwise_entropy"
+PKG = "turbo_parakeet.techniques.pairwise_entropy"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 NAN = float("nan")
@@ -159,7 +159,7 @@ def test_unique_constant_and_composite_key(impl):
 def test_ams_seed_is_reproducible_and_num_samples_checked():
     from polars.testing import assert_frame_equal
 
-    from analytics.pairwise_entropy import PairwiseEntropyAmsRust
+    from turbo_parakeet.techniques.pairwise_entropy import PairwiseEntropyAmsRust
 
     frames = {"t": mixed_dtypes(300)}
     first = run(PairwiseEntropyAmsRust, frames)

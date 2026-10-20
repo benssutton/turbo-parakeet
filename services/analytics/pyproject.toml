@@ -3,7 +3,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "analytics"
+name = "turbo-parakeet"
 version = "0.1"
 description = "Column-relationship analytics over Arrow data, with a Rust core"
 requires-python = ">=3.10"
@@ -16,3 +16,6 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
 ]
 
+[tool.maturin]
+python-source = "python"
+module-name = "turbo_parakeet._core"

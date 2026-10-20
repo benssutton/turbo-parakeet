@@ -6,7 +6,7 @@ import java.util.OptionalLong;
 
 /**
  * Keyword parameters of the streaming recommender; {@link #defaults()} matches the Python
- * {@code analytics.recommend.StreamingRecommender}. The native constructor validates the other parameters; {@code topK} is validated here.
+ * {@code turbo_parakeet.recommenders.StreamingRecommender}. The native constructor validates the other parameters; {@code topK} is validated here.
  *
  * @param reservoirRows rows of contiguous blocks sampled for ZSTD sizes and the cross-check
  *                      (0: no sample, ZSTD sizes null); 0 or at least {@code blockRows}

@@ -1,5 +1,5 @@
 """
-Unit tests for the Technique contract (analytics/base.py) using a toy technique.
+Unit tests for the Technique contract (turbo_parakeet/techniques/base.py) using a toy technique.
 
 The toy's metric is the total length of the column names in a combination / 10,
 so every expected value below can be worked out by hand.
@@ -11,8 +11,8 @@ import polars as pl
 import pyarrow as pa
 import pytest
 
-from analytics._dtypes import encodable, is_nested, value_family
-from analytics.base import (
+from turbo_parakeet._dtypes import encodable, is_nested, value_family
+from turbo_parakeet.techniques.base import (
     STATUS,
     Technique,
     at_least,

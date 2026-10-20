@@ -12,4 +12,4 @@ from benchmark_minmax_index import DATASETS
 from harness import run
 
 if __name__ == "__main__":
-    run("analytics.set_index", DATASETS)
+    run("turbo_parakeet.techniques.set_index", DATASETS)

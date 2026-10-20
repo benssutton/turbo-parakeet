@@ -11,7 +11,7 @@ use std::collections::HashSet;
 // and no regex, so run time is linear in the input for any string — adversarial
 // input cannot trigger catastrophic backtracking. The Python implementations use
 // the same grammar as anchored regexes on the Rust `regex` engine
-// (analytics/describe/_values.py).
+// (turbo_parakeet/techniques/describe/_values.py).
 //
 // Numeric grammar: -?[0-9]+(\.[0-9]+)?   (ASCII digits only)
 // ISO grammar:     date     YYYY-MM-DD (calendar-valid, Gregorian leap years)

@@ -17,7 +17,7 @@ G = 3_600
 
 if __name__ == "__main__":
     run(
-        "analytics.gcd",
+        "turbo_parakeet.techniques.gcd",
         [
             large_dataset(),
             Dataset(

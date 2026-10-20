@@ -13,7 +13,7 @@ from datagen import related_frames, similar_frames
 
 if __name__ == "__main__":
     run(
-        "analytics.similarity",
+        "turbo_parakeet.techniques.similarity",
         [
             large_dataset(),
             Dataset(

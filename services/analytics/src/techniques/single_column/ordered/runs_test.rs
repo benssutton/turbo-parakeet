@@ -236,7 +236,7 @@ fn statistics(t: Tally) -> RunsStats {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Logical dtypes the order-dependent kernels accept (runs test, skip indexes) — mirrored by
-/// analytics/_dtypes.py::ORDERED_SCALARS.
+/// turbo_parakeet/_dtypes.py::ORDERED_SCALARS.
 pub(crate) fn supported(dtype: &DataType) -> bool {
     matches!(
         dtype,

@@ -42,7 +42,7 @@ and ask it to re-check.
 
 ## What is analysed
 
-- **Python** (`services/analytics/analytics`, tests) with coverage from `coverage.xml`.
+- **Python** (`services/analytics/python/turbo_parakeet`, tests) with coverage from `coverage.xml`.
   The reported coverage is Python only.
 - **Rust** (`services/analytics/src`) — this Community Build does analyse Rust (the first
   analysis counted about 15 000 lines), but it imports no Rust coverage. Clippy

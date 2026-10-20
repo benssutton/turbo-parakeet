@@ -2,7 +2,7 @@
 // cardinality_estimators — number of distinct values in a population
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Ports of analytics/describe/estimators.py (the Python reference that feeds
+// Ports of turbo_parakeet/techniques/describe/estimators.py (the Python reference that feeds
 // Describe's conclusions); recommenders/engine uses them to size dictionaries. Picked by
 // rule, never averaged. 95% closed-form intervals (z = 1.96).
 

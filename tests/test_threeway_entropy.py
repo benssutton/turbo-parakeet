@@ -1,5 +1,5 @@
 """
-Three-way joint entropy accuracy tests — every implementation in analytics.threeway_entropy.
+Three-way joint entropy accuracy tests — every implementation in turbo_parakeet.techniques.threeway_entropy.
 
 Reference: ThreewayEntropyPolars. mixed_dtypes: 18 eligible columns → C(18,3) = 816 triplets.
 """
@@ -9,7 +9,7 @@ import math
 import polars as pl
 import pytest
 
-from analytics.threeway_entropy import ThreewayEntropy
+from turbo_parakeet.techniques.threeway_entropy import ThreewayEntropy
 from datagen import mixed_dtypes
 from harness import (
     assert_agrees,
@@ -21,7 +21,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.threeway_entropy"
+PKG = "turbo_parakeet.techniques.threeway_entropy"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
@@ -93,7 +93,7 @@ def test_composite_key_and_constant_triplets(impl):
 
 
 def test_ams_num_samples_checked():
-    from analytics.threeway_entropy import ThreewayEntropyAmsRust
+    from turbo_parakeet.techniques.threeway_entropy import ThreewayEntropyAmsRust
 
     with pytest.raises(ValueError, match="num_samples"):
         ThreewayEntropyAmsRust(num_samples=0)

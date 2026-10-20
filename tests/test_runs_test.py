@@ -1,5 +1,5 @@
 """
-Runs-test accuracy tests — every implementation in analytics.runs_test.
+Runs-test accuracy tests — every implementation in turbo_parakeet.techniques.runs_test.
 
 Oracles: hand-worked known answers, a plain-Python run counter, RunsTestPolars (the
 reference: exact Python-int moments), a permutation Monte Carlo of the closed-form
@@ -17,7 +17,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from analytics.runs_test.polars import exact_moments
+from turbo_parakeet.techniques.runs_test.polars import exact_moments
 from datagen import large_dataset, large_dataset_mixed, mixed_dtypes, runs_int, runs_str
 from harness import (
     assert_agrees,
@@ -28,7 +28,7 @@ from harness import (
     run,
 )
 
-PKG = "analytics.runs_test"
+PKG = "turbo_parakeet.techniques.runs_test"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
@@ -151,7 +151,7 @@ def test_seeded_fuzz_matches_reference(impl, seed):
 
 
 def test_kernel_rejects_unsupported_dtype():
-    from analytics import _plugin
+    from turbo_parakeet import _plugin
 
     with pytest.raises(ValueError, match="unsupported dtype"):
         _plugin.runs_test(pl.DataFrame({"x": [[1], [2]]}))
@@ -175,7 +175,7 @@ def test_known_answer_every_dtype(impl, dtype):
 def test_known_answers_cover_every_eligible_class():
     """Every class in ELIGIBLE (mirrored by the Rust kernel's `supported`) runs through both
     implementations in test_known_answer_every_dtype (Boolean: test_boolean)."""
-    from analytics.runs_test.base import ELIGIBLE
+    from turbo_parakeet.techniques.runs_test.base import ELIGIBLE
 
     assert {type(dt) for dt in ELIGIBLE_DTYPES} | {pl.Boolean} == set(ELIGIBLE)
 

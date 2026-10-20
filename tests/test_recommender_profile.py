@@ -7,8 +7,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from analytics import _plugin
-from analytics.recommend import OneShotRecommender, StreamingRecommender
+from turbo_parakeet import _plugin
+from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, large_dataset, large_dataset_mixed
 
 FRAMES = [

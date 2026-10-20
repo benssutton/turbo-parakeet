@@ -936,7 +936,7 @@ mod tests {
 
     #[test]
     fn polars_sizes_match_polars_view_layout() {
-        // Oracle: the same data cast in Polars and measured by analytics/describe/_sizes.py
+        // Oracle: the same data cast in Polars and measured by turbo_parakeet/techniques/describe/_sizes.py
         // (size_polars_bytes). Views inline ≤ 12 bytes; longer values fill 8 KiB, 16 KiB, … blocks.
         let long = |i: usize| format!("long string number {i:06}");
         let cases: Vec<(Series, &str, u64)> = vec![

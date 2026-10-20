@@ -41,7 +41,7 @@ def wide() -> dict[str, pl.DataFrame]:
 
 if __name__ == "__main__":
     run(
-        "analytics.runs_test",
+        "turbo_parakeet.techniques.runs_test",
         [
             large_dataset(),
             Dataset("long runs 10M x 4", long_runs),

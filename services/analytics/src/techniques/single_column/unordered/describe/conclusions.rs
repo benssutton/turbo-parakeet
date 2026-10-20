@@ -1,5 +1,5 @@
 //! Describe's conclusions (spec 2026-10-01 §4, §5), shared by one-shot and streaming:
-//! the whole-number range behind `ordinal` and the class rule. analytics/describe/base.py
+//! the whole-number range behind `ordinal` and the class rule. turbo_parakeet/techniques/describe/base.py
 //! keeps the reference implementation.
 
 use polars::prelude::DataType as PT;

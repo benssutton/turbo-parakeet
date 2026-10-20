@@ -6,7 +6,7 @@ import java.util.OptionalLong;
 
 /**
  * Keyword parameters of the one-shot recommender; {@link #defaults()} matches the Python
- * {@code analytics.recommend.OneShotRecommender}. The native constructor validates the other parameters; {@code topK} is validated here.
+ * {@code turbo_parakeet.recommenders.OneShotRecommender}. The native constructor validates the other parameters; {@code topK} is validated here.
  *
  * @param topK entries per {@code top_k} / {@code inner_top_k} map (0: null cells; empty: every ranked value)
  * @param idColumns columns whose values identify an exemplar row ({@code exemplar_id} /

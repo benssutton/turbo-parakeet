@@ -1,5 +1,5 @@
 """
-Set skip-index accuracy tests — every implementation in analytics.set_index.
+Set skip-index accuracy tests — every implementation in turbo_parakeet.techniques.set_index.
 
 Oracles: hand-worked known answers, a brute-force window-by-window oracle
 (skip_index_helpers.oracle), SetIndexPolars (the reference) and a Monte Carlo of the
@@ -34,7 +34,7 @@ from skip_index_helpers import (
     zipf_column,
 )
 
-PKG = "analytics.set_index"
+PKG = "turbo_parakeet.techniques.set_index"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
@@ -156,7 +156,7 @@ def test_matches_brute_force_oracle(impl, seed):
 
 
 def test_kernel_rejects_bad_input():
-    from analytics import _plugin
+    from turbo_parakeet import _plugin
 
     with pytest.raises(ValueError, match="unsupported dtype"):
         _plugin.set_index(pl.DataFrame({"x": [[1], [2]]}), 4, 0)
@@ -191,7 +191,7 @@ def test_window_is_index_granularity_times_granularity(impl):
 
 
 def test_known_answers_cover_every_eligible_class():
-    from analytics._dtypes import ORDERED_SCALARS
+    from turbo_parakeet._dtypes import ORDERED_SCALARS
 
     assert {type(dt) for dt in ELIGIBLE_DTYPES} | {pl.Boolean} == set(ORDERED_SCALARS)
 

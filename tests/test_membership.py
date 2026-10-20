@@ -1,5 +1,5 @@
 """
-Set-membership / containment accuracy tests — every implementation in analytics.membership.
+Set-membership / containment accuracy tests — every implementation in turbo_parakeet.techniques.membership.
 
 Reference: MembershipExact (Python sets of distinct non-null values). Bloom
 implementations are probabilistic (EXACT=False): no false negatives, exact
@@ -15,9 +15,9 @@ import textwrap
 import polars as pl
 import pytest
 
-from analytics import _plugin
-from analytics.membership import BloomMembership, Membership
-from analytics.membership.rust import bloom_geometry
+from turbo_parakeet import _plugin
+from turbo_parakeet.techniques.membership import BloomMembership, Membership
+from turbo_parakeet.techniques.membership.rust import bloom_geometry
 from datagen import mixed_dtypes, related_frames
 from harness import (
     assert_agrees,
@@ -29,7 +29,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.membership"
+PKG = "turbo_parakeet.techniques.membership"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 NAN = float("nan")
@@ -154,7 +154,7 @@ def test_fp_rate_validation(impl):
 
 
 def test_import_and_use_without_fastbloom_rs():
-    """analytics.membership must import, and BloomRust/MembershipExact must work,
+    """turbo_parakeet.techniques.membership must import, and BloomRust/MembershipExact must work,
     when fastbloom_rs cannot be imported (it's an optional reference impl, lazily
     imported by BloomFastbloom only). Run in a subprocess so faking the ImportError
     can't leak into other tests via sys.modules."""
@@ -162,7 +162,7 @@ def test_import_and_use_without_fastbloom_rs():
         import sys
         sys.modules["fastbloom_rs"] = None  # forces ImportError on `import fastbloom_rs`
         import polars as pl
-        import analytics.membership as mem
+        import turbo_parakeet.techniques.membership as mem
 
         frames = {"x": pl.DataFrame({"a": [1, 2, 3]}), "y": pl.DataFrame({"a": [1, 2, 4]})}
         assert mem.BloomRust().add(frames).result().height == 1

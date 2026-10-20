@@ -47,4 +47,4 @@ DATASETS = [
 ]
 
 if __name__ == "__main__":
-    run("analytics.minmax_index", DATASETS)
+    run("turbo_parakeet.techniques.minmax_index", DATASETS)

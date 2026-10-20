@@ -11,9 +11,9 @@ import polars as pl
 import pyarrow as pa
 import pytest
 
-from analytics.describe import _sizes
-from analytics.gcd import GcdRust
-from analytics.recommend import OneShotRecommender, StreamingRecommender
+from turbo_parakeet.techniques.describe import _sizes
+from turbo_parakeet.techniques.gcd import GcdRust
+from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 from datagen import describe_mixed, large_dataset, large_dataset_mixed, stringified
 
 CANDIDATE = pl.Struct(

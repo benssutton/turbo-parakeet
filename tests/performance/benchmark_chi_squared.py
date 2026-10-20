@@ -10,7 +10,7 @@ from datagen import low_cardinality
 
 if __name__ == "__main__":
     run(
-        "analytics.chi_squared",
+        "turbo_parakeet.techniques.chi_squared",
         [
             large_dataset(),
             Dataset("narrow 2M x 4", lambda: {"t": low_cardinality(2_000_000, 4)}),

@@ -1,7 +1,7 @@
 """
 Shared accuracy-test helpers. Every technique's test file uses them the same way:
 
-    PKG = "analytics.<technique>"
+    PKG = "turbo_parakeet.techniques.<technique>"
     ALL = implementation_params(PKG)                            # contract block
     OTHERS = implementation_params(PKG, include_reference=False)  # agreement block
 
@@ -18,8 +18,8 @@ import polars as pl
 import pyarrow as pa
 import pytest
 
-from analytics.base import STATUS, Technique
-from analytics.describe._sizes import ipc_body_bytes
+from turbo_parakeet.techniques.base import STATUS, Technique
+from turbo_parakeet.techniques.describe._sizes import ipc_body_bytes
 
 
 def implementation_params(package: str, include_reference: bool = True) -> list:

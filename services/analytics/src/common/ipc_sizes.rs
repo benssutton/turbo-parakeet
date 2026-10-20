@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Mirrors pyarrow's IPC writer (checked against pyarrow 24; the Python oracle is
-// analytics/describe/_sizes.py): a column's size is the body length of the IPC
+// turbo_parakeet/techniques/describe/_sizes.py): a column's size is the body length of the IPC
 // messages that carry it (dictionary batches + record batch). Every buffer is
 // padded to 8 bytes; a validity buffer is written only when the array has nulls;
 // an empty buffer takes no space; List/Utf8 offsets are rebased to 0 and their

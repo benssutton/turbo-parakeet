@@ -10,7 +10,7 @@ from datagen import low_cardinality
 
 if __name__ == "__main__":
     run(
-        "analytics.adjusted_rand",
+        "turbo_parakeet.techniques.adjusted_rand",
         [
             large_dataset(),
             Dataset("narrow 2M x 4", lambda: {"t": low_cardinality(2_000_000, 4)}),

@@ -50,10 +50,10 @@ def default_budget(k: int) -> int:
 
 
 def child(data: str, column: str, name: str, k: int, budget: int, out: str) -> None:
-    import analytics.top_k
+    import turbo_parakeet.techniques.top_k
 
     frame = pl.read_ipc(data, columns=[column], memory_map=False)
-    cls = getattr(analytics.top_k, name)
+    cls = getattr(turbo_parakeet.techniques.top_k, name)
     gc.collect()
     current_before, peak_before = memory_mb()
     start = time.perf_counter()

@@ -11,7 +11,7 @@ from datagen import low_cardinality, near_constant, near_unique
 
 if __name__ == "__main__":
     run(
-        "analytics.pairwise_entropy",
+        "turbo_parakeet.techniques.pairwise_entropy",
         [
             large_dataset(),
             Dataset("narrow 2M x 4", lambda: {"t": low_cardinality(2_000_000, 4)}),

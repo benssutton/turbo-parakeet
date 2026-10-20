@@ -172,10 +172,10 @@ def coverage_rust_full() -> None:
         stale.unlink()
     ext = [
         f
-        for pattern in ("analytics.*pyd", "analytics*.so")
-        for f in (CRATE / "analytics").glob(pattern)
+        for pattern in ("_core*.pyd", "_core*.so")
+        for f in (CRATE / "python" / "turbo_parakeet").glob(pattern)
     ]
-    backup = Path(tempfile.mkdtemp(prefix="analytics-ext-"))
+    backup = Path(tempfile.mkdtemp(prefix="turbo-parakeet-ext-"))
     for f in ext:
         shutil.copy2(f, backup / f.name)
     try:

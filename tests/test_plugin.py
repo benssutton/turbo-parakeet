@@ -10,20 +10,20 @@ import pyarrow as pa
 import pytest
 from polars.testing import assert_frame_equal
 
-from analytics import analytics as rs
-from analytics._dtypes import holds_wide_integer
+from turbo_parakeet import _core as rs
+from turbo_parakeet._dtypes import holds_wide_integer
 from datagen import mixed_dtypes
 from harness import load, run
 
 PACKAGES = (
-    "analytics.gcd",
-    "analytics.describe",
-    "analytics.membership",
-    "analytics.similarity",
-    "analytics.chi_squared",
-    "analytics.pairwise_entropy",
-    "analytics.threeway_entropy",
-    "analytics.adjusted_rand",
+    "turbo_parakeet.techniques.gcd",
+    "turbo_parakeet.techniques.describe",
+    "turbo_parakeet.techniques.membership",
+    "turbo_parakeet.techniques.similarity",
+    "turbo_parakeet.techniques.chi_squared",
+    "turbo_parakeet.techniques.pairwise_entropy",
+    "turbo_parakeet.techniques.threeway_entropy",
+    "turbo_parakeet.techniques.adjusted_rand",
 )
 EVERY_IMPLEMENTATION = [
     pytest.param(f"{p}:{n}", id=n)
@@ -61,7 +61,7 @@ def test_128_bit_integer_columns_are_ineligible(spec):
     assert touches_wide["status"].unique().to_list() == ["ineligible"]
 
 
-# ── the binding (analytics.analytics) ─────────────────────────────────────────
+# ── the binding (turbo_parakeet._core) ─────────────────────────────────────────
 
 
 def test_binding_takes_and_returns_arrow():

@@ -188,7 +188,7 @@ jobs:
         run: python scripts/check.py build
 
       - name: Verify extension imports
-        run: python -c "import analytics; print('analytics module loaded')"
+        run: python -c "import turbo_parakeet; print('turbo_parakeet module loaded')"
 
       - name: Run Python tests
         run: python scripts/check.py test-py

@@ -1,5 +1,5 @@
 """
-Top-k accuracy tests — every implementation in analytics.top_k.
+Top-k accuracy tests — every implementation in turbo_parakeet.techniques.top_k.
 
 Oracles: known answers and TopKPolars (exact group-by counts), the reference. Semantics
 (spec docs/superpowers/specs/2026-10-12-heavy-hitters-top-k-design.md): each eligible
@@ -16,7 +16,7 @@ from decimal import Decimal
 import polars as pl
 import pytest
 
-from analytics.top_k import TopK
+from turbo_parakeet.techniques.top_k import TopK
 from datagen import mixed_dtypes, top_k_streams
 from harness import (
     assert_agrees,
@@ -28,7 +28,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.top_k"
+PKG = "turbo_parakeet.techniques.top_k"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 # Columns whose k-th count is not tied (agreement precision is a lower bound under ties).

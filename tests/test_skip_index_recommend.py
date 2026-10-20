@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from analytics.recommend import OneShotRecommender, StreamingRecommender
+from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 
 BAD = [
     {"skip_granularities": ()},
@@ -176,7 +176,7 @@ def chbench_suites(tmp_path, frames, **kw):
 
     import yaml
 
-    from analytics.recommend import to_chbench
+    from turbo_parakeet.recommenders import to_chbench
 
     frame = pl.DataFrame(frames)
     result = OneShotRecommender(**kw).add(frame).result()

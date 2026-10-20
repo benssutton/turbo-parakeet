@@ -69,7 +69,7 @@ fn read_reader(data: &Bound<'_, PyAny>) -> PyResult<CheckedReader> {
 /// Arrow has no 128-bit integer type. Polars exports Int128 / UInt128 in its private
 /// formats `_pli128` / `_plu128`, which arrow-rs (and every non-Polars consumer)
 /// rejects, so they are refused here, naming the column. The Python classes list
-/// such columns as ineligible and never send them (analytics._dtypes.WIDE_INTEGERS).
+/// such columns as ineligible and never send them (turbo_parakeet._dtypes.WIDE_INTEGERS).
 ///
 /// SAFETY: `stream` points to a valid, unreleased ArrowArrayStream.
 unsafe fn reject_wide_integers(stream: *mut RawStream) -> PyResult<()> {
@@ -124,7 +124,7 @@ fn wide_integer(s: &FFI_ArrowSchema) -> Option<&'static str> {
 
 /// A result table, handed to Python through the Arrow PyCapsule interface
 /// (`pl.DataFrame(table)`, `pa.table(table)`).
-#[pyclass(frozen, module = "analytics.analytics")]
+#[pyclass(frozen, module = "turbo_parakeet._core")]
 struct ArrowTable(RecordBatch);
 
 #[pymethods]
@@ -152,7 +152,7 @@ fn run<T: Send>(py: Python<'_>, f: impl FnOnce() -> api::Result<T> + Send) -> Py
 
 /// The streaming recommender (api::StreamingRecommender): add batches over time,
 /// `result` at any point. A mutex serialises callers; the work runs without the GIL.
-#[pyclass(frozen, module = "analytics.analytics")]
+#[pyclass(frozen, module = "turbo_parakeet._core")]
 struct StreamingRecommender(Mutex<api::StreamingRecommender>);
 
 fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
@@ -254,7 +254,7 @@ impl StreamingRecommender {
 
 /// The one-shot recommender (api::OneShotRecommender): add one frame, `result` any
 /// number of times. A mutex serialises callers; the work runs without the GIL.
-#[pyclass(frozen, module = "analytics.analytics")]
+#[pyclass(frozen, module = "turbo_parakeet._core")]
 struct OneShotRecommender(Mutex<api::OneShotRecommender>);
 
 #[pymethods]
@@ -583,8 +583,8 @@ fn checked_table(data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     read_batch(data).map(ArrowTable)
 }
 
-#[pymodule]
-fn analytics(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pymodule(name = "_core")]
+fn core_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ArrowTable>()?;
     m.add_class::<StreamingRecommender>()?;
     m.add_class::<OneShotRecommender>()?;

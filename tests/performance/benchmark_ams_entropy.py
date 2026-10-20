@@ -1,6 +1,6 @@
 """
-AMS entropy memory and error report: every implementation of analytics.pairwise_entropy
-and analytics.threeway_entropy on the speed benchmarks' datasets (near-unique 1M x 9
+AMS entropy memory and error report: every implementation of turbo_parakeet.techniques.pairwise_entropy
+and turbo_parakeet.techniques.threeway_entropy on the speed benchmarks' datasets (near-unique 1M x 9
 and near-constant 1M x 3 included).
 
 Each (dataset, implementation) runs once in a fresh child process. After loading the data
@@ -41,14 +41,14 @@ from harness import RESULTS_DIR, Dataset, large_dataset
 from datagen import low_cardinality, near_constant, near_unique
 
 DATASETS = {
-    "analytics.pairwise_entropy": [
+    "turbo_parakeet.techniques.pairwise_entropy": [
         large_dataset(),
         Dataset("narrow 2M x 4", lambda: {"t": low_cardinality(2_000_000, 4)}),
         Dataset("wide 20K x 60", lambda: {"t": low_cardinality(20_000, 60)}),
         Dataset("near-unique 1M x 9", lambda: {"t": near_unique()}),
         Dataset("near-constant 1M x 3", lambda: {"t": near_constant()}),
     ],
-    "analytics.threeway_entropy": [
+    "turbo_parakeet.techniques.threeway_entropy": [
         large_dataset(columns=40),
         Dataset("narrow 1M x 5", lambda: {"t": low_cardinality(1_000_000, 5)}),
         Dataset("wide 20K x 30", lambda: {"t": low_cardinality(20_000, 30)}),
@@ -57,8 +57,8 @@ DATASETS = {
     ],
 }
 ENTROPIES = {
-    "analytics.pairwise_entropy": ["h_a", "h_b", "h_ab"],
-    "analytics.threeway_entropy": ["h_abc"],
+    "turbo_parakeet.techniques.pairwise_entropy": ["h_a", "h_b", "h_ab"],
+    "turbo_parakeet.techniques.threeway_entropy": ["h_abc"],
 }
 
 

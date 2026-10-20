@@ -14,7 +14,7 @@ from datagen import describe_narrow, describe_nested, describe_wide
 
 if __name__ == "__main__":
     run(
-        "analytics.describe",
+        "turbo_parakeet.techniques.describe",
         [
             large_dataset(),
             Dataset("narrow 10M x 4", lambda: {"t": describe_narrow(10_000_000)}),

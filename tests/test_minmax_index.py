@@ -1,5 +1,5 @@
 """
-MinMax skip-index accuracy tests — every implementation in analytics.minmax_index.
+MinMax skip-index accuracy tests — every implementation in turbo_parakeet.techniques.minmax_index.
 
 Oracles: hand-worked known answers, a brute-force window-by-window oracle
 (skip_index_helpers.oracle), MinMaxIndexPolars (the reference) and a Monte Carlo of the
@@ -33,7 +33,7 @@ from skip_index_helpers import (
     zipf_column,
 )
 
-PKG = "analytics.minmax_index"
+PKG = "turbo_parakeet.techniques.minmax_index"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
@@ -153,7 +153,7 @@ def test_matches_brute_force_oracle(impl, seed):
 
 
 def test_kernel_rejects_bad_input():
-    from analytics import _plugin
+    from turbo_parakeet import _plugin
 
     with pytest.raises(ValueError, match="unsupported dtype"):
         _plugin.minmax_index(pl.DataFrame({"x": [[1], [2]]}), 4)
@@ -188,7 +188,7 @@ def test_known_answers_cover_every_eligible_class():
     """Every class in ORDERED_SCALARS (mirrored by the Rust kernels' `supported`) runs
     through both implementations in test_known_answer_every_dtype (Boolean: test_boolean).
     """
-    from analytics._dtypes import ORDERED_SCALARS
+    from turbo_parakeet._dtypes import ORDERED_SCALARS
 
     assert {type(dt) for dt in ELIGIBLE_DTYPES} | {pl.Boolean} == set(ORDERED_SCALARS)
 

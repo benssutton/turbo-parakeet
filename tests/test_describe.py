@@ -1,5 +1,5 @@
 """
-describe accuracy tests — every implementation in analytics.describe.
+describe accuracy tests — every implementation in turbo_parakeet.techniques.describe.
 
 Oracles: hand-worked known answers and DescribePolars, the technique's reference.
 Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
@@ -14,7 +14,7 @@ import polars as pl
 import pyarrow as pa
 import pytest
 
-from analytics.describe import Describe, _sizes, estimators
+from turbo_parakeet.techniques.describe import Describe, _sizes, estimators
 from datagen import describe_mixed, large_dataset, large_dataset_mixed, stringified
 from harness import (
     assert_agrees,
@@ -418,7 +418,7 @@ def test_polars_size_is_the_native_ipc_body():
     )  # views 32 + 20-byte buffer → 24
 
 
-PKG = "analytics.describe"
+PKG = "turbo_parakeet.techniques.describe"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
@@ -510,7 +510,7 @@ def test_agrees_with_reference_on_large_dataset(impl, make):
     ],
 )
 def test_render_is_arrow_rs_text(s, expected):
-    from analytics import _plugin
+    from turbo_parakeet import _plugin
 
     assert _plugin.render(s) == expected
 
@@ -1046,7 +1046,7 @@ def test_array_lengths_with_null_rows(impl):
 
 _SLICED = """
 import polars as pl
-from analytics import describe
+from turbo_parakeet.techniques import describe
 from harness import load, run
 fresh = pl.DataFrame({{
     "arr": pl.Series([[3, 4], None, [5, None]], dtype=pl.Array(pl.Int64, 2)),
@@ -1126,8 +1126,8 @@ def test_nested_floats_and_enums(impl, s, expected):
 def test_rust_conclusions_equal_the_reference_rule():
     """describe_columns returns Rust's conclusions and the inputs; the Python base
     derives its own from those inputs (DescribeRust). Same inputs, same rule."""
-    from analytics import _plugin
-    from analytics.describe import CONCLUSIONS, DescribeRust
+    from turbo_parakeet import _plugin
+    from turbo_parakeet.techniques.describe import CONCLUSIONS, DescribeRust
 
     for frame in [describe_mixed(2_000), stringified(describe_mixed(500))]:
         raw = _plugin.describe_columns(frame, 0, 10_000)

@@ -14,7 +14,7 @@ from datagen import low_cardinality, near_constant, near_unique
 
 if __name__ == "__main__":
     run(
-        "analytics.threeway_entropy",
+        "turbo_parakeet.techniques.threeway_entropy",
         [
             large_dataset(columns=40),
             # All 101 columns -> C(101, 3) = 166,650 triplets. Neither the one-triplet-at-a-

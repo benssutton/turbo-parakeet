@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "tests")]
 
 import datagen  # noqa: E402
-from analytics.recommend import OneShotRecommender, to_chbench  # noqa: E402
+from turbo_parakeet.recommenders import OneShotRecommender, to_chbench  # noqa: E402
 
 N = 1_000_000
 LARGE_ROWS = 200_000

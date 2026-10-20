@@ -1,5 +1,5 @@
 """
-Pairwise chi-squared accuracy tests — every implementation in analytics.chi_squared.
+Pairwise chi-squared accuracy tests — every implementation in turbo_parakeet.techniques.chi_squared.
 
 Reference: ChiSquaredScipy (scipy.stats.chi2_contingency, correction=False, after
 dropping rows where either column is null). Eligible columns in mixed_dtypes:
@@ -12,7 +12,7 @@ import math
 import polars as pl
 import pytest
 
-from analytics.chi_squared import ChiSquared
+from turbo_parakeet.techniques.chi_squared import ChiSquared
 from datagen import mixed_dtypes
 from harness import (
     assert_agrees,
@@ -24,7 +24,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.chi_squared"
+PKG = "turbo_parakeet.techniques.chi_squared"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 NAN = float("nan")

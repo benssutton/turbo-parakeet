@@ -15,7 +15,7 @@ from datagen import low_cardinality, top_k_streams
 
 if __name__ == "__main__":
     run(
-        "analytics.top_k",
+        "turbo_parakeet.techniques.top_k",
         [
             large_dataset(),
             Dataset(

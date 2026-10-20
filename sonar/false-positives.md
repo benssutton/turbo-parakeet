@@ -8,15 +8,15 @@ of the same rule; add new entries here when a finding is rejected.
 ## `python:S5807` — "Change or remove this string; X is not defined" (12, BLOCKER)
 
 **Why it is wrong:** the packages' `__init__.py` define a module-level `__getattr__`
-(PEP 562, `analytics.base.lazy_attributes`), so every name in `__all__` resolves on access;
-`from analytics.gcd import *` works. The optional implementations (those needing polars-ds,
+(PEP 562, `turbo_parakeet.techniques.base.lazy_attributes`), so every name in `__all__` resolves on access;
+`from turbo_parakeet.techniques.gcd import *` works. The optional implementations (those needing polars-ds,
 scipy, datasketch, fastbloom, scikit-learn, DataFusion) are imported lazily on purpose, so
-`import analytics.<technique>` does not require every optional library. Sonar's rule only
+`import turbo_parakeet.techniques.<technique>` does not require every optional library. Sonar's rule only
 sees names bound statically.
 
 **Do not:** remove the names from `__all__`, or import the optional modules eagerly.
 
-| File (`services/analytics/analytics/`) | Names |
+| File (`services/analytics/python/turbo_parakeet/`) | Names |
 |---|---|
 | `gcd/__init__.py` | `GcdNumpy`, `GcdMath` |
 | `describe/__init__.py` | `DescribePolars`, `DescribeDataFusion` |

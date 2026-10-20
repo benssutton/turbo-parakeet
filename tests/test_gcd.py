@@ -1,5 +1,5 @@
 """
-Whole-column GCD accuracy tests — every implementation in analytics.gcd.
+Whole-column GCD accuracy tests — every implementation in turbo_parakeet.techniques.gcd.
 
 Oracles: known answers (values built as k·g) and GcdMath (math.gcd, arbitrary
 precision), the technique's reference. Semantics (ClickHouse GCD-codec method):
@@ -20,7 +20,7 @@ import polars as pl
 import pyarrow as pa
 import pytest
 
-from analytics.gcd import Gcd
+from turbo_parakeet.techniques.gcd import Gcd
 from datagen import integer_multiples, mixed_dtypes
 from harness import (
     assert_agrees,
@@ -32,7 +32,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.gcd"
+PKG = "turbo_parakeet.techniques.gcd"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
@@ -338,7 +338,7 @@ def test_ineligible_dtypes_are_reported_with_their_dtype(impl):
     }
     if hasattr(
         pl, "UInt128"
-    ):  # 128-bit integers are ineligible (analytics._dtypes.WIDE_INTEGERS)
+    ):  # 128-bit integers are ineligible (turbo_parakeet._dtypes.WIDE_INTEGERS)
         cols["u128"] = pl.Series([12, 18], dtype=pl.UInt128)
     df = pl.DataFrame(cols)
     out = run(load(impl), {"t": df})

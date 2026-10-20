@@ -4,7 +4,7 @@ Shared speed-benchmark harness. Every tests/performance/benchmark_<technique>.py
     from harness import Dataset, large_dataset, run
     from datagen import ...
     if __name__ == "__main__":
-        run("analytics.<technique>", [large_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
+        run("turbo_parakeet.techniques.<technique>", [large_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
 
 What is timed: Impl(**params).add(frames).result() — the whole analytical question,
 fresh instance per run (so caches never carry over), 1 warm-up + `runs` timed runs,
@@ -44,7 +44,7 @@ sys.path.insert(
     0, str(Path(__file__).parents[1])
 )  # tests/ -> `import datagen` in benchmark scripts
 
-import analytics  # noqa: E402
+import turbo_parakeet  # noqa: E402
 from datagen import large_dataset as generated_large_dataset  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -258,7 +258,7 @@ def _report(package: str, rows: list[dict]) -> pl.DataFrame:
         processor=pl.lit(platform.processor()),
         polars=pl.lit(pl.__version__),
         numpy=pl.lit(np.__version__),
-        analytics=pl.lit(analytics.__version__),
+        analytics=pl.lit(turbo_parakeet.__version__),
         timestamp=pl.lit(stamp),
     )
     RESULTS_DIR.mkdir(exist_ok=True)

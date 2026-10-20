@@ -26,9 +26,12 @@ sys.path.insert(0, str(HERE.parent))  # tests/: datagen
 
 from datagen import describe_narrow, describe_wide, large_dataset  # noqa: E402
 
-from analytics.describe import _sizes  # noqa: E402
+from turbo_parakeet.techniques.describe import _sizes  # noqa: E402
 
-from analytics.recommend import OneShotRecommender, StreamingRecommender  # noqa: E402
+from turbo_parakeet.recommenders import (  # noqa: E402
+    OneShotRecommender,
+    StreamingRecommender,
+)
 
 DATASETS = {
     "large_dataset": large_dataset,

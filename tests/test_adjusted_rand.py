@@ -1,5 +1,5 @@
 """
-Pairwise Adjusted Rand Index accuracy tests — every implementation in analytics.adjusted_rand.
+Pairwise Adjusted Rand Index accuracy tests — every implementation in turbo_parakeet.techniques.adjusted_rand.
 
 Reference: AdjustedRandSklearn (sklearn.metrics.adjusted_rand_score on string
 labels after dropping rows where either column is null). Eligible columns in
@@ -11,7 +11,7 @@ import math
 import polars as pl
 import pytest
 
-from analytics.adjusted_rand import AdjustedRand
+from turbo_parakeet.techniques.adjusted_rand import AdjustedRand
 from datagen import mixed_dtypes
 from harness import (
     assert_agrees,
@@ -23,7 +23,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.adjusted_rand"
+PKG = "turbo_parakeet.techniques.adjusted_rand"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 

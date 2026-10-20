@@ -6,8 +6,8 @@ import pytest
 from datagen import describe_mixed, large_dataset_mixed
 from harness import pyarrow_body
 
-from analytics import _plugin
-from analytics.recommend import OneShotRecommender, StreamingRecommender
+from turbo_parakeet import _plugin
+from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 
 
 @pytest.mark.parametrize(
@@ -203,7 +203,7 @@ def chbench_frame(n: int = 50_000) -> pl.DataFrame:
 def chbench_out(tmp_path_factory):
     import yaml
 
-    from analytics.recommend import to_chbench
+    from turbo_parakeet.recommenders import to_chbench
 
     frame = chbench_frame()
     result = OneShotRecommender().add(frame).result()
@@ -314,7 +314,7 @@ def test_to_chbench_predicted_and_arrow(chbench_out):
 
 
 def test_to_chbench_normalises_categorical_and_columns(tmp_path):
-    from analytics.recommend import to_chbench
+    from turbo_parakeet.recommenders import to_chbench
 
     frame = pl.DataFrame(
         {"c": pl.Series(["a", "b"] * 500, dtype=pl.Categorical), "x": [1] * 1000}
@@ -373,7 +373,7 @@ def _arrow_type(path, name, col):
 def test_to_chbench_bool_over_integers_uses_boolean_dataset(tmp_path):
     import json
 
-    from analytics.recommend import to_chbench
+    from turbo_parakeet.recommenders import to_chbench
 
     frame = pl.DataFrame({"flag": pl.Series([0, 1] * 5_000, dtype=pl.Int32)})
     result = OneShotRecommender().add(frame).result()
@@ -392,7 +392,7 @@ def test_to_chbench_recommended_dataset_carries_recommended_type(tmp_path):
     from datetime import date, datetime, timedelta
     from decimal import Decimal
 
-    from analytics.recommend import to_chbench
+    from turbo_parakeet.recommenders import to_chbench
 
     n = 6_000
     frame = pl.DataFrame(
@@ -441,7 +441,7 @@ def test_to_chbench_recommended_dataset_carries_recommended_type(tmp_path):
 
 
 def test_to_chbench_skips_unreproducible_recommended_type(tmp_path, monkeypatch):
-    from analytics.recommend import chbench, to_chbench
+    from turbo_parakeet.recommenders import chbench, to_chbench
 
     frame = pl.DataFrame({"small": pl.Series([i % 200 for i in range(6_000)])})
     result = OneShotRecommender().add(frame).result()
@@ -455,7 +455,7 @@ def test_to_chbench_skips_unreproducible_recommended_type(tmp_path, monkeypatch)
 
 
 def test_to_chbench_skips_a_row_without_a_sample(tmp_path):
-    from analytics.recommend import to_chbench
+    from turbo_parakeet.recommenders import to_chbench
 
     frame = pl.DataFrame({"a": [i % 7 for i in range(2_000)]})
     rec = StreamingRecommender(reservoir_rows=0)

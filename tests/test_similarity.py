@@ -1,6 +1,6 @@
 """
 Set-similarity (Jaccard / Overlap Coefficient) accuracy tests — every implementation
-in analytics.similarity.
+in turbo_parakeet.techniques.similarity.
 
 Reference: SimilarityExactLRU (brute force over every pair; distinct-value sets
 memoised by a per-instance LRU cache). MinHash implementations are probabilistic
@@ -20,7 +20,7 @@ import weakref
 import polars as pl
 import pytest
 
-from analytics.similarity import Similarity, SimilarityExactLRU
+from turbo_parakeet.techniques.similarity import Similarity, SimilarityExactLRU
 from datagen import containment_pairs, related_frames, similar_frames
 from harness import (
     assert_agrees,
@@ -32,7 +32,7 @@ from harness import (
     with_metrics,
 )
 
-PKG = "analytics.similarity"
+PKG = "turbo_parakeet.techniques.similarity"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 NAN = float("nan")
@@ -184,7 +184,7 @@ def test_conclusions_default_override_and_nan():
 
 
 def test_import_and_use_without_datasketch():
-    """analytics.similarity must import, and MinHashRust/SimilarityExactLRU must
+    """turbo_parakeet.techniques.similarity must import, and MinHashRust/SimilarityExactLRU must
     work, when datasketch cannot be imported (it's an optional reference impl,
     lazily imported by MinHashDatasketch only). Run in a subprocess so faking the
     ImportError can't leak into other tests via sys.modules."""
@@ -192,7 +192,7 @@ def test_import_and_use_without_datasketch():
         import sys
         sys.modules["datasketch"] = None  # forces ImportError on `import datasketch`
         import polars as pl
-        import analytics.similarity as sim
+        import turbo_parakeet.techniques.similarity as sim
 
         frames = {"x": pl.DataFrame({"a": [1, 2, 3]}), "y": pl.DataFrame({"a": [1, 2, 4]})}
         assert sim.MinHashRust().add(frames).result().height == 1
