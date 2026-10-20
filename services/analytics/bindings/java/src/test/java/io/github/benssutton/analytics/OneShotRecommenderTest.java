@@ -293,4 +293,27 @@ class OneShotRecommenderTest {
         assertThrows(IllegalArgumentException.class, () -> new OneShotRecommender(withCompression(List.of(3), 1.0)));
         assertThrows(IllegalArgumentException.class, () -> new OneShotRecommender(withCompression(List.of(), 0.10)));
     }
+
+    private static OneShotParams withSkip(double minSkip) {
+        OneShotParams d = OneShotParams.defaults();
+        return new OneShotParams(d.categoricalThreshold(), d.zstdLevel(), d.seed(), d.booleanPairs(), d.topK(),
+            d.idColumns(), d.zstdLevels(), 0.01, 0.10, 0.01,
+            List.of(1, 2), List.of(125L), List.of(0.025), minSkip, 0.1, 0.1);
+    }
+
+    @Test
+    void aSortedColumnGetsAMinmaxSkipIndex() throws IOException {
+        long[] values = java.util.stream.LongStream.range(0, 50_000).toArray();
+        try (BufferAllocator allocator = new RootAllocator();
+             OneShotRecommender rec = new OneShotRecommender(withSkip(0.3))) {
+            rec.add(reader(allocator, ints(allocator, "a", values)), allocator);
+            String skip = result(rec, allocator, root -> column(root, "clickhouse_skip_index").get(0));
+            assertTrue(skip.startsWith("minmax"), skip);
+        }
+    }
+
+    @Test
+    void anInvalidSkipKeywordIsIllegalArgument() {
+        assertThrows(IllegalArgumentException.class, () -> new OneShotRecommender(withSkip(1.5)));
+    }
 }

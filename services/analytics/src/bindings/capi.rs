@@ -62,16 +62,16 @@ unsafe fn strings(ptrs: *const *const c_char, n: usize, what: &str) -> api::Resu
         .collect()
 }
 
-/// The ZSTD levels of a `_new` call: `n` of them at `ptr` (none when `n == 0`, which the
-/// API then rejects).
+/// A list keyword of a `_new` call (`zstd_levels`, `skip_granularities`, ...): `n` values at
+/// `ptr` (none when `n == 0`, which the API then rejects).
 ///
-/// SAFETY: when `n > 0`, `ptr` is null or points to `n` readable `i32`s.
-unsafe fn levels(ptr: *const i32, n: usize) -> api::Result<Vec<i32>> {
+/// SAFETY: when `n > 0`, `ptr` is null or points to `n` readable `T`s.
+unsafe fn list<T: Copy>(ptr: *const T, n: usize, name: &str) -> api::Result<Vec<T>> {
     if n == 0 {
         return Ok(Vec::new());
     }
     if ptr.is_null() {
-        return Err(Error::InvalidInput("zstd_levels is null".into()));
+        return Err(Error::InvalidInput(format!("{name} is null")));
     }
     Ok(unsafe { std::slice::from_raw_parts(ptr, n) }.to_vec())
 }
@@ -176,6 +176,11 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 /// and `gcd_min_saving` are fractions in [0, 1) (defaults 0.01, 0.10, 0.01; spec
 /// 2026-10-19 §4.3). A null `zstd_levels` with `n_zstd_levels > 0` returns 1.
 ///
+/// `skip_granularities` / `set_max_sizes` / `bloom_fprs` point to `n_*` values each (non-empty;
+/// defaults (1, 2, 4, 8), (125, 250), (0.025); a null pointer with n > 0, or an empty or
+/// invalid list, returns 1) and `min_skip`, `min_gain`, `max_overflow` are fractions
+/// (defaults 0.3, 0.1, 0.1; spec 2026-10-20 §4).
+///
 /// `entropy_estimator`: 0 the bottom-k distinct sample, 1 the AMS sketch (past the exact
 /// phase; the Java default is 1); any other value returns 1 (invalid input).
 #[no_mangle]
@@ -198,6 +203,15 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
     zstd_level_tolerance: f64,
     zstd_min_saving: f64,
     gcd_min_saving: f64,
+    skip_granularities: *const u32,
+    n_skip_granularities: usize,
+    set_max_sizes: *const u64,
+    n_set_max_sizes: usize,
+    bloom_fprs: *const f64,
+    n_bloom_fprs: usize,
+    min_skip: f64,
+    min_gain: f64,
+    max_overflow: f64,
     out: *mut *mut c_void,
     error: *mut *mut c_char,
 ) -> c_int {
@@ -205,7 +219,16 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
         if out.is_null() {
             return Err(Error::InvalidInput("out is null".into()));
         }
-        let zstd_levels = unsafe { levels(zstd_levels, n_zstd_levels) }?;
+        let zstd_levels = unsafe { list(zstd_levels, n_zstd_levels, "zstd_levels") }?;
+        let skip_granularities = unsafe {
+            list(
+                skip_granularities,
+                n_skip_granularities,
+                "skip_granularities",
+            )
+        }?;
+        let set_max_sizes = unsafe { list(set_max_sizes, n_set_max_sizes, "set_max_sizes") }?;
+        let bloom_fprs = unsafe { list(bloom_fprs, n_bloom_fprs, "bloom_fprs") }?;
         let r = api::StreamingRecommender::new(api::StreamingParams {
             reservoir_rows,
             block_rows,
@@ -228,13 +251,12 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
             zstd_level_tolerance,
             zstd_min_saving,
             gcd_min_saving,
-            // Skip-index keywords stay at their defaults until the C ABI carries them.
-            skip_granularities: vec![1, 2, 4, 8],
-            set_max_sizes: vec![125, 250],
-            bloom_fprs: vec![0.025],
-            min_skip: 0.3,
-            min_gain: 0.1,
-            max_overflow: 0.1,
+            skip_granularities,
+            set_max_sizes,
+            bloom_fprs,
+            min_skip,
+            min_gain,
+            max_overflow,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -329,6 +351,15 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
     zstd_level_tolerance: f64,
     zstd_min_saving: f64,
     gcd_min_saving: f64,
+    skip_granularities: *const u32,
+    n_skip_granularities: usize,
+    set_max_sizes: *const u64,
+    n_set_max_sizes: usize,
+    bloom_fprs: *const f64,
+    n_bloom_fprs: usize,
+    min_skip: f64,
+    min_gain: f64,
+    max_overflow: f64,
     out: *mut *mut c_void,
     error: *mut *mut c_char,
 ) -> c_int {
@@ -336,7 +367,16 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
         if out.is_null() {
             return Err(Error::InvalidInput("out is null".into()));
         }
-        let zstd_levels = unsafe { levels(zstd_levels, n_zstd_levels) }?;
+        let zstd_levels = unsafe { list(zstd_levels, n_zstd_levels, "zstd_levels") }?;
+        let skip_granularities = unsafe {
+            list(
+                skip_granularities,
+                n_skip_granularities,
+                "skip_granularities",
+            )
+        }?;
+        let set_max_sizes = unsafe { list(set_max_sizes, n_set_max_sizes, "set_max_sizes") }?;
+        let bloom_fprs = unsafe { list(bloom_fprs, n_bloom_fprs, "bloom_fprs") }?;
         let r = api::OneShotRecommender::new(api::OneShotParams {
             categorical_threshold,
             top_k,
@@ -348,13 +388,12 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
             zstd_level_tolerance,
             zstd_min_saving,
             gcd_min_saving,
-            // Skip-index keywords stay at their defaults until the C ABI carries them.
-            skip_granularities: vec![1, 2, 4, 8],
-            set_max_sizes: vec![125, 250],
-            bloom_fprs: vec![0.025],
-            min_skip: 0.3,
-            min_gain: 0.1,
-            max_overflow: 0.1,
+            skip_granularities,
+            set_max_sizes,
+            bloom_fprs,
+            min_skip,
+            min_gain,
+            max_overflow,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -470,6 +509,15 @@ mod tests {
                 0.01,
                 0.10,
                 0.01,
+                [1, 2, 4, 8].as_ptr(),
+                4,
+                [125, 250].as_ptr(),
+                2,
+                [0.025].as_ptr(),
+                1,
+                0.3,
+                0.1,
+                0.1,
                 &mut h,
                 error,
             )
@@ -552,6 +600,15 @@ mod tests {
                 0.01,
                 zstd_min_saving,
                 0.01,
+                [1, 2, 4, 8].as_ptr(),
+                4,
+                [125, 250].as_ptr(),
+                2,
+                [0.025].as_ptr(),
+                1,
+                0.3,
+                0.1,
+                0.1,
                 &mut h,
                 error,
             )
@@ -587,6 +644,15 @@ mod tests {
                 0.01,
                 0.10,
                 0.01,
+                [1, 2, 4, 8].as_ptr(),
+                4,
+                [125, 250].as_ptr(),
+                2,
+                [0.025].as_ptr(),
+                1,
+                0.3,
+                0.1,
+                0.1,
                 &mut h,
                 &mut error,
             )
@@ -621,6 +687,83 @@ mod tests {
                 "{c}"
             );
         }
+        unsafe { analytics_oneshot_recommender_free(h) };
+    }
+
+    /// A one-shot `_new` with explicit skip-index keywords.
+    unsafe fn new_with_skip(
+        granularities: (*const u32, usize),
+        fprs: (*const f64, usize),
+        min_skip: f64,
+        error: *mut *mut c_char,
+    ) -> (c_int, *mut c_void) {
+        let mut h = ptr::null_mut();
+        let code = unsafe {
+            analytics_oneshot_recommender_new(
+                10_000,
+                256,
+                1,
+                0,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                [1, 3, 9].as_ptr(),
+                3,
+                0.01,
+                0.10,
+                0.01,
+                granularities.0,
+                granularities.1,
+                [125u64, 250].as_ptr(),
+                2,
+                fprs.0,
+                fprs.1,
+                min_skip,
+                0.1,
+                0.1,
+                &mut h,
+                error,
+            )
+        };
+        (code, h)
+    }
+
+    #[test]
+    fn oneshot_recommender_rejects_bad_skip_keywords() {
+        let (g, f) = ([1u32, 2], [0.025f64]);
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_with_skip((g.as_ptr(), 0), (f.as_ptr(), 1), 0.3, &mut error) };
+        assert_eq!((code, h.is_null()), (INVALID_INPUT, true));
+        assert!(message(error).contains("skip_granularities"));
+
+        let (code, h) =
+            unsafe { new_with_skip((g.as_ptr(), 2), (ptr::null(), 1), 0.3, &mut error) };
+        assert_eq!((code, h.is_null()), (INVALID_INPUT, true));
+        assert!(message(error).contains("bloom_fprs"));
+
+        let (code, h) = unsafe { new_with_skip((g.as_ptr(), 2), (f.as_ptr(), 1), 1.5, &mut error) };
+        assert_eq!((code, h.is_null()), (INVALID_INPUT, true));
+        assert!(message(error).contains("min_skip"));
+    }
+
+    #[test]
+    fn oneshot_recommender_recommends_minmax_for_a_sorted_column() {
+        let (g, f) = ([1u32, 2], [0.025f64]);
+        let mut error = ptr::null_mut();
+        let (code, h) = unsafe { new_with_skip((g.as_ptr(), 2), (f.as_ptr(), 1), 0.3, &mut error) };
+        assert_eq!(code, OK);
+        let values: Vec<i64> = (0..50_000).collect();
+        let mut input = stream(vec![("a", ints(&values))]);
+        assert_eq!(
+            unsafe { analytics_oneshot_recommender_add(h, &mut input, &mut error) },
+            OK
+        );
+        let out = unsafe { oneshot_result(h) };
+        let skip = out.column_by_name("clickhouse_skip_index").unwrap();
+        let skip = skip.as_string_view();
+        assert!(skip.value(0).starts_with("minmax"), "{}", skip.value(0));
         unsafe { analytics_oneshot_recommender_free(h) };
     }
 
@@ -679,6 +822,15 @@ mod tests {
                 0.01,
                 0.10,
                 0.01,
+                [1, 2, 4, 8].as_ptr(),
+                4,
+                [125, 250].as_ptr(),
+                2,
+                [0.025].as_ptr(),
+                1,
+                0.3,
+                0.1,
+                0.1,
                 &mut h,
                 error,
             )
@@ -774,6 +926,15 @@ mod tests {
                 0.01,
                 0.10,
                 0.01,
+                [1, 2, 4, 8].as_ptr(),
+                4,
+                [125, 250].as_ptr(),
+                2,
+                [0.025].as_ptr(),
+                1,
+                0.3,
+                0.1,
+                0.1,
                 ptr::null_mut(),
                 &mut error,
             )
@@ -904,6 +1065,15 @@ mod tests {
                 0.01,
                 0.10,
                 0.01,
+                [1, 2, 4, 8].as_ptr(),
+                4,
+                [125, 250].as_ptr(),
+                2,
+                [0.025].as_ptr(),
+                1,
+                0.3,
+                0.1,
+                0.1,
                 &mut h,
                 &mut error,
             )
@@ -933,6 +1103,15 @@ mod tests {
                 0.01,
                 0.10,
                 0.01,
+                [1, 2, 4, 8].as_ptr(),
+                4,
+                [125, 250].as_ptr(),
+                2,
+                [0.025].as_ptr(),
+                1,
+                0.3,
+                0.1,
+                0.1,
                 &mut h,
                 &mut error,
             )

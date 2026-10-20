@@ -47,6 +47,15 @@ public final class StreamingRecommender extends NativeRecommender {
             JAVA_DOUBLE,  // double zstd_level_tolerance
             JAVA_DOUBLE,  // double zstd_min_saving
             JAVA_DOUBLE,  // double gcd_min_saving
+            ADDRESS,    // const uint32_t *skip_granularities
+            JAVA_LONG,  // size_t n_skip_granularities
+            ADDRESS,    // const uint64_t *set_max_sizes
+            JAVA_LONG,  // size_t n_set_max_sizes
+            ADDRESS,    // const double *bloom_fprs
+            JAVA_LONG,  // size_t n_bloom_fprs
+            JAVA_DOUBLE,  // double min_skip
+            JAVA_DOUBLE,  // double min_gain
+            JAVA_DOUBLE,  // double max_overflow
             ADDRESS,    // void **out
             ADDRESS));  // char **error
 
@@ -79,6 +88,15 @@ public final class StreamingRecommender extends NativeRecommender {
                     params.zstdLevelTolerance(),
                     params.zstdMinSaving(),
                     params.gcdMinSaving(),
+                    arena.allocateFrom(JAVA_INT, params.skipGranularities().stream().mapToInt(Integer::intValue).toArray()),
+                    (long) params.skipGranularities().size(),
+                    arena.allocateFrom(JAVA_LONG, params.setMaxSizes().stream().mapToLong(Long::longValue).toArray()),
+                    (long) params.setMaxSizes().size(),
+                    arena.allocateFrom(JAVA_DOUBLE, params.bloomFprs().stream().mapToDouble(Double::doubleValue).toArray()),
+                    (long) params.bloomFprs().size(),
+                    params.minSkip(),
+                    params.minGain(),
+                    params.maxOverflow(),
                     out,
                     error);
                 if (code != 0) {

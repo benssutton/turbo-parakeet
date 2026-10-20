@@ -17,20 +17,41 @@ import java.util.OptionalLong;
  * @param zstdMinSaving ZSTD replaces LZ4 only if it saves at least this fraction (default 0.10)
  * @param gcdMinSaving  the GCD codec is chosen only if it saves at least this fraction (default 0.01)
  * (spec 2026-10-19-clickhouse-recommendations-design.md §4.3; each fraction in [0, 1))
+ * @param skipGranularities GRANULARITY values tried for the skip indexes (non-empty; default 1, 2, 4, 8)
+ * @param setMaxSizes   {@code set(max_size)} values tried (non-empty; default 125, 250)
+ * @param bloomFprs     {@code bloom_filter} false-positive rates tried (non-empty, each in (0, 1); default 0.025)
+ * @param minSkip       a skip index must let at least this fraction of point queries skip (default 0.3)
+ * @param minGain       and gain at least this much over a random row order (default 0.1)
+ * @param maxOverflow   a set index may overflow its max_size in at most this fraction of windows (default 0.1)
+ * (spec 2026-10-20-skip-index-recommendations-design.md §4; fractions in [0, 1])
  */
 public record OneShotParams(long categoricalThreshold, int zstdLevel, long seed, List<BooleanPair> booleanPairs,
                             OptionalLong topK, List<String> idColumns,
                             List<Integer> zstdLevels, double zstdLevelTolerance, double zstdMinSaving,
-                            double gcdMinSaving) {
+                            double gcdMinSaving,
+                            List<Integer> skipGranularities, List<Long> setMaxSizes, List<Double> bloomFprs,
+                            double minSkip, double minGain, double maxOverflow) {
 
     public OneShotParams {
         booleanPairs = List.copyOf(booleanPairs);
         Objects.requireNonNull(topK, "topK");
         idColumns = List.copyOf(Objects.requireNonNull(idColumns, "idColumns"));
         zstdLevels = List.copyOf(Objects.requireNonNull(zstdLevels, "zstdLevels"));
+        skipGranularities = List.copyOf(Objects.requireNonNull(skipGranularities, "skipGranularities"));
+        setMaxSizes = List.copyOf(Objects.requireNonNull(setMaxSizes, "setMaxSizes"));
+        bloomFprs = List.copyOf(Objects.requireNonNull(bloomFprs, "bloomFprs"));
         if (topK.isPresent() && topK.getAsLong() < 0) {
             throw new IllegalArgumentException("topK must be non-negative, got " + topK.getAsLong());
         }
+    }
+
+    /** As the canonical constructor, with the default skip-index keywords. */
+    public OneShotParams(long categoricalThreshold, int zstdLevel, long seed, List<BooleanPair> booleanPairs,
+                         OptionalLong topK, List<String> idColumns,
+                         List<Integer> zstdLevels, double zstdLevelTolerance, double zstdMinSaving,
+                         double gcdMinSaving) {
+        this(categoricalThreshold, zstdLevel, seed, booleanPairs, topK, idColumns,
+            zstdLevels, zstdLevelTolerance, zstdMinSaving, gcdMinSaving, List.of(1, 2, 4, 8), List.of(125L, 250L), List.of(0.025), 0.3, 0.1, 0.1);
     }
 
     /** As the canonical constructor, with the default compression keywords. */
