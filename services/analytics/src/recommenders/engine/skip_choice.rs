@@ -31,12 +31,16 @@ fn bloom_unsupported(ch_type: &str) -> bool {
 /// The chosen index (`"<ddl> GRANULARITY <g>"`) and every candidate. `segments` are the row ranges
 /// of `arr` whose windows are scanned (one-shot: the whole column); `ch` is the column's
 /// ClickHouse type and layout (None: no candidates); `ch_size` its predicted compressed bytes.
+/// `bytes_scale` multiplies every index size (streaming: stream rows / sampled rows; one-shot 1.0)
+/// and `extra_pruned` are rows the caller already pruned (streaming: granularities beyond a block).
 pub(crate) fn skip_choice(
     arr: &dyn Array,
     ch: Option<(&str, &ChLayout)>,
     ch_size: Option<u64>,
     segments: &[(usize, usize)],
     p: &SkipParams,
+    bytes_scale: f64,
+    extra_pruned: Vec<SkipCandidate>,
 ) -> (Option<String>, Vec<SkipCandidate>) {
     let none = (None, Vec::new());
     let Some((ch_type, layout)) = ch else {
@@ -57,7 +61,7 @@ pub(crate) fn skip_choice(
         return none;
     }
 
-    let mut pruned = Vec::new();
+    let mut pruned = extra_pruned;
     let bloom_ok = !bloom_unsupported(ch_type);
     if !bloom_ok {
         for &fpr in &p.bloom_fprs {
@@ -93,7 +97,18 @@ pub(crate) fn skip_choice(
                 )
             }
         };
-        measured(&pop, w, &sums, expected, kind, g, index, arr, layout)
+        measured(
+            &pop,
+            w,
+            &sums,
+            expected,
+            kind,
+            g,
+            index,
+            arr,
+            layout,
+            bytes_scale,
+        )
     };
 
     let mut cheap = Vec::new();
@@ -118,7 +133,8 @@ pub(crate) fn skip_choice(
                     IndexKind::Bloom { fpr },
                     u64::from(g) * GRANULE_ROWS,
                 )
-                .ok();
+                .ok()
+                .map(|b| scaled(b, bytes_scale));
                 out.push(Measured {
                     kind: Kind::Bloom(fpr),
                     skip_rows: unlimited.skip_rows * keep,
@@ -140,6 +156,14 @@ pub(crate) fn skip_choice(
     (chosen, rows)
 }
 
+fn scaled(bytes: u64, scale: f64) -> u64 {
+    if scale == 1.0 {
+        bytes
+    } else {
+        (bytes as f64 * scale).round() as u64
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn measured(
     pop: &Population,
@@ -151,6 +175,7 @@ fn measured(
     index: IndexKind,
     arr: &dyn Array,
     layout: &ChLayout,
+    bytes_scale: f64,
 ) -> Measured {
     let c = Common::new(pop, w, sums, expected);
     let per_window = |x: f64| x / sums.windows as f64;
@@ -164,7 +189,9 @@ fn measured(
             // Bloom bytes are computed per fpr by the caller.
             Kind::Bloom(_) => None,
             _ if matches!(index, IndexKind::Set { max_size: 0 }) => None,
-            _ => skip_index_bytes(arr, layout, index, u64::from(g) * GRANULE_ROWS).ok(),
+            _ => skip_index_bytes(arr, layout, index, u64::from(g) * GRANULE_ROWS)
+                .ok()
+                .map(|b| scaled(b, bytes_scale)),
         },
         overflow: matches!(kind, Kind::Set(_)).then(|| {
             (

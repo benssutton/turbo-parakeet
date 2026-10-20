@@ -161,6 +161,8 @@ pub(crate) fn recommend(
         ch.size,
         &[(0, chosen.array.len())],
         &params.skip,
+        1.0,
+        Vec::new(),
     );
     Ok(Rec {
         nullable,

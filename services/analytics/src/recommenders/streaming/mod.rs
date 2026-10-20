@@ -29,9 +29,9 @@ use crate::common::error::{Error, Result};
 use crate::common::ipc_sizes::{classic_layout, layout_sizes, sizes_of};
 use crate::recommenders::engine::{
     clickhouse_choice_over, entropy_cells, enum_categories, exemplar_cells, exemplar_value,
-    ipc_choice, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row, rescale,
-    to_polars_layout, top_k_cell, Entropy, EntropyEstimator, Exemplars, Params, Rec, RunningStats,
-    Target,
+    ipc_choice, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row, rescale, skip_choice,
+    to_polars_layout, top_k_cell, Entropy, EntropyEstimator, Exemplars, Kind, Params, Rec,
+    RunningStats, SkipCandidate, Target,
 };
 use crate::recommenders::schema::{id_schema, recommender_fields, with_ids, with_maps, IdCell};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
@@ -86,6 +86,7 @@ pub(crate) struct Streaming {
     columns: Vec<Column>,
     index: HashMap<String, usize>,
     reservoir: Reservoir,
+    block_rows: u64,
     /// The id columns' schema, from the first batch; None without `id_columns`.
     id_schema: Option<SchemaRef>,
     /// The id columns' values at global row 0 (a one-row copy): the null exemplar of a
@@ -165,6 +166,7 @@ impl Streaming {
                 params.seed,
             ),
             params,
+            block_rows,
             n_rows: 0,
             columns: Vec::new(),
             index: HashMap::new(),
@@ -702,6 +704,51 @@ impl Streaming {
             distinct_ratio,
             &self.params,
         )?;
+        // Skip indexes: windows are scanned inside each sampled block, so a granularity whose
+        // window exceeds `block_rows` is pruned (one row per granularity, kind MinMax, naming
+        // the reason for every kind). Index sizes scale to the stream like `ch_size`.
+        let (skip_index, skip_candidates) = match (&whole, ch.ty.as_deref().zip(ch.layout.as_ref()))
+        {
+            (Some(w), chl @ Some(_)) => {
+                let mut sp = self.params.skip.clone();
+                let mut extra = Vec::new();
+                sp.granularities.retain(|&g| {
+                    let rows = u64::from(g) * 8_192;
+                    if rows <= self.block_rows {
+                        return true;
+                    }
+                    extra.push(SkipCandidate {
+                        measured: None,
+                        kind: Kind::MinMax,
+                        granularity: g,
+                        outcome: "pruned",
+                        evidence: format!(
+                            "window of {rows} rows exceeds block_rows {}",
+                            self.block_rows
+                        ),
+                    });
+                    false
+                });
+                let mut at = 0;
+                let segments: Vec<(usize, usize)> = arrow_blocks
+                    .iter()
+                    .map(|b| {
+                        at += b.len();
+                        (at - b.len(), at)
+                    })
+                    .collect();
+                skip_choice(
+                    w.as_ref(),
+                    chl,
+                    ch.size,
+                    &segments,
+                    &sp,
+                    self.n_rows as f64 / sampled as f64,
+                    extra,
+                )
+            }
+            _ => (None, Vec::new()),
+        };
         let rec = Rec {
             nullable,
             arrow_type: pa_name(&rec_t),
@@ -725,8 +772,8 @@ impl Streaming {
             ch_chain: ch.chain,
             ch_size: ch.size,
             ch_candidates: ch.candidates,
-            skip_index: None,
-            skip_candidates: Vec::new(),
+            skip_index,
+            skip_candidates,
         };
         row.extend(p.row(&oc));
         row.push(u(o.n_midnight));

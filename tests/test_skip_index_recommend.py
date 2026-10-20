@@ -112,3 +112,57 @@ def test_set_max_sizes_above_the_window_distinct_leave_the_gate():
     )
     sets = [r for r in rows if r["kind"] == "set"]
     assert sets and any(r["outcome"] != "pruned" for r in sets), show(rows)
+
+
+FRAMES = {
+    "sorted": sorted_ids,
+    "clustered": clustered,
+    "random": random_50,
+    "hashes": grouped_hashes,
+}
+
+
+def streamed_row(frame, batch=50_000, **kw):
+    rec = StreamingRecommender(**kw)
+    for off in range(0, frame.height, batch):
+        rec.add(frame.slice(off, batch))
+    return rec.result().row(0, named=True)
+
+
+def chosen(r):
+    return next(
+        (c for c in r["clickhouse_skip_indexes"] if c["outcome"] == "chosen"), None
+    )
+
+
+@pytest.mark.parametrize("name", FRAMES)
+def test_streaming_skip_index_matches_one_shot(name):
+    frame = pl.DataFrame({"x": FRAMES[name]()})
+    one = OneShotRecommender().add(frame).result().row(0, named=True)
+    row = streamed_row(frame, reservoir_rows=frame.height + 65_536)
+    assert row["clickhouse_skip_index"] == one["clickhouse_skip_index"], show(
+        row["clickhouse_skip_indexes"]
+    )
+    a, b = chosen(row), chosen(one)
+    assert (a is None) == (b is None)
+    if a is not None:
+        assert a["skip_rows"] == pytest.approx(b["skip_rows"], abs=0.02)
+
+
+def test_streaming_skip_index_without_sample():
+    frame = pl.DataFrame({"x": sorted_ids()})
+    row = streamed_row(frame, reservoir_rows=0)
+    assert row["clickhouse_skip_index"] is None
+    assert not row["clickhouse_skip_indexes"]
+
+
+def test_streaming_granularity_capped_by_block_rows():
+    frame = pl.DataFrame({"x": sorted_ids()})
+    row = streamed_row(frame, reservoir_rows=frame.height, block_rows=16_384)
+    rows = row["clickhouse_skip_indexes"]
+    for r in rows:
+        if r["granularity"] >= 4:
+            assert r["outcome"] == "pruned" and "exceeds block_rows" in r["evidence"]
+    assert {r["granularity"] for r in rows if r["skip_rows"] is not None} <= {1, 2}
+    assert any(r["skip_rows"] is not None for r in rows), show(rows)
+    assert {4, 8} <= {r["granularity"] for r in rows if r["outcome"] == "pruned"}

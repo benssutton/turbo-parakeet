@@ -279,6 +279,50 @@ def assert_compression_parity(name: str, r: dict, o: dict):
             )
 
 
+def skip_key(c: dict):
+    return (c["kind"], c["granularity"], c["max_size"], c["fpr"])
+
+
+def assert_skip_index_parity(name: str, r: dict, o: dict):
+    """Skip indexes (spec 2026-10-20 §7): with the whole column in one sampled block the
+    index and every candidate row equal one-shot's; else the index is equal unless
+    one-shot's two best measured candidates are within 0.05 skip_rows."""
+    if r["n_sampled_rows"] == 0:
+        assert r["clickhouse_skip_index"] is None and not r["clickhouse_skip_indexes"]
+        return
+    if wide_temporal(r, o):
+        return
+    if r["n_sampled_rows"] == r["n_rows"] and r["n_sampled_blocks"] == 1:
+        assert r["clickhouse_skip_index"] == o["clickhouse_skip_index"], name
+        got, want = r["clickhouse_skip_indexes"], o["clickhouse_skip_indexes"]
+        assert len(got) == len(want), name
+        for g, w in zip(got, want):
+            assert skip_key(g) == skip_key(w) and g["outcome"] == w["outcome"], (
+                name,
+                g,
+                w,
+            )
+            assert g["bytes"] == w["bytes"], (name, g, w)
+            for k in ("skip_rows", "skip_values", "expected_skip_rows"):
+                assert g[k] == pytest.approx(w[k], rel=1e-9), (name, k, g, w)
+        return
+    if r["clickhouse_skip_index"] != o["clickhouse_skip_index"]:
+        best = sorted(
+            (
+                c["skip_rows"]
+                for c in o["clickhouse_skip_indexes"] or []
+                if c["skip_rows"] is not None and c["outcome"] != "pruned"
+            ),
+            reverse=True,
+        )
+        assert len(best) > 1 and best[0] - best[1] <= 0.05, (
+            name,
+            r["clickhouse_skip_index"],
+            o["clickhouse_skip_index"],
+            o["clickhouse_skip_indexes"],
+        )
+
+
 def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: bool):
     """Parity spec (docs/superpowers/specs/2026-10-01-recommender-parity-design.md)
     §7 / §10: equal recommendations, sizes, candidates and shared value columns; ZSTD
@@ -320,6 +364,7 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
             o["clickhouse_type"],
         )
         assert_compression_parity(name, r, o)
+        assert_skip_index_parity(name, r, o)
         # Both rank by exact counts while the dictionary is a candidate (spec 2026-10-07 §4).
         for k in ("top_k", "inner_top_k"):
             assert r[k] == o[k], (name, k, r[k], o[k])
