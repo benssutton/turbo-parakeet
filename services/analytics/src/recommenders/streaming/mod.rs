@@ -725,6 +725,8 @@ impl Streaming {
             ch_chain: ch.chain,
             ch_size: ch.size,
             ch_candidates: ch.candidates,
+            skip_index: None,
+            skip_candidates: Vec::new(),
         };
         row.extend(p.row(&oc));
         row.push(u(o.n_midnight));

@@ -30,7 +30,6 @@ pub use entropy::EntropyEstimator;
 pub(crate) use entropy::*;
 pub(crate) use exemplar::*;
 pub(crate) use polars_layout::*;
-#[expect(unused_imports, reason = "wired in by later tasks")]
 pub(crate) use skip_index::*;
 pub(crate) use top_k::*;
 pub(crate) use types::*;

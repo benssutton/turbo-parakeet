@@ -34,6 +34,21 @@ pub(crate) fn clickhouse_candidate_type() -> PT {
     ])
 }
 
+pub(crate) fn skip_index_candidate_type() -> PT {
+    PT::Struct(vec![
+        PField::new("kind".into(), PT::String),
+        PField::new("granularity".into(), PT::UInt32),
+        PField::new("max_size".into(), PT::UInt32),
+        PField::new("fpr".into(), PT::Float64),
+        PField::new("bytes".into(), PT::UInt64),
+        PField::new("skip_rows".into(), PT::Float64),
+        PField::new("skip_values".into(), PT::Float64),
+        PField::new("expected_skip_rows".into(), PT::Float64),
+        PField::new("outcome".into(), PT::String),
+        PField::new("evidence".into(), PT::String),
+    ])
+}
+
 pub(crate) fn rec_fields() -> Vec<(String, PT)> {
     [
         ("nullable", PT::Boolean),
@@ -54,10 +69,15 @@ pub(crate) fn rec_fields() -> Vec<(String, PT)> {
         ("polars_ipc_size_bytes", PT::UInt64),
         ("clickhouse_type", PT::String),
         ("clickhouse_codecs", PT::String),
+        ("clickhouse_skip_index", PT::String),
         ("clickhouse_size_bytes", PT::UInt64),
         (
             "clickhouse_candidates",
             PT::List(Box::new(clickhouse_candidate_type())),
+        ),
+        (
+            "clickhouse_skip_indexes",
+            PT::List(Box::new(skip_index_candidate_type())),
         ),
         ("candidates", PT::List(Box::new(candidate_type()))),
     ]

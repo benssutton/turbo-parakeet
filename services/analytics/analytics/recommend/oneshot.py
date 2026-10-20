@@ -61,6 +61,14 @@ class OneShotRecommender:
     `zstd_min_saving` the smallest relative saving that makes ZSTD preferable to LZ4;
     `gcd_min_saving` the smallest relative saving that keeps a GCD codec. The three
     fractions lie in [0, 1).
+
+    Skip indexes (spec docs/superpowers/specs/2026-10-20-skip-index-recommendations-design.md
+    §4): `skip_granularities` are the GRANULARITY values tried, `set_max_sizes` the
+    `set(max_size)` sizes and `bloom_fprs` the `bloom_filter` false-positive rates
+    (each non-empty and distinct; fprs in (0, 1)). `min_skip` is the smallest share of
+    rows a point query must skip, `min_gain` the smallest gain over a random row order,
+    and `max_overflow` the largest share of windows whose distinct values may exceed a
+    set's size; the three lie in [0, 1].
     """
 
     def __init__(
@@ -76,6 +84,12 @@ class OneShotRecommender:
         zstd_level_tolerance: float = 0.01,
         zstd_min_saving: float = 0.10,
         gcd_min_saving: float = 0.01,
+        skip_granularities: Sequence[int] = (1, 2, 4, 8),
+        set_max_sizes: Sequence[int] = (125, 250),
+        bloom_fprs: Sequence[float] = (0.025,),
+        min_skip: float = 0.3,
+        min_gain: float = 0.1,
+        max_overflow: float = 0.1,
     ) -> None:
         self._ids = _input.id_columns(id_columns)
         self._rs = _plugin.oneshot_recommender(
@@ -89,6 +103,12 @@ class OneShotRecommender:
             zstd_level_tolerance=zstd_level_tolerance,
             zstd_min_saving=zstd_min_saving,
             gcd_min_saving=gcd_min_saving,
+            skip_granularities=list(skip_granularities),
+            set_max_sizes=list(set_max_sizes),
+            bloom_fprs=list(bloom_fprs),
+            min_skip=min_skip,
+            min_gain=min_gain,
+            max_overflow=max_overflow,
         )
 
     def add(self, frame) -> OneShotRecommender:

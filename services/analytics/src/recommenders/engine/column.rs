@@ -12,7 +12,7 @@ use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType as AT;
 use polars::prelude::{
     polars_err, AnyValue, CompatLevel, DataType as PT, Float64Chunked, IntoSeries, NewChunkedArray,
-    PolarsResult, Series, StringChunked, StructChunked, UInt64Chunked,
+    PolarsResult, Series, StringChunked, StructChunked, UInt32Chunked, UInt64Chunked,
 };
 
 // ── one column ───────────────────────────────────────────────────────────────
@@ -42,6 +42,10 @@ pub(crate) struct Rec {
     pub ch_chain: Option<Chain>,
     pub ch_size: Option<u64>,
     pub ch_candidates: Vec<CodecCandidate>,
+    /// The ClickHouse skip index as `"<ddl> GRANULARITY <g>"` and every candidate (spec
+    /// 2026-10-20 §6). None / empty until the skip-index choice lands.
+    pub skip_index: Option<String>,
+    pub skip_candidates: Vec<SkipCandidate>,
 }
 
 /// An Enum's categories, found through lists and arrays.
@@ -169,6 +173,8 @@ pub(crate) fn recommend(
         ch_chain: ch.chain,
         ch_size: ch.size,
         ch_candidates: ch.candidates,
+        skip_index: None,
+        skip_candidates: Vec::new(),
     })
 }
 
@@ -401,6 +407,59 @@ fn clickhouse_candidates_series(c: &[CodecCandidate]) -> Series {
         .into_series()
 }
 
+/// `clickhouse_skip_indexes` cell: one struct per skip-index candidate (spec 2026-10-20 §6).
+fn skip_candidates_series(c: &[SkipCandidate]) -> Series {
+    let text = |name: &str, v: Vec<String>| {
+        StringChunked::from_iter_values(name.into(), v.into_iter()).into_series()
+    };
+    let kind = |k: &Kind| match k {
+        Kind::MinMax => "minmax",
+        Kind::Set(_) => "set",
+        Kind::Bloom(_) => "bloom_filter",
+    };
+    let measured = |name: &str, f: fn(&Measured) -> f64| {
+        Float64Chunked::from_iter_options(name.into(), c.iter().map(|x| x.measured.as_ref().map(f)))
+            .into_series()
+    };
+    let cols = [
+        text(
+            "kind",
+            c.iter().map(|x| kind(&x.kind).to_string()).collect(),
+        ),
+        UInt32Chunked::from_iter_values("granularity".into(), c.iter().map(|x| x.granularity))
+            .into_series(),
+        UInt32Chunked::from_iter_options(
+            "max_size".into(),
+            c.iter().map(|x| match x.kind {
+                Kind::Set(n) => Some(n as u32),
+                _ => None,
+            }),
+        )
+        .into_series(),
+        Float64Chunked::from_iter_options(
+            "fpr".into(),
+            c.iter().map(|x| match x.kind {
+                Kind::Bloom(f) => Some(f),
+                _ => None,
+            }),
+        )
+        .into_series(),
+        UInt64Chunked::from_iter_options(
+            "bytes".into(),
+            c.iter().map(|x| x.measured.as_ref().and_then(|m| m.bytes)),
+        )
+        .into_series(),
+        measured("skip_rows", |m| m.skip_rows),
+        measured("skip_values", |m| m.skip_values),
+        measured("expected_skip_rows", |m| m.expected_skip_rows),
+        text("outcome", c.iter().map(|x| x.outcome.to_string()).collect()),
+        text("evidence", c.iter().map(|x| x.evidence.clone()).collect()),
+    ];
+    StructChunked::from_series("candidate".into(), c.len(), cols.iter())
+        .expect("equal-length fields")
+        .into_series()
+}
+
 /// The (compression name, level, size) cells of an `*_ipc_*` column group.
 fn ipc_cells(ipc: Option<(Compression, u64)>) -> [AnyValue<'static>; 3] {
     match ipc {
@@ -436,10 +495,12 @@ pub(crate) fn rec_row(r: &Rec) -> Row {
     row.extend(ipc_cells(r.polars_ipc));
     row.push(r.ch_type.as_deref().map_or(AnyValue::Null, text));
     row.push(r.ch_chain.map_or(AnyValue::Null, |c| text(&c.ddl())));
+    row.push(r.skip_index.as_deref().map_or(AnyValue::Null, text));
     row.push(r.ch_size.map_or(AnyValue::Null, AnyValue::UInt64));
     row.push(AnyValue::List(clickhouse_candidates_series(
         &r.ch_candidates,
     )));
+    row.push(AnyValue::List(skip_candidates_series(&r.skip_candidates)));
     row.push(AnyValue::List(candidates_series(&r.candidates)));
     row
 }

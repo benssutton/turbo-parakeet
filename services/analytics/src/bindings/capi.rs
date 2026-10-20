@@ -228,6 +228,13 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
             zstd_level_tolerance,
             zstd_min_saving,
             gcd_min_saving,
+            // Skip-index keywords stay at their defaults until the C ABI carries them.
+            skip_granularities: vec![1, 2, 4, 8],
+            set_max_sizes: vec![125, 250],
+            bloom_fprs: vec![0.025],
+            min_skip: 0.3,
+            min_gain: 0.1,
+            max_overflow: 0.1,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())
@@ -341,6 +348,13 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
             zstd_level_tolerance,
             zstd_min_saving,
             gcd_min_saving,
+            // Skip-index keywords stay at their defaults until the C ABI carries them.
+            skip_granularities: vec![1, 2, 4, 8],
+            set_max_sizes: vec![125, 250],
+            bloom_fprs: vec![0.025],
+            min_skip: 0.3,
+            min_gain: 0.1,
+            max_overflow: 0.1,
         })?;
         unsafe { new_handle(r, out) };
         Ok(())

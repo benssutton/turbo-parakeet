@@ -163,7 +163,7 @@ fn locked<T>(m: &Mutex<T>) -> api::Result<std::sync::MutexGuard<'_, T>> {
 #[pymethods]
 impl StreamingRecommender {
     #[new]
-    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="ams", id_columns=Vec::new(), zstd_levels=vec![1, 3, 9], zstd_level_tolerance=0.01, zstd_min_saving=0.10, gcd_min_saving=0.01))]
+    #[pyo3(signature = (*, reservoir_rows, block_rows, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, entropy_estimator="ams", id_columns=Vec::new(), zstd_levels=vec![1, 3, 9], zstd_level_tolerance=0.01, zstd_min_saving=0.10, gcd_min_saving=0.01, skip_granularities=vec![1, 2, 4, 8], set_max_sizes=vec![125, 250], bloom_fprs=vec![0.025], min_skip=0.3, min_gain=0.1, max_overflow=0.1))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -180,6 +180,12 @@ impl StreamingRecommender {
         zstd_level_tolerance: f64,
         zstd_min_saving: f64,
         gcd_min_saving: f64,
+        skip_granularities: Vec<u32>,
+        set_max_sizes: Vec<u64>,
+        bloom_fprs: Vec<f64>,
+        min_skip: f64,
+        min_gain: f64,
+        max_overflow: f64,
     ) -> PyResult<Self> {
         let entropy_estimator = match entropy_estimator {
             "sample" => api::EntropyEstimator::Sample,
@@ -205,6 +211,12 @@ impl StreamingRecommender {
             zstd_level_tolerance,
             zstd_min_saving,
             gcd_min_saving,
+            skip_granularities,
+            set_max_sizes,
+            bloom_fprs,
+            min_skip,
+            min_gain,
+            max_overflow,
         };
         run(py, || api::StreamingRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }
@@ -249,7 +261,7 @@ struct OneShotRecommender(Mutex<api::OneShotRecommender>);
 impl OneShotRecommender {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, id_columns=Vec::new(), zstd_levels=vec![1, 3, 9], zstd_level_tolerance=0.01, zstd_min_saving=0.10, gcd_min_saving=0.01))]
+    #[pyo3(signature = (*, categorical_threshold, top_k, zstd_level, seed, boolean_pairs, id_columns=Vec::new(), zstd_levels=vec![1, 3, 9], zstd_level_tolerance=0.01, zstd_min_saving=0.10, gcd_min_saving=0.01, skip_granularities=vec![1, 2, 4, 8], set_max_sizes=vec![125, 250], bloom_fprs=vec![0.025], min_skip=0.3, min_gain=0.1, max_overflow=0.1))]
     fn new(
         py: Python<'_>,
         categorical_threshold: u64,
@@ -262,6 +274,12 @@ impl OneShotRecommender {
         zstd_level_tolerance: f64,
         zstd_min_saving: f64,
         gcd_min_saving: f64,
+        skip_granularities: Vec<u32>,
+        set_max_sizes: Vec<u64>,
+        bloom_fprs: Vec<f64>,
+        min_skip: f64,
+        min_gain: f64,
+        max_overflow: f64,
     ) -> PyResult<Self> {
         let p = api::OneShotParams {
             categorical_threshold,
@@ -275,6 +293,12 @@ impl OneShotRecommender {
             zstd_level_tolerance,
             zstd_min_saving,
             gcd_min_saving,
+            skip_granularities,
+            set_max_sizes,
+            bloom_fprs,
+            min_skip,
+            min_gain,
+            max_overflow,
         };
         run(py, || api::OneShotRecommender::new(p)).map(|r| Self(Mutex::new(r)))
     }

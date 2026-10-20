@@ -111,12 +111,29 @@ SCHEMA = {
     "polars_ipc_size_bytes": pl.UInt64,
     "clickhouse_type": pl.String,
     "clickhouse_codecs": pl.String,
+    "clickhouse_skip_index": pl.String,
     "clickhouse_size_bytes": pl.UInt64,
     "clickhouse_candidates": pl.List(
         pl.Struct(
             {
                 "codecs": pl.String,
                 "predicted_bytes": pl.UInt64,
+                "outcome": pl.String,
+                "evidence": pl.String,
+            }
+        )
+    ),
+    "clickhouse_skip_indexes": pl.List(
+        pl.Struct(
+            {
+                "kind": pl.String,
+                "granularity": pl.UInt32,
+                "max_size": pl.UInt32,
+                "fpr": pl.Float64,
+                "bytes": pl.UInt64,
+                "skip_rows": pl.Float64,
+                "skip_values": pl.Float64,
+                "expected_skip_rows": pl.Float64,
                 "outcome": pl.String,
                 "evidence": pl.String,
             }

@@ -214,6 +214,12 @@ def streaming_recommender(
     zstd_level_tolerance: float,
     zstd_min_saving: float,
     gcd_min_saving: float,
+    skip_granularities: list[int],
+    set_max_sizes: list[int],
+    bloom_fprs: list[float],
+    min_skip: float,
+    min_gain: float,
+    max_overflow: float,
 ):
     """The Rust streaming recommender (src/recommenders/streaming/): .add(data, ineligible), .result()."""
     return _rs.StreamingRecommender(
@@ -230,6 +236,12 @@ def streaming_recommender(
         zstd_level_tolerance=zstd_level_tolerance,
         zstd_min_saving=zstd_min_saving,
         gcd_min_saving=gcd_min_saving,
+        skip_granularities=skip_granularities,
+        set_max_sizes=set_max_sizes,
+        bloom_fprs=bloom_fprs,
+        min_skip=min_skip,
+        min_gain=min_gain,
+        max_overflow=max_overflow,
     )
 
 
@@ -245,6 +257,12 @@ def oneshot_recommender(
     zstd_level_tolerance: float,
     zstd_min_saving: float,
     gcd_min_saving: float,
+    skip_granularities: list[int],
+    set_max_sizes: list[int],
+    bloom_fprs: list[float],
+    min_skip: float,
+    min_gain: float,
+    max_overflow: float,
 ):
     """The Rust one-shot recommender (src/recommenders/oneshot.rs): .add(data, ineligible), .result()."""
     return _rs.OneShotRecommender(
@@ -258,4 +276,10 @@ def oneshot_recommender(
         zstd_level_tolerance=zstd_level_tolerance,
         zstd_min_saving=zstd_min_saving,
         gcd_min_saving=gcd_min_saving,
+        skip_granularities=skip_granularities,
+        set_max_sizes=set_max_sizes,
+        bloom_fprs=bloom_fprs,
+        min_skip=min_skip,
+        min_gain=min_gain,
+        max_overflow=max_overflow,
     )

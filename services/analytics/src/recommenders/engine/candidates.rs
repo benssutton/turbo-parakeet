@@ -28,6 +28,9 @@ pub(crate) struct Params {
     pub id_columns: Vec<String>,
     /// The compression keywords (spec 2026-10-19 §4.3).
     pub compression: CompressionParams,
+    /// The skip-index keywords (spec 2026-10-20 §4).
+    #[expect(dead_code, reason = "read by the skip-index choice, a later task")]
+    pub skip: SkipParams,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

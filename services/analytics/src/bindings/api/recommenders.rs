@@ -5,7 +5,7 @@ use super::*;
 use arrow_array::RecordBatch;
 
 pub use crate::recommenders::engine::EntropyEstimator;
-use crate::recommenders::engine::{CompressionParams, Params};
+use crate::recommenders::engine::{CompressionParams, Params, SkipParams};
 
 /// The checks both recommenders' constructors share.
 pub(crate) fn validate_common(zstd_level: i32, boolean_pairs: &[(String, String)]) -> Result<()> {
@@ -70,6 +70,70 @@ fn compression(
     })
 }
 
+/// The skip-index keywords (spec 2026-10-20 §4) as engine parameters, checked.
+fn skip_params(
+    granularities: Vec<u32>,
+    set_max_sizes: Vec<u64>,
+    bloom_fprs: Vec<f64>,
+    min_skip: f64,
+    min_gain: f64,
+    max_overflow: f64,
+) -> Result<SkipParams> {
+    fn distinct<T: PartialEq + Copy + std::fmt::Display>(name: &str, v: &[T]) -> Result<()> {
+        if v.is_empty() {
+            return Err(Error::InvalidInput(format!("{name} must be non-empty")));
+        }
+        for (i, x) in v.iter().enumerate() {
+            if v[..i].contains(x) {
+                return Err(Error::InvalidInput(format!(
+                    "{name} must be distinct, {x} repeats"
+                )));
+            }
+        }
+        Ok(())
+    }
+    distinct("skip_granularities", &granularities)?;
+    if granularities.contains(&0) {
+        return Err(Error::InvalidInput(
+            "skip_granularities must be at least 1".into(),
+        ));
+    }
+    distinct("set_max_sizes", &set_max_sizes)?;
+    if set_max_sizes.contains(&0) {
+        return Err(Error::InvalidInput(
+            "set_max_sizes must be at least 1".into(),
+        ));
+    }
+    distinct("bloom_fprs", &bloom_fprs)?;
+    if let Some(f) = bloom_fprs
+        .iter()
+        .find(|f| !(f.is_finite() && **f > 0.0 && **f < 1.0))
+    {
+        return Err(Error::InvalidInput(format!(
+            "bloom_fprs must be in (0, 1), got {f}"
+        )));
+    }
+    for (name, v) in [
+        ("min_skip", min_skip),
+        ("min_gain", min_gain),
+        ("max_overflow", max_overflow),
+    ] {
+        if !(v.is_finite() && (0.0..=1.0).contains(&v)) {
+            return Err(Error::InvalidInput(format!(
+                "{name} must be in [0, 1], got {v}"
+            )));
+        }
+    }
+    Ok(SkipParams {
+        granularities,
+        set_max_sizes,
+        bloom_fprs,
+        min_skip,
+        min_gain,
+        max_overflow,
+    })
+}
+
 /// Duplicate id column names are InvalidInput.
 fn validate_ids(id_columns: &[String]) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
@@ -95,6 +159,13 @@ pub struct OneShotParams {
     pub zstd_level_tolerance: f64,
     pub zstd_min_saving: f64,
     pub gcd_min_saving: f64,
+    /// Skip-index keywords (spec 2026-10-20 §4).
+    pub skip_granularities: Vec<u32>,
+    pub set_max_sizes: Vec<u64>,
+    pub bloom_fprs: Vec<f64>,
+    pub min_skip: f64,
+    pub min_gain: f64,
+    pub max_overflow: f64,
 }
 
 /// Recommends dtypes for one frame from exact statistics, each candidate verified on
@@ -111,6 +182,14 @@ impl OneShotRecommender {
             p.zstd_min_saving,
             p.gcd_min_saving,
         )?;
+        let skip = skip_params(
+            p.skip_granularities,
+            p.set_max_sizes,
+            p.bloom_fprs,
+            p.min_skip,
+            p.min_gain,
+            p.max_overflow,
+        )?;
         Ok(Self(crate::recommenders::oneshot::OneShot::new(Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
@@ -120,6 +199,7 @@ impl OneShotRecommender {
             entropy_estimator: EntropyEstimator::Sample,
             id_columns: p.id_columns,
             compression,
+            skip,
         })))
     }
 
@@ -163,6 +243,13 @@ pub struct StreamingParams {
     pub zstd_level_tolerance: f64,
     pub zstd_min_saving: f64,
     pub gcd_min_saving: f64,
+    /// Skip-index keywords (spec 2026-10-20 §4).
+    pub skip_granularities: Vec<u32>,
+    pub set_max_sizes: Vec<u64>,
+    pub bloom_fprs: Vec<f64>,
+    pub min_skip: f64,
+    pub min_gain: f64,
+    pub max_overflow: f64,
 }
 
 /// Recommends dtypes from record batches added over time; all state stays in Rust.
@@ -187,6 +274,14 @@ impl StreamingRecommender {
             p.zstd_min_saving,
             p.gcd_min_saving,
         )?;
+        let skip = skip_params(
+            p.skip_granularities,
+            p.set_max_sizes,
+            p.bloom_fprs,
+            p.min_skip,
+            p.min_gain,
+            p.max_overflow,
+        )?;
         let params = Params {
             seed: p.seed,
             zstd_level: p.zstd_level,
@@ -196,6 +291,7 @@ impl StreamingRecommender {
             entropy_estimator: p.entropy_estimator,
             id_columns: p.id_columns,
             compression,
+            skip,
         };
         Ok(Self(crate::recommenders::streaming::Streaming::new(
             params,
@@ -253,6 +349,12 @@ mod tests {
             zstd_level_tolerance: 0.01,
             zstd_min_saving: 0.10,
             gcd_min_saving: 0.01,
+            skip_granularities: vec![1, 2, 4, 8],
+            set_max_sizes: vec![125, 250],
+            bloom_fprs: vec![0.025],
+            min_skip: 0.3,
+            min_gain: 0.1,
+            max_overflow: 0.1,
         }
     }
 
@@ -312,6 +414,34 @@ mod tests {
                 zstd_level_tolerance: f64::NAN,
                 ..streaming_params()
             },
+            StreamingParams {
+                skip_granularities: vec![],
+                ..streaming_params()
+            },
+            StreamingParams {
+                skip_granularities: vec![1, 1],
+                ..streaming_params()
+            },
+            StreamingParams {
+                skip_granularities: vec![0],
+                ..streaming_params()
+            },
+            StreamingParams {
+                set_max_sizes: vec![0],
+                ..streaming_params()
+            },
+            StreamingParams {
+                bloom_fprs: vec![1.0],
+                ..streaming_params()
+            },
+            StreamingParams {
+                min_skip: 1.5,
+                ..streaming_params()
+            },
+            StreamingParams {
+                max_overflow: -0.1,
+                ..streaming_params()
+            },
         ];
         for p in bad {
             assert!(
@@ -341,6 +471,12 @@ mod tests {
             zstd_level_tolerance: 0.01,
             zstd_min_saving: 0.10,
             gcd_min_saving: 0.01,
+            skip_granularities: vec![1, 2, 4, 8],
+            set_max_sizes: vec![125, 250],
+            bloom_fprs: vec![0.025],
+            min_skip: 0.3,
+            min_gain: 0.1,
+            max_overflow: 0.1,
         }
     }
 
@@ -365,6 +501,14 @@ mod tests {
             },
             OneShotParams {
                 zstd_min_saving: 1.0,
+                ..oneshot_params()
+            },
+            OneShotParams {
+                bloom_fprs: vec![0.0],
+                ..oneshot_params()
+            },
+            OneShotParams {
+                min_gain: f64::NAN,
                 ..oneshot_params()
             },
         ];
