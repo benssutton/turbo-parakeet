@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::common::arrow_io::import_array;
-use crate::common::clickhouse_sizes::{skip_index_bytes, ChLayout, IndexKind};
+use crate::common::clickhouse_sizes::{
+    skip_index_bytes, ChLayout, IndexKind, BLOOM_BITS_PER_VALUE,
+};
 use crate::techniques::skip_index::{
     minmax, over_segments, population, set, windows, Common, Population,
 };
@@ -28,14 +30,22 @@ fn bloom_unsupported(ch_type: &str) -> bool {
         .any(|p| t.starts_with(p))
 }
 
+/// A ClickHouse `Enum8` / `Enum16` (possibly `Nullable`).
+fn is_enum_type(ch_type: &str) -> bool {
+    let t = ch_type.strip_prefix("Nullable(").unwrap_or(ch_type);
+    t.starts_with("Enum8(") || t.starts_with("Enum16(")
+}
+
 /// The chosen index (`"<ddl> GRANULARITY <g>"`) and every candidate. `segments` are the row ranges
 /// of `arr` whose windows are scanned (one-shot: the whole column); `ch` is the column's
 /// ClickHouse type and layout (None: no candidates); `ch_size` its predicted compressed bytes.
 /// `bytes_scale` multiplies every index size (streaming: stream rows / sampled rows; one-shot 1.0)
 /// and `extra_pruned` are rows the caller already pruned (streaming: granularities beyond a block).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn skip_choice(
     arr: &dyn Array,
     ch: Option<(&str, &ChLayout)>,
+    enum_values: Option<&[String]>,
     ch_size: Option<u64>,
     segments: &[(usize, usize)],
     p: &SkipParams,
@@ -54,8 +64,32 @@ pub(crate) fn skip_choice(
     // category mapping, and a global Categorical column's exported size counts every category in
     // it, so the size of unrelated columns would depend on which columns were imported before.
     // The population ranks values (a Categorical by string) either way.
-    let decoded = match arr.data_type() {
-        arrow_schema::DataType::Dictionary(_, values) => {
+    // An Enum column is the exception: ClickHouse compares an Enum's category codes, so it is
+    // ranked by category index (its position in `enum_values`), as the skip-index techniques do.
+    let enum_index = enum_values.filter(|_| is_enum_type(ch_type));
+    let decoded = match (enum_index, arr.data_type()) {
+        (Some(cats), _) => {
+            let index: std::collections::HashMap<&str, u32> = cats
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (c.as_str(), i as u32))
+                .collect();
+            let Ok(text) = arrow_cast::cast(arr, &arrow_schema::DataType::Utf8) else {
+                return none;
+            };
+            let Some(text) = text.as_any().downcast_ref::<arrow_array::StringArray>() else {
+                return none;
+            };
+            let codes: arrow_array::UInt32Array = text
+                .iter()
+                .map(|v| v.and_then(|s| index.get(s).copied()))
+                .collect();
+            if codes.null_count() != text.null_count() {
+                return none;
+            }
+            arrow_array::make_array(codes.to_data())
+        }
+        (None, arrow_schema::DataType::Dictionary(_, values)) => {
             let Ok(a) = arrow_cast::cast(arr, values) else {
                 return none;
             };
@@ -85,6 +119,27 @@ pub(crate) fn skip_choice(
                 outcome: "pruned",
                 evidence: format!("bloom_filter is not supported on {ch_type} (chbench R36)"),
             });
+        }
+    }
+
+    // A false-positive rate outside chbench's R37 table has no size model: pruned, with the rule.
+    let known: Vec<f64> = BLOOM_BITS_PER_VALUE.iter().map(|(f, _)| *f).collect();
+    let mut bloom_fprs = Vec::new();
+    for &fpr in &p.bloom_fprs {
+        if bloom_ok && !known.contains(&fpr) {
+            let list: Vec<String> = known.iter().map(f64::to_string).collect();
+            pruned.push(SkipCandidate {
+                measured: None,
+                kind: Kind::Bloom(fpr),
+                granularity: p.granularities.first().copied().unwrap_or(1),
+                outcome: "pruned",
+                evidence: format!(
+                    "bloom_filter fpr {fpr} not measured (chbench R37: {})",
+                    list.join(", ")
+                ),
+            });
+        } else {
+            bloom_fprs.push(fpr);
         }
     }
 
@@ -138,7 +193,7 @@ pub(crate) fn skip_choice(
         let mut out = Vec::new();
         for &g in &p.granularities {
             let unlimited = measure(Kind::Set(0), g, Some(0));
-            for &fpr in &p.bloom_fprs {
+            for &fpr in &bloom_fprs {
                 let keep = 1.0 - fpr;
                 let bytes = skip_index_bytes(
                     arr,
@@ -242,6 +297,7 @@ mod tests {
         let (_, candidates) = skip_choice(
             &d,
             Some(("LowCardinality(String)", &layout)),
+            None,
             Some(1_000),
             &[(0, 150)],
             &SkipParams::default(),

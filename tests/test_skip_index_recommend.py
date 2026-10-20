@@ -253,10 +253,14 @@ def test_to_chbench_granularity_suffix(tmp_path):
 
 
 def test_to_chbench_skip_suites_load_in_chbench(tmp_path):
+    import os
     import sys
     from pathlib import Path
 
-    root = Path("c:/Users/Alexander/clickhouse_benchmark")
+    root = Path(
+        os.environ.get("CHBENCH_DIR")
+        or Path(__file__).resolve().parents[1].parent / "clickhouse_benchmark"
+    )
     if not root.exists():
         pytest.skip("clickhouse_benchmark not found")
     sys.path.insert(0, str(root))
@@ -271,3 +275,54 @@ def test_to_chbench_skip_suites_load_in_chbench(tmp_path):
     for name in suites:
         s = load_suite(tmp_path / f"{name}.yaml")
         assert s.clickhouse.skip_index[-1] == "none"
+
+
+# ---- review fixes ---------------------------------------------------------------------------
+
+
+def enum_minmax_skip(categories, cls=OneShotRecommender):
+    n = 16_384
+    s = pl.Series("x", ["a"] * n + ["b"] * n + ["c"] * n).cast(pl.Enum(categories))
+    r = cls().add(pl.DataFrame([s])).result().row(0, named=True)
+    assert r["clickhouse_type"].startswith("Enum8("), r["clickhouse_type"]
+    (row,) = [
+        c
+        for c in r["clickhouse_skip_indexes"]
+        if c["kind"] == "minmax" and c["granularity"] == 1
+    ]
+    return row["skip_rows"]
+
+
+def enum_expected(mixed_ab_skip):
+    # Three runs of 16 384 rows, windows of 8 192 rows at every start: 24 579 pure windows skip
+    # the two other values (2/3 of the rows); 8 191 windows straddle each of the two run
+    # boundaries. a|b skips c iff c lies outside [a, b] by category order; b|c always skips a.
+    windows = 3 * 16_384 - 8_192 + 1
+    pure = windows - 2 * 8_191
+    return (pure * 2 / 3 + 8_191 * mixed_ab_skip + 8_191 / 3) / windows
+
+
+@pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
+def test_enum_minmax_follows_category_order(cls):
+    in_order = enum_minmax_skip(["a", "b", "c"], cls)
+    assert in_order == pytest.approx(enum_expected(1 / 3), abs=1e-3)
+    # Categories (a, c, b): [a, b] spans c's code, so the a|b windows skip nothing.
+    swapped = enum_minmax_skip(["a", "c", "b"], cls)
+    assert swapped == pytest.approx(enum_expected(0.0), abs=1e-3)
+    assert in_order - swapped > 0.05
+
+
+def test_set_max_sizes_above_uint32_is_refused():
+    with pytest.raises(ValueError, match="set_max_sizes"):
+        OneShotRecommender(set_max_sizes=(2**32,))
+
+
+def test_unmeasured_bloom_fpr_is_pruned_with_the_rule():
+    _, rows = recommend(grouped_hashes(), bloom_fprs=(0.1,), skip_granularities=(1,))
+    bloom = [r for r in rows if r["kind"] == "bloom_filter"]
+    assert bloom and all(r["outcome"] == "pruned" for r in bloom), show(rows)
+    assert all(
+        r["evidence"]
+        == "bloom_filter fpr 0.1 not measured (chbench R37: 0.001, 0.01, 0.025, 0.05)"
+        for r in bloom
+    ), show(rows)

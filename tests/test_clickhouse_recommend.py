@@ -327,10 +327,14 @@ def test_to_chbench_normalises_categorical_and_columns(tmp_path):
 
 
 def test_to_chbench_suites_parse_in_chbench(chbench_out):
+    import os
     import sys
     from pathlib import Path
 
-    root = Path("c:/Users/Alexander/clickhouse_benchmark")
+    root = Path(
+        os.environ.get("CHBENCH_DIR")
+        or Path(__file__).resolve().parents[1].parent / "clickhouse_benchmark"
+    )
     if not root.exists():
         pytest.skip("clickhouse_benchmark not found")
     sys.path.insert(0, str(root))

@@ -104,15 +104,17 @@ fn grouped(n: u64) -> String {
 }
 
 /// Step 1: Some(evidence) when the candidate fails the gate.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn gate(m: &Measured, p: &SkipParams) -> Option<String> {
-    if m.skip_rows < p.min_skip {
+    // NaN shares fail the gate.
+    if !(m.skip_rows >= p.min_skip) {
         return Some(format!(
             "skip {:.2} < min_skip {:.2}",
             m.skip_rows, p.min_skip
         ));
     }
     let gain = m.skip_rows - m.expected_skip_rows;
-    if gain < p.min_gain {
+    if !(gain >= p.min_gain) {
         return Some(format!(
             "gain {gain:.2} over random order < min_gain {:.2}",
             p.min_gain
@@ -340,6 +342,20 @@ mod tests {
             find(&rows, Kind::MinMax, 2).evidence,
             "gain 0.04 over random order < min_gain 0.10"
         );
+        assert!(rows.iter().all(|r| r.outcome == "rejected"));
+    }
+
+    #[test]
+    fn nan_shares_fail_the_gate() {
+        let rows = run(
+            vec![
+                m(Kind::MinMax, 1, f64::NAN, 0.0, Some(10)),
+                m(Kind::MinMax, 2, 0.9, f64::NAN, Some(10)),
+            ],
+            vec![],
+            None,
+        );
+        assert!(chosen(&rows).is_empty());
         assert!(rows.iter().all(|r| r.outcome == "rejected"));
     }
 

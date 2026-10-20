@@ -158,6 +158,7 @@ pub(crate) fn recommend(
     let (skip_index, skip_candidates) = skip_choice(
         chosen.array.as_ref(),
         ch.ty.as_deref().zip(ch.layout.as_ref()),
+        enum_categories(s.dtype()).as_deref(),
         ch.size,
         &[(0, chosen.array.len())],
         &params.skip,

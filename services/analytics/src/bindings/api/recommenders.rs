@@ -104,6 +104,12 @@ fn skip_params(
             "set_max_sizes must be at least 1".into(),
         ));
     }
+    if let Some(m) = set_max_sizes.iter().find(|m| **m > u64::from(u32::MAX)) {
+        return Err(Error::InvalidInput(format!(
+            "set_max_sizes must be at most {}, got {m}",
+            u32::MAX
+        )));
+    }
     distinct("bloom_fprs", &bloom_fprs)?;
     if let Some(f) = bloom_fprs
         .iter()

@@ -740,6 +740,7 @@ impl Streaming {
                 skip_choice(
                     w.as_ref(),
                     chl,
+                    enum_values.as_deref(),
                     ch.size,
                     &segments,
                     &sp,
