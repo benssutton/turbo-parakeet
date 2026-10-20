@@ -598,12 +598,10 @@ pub(crate) fn emulate(streams: &[Stream], chain: Chain) -> Result<Emulated, Stri
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Bloom filter bits per distinct value of an index block, by false-positive rate (chbench R37).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const BLOOM_BITS_PER_VALUE: [(f64, u64); 4] =
     [(0.001, 15), (0.01, 10), (0.025, 8), (0.05, 7)];
 
 /// A skip index's kind for size emulation.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum IndexKind {
     MinMax,
@@ -727,7 +725,6 @@ fn block_stream(parts: Vec<Vec<u8>>) -> Stream {
 
 /// The uncompressed minmax index: per block the min and max of the non-null values (defaults
 /// for an all-null block), plus one byte per block when the column is nullable.
-#[cfg_attr(not(test), allow(dead_code))]
 fn minmax_stream(a: &dyn Array, layout: &ChLayout, block_rows: u64) -> Result<Stream, String> {
     let rows = Rows::new(a, layout)?;
     let nullable = matches!(layout, ChLayout::Nullable(_));
@@ -784,7 +781,6 @@ fn block_distinct<'a>(
 
 /// The uncompressed set(`max_size`) index: per block an 8-byte count and, unless the block
 /// overflows (distinct values + NULL > `max_size`; 0 = unlimited), its distinct values.
-#[cfg_attr(not(test), allow(dead_code))]
 fn set_stream(
     a: &dyn Array,
     layout: &ChLayout,
@@ -812,7 +808,6 @@ fn set_stream(
 /// fpr not in `BLOOM_BITS_PER_VALUE`. minmax and set: the per-block entries concatenated and
 /// LZ4-compressed like a column stream; bloom_filter: ⌈D·b/8⌉ + v(D) bytes per block,
 /// uncompressed (random bits).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn skip_index_bytes(
     a: &dyn Array,
     layout: &ChLayout,

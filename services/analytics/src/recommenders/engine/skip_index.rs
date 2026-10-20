@@ -1,6 +1,5 @@
 //! Skip-index decisions (spec 2026-10-20 §4): gate, set overflow, bloom fallback and economics,
 //! granularity within a kind, choice across kinds.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::cmp::Ordering;
 

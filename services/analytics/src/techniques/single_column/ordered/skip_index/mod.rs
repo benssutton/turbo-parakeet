@@ -321,7 +321,6 @@ where
 /// end in one population): for each segment `[start, end)` with `end − start ≥ w`, the starts
 /// `start ..= end − w` (no window crosses a segment boundary), scanned in parallel ranges as
 /// `over_ranges` splits them, and merged. Segments shorter than `w` contribute nothing.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn over_segments<F>(
     segments: &[(usize, usize)],
     w: u64,

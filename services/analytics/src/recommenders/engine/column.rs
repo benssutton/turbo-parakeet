@@ -155,6 +155,13 @@ pub(crate) fn recommend(
         params,
     )
     .map_err(err)?;
+    let (skip_index, skip_candidates) = skip_choice(
+        chosen.array.as_ref(),
+        ch.ty.as_deref().zip(ch.layout.as_ref()),
+        ch.size,
+        &[(0, chosen.array.len())],
+        &params.skip,
+    );
     Ok(Rec {
         nullable,
         arrow_type: pa_name(&t),
@@ -173,8 +180,8 @@ pub(crate) fn recommend(
         ch_chain: ch.chain,
         ch_size: ch.size,
         ch_candidates: ch.candidates,
-        skip_index: None,
-        skip_candidates: Vec::new(),
+        skip_index,
+        skip_candidates,
     })
 }
 
@@ -221,6 +228,8 @@ pub(crate) struct ChChoice {
     pub chain: Option<Chain>,
     pub size: Option<u64>,
     pub candidates: Vec<CodecCandidate>,
+    /// The ClickHouse layout of the type (for the skip-index size emulation).
+    pub layout: Option<ChLayout>,
 }
 
 fn clickhouse_choice(
@@ -280,6 +289,7 @@ pub(crate) fn clickhouse_choice_over(
                     ty: None,
                     chain: None,
                     size: None,
+                    layout: None,
                     candidates: vec![CodecCandidate {
                         codecs: String::new(),
                         predicted_bytes: None,
@@ -294,6 +304,7 @@ pub(crate) fn clickhouse_choice_over(
             ty: Some(ty),
             chain: None,
             size: None,
+            layout: Some(layout),
             candidates: Vec::new(),
         });
     };
@@ -346,6 +357,7 @@ pub(crate) fn clickhouse_choice_over(
         chain: Some(decision.chain),
         size: Some(decision.bytes),
         candidates: decision.candidates,
+        layout: Some(layout),
     })
 }
 
