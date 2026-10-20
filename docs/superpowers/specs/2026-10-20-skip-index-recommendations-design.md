@@ -135,8 +135,74 @@ Tolerances are adopted from the evidence and written into §10.
 
 ## 10. Outcome
 
-To be filled in by the implementation: the bloom `bits_per_row` table (§8.1), the calibration of skip shares and
-index sizes (§8.3) with the adopted tolerances.
+Calibration run: `tests/performance/calibrate_skip_indexes.py` (ClickHouse 26.8 in `chbench-ch`, chbench branch
+`skip-index-sizes`; ~3 min for 40 suites, 3 workers), result `tests/performance/results/skip_index_calibration.arrow`
+(666 cells = 333 `none` controls + 333 indexed). Frames: the four known-answer shapes at 1 000 000 rows (clustered ids
+in runs of 1 000, grouped hashes in runs of 10; random 50 values chooses no index, sorted unique ids chooses `minmax`)
+and `large_dataset_mixed(200 000)`; 40 suites had a chosen index (37 from `large`, 3 from the shapes) (14 columns `minmax`, 10 `set`, 10 `bloom_filter`,
+and one column each at G = 2 / 2 / 4). One type, the first codec's `none`, one compression. Queries: the three `in`
+point queries of `to_chbench` plus six extra fractions (more distinct values), one sample each. The predicted skip is
+computed exactly in Python from the suite's dataset in stored order; measured = `1 − selected_marks / total_marks`.
+
+**Marks.** `total_marks` (the `none` table's full scan `selected_marks`) equals `ceil(rows / 8 192)` in all 333 tables
+(no off-by-one; the last partial granule counts as one mark). The control is exact: with `none`, every point query
+selects all marks (measured skip 0 in 333 of 333 cells).
+
+**Bloom sizes (chbench R37; spike FINDINGS 10, 24 of 24 cells reproduced).** A block holds `ceil(D × b / 8)` bytes plus
+1 / 2 / 3 bytes of length (D < 128 / < 16 384 / larger), D the block's distinct values:
+
+| fpr | 0.001 | 0.01 | 0.025 | 0.05 |
+|---|---|---|---|---|
+| bits per distinct value b | 15 | 10 | 8 | 7 |
+
+`minmax` 16 B per block; `set(N)` 8 B per block plus 8 B per value (8 B when the block overflows).
+
+**Skip share, predicted (exact set semantics) vs measured** — |predicted − measured|, in share of marks:
+
+| kind | G | cells | distinct (column, value) | mean abs | max abs | mean (measured − predicted) |
+|---|---|---|---|---|---|---|
+| minmax | 1 | 126 | 15 | 0 | 0 | 0 |
+| minmax | 2 | 9 | 1 | 0 | 0 | 0 |
+| set | 1 | 90 | 38 | 0 | 0 | 0 |
+| set | 2 | 9 | 1 | 0 | 0 | 0 |
+| bloom_filter(0.025) | 1 | 90 | 35 | 0.0053 | 0.080 | −0.0053 |
+| bloom_filter(0.025) | 4 | 9 | 1 | 0.065 | 0.065 | −0.065 |
+
+Against the fpr-adjusted prediction (`× (1 − fpr)`): G = 1 mean abs 0.0097, max 0.066; G = 4 0.041. minmax and set
+(including set overflow blocks, `set(250)` and `set(125)` cells) match the model to the mark. Bloom: over the
+36 distinct (column, value) points the measured skippable-block loss is 1.7 % at G = 1 (expected fpr 2.5 %; 14.04 of
+14.28 predicted skip-units) and 6.7 % for the single G = 4 point (2 of 31 blocks); the cells are small
+(25 marks per `large` table: one false positive is 0.04, two 0.08, which is the `max abs` above), so the data are
+consistent with fpr and neither confirm nor refute a systematic offset. Only fpr 0.025 was ever chosen, so 0.001 / 0.01
+/ 0.05 skip shares remain uncalibrated (sizes: R37).
+
+**Index bytes, predicted vs measured compressed** (per table):
+
+| kind | G | tables | median rel | max rel | max abs bytes | mean signed rel (pred − meas) |
+|---|---|---|---|---|---|---|
+| minmax | 1 | 14 | 0 | 0 | 0 | 0 |
+| minmax | 2 | 1 | 0 | 0 | 0 | 0 |
+| set | 1 | 10 | 0 | 0 | 0 | 0 |
+| set | 2 | 1 | 0 | 0 | 0 | 0 |
+| bloom_filter(0.025) | 1 | 10 | 0.66 % | 0.67 % | 125 | −0.66 % |
+| bloom_filter(0.025) | 4 | 1 | 0.44 % | 0.44 % | 446 | −0.44 % |
+
+minmax and set bytes are exact (the compressed file equals the model's byte count). Bloom is a consistent 0.4–0.7 %
+under the measurement (e.g. 18 376 predicted vs 18 500 measured): incompressible bloom bits plus LZ4 framing
+(plausibly the worst-case expansion, not confirmed separately); the model reproduces D and the per-block header exactly.
+
+**Adopted tolerances** (for tests and for reading the recommender's predictions):
+- `minmax` / `set` skip share: exact (the share of marks is a multiple of 1 / total_marks; use an absolute 1e-9 for
+  float comparison); index bytes exact (0 B).
+- `bloom_filter` skip share: expectation `(1 − fpr) × exact`; a single value deviates by binomial noise,
+  tolerance one mark's worth per false positive, i.e. an absolute 0.08 on tables of 25 marks (≈ 2 / total_marks + 0.01
+  in general), and 0.01 on the mean over many values (observed 0.005 signed, always on the pessimistic side).
+- `bloom_filter` index bytes: predicted within 1 % of measured (observed −0.4 … −0.7 %, always under).
+
+No systematic deviation found. Caveats: few distinct queried values per column (uniform data gives one value for all
+target fractions, so 91 of 333 cells are distinct points), 25 marks per `large` table, one fpr, G ≥ 2 on one column
+each, and 54 point queries on Date / Decimal-typed columns whose literals the script does not parse (skipped, not
+counted); the `large` frame uses 200 000 rows rather than 50 000 for mark resolution.
 
 ## 11. Documentation
 
