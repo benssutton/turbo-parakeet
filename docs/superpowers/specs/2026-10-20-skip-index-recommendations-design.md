@@ -86,9 +86,9 @@ Approximate by design; calibrated (§8.3).
 
 The sampled reservoir blocks are the window segments (spec 2026-10-16 §5): (a) a multi-segment entry point in the
 techniques — window starts clipped to `seg.start .. seg.end − w + 1` per segment, `WindowSums` merged; (b) the
-denominators (non-null rows, distinct values) injected from the running statistics instead of `Population::counts`;
-(c) `Population::from_ids` given counts that describe exactly the sampled rows.  The random-order baselines use the
-running counts (exact while the distinct sample is exact; else its estimates).  A G whose window exceeds
+population — ids and counts — is that of the sampled rows, so `Population::from_ids`' counts describe exactly the
+rows scanned, and the denominators and the random-order baselines are the sample's (consistent with the windows;
+exact when every row is sampled).  Injecting the running counts instead is a later refinement.  A G whose window exceeds
 `block_rows` cannot be evaluated: `pruned` with that reason (with the default 65 536 rows, G ≤ 8).  No sample
 (`reservoir_rows = 0`) → no candidates, `clickhouse_skip_index` null.  Parity: exact when one block holds every row
 (one batch, fully sampled); otherwise the shares are those of the sampled blocks (a stated tolerance in the tests).
