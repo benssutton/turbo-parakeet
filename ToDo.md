@@ -5,7 +5,7 @@ The objectives these serve (target engines, formats, row order, queries, validat
 
 ToDos are broken into thematic sections in a suggested priority order, but items within each section are in no priority order.  The order in which these are implemented should favour efficiency and code quality.  Item numbers are stable: CLAUDE.md and the specs refer to them.
 
-**Agreed starting order:** 1a–g next (1.0 skeleton, 4 and 2 done; 6 + 5g done).  Do 5c (rename) just before the first new Python package (ToDo 3 or 8).
+**Agreed starting order:** 1a–f done, 1g on hold; next 5c then 3 (1.0 skeleton, 4 and 2 done; 6 + 5g done).  Do 5c (rename) just before the first new Python package (ToDo 3 or 8).
 
 ---
 The following ToDos 1 to 7 are largely intended as a clean up of existing code and implementation of encoding and skipping index recommendations.
@@ -28,7 +28,7 @@ For d and e in the StreamingRecommender (skip-index spec 2026-10-16 §5; **done*
 - `Population::from_ids` requires the counts to describe the same rows as the ids;
 - a window larger than `block_rows` cannot be evaluated, which caps any GRANULARITY sweep at 65 536 rows by default.
 f. **Done** (spec 2026-10-19): `*_ipc_compression` / level / size columns and `clickhouse_codecs`.  General compression choice: LZ4 or ZSTD plus level per column, for both the ClickHouse codec chain tail and Arrow IPC buffer compression (DataFusion / Polars).
-g. Later: range queries (`col BETWEEN a AND b`) in the MinMax technique, where MinMax indexes earn most of their value.  Point queries are the current assumption.
+g. **On hold** (2026-10-20: needs more design thought — how point and range queries combine in the skip-index decision, and whether ClickHouse's set index skips ranges).  Range queries (`col BETWEEN a AND b`) in the MinMax technique, where MinMax indexes earn most of their value.  Point queries are the current assumption.
 
 2. **Done** (spec 2026-10-18): `exemplar_*` / `null_exemplar_*` columns in both recommenders, first-seen rows, optional `id_columns`.  Extend the Recommenders to provide a) Exemplars and b) Null Exemplars.  An optional parameter comprising of a list of column names is passed to the Recommenders which serve as the identifier for the Exemplars result.  For each column, the Recommenders identify 1 row where the column value is Not Null, and 1 row where the column value is Null, where applicable, and return the identifier for those rows as well as the value in the Exemplar case.
 - The exemplar is the **first-seen** non-null row and the null exemplar the first-seen null row, in frame / stream order: deterministic, identical in one-shot and streaming, O(1) memory (streaming already tracks `first_row`).
