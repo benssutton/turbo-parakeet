@@ -95,7 +95,7 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 
 ★ = accuracy reference.
 
-**Not implemented:** run-length / REE compression analysis (`run_length.py` was deleted in `93f6dcb`). The runs test (§1b) covers run structure as a technique; REE recommendations are the recommenders' concern.
+**Not implemented:** run-length / REE compression analysis (`run_length.py` was deleted in `93f6dcb`). The runs test (§1b) covers run structure as a technique; REE is never recommended: DataFusion 54 rejects MIN / MAX over REE columns (spec 2026-10-21; `tests/performance/spike_datafusion_ree.py` re-checks after an upgrade).
 
 # Checks, CI and local tooling
 `python scripts/check.py <step|group>` (run with the p312 Python) runs exactly what CI runs: `fast` (rustfmt, black, clippy for both
@@ -158,6 +158,7 @@ turbo-parakeet/
         ├── benchmark_<technique>.py        # one per technique package
         ├── calibrate_clickhouse_sizes.py   # emulator vs measured ClickHouse sizes via chbench (needs the container; results/clickhouse_calibration.arrow)
         ├── calibrate_skip_indexes.py       # skip-index shares / sizes vs ClickHouse via chbench (needs the container)
+        ├── spike_datafusion_ree.py         # which DataFusion operators accept run-end-encoded columns (spec 2026-10-21)
         ├── benchmark_streaming_entropy.py  # sample vs ams entropy: error, time, memory (results/streaming_entropy.arrow)
         └── benchmark_recommend.py  # standalone: both recommenders' add / result times
 ```
@@ -209,7 +210,7 @@ Every technique package declares `REFERENCE` (the exact accuracy reference) and 
 - Rust unit tests: `cargo test --lib <module>::` from `services/analytics/` with `PYO3_PYTHON` set to the env's `python.exe` and the env dir on `PATH` (else `STATUS_DLL_NOT_FOUND`).
 
 # Current Focus
-All twelve techniques (GCD, Describe, Top-k; Runs test, MinMax index, Set index; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract and one Arrow-in/Arrow-out Rust core, one accuracy-test pattern and one benchmark harness (described under Analytical Functions; the original spec was deleted in `1bb7ca4`). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. The output-schema skeleton (ToDo 1.0), entropy (4) and exemplars (2) are done (spec 2026-10-18), as are the ClickHouse type / codec recommendations (1b GCD, 1f compression choice, the type mapping and the chbench handoff of 1.0; spec 2026-10-19, calibrated against chbench). The ClickHouse skip-index recommendations (1c–e: minmax / set / bloom_filter at a GRANULARITY, one per column; spec 2026-10-20, calibrated against chbench) are done in both recommenders. Next (ToDo.md): sub-project C (run-end encoding, 1a — starting with a spike on which DataFusion operators accept REE input), then D (range queries, 1g). OneShotRecommender and StreamingRecommender share one output schema and the add / result interface (spec 2026-10-04).
+All twelve techniques (GCD, Describe, Top-k; Runs test, MinMax index, Set index; Membership, Similarity; Chi-squared, Pairwise/Threeway Entropy, ARI) share one class-based contract and one Arrow-in/Arrow-out Rust core, one accuracy-test pattern and one benchmark harness (described under Analytical Functions; the original spec was deleted in `1bb7ca4`). Benchmark results with the algorithmic/parallel/total split live in tests/performance/results/. The output-schema skeleton (ToDo 1.0), entropy (4) and exemplars (2) are done (spec 2026-10-18), as are the ClickHouse type / codec recommendations (1b GCD, 1f compression choice, the type mapping and the chbench handoff of 1.0; spec 2026-10-19, calibrated against chbench). The ClickHouse skip-index recommendations (1c–e: minmax / set / bloom_filter at a GRANULARITY, one per column; spec 2026-10-20, calibrated against chbench) are done in both recommenders. Run-end encoding (1a, sub-project C) is closed: not recommended, as DataFusion 54 rejects MIN / MAX over REE columns (spec 2026-10-21). Next (ToDo.md): sub-project D (range queries, 1g). OneShotRecommender and StreamingRecommender share one output schema and the add / result interface (spec 2026-10-04).
 
 ## Entropy dense re-encoding (common/encode.rs + techniques/pairwise/ordered/joint_entropy.rs)
 Columns feeding `pairwise_joint_entropy`/`threeway_joint_entropy` are dictionary-encoded to dense ids `0..card` via `densify`/`build_dense_cache_par` (nulls become their own id, so the per-row loop carries no separate null mask). Joint keys are then combined arithmetically (`(a·Kb + b)·Kc + c`) instead of hashing multi-field tuples:

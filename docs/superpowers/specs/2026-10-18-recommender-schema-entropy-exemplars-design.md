@@ -35,11 +35,13 @@ does not depend on the engine, then one **block per engine**, prefixed by the en
 | profile: inner level | `inner_n_values`, `inner_n_null`, `inner_` + Describe's value block |
 | profile: frequencies | `top_k`, `inner_top_k` |
 | shared recommendation | `nullable`, `lossy_formatting` |
-| DataFusion | `datafusion_type`, `datafusion_size_bytes`, `datafusion_size_zstd_bytes`; *`datafusion_encoding` (1a), `datafusion_size_lz4_bytes`, `datafusion_ipc_compression`, `datafusion_ipc_zstd_level` (1f)* |
+| DataFusion | `datafusion_type`, `datafusion_size_bytes`, `datafusion_size_zstd_bytes`; *`datafusion_size_lz4_bytes`, `datafusion_ipc_compression`, `datafusion_ipc_zstd_level` (1f)* |
 | Polars | `polars_type`, `polars_size_bytes`, `polars_size_zstd_bytes`; *`polars_size_lz4_bytes`, `polars_ipc_compression`, `polars_ipc_zstd_level` (1f)* |
 | ClickHouse | *`clickhouse_type`, `clickhouse_codecs`, `clickhouse_size_bytes` (1b, 1f), `clickhouse_skip_indexes` (1c–e)* |
 | evidence | `candidates` |
 | streaming only | `n_sampled_rows`, `n_sampled_blocks` |
+
+`datafusion_encoding` (1a) was withdrawn: REE is not recommended (spec 2026-10-21).
 
 Reserved columns are documented here and **not** emitted until their ToDo lands: later changes are additive.  One
 definition in `recommenders/schema.rs` (`recommender_fields`) keeps serving both recommenders.
