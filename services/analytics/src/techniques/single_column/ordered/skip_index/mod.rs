@@ -297,18 +297,53 @@ impl WindowSums {
     }
 }
 
-/// Window starts `0..k`, in parallel ranges of at least max(2^16, 4w, `min_len`) starts,
-/// merged. Each range re-reads the w − 1 rows before its first full window, so the ranges are
-/// long next to w; `min_len` lets the set scan amortise its per-id array.
+/// Range length of the parallel window scans: at least max(2^16, 4w, `min_len`) starts. Each
+/// range re-reads the w − 1 rows before its first full window, so the ranges are long next to
+/// w; `min_len` lets the set scan amortise its per-id array.
+fn range_len(w: u64, min_len: u64) -> usize {
+    (RANGE as u64).max(4 * w).max(min_len) as usize
+}
+
+/// Window starts `0..k`, in parallel ranges (`range_len`), merged.
 pub(crate) fn over_ranges<F>(k: u64, w: u64, min_len: u64, scan: F) -> WindowSums
 where
     F: Fn(Range<usize>) -> WindowSums + Sync,
 {
     let k = k as usize;
-    let len = (RANGE as u64).max(4 * w).max(min_len) as usize;
+    let len = range_len(w, min_len);
     (0..k.div_ceil(len))
         .into_par_iter()
         .map(|r| scan(r * len..((r + 1) * len).min(k)))
+        .reduce(WindowSums::default, WindowSums::merge)
+}
+
+/// Window starts over several segments (e.g. a streaming recommender's sampled blocks laid end to
+/// end in one population): for each segment `[start, end)` with `end − start ≥ w`, the starts
+/// `start ..= end − w` (no window crosses a segment boundary), scanned in parallel ranges as
+/// `over_ranges` splits them, and merged. Segments shorter than `w` contribute nothing.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn over_segments<F>(
+    segments: &[(usize, usize)],
+    w: u64,
+    min_len: u64,
+    scan: F,
+) -> WindowSums
+where
+    F: Fn(Range<usize>) -> WindowSums + Sync,
+{
+    let len = range_len(w, min_len);
+    let w = w as usize;
+    let ranges: Vec<Range<usize>> = segments
+        .iter()
+        .filter(|&&(s, e)| e >= s + w)
+        .flat_map(|&(s, e)| {
+            let k = e - w + 1 - s;
+            (0..k.div_ceil(len)).map(move |r| s + r * len..s + ((r + 1) * len).min(k))
+        })
+        .collect();
+    ranges
+        .into_par_iter()
+        .map(&scan)
         .reduce(WindowSums::default, WindowSums::merge)
 }
 
@@ -590,6 +625,73 @@ mod tests {
             over_ranges(0, 4, 0, |_| unreachable!()),
             WindowSums::default()
         );
+    }
+
+    #[test]
+    fn over_segments_one_segment_equals_over_ranges() {
+        let n = 3 * RANGE + 1000;
+        let (w, p) = (64usize, seeded_pop(n, 40, 1));
+        let k = (n - w + 1) as u64;
+        let mm = over_ranges(k, w as u64, 0, |r| minmax::scan(&p, w, r));
+        assert_eq!(
+            over_segments(&[(0, n)], w as u64, 0, |r| minmax::scan(&p, w, r)),
+            mm
+        );
+        let st = over_ranges(k, w as u64, p.d(), |r| set::scan(&p, w, 10, r));
+        assert_eq!(
+            over_segments(&[(0, n)], w as u64, p.d(), |r| set::scan(&p, w, 10, r)),
+            st
+        );
+    }
+
+    #[test]
+    fn over_segments_two_segments_never_straddle() {
+        let n = 2 * RANGE + 5000;
+        let (w, a) = (64usize, RANGE + 777);
+        let p = seeded_pop(n, 40, 2);
+        let scan = |r: Range<usize>| minmax::scan(&p, w, r);
+        let two = over_segments(&[(0, a), (a, n)], w as u64, 0, scan);
+        let one = over_segments(&[(0, n)], w as u64, 0, scan);
+        let halves = over_segments(&[(0, a)], w as u64, 0, scan).merge(over_segments(
+            &[(a, n)],
+            w as u64,
+            0,
+            scan,
+        ));
+        assert_eq!(two, halves);
+        assert_eq!(two.windows, (a - w + 1 + n - a - w + 1) as u64);
+        assert_eq!(one.windows - two.windows, w as u64 - 1);
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn over_segments_short_and_empty() {
+        let p = seeded_pop(100, 5, 3);
+        let scan = |r: Range<usize>| minmax::scan(&p, 10, r);
+        assert_eq!(over_segments(&[(0, 9)], 10, 0, scan), WindowSums::default());
+        assert_eq!(over_segments(&[], 10, 0, scan), WindowSums::default());
+        assert_eq!(over_segments(&[(5, 15)], 10, 0, scan).windows, 1);
+    }
+
+    /// n rows of ids drawn by an LCG from `d` values (every ninth row null).
+    fn seeded_pop(n: usize, d: u32, seed: u64) -> Population {
+        let mut x = seed;
+        let mut counts = vec![0u64; d as usize];
+        let ids = (0..n)
+            .map(|i| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let id = ((x >> 33) % u64::from(d)) as u32;
+                if i % 9 == 8 {
+                    NULL
+                } else {
+                    counts[id as usize] += 1;
+                    id
+                }
+            })
+            .collect();
+        Population::from_ids(ids, counts)
     }
 
     #[test]
