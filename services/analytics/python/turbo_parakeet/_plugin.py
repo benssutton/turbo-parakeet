@@ -136,6 +136,11 @@ def runs_test(df: Frame) -> pl.DataFrame:
     return pl.DataFrame(_rs.runs_test(_collected(df)))
 
 
+def delta(df: Frame) -> pl.DataFrame:
+    """column + Delta's metrics per column — rows in the frame's order."""
+    return pl.DataFrame(_rs.delta(_collected(df)))
+
+
 def minmax_index(df: Frame, window_rows: int) -> pl.DataFrame:
     """column + MinMaxIndex's metrics per column — windows of `window_rows` rows sliding
     over the frame's row order."""

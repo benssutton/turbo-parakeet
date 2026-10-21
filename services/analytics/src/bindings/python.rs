@@ -343,6 +343,12 @@ fn runs_test(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
 }
 
 #[pyfunction]
+fn delta(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::delta(&batch)).map(ArrowTable)
+}
+
+#[pyfunction]
 #[pyo3(signature = (data, window_rows))]
 fn minmax_index(py: Python<'_>, data: &Bound<'_, PyAny>, window_rows: u64) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
@@ -590,6 +596,7 @@ fn core_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<OneShotRecommender>()?;
     m.add_function(wrap_pyfunction!(column_gcd, m)?)?;
     m.add_function(wrap_pyfunction!(runs_test, m)?)?;
+    m.add_function(wrap_pyfunction!(delta, m)?)?;
     m.add_function(wrap_pyfunction!(minmax_index, m)?)?;
     m.add_function(wrap_pyfunction!(set_index, m)?)?;
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;

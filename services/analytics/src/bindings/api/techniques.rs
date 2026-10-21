@@ -22,6 +22,11 @@ pub fn runs_test(batch: &RecordBatch) -> Result<RecordBatch> {
     )?))
 }
 
+/// `column` + the delta technique's metrics per column (rows in batch order).
+pub fn delta(batch: &RecordBatch) -> Result<RecordBatch> {
+    table(crate::techniques::delta::delta_impl(&columns(batch)?))
+}
+
 /// `window_rows >= 1`, else InvalidInput.
 fn window(window_rows: u64) -> Result<u64> {
     if window_rows == 0 {
