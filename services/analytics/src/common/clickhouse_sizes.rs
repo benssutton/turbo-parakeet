@@ -698,12 +698,33 @@ fn double_delta_transform(block: &[u8], width: usize) -> Cow<'_, [u8]> {
 }
 
 /// A compression block of a two-codec chain is a `CompressionCodecMultiple` payload: a codec
-/// count byte, one method byte per codec, and the first codec's output carries its own 9-byte
-/// block header (method, compressed size, decompressed size) into the compressor. Modelled for
-/// the Delta / DoubleDelta chains only; the calibrated GCD chains stay as they were (the spike,
-/// spec 2026-10-23 Task 4, decides whether GCD shares it).
-const MULTIPLE_HEADER: u64 = 3;
+/// count byte, one method byte per codec, and the compressor's own 9-byte block header (kept
+/// inside the payload): 12 bytes on top of the outer `BLOCK_HEADER`. The transform's output
+/// carries its own 9-byte block header (method, compressed size, decompressed size) into the
+/// compressor. Measured against ClickHouse 26.8 (spec 2026-10-23 §7).
+const MULTIPLE_HEADER: u64 = 3 + 9;
+// Method bytes (CompressionMethodByte.h); only their entropy matters here.
+const DELTA_METHOD: u8 = 0x92;
+const DOUBLE_DELTA_METHOD: u8 = 0x94;
+const GCD_METHOD: u8 = 0x9a;
 const INNER_BLOCK_HEADER: usize = 9;
+
+/// The GCD codec's block body as written by ClickHouse: header `[width, bytes_to_skip]`, the
+/// GCD (`width` bytes; 1 when the values have none), then the quotients. Widths other than
+/// 1, 2, 4, 8 keep the bare `gcd_transform`.
+fn gcd_body(block: &[u8], width: usize, signed: bool) -> Cow<'_, [u8]> {
+    let t = gcd_transform(block, width, signed);
+    if !matches!(width, 1 | 2 | 4 | 8) {
+        return t;
+    }
+    let mut out = Vec::with_capacity(t.len() + 2 + width);
+    out.extend_from_slice(&[width as u8, 0]);
+    if matches!(t, Cow::Borrowed(_)) {
+        out.extend_from_slice(&1u128.to_le_bytes()[..width]);
+    }
+    out.extend_from_slice(&t);
+    Cow::Owned(out)
+}
 
 fn binary_gcd(mut a: u128, mut b: u128) -> u128 {
     while b != 0 {
@@ -739,18 +760,25 @@ pub(crate) fn emulate(streams: &[Stream], chain: Chain) -> Result<Emulated, Stri
             let raw = &s.bytes[a..b];
             let mut extra = 0;
             let data = match (s.int_width, chain.transform) {
-                (Some((w, signed)), Transform::Gcd) => gcd_transform(raw, w, signed),
-                (Some((w, _)), t @ (Transform::Delta | Transform::DoubleDelta)) => {
-                    let body = if t == Transform::Delta {
-                        delta_transform(raw, w)
-                    } else {
-                        double_delta_transform(raw, w)
+                (
+                    Some((w, signed)),
+                    t @ (Transform::Gcd | Transform::Delta | Transform::DoubleDelta),
+                ) => {
+                    let (body, method) = match t {
+                        Transform::Gcd => (gcd_body(raw, w, signed), GCD_METHOD),
+                        Transform::Delta => (delta_transform(raw, w), DELTA_METHOD),
+                        _ => (double_delta_transform(raw, w), DOUBLE_DELTA_METHOD),
                     };
                     if chain.compression == Compression::None {
                         body
                     } else {
                         extra = MULTIPLE_HEADER;
-                        let mut v = vec![0u8; INNER_BLOCK_HEADER];
+                        let mut v = Vec::with_capacity(INNER_BLOCK_HEADER + body.len());
+                        v.push(method);
+                        v.extend_from_slice(
+                            &((INNER_BLOCK_HEADER + body.len()) as u32).to_le_bytes(),
+                        );
+                        v.extend_from_slice(&(raw.len() as u32).to_le_bytes());
                         v.extend_from_slice(&body);
                         Cow::Owned(v)
                     }
@@ -1259,6 +1287,27 @@ mod tests {
     }
 
     #[test]
+    fn gcd_body_header_and_chain_overhead() {
+        // [width, skip], the GCD (1 when none), then the values
+        assert_eq!(gcd_body(&[2, 3], 1, false).as_ref(), [1, 0, 1, 2, 3]);
+        assert_eq!(gcd_body(&[10, 20], 1, false).as_ref(), [1, 0, 10, 1, 2]);
+        // measured on ClickHouse 26.8 (spec 2026-10-23 §7): codec alone = outer header + body;
+        // two codecs add the Multiple header (3) + the compressor's own 9-byte header
+        let mut s = plain(vec![0u8; 8], 1);
+        s.int_width = Some((1, false));
+        let c = |transform, compression| Chain {
+            transform,
+            compression,
+        };
+        let one = emulate(&[s], c(Transform::Delta, Compression::None)).unwrap();
+        assert_eq!(one.bytes, BLOCK_HEADER + 2 + 8);
+        let mut s = plain(vec![0u8; 8], 1);
+        s.int_width = Some((1, false));
+        let two = emulate(&[s], c(Transform::Delta, Compression::Lz4)).unwrap();
+        assert!(two.bytes >= BLOCK_HEADER + MULTIPLE_HEADER);
+    }
+
+    #[test]
     fn histogram_and_sizes() {
         let lz4 = Chain {
             transform: Transform::None,
@@ -1275,7 +1324,7 @@ mod tests {
         .unwrap()
         .len() as u64;
         assert_eq!(e.bytes, BLOCK_HEADER + payload);
-        // The histogram counts the post-GCD bytes: header 1000 = E8 03, then 1, 2, 3.
+        // The histogram counts what the compressor sees: 9 + 2 header bytes, GCD 1000 = E8 03, then 1, 2, 3.
         let mut s = plain(i64s(&[1000, 2000, 3000]), 8);
         s.int_width = Some((8, true));
         let e = emulate(
@@ -1286,7 +1335,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(e.histogram.iter().sum::<u64>(), 32);
+        assert_eq!(e.histogram.iter().sum::<u64>(), 9 + 2 + 32);
         assert_eq!(
             (e.histogram[0xE8], e.histogram[3], e.histogram[1]),
             (1, 2, 1)
