@@ -547,3 +547,24 @@ def test_clickhouse_profile_delta_chains():
     assert _plugin.clickhouse_profile(t, "f", "Delta")["bytes"] is None
     dd = _plugin.clickhouse_profile(t, "a", "DoubleDelta")["bytes"]
     assert dd < _plugin.clickhouse_profile(t, "a", "NONE")["bytes"] / 10
+
+
+def test_to_chbench_delta_transform(tmp_path):
+    import json
+
+    import yaml
+
+    from turbo_parakeet.recommenders import to_chbench
+
+    n = 200_000
+    ts = pl.Series(range(n), dtype=pl.Int64) * 1_000 + 1_700_000_000_123
+    frame = pl.DataFrame({"ts": ts.cast(pl.Datetime("ms"))})
+    result = OneShotRecommender().add(frame).result()
+    assert result["clickhouse_codecs"][0].startswith("DoubleDelta")
+    to_chbench(result, frame, tmp_path)
+    suite = yaml.safe_load((tmp_path / "ts.yaml").read_text())
+    assert suite["clickhouse"]["codec"] == ["DoubleDelta", "none"]
+    predicted = json.loads((tmp_path / "ts.predicted.json").read_text())
+    comp = result["clickhouse_codecs"][0].split(", ")[-1]
+    assert predicted[f"DateTime64|DoubleDelta|{comp}"] is not None
+    assert f"DateTime64|none|{comp}" in predicted

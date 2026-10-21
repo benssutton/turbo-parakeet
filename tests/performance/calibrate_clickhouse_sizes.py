@@ -61,6 +61,61 @@ def gcd_frames() -> dict[str, pl.DataFrame]:
     }
 
 
+def delta_frames() -> dict[str, pl.DataFrame]:
+    rng = np.random.default_rng(1)
+    step = np.full(N, 1000, dtype=np.int64)
+    jit = step + rng.integers(-5, 6, N)
+    gaps = rng.random(N) < 0.01
+    jit[gaps] = rng.integers(1000, 60_000, int(gaps.sum()))
+    t0 = 1_700_000_000_000
+    walk = np.cumsum(rng.integers(-1000, 1001, N), dtype=np.int64)
+    ids = np.cumsum(rng.integers(1, 11, N), dtype=np.uint64)
+    w16 = np.clip(np.cumsum(rng.integers(-3, 4, N)), -32768, 32767).astype(np.int16)
+    w32 = np.cumsum(rng.integers(-100, 101, N)).astype(np.int32)
+    ts = lambda name, d: pl.DataFrame(  # noqa: E731
+        [pl.Series(name, t0 + np.cumsum(d), dtype=pl.Int64).cast(pl.Datetime("ms"))]
+    )
+    return {
+        "ts_regular": ts("ts_regular", step),
+        "ts_jitter": ts("ts_jitter", jit),
+        "walk": pl.DataFrame({"walk": walk}),
+        "ids_sorted": pl.DataFrame({"ids_sorted": ids}),
+        "walk_i16": pl.DataFrame({"walk_i16": w16}),
+        "walk_i32": pl.DataFrame({"walk_i32": w32}),
+        "random_ints": pl.DataFrame(
+            {"random_ints": rng.integers(-(2**62), 2**62, N, dtype=np.int64)}
+        ),
+    }
+
+
+def widen(yaml_path: Path) -> None:
+    """Measure every transform on a delta-frame suite, not only the recommended one: the codec
+    axis becomes none / GCD / Delta / DoubleDelta and the compression axis LZ4 / ZSTD(1) / ZSTD(3),
+    predictions from the emulator on the suite's own dataset (spec 2026-10-23 §6)."""
+    from turbo_parakeet import _plugin
+
+    suite = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    ch = suite["clickhouse"]
+    if "LowCardinality" in ch["codec"]:
+        return
+    one = pa.ipc.open_file(yaml_path.parent / suite["dataset"]["path"]).read_all()
+    col, base = suite["dataset"]["column"], ch["type"][0]
+    comps = ["LZ4", "ZSTD(1)", "ZSTD(3)"]
+    codecs = ["none", "GCD", "Delta", "DoubleDelta"]
+    predicted = {}
+    for k in codecs:
+        for c in comps:
+            chain = c if k == "none" else f"{k}, {c}"
+            predicted[f"{base}|{k}|{c}"] = _plugin.clickhouse_profile(one, col, chain)[
+                "bytes"
+            ]
+    ch["codec"], ch["compression"], ch["skip_index"] = codecs, comps, ["none"]
+    yaml_path.write_text(yaml.safe_dump(suite, sort_keys=False), encoding="utf-8")
+    (yaml_path.parent / f"{yaml_path.stem}.predicted.json").write_text(
+        json.dumps(predicted), encoding="utf-8"
+    )
+
+
 def run_suite(chbench_root: Path, yaml_path: Path, work: Path) -> tuple[str, str]:
     name = yaml_path.stem
     suite = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
@@ -117,8 +172,9 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     chbench_root = Path(args.chbench)
     work = Path(tempfile.mkdtemp(prefix="calibrate_ch_"))
-    frames = {"large": datagen.large_dataset_mixed(), **gcd_frames()}
+    frames = {"large": datagen.large_dataset_mixed(), **gcd_frames(), **delta_frames()}
 
+    delta_names = set(delta_frames())
     suites: list[tuple[str, Path]] = []  # (frame, yaml)
     for fname, frame in frames.items():
         result = OneShotRecommender().add(frame).result()
@@ -128,6 +184,9 @@ def main() -> None:
         print(
             f"{fname}: {len(list(d.glob('*.yaml')))} suites, {len(skipped)} columns skipped"
         )
+        if fname in delta_names:
+            for p in d.glob("*.yaml"):
+                widen(p)
         suites += [(fname, p) for p in sorted(d.glob("*.yaml"))]
     # Suite names are column names; make them unique across frames for the stores.
     errors = {}

@@ -22,6 +22,7 @@ import polars as pl
 
 from turbo_parakeet import _plugin
 
+_TRANSFORMS = ("GCD", "Delta", "DoubleDelta")
 _NESTED = ("Array(", "Tuple(", "Map(", "Nested(")
 _RANGE_TYPES = re.compile(
     r"^(U?Int\d+|Float\d+|Decimal\d*|Date|Date32|DateTime|DateTime64)$"
@@ -208,10 +209,11 @@ def _write(
     base = _base(orig["clickhouse_type"] if original else rec_type)
     chosen = r["clickhouse_codecs"]
     comp = _compression(chosen)
+    head = chosen.split(", ")[0]
     rec_codec = (
         "LowCardinality"
         if rec_type.startswith("LowCardinality(")
-        else "GCD" if chosen.startswith("GCD") else "none"
+        else head if head in _TRANSFORMS else "none"
     )
     comps = list(dict.fromkeys([comp, "LZ4"]))
     profile: dict[str, int | None] = {}
@@ -222,8 +224,8 @@ def _write(
         return profile[chain]
 
     if original:
-        gcd = rec_codec == "GCD" and measured(f"GCD, {comp}") is not None
-        codecs = ["none", "GCD"] if gcd else ["none"]
+        has = rec_codec in _TRANSFORMS and measured(f"{rec_codec}, {comp}") is not None
+        codecs = ["none", rec_codec] if has else ["none"]
     else:
         codecs = list(dict.fromkeys([rec_codec, "none"]))
     candidates = {
@@ -231,7 +233,7 @@ def _write(
     }
 
     def predict(k: str, c: str) -> int | None:
-        chain = f"GCD, {c}" if k == "GCD" else c
+        chain = f"{k}, {c}" if k in _TRANSFORMS else c
         if original or (rec_codec == "LowCardinality" and k == "none"):
             return None if k == "LowCardinality" else measured(chain)
         return candidates.get(chain)

@@ -108,7 +108,7 @@ batch with `block_rows` a multiple of 8 192, otherwise within about 2 %.
 timestamps, timestamps with jitter and gaps, a random walk, sorted ids, random ints (control) — at widths 2, 4 and 8,
 under LZ4 and ZSTD(1/3).  Target: the fixed-width tolerance, within max(2 % × measured, 256 bytes).  `to_chbench`
 already writes the codec axis in the R36 vocabulary, which includes `Delta` and `DoubleDelta`: the chosen transform
-appears there with no change beyond the chain's DDL.
+appears there the transform generalises `to_chbench`'s GCD handling.
 
 Recommender tests (`tests/test_clickhouse_recommend.py`): a regular timestamp column chooses `DoubleDelta`; a
 random walk chooses `Delta`; random ints prune both with evidence; Decimal128 / float / string columns get no delta
@@ -145,6 +145,28 @@ Layout facts (source: CompressionCodec{Delta,DoubleDelta,Multiple}.cpp, BitHelpe
 - `Compression::None` (codec-only) = outer header + transform body, uncompressed.
 - Unaligned tails are never produced by fixed-width streams (all blocks are whole values), so the tail placement
   (modelled at the front, as in the source) is untested.
+
+### Calibration
+
+`tests/performance/calibrate_clickhouse_sizes.py` (456 cells, ClickHouse 26.8 via chbench, 3 workers) now also covers
+seven 1 000 000-row delta frames (`ts_regular`, `ts_jitter`, `walk` Int64, `ids_sorted`, `walk_i16`, `walk_i32`,
+`random_ints`).  `widen()` measures every transform on each of them (codec axis none / GCD / Delta / DoubleDelta,
+compression LZ4 / ZSTD(1) / ZSTD(3), predictions from the emulator on the suite's own dataset), so the control and
+the unrecommended families are covered as well as the recommended chain; `to_chbench` writes the recommended
+transform on the axis (tested separately).
+
+| family | cells | median error | max error | within max(2 %, 256 B) |
+|---|---|---|---|---|
+| Delta | 36 | 0 | 0 | yes (byte-exact) |
+| DoubleDelta | 30 | 0 | 0 | yes (byte-exact) |
+| GCD | 32 | 0 | 0 | yes (byte-exact) |
+| none (codec-only: LZ4 / ZSTD) | 328 | 0 | 19.1 (six constant-looking `large` Int32 / Bool columns) | all but those |
+| LowCardinality | 30 | 0.9 % | 2.5 % | yes (2.5 % rule) |
+
+GCD before the spike's model change (271 cells): 2 cells, median 0.97 %, max 1.86 % (`gcd_1000` LZ4 -1.86 %);
+now 32 cells, all byte-exact.  The "none" outliers (`large` col_60 / 68 / 72 / 80 / 88 / 92, original-type LZ4
+cells: 925 predicted vs 46 measured Int32, 231 vs 46 Bool) are unchanged from before this work; they are
+columns of the 50K-row mixed frame (cause not investigated here; not a codec effect, no transform is involved).  String columns keep their known error (ToDo 7).
 
 
 ## 8. Documentation
