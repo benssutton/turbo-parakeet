@@ -155,7 +155,10 @@ fn entropy(keys: impl ParallelIterator<Item = i128>) -> f64 {
     if r == 0 {
         return f64::NAN;
     }
-    entropy_from_counts_iter(counts.into_values(), (r as f64).log2(), r as f64)
+    if counts.len() == 1 {
+        return 0.0; // exactly: the SIMD reduction leaves ~1e-15 of rounding
+    }
+    entropy_from_counts_iter(counts.into_values(), (r as f64).log2(), r as f64).max(0.0)
 }
 
 /// Mean sig(Δ) of Δ = x_j − x_i over ordered pairs of distinct positions (spec §2):
