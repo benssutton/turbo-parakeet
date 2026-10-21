@@ -116,7 +116,36 @@ rows; `transform_min_saving` respected; streaming parity.  Java: the renamed par
 
 ## 7. Spike findings
 
-(Filled in by the spike.)
+Spike: `tests/performance/spike_clickhouse_delta.py` (ClickHouse 26.8, one-column Wide MergeTree, one active part,
+`data_compressed_bytes` after `OPTIMIZE FINAL`).  16 columns of 1 000 000 rows (regular UInt32, jittered Int64 ms,
+random walks Int16 / Int32 / Int64, sorted UInt64 ids, random UInt16 / Int8, alternating-extreme Int8 / Int16 / Int32 /
+Int64 that exercise the most negative double-delta, and four columns with GCD > 1) times 11 chains (`NONE`, `Delta`,
+`DoubleDelta`, `GCD`, `LZ4`, and each transform with `LZ4` and `ZSTD(1)`): **all 176 cells are byte-exact**
+(emulated = measured), codec-only and chained, for widths 1, 2, 4 and 8.  Examples (emulated = measured):
+
+| column | NONE | Delta | DoubleDelta | GCD | Delta, LZ4 | DoubleDelta, LZ4 | DoubleDelta, ZSTD(1) |
+|---|---|---|---|---|---|---|---|
+| regular UInt32 | 4 001 550 | 4 001 674 | 127 418 | 4 001 922 | 19 778 | 4 829 | 4 648 |
+| extreme Int8 | 1 000 400 | 1 000 432 | 1 063 012 | 1 000 448 | 4 914 | 5 415 | 1 426 |
+
+Layout facts (source: CompressionCodec{Delta,DoubleDelta,Multiple}.cpp, BitHelpers.h, confirmed by the measurements):
+
+- **Delta**: `[width, bytes_to_skip]`, the `len % width` leading bytes, then wrapping differences (first minus 0).
+- **DoubleDelta**: the same 2-byte header and skipped bytes, UInt32 item count, first value, first delta (`width` bytes
+  each), then per item `0` (double-delta 0) or prefix `10` / `110` / `1110` / `11110` / `11111` + sign bit (1 =
+  negative) + `|dd| - 1` in 6 / 8 / 11 / 31 / 63 bits (ranges -63 < dd < 64, ±255, ±2047, Int32 interior, else); the
+  width's most negative value is stored as `2^(8w-1) - 1`; MSB first, last byte zero-padded.  Same table for every width.
+- **GCD** (changed from Task 3): the codec always writes `[width, 0]` and the GCD (`width` bytes, 1 when the values
+  have none) before the quotients, so a GCD-1 column also grows by `2 + width` bytes per block.  Chains were
+  previously off by that and by the Multiple header (up to 11% on LZ4-friendly Int16 data).
+- **Two codecs** (`CompressionCodecMultiple`): the outer 25-byte block header, then 12 bytes (codec count + 2 method
+  bytes + the compressor's own 9-byte header) before the compressed data; the transform's output enters the compressor
+  behind its own 9-byte block header (method byte, compressed size, decompressed size).  A single codec has neither.
+  Applied to GCD, Delta and DoubleDelta alike.
+- `Compression::None` (codec-only) = outer header + transform body, uncompressed.
+- Unaligned tails are never produced by fixed-width streams (all blocks are whole values), so the tail placement
+  (modelled at the front, as in the source) is untested.
+
 
 ## 8. Documentation
 
