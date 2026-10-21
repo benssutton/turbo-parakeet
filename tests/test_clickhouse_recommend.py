@@ -356,7 +356,7 @@ def test_clickhouse_profile_binding():
     with pytest.raises(ValueError):
         _plugin.clickhouse_profile(t, "nope", "LZ4")
     with pytest.raises(ValueError):
-        _plugin.clickhouse_profile(t, "a", "Delta")
+        _plugin.clickhouse_profile(t, "a", "Gorilla, LZ4")
 
 
 def _suite(path, name):
@@ -463,3 +463,20 @@ def test_to_chbench_skips_a_row_without_a_sample(tmp_path):
     assert result["clickhouse_codecs"].null_count() == 1
     assert to_chbench(result, frame, tmp_path) == [("a", "no codec chosen (no sample)")]
     assert not list(tmp_path.glob("*.yaml"))
+
+
+def test_clickhouse_profile_delta_chains():
+    t = pa.table(
+        {"a": pa.array(range(1000, 101_000, 7), pa.int64()), "f": [0.5] * 14286}
+    )
+    for codecs in (
+        "Delta",
+        "DoubleDelta",
+        "Delta, LZ4",
+        "DoubleDelta, ZSTD(1)",
+        "NONE",
+    ):
+        assert _plugin.clickhouse_profile(t, "a", codecs)["bytes"] > 0
+    assert _plugin.clickhouse_profile(t, "f", "Delta")["bytes"] is None
+    dd = _plugin.clickhouse_profile(t, "a", "DoubleDelta")["bytes"]
+    assert dd < _plugin.clickhouse_profile(t, "a", "NONE")["bytes"] / 10

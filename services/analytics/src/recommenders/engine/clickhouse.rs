@@ -10,11 +10,11 @@ const DATE_MAX_DAYS: i128 = 65_535;
 /// Last second `DateTime` holds (2106-02-07 06:28:15).
 const DATETIME_MAX_SECONDS: i128 = 4_294_967_295;
 
-fn fixed(width: usize, signed: bool, gcd_applies: bool) -> ChLayout {
+fn fixed(width: usize, signed: bool, int_codecs: bool) -> ChLayout {
     ChLayout::Fixed {
         width,
         signed,
-        gcd_applies,
+        int_codecs,
     }
 }
 

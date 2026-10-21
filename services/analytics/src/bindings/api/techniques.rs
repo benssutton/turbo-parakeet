@@ -377,15 +377,33 @@ pub fn ipc_body_sizes(batch: &RecordBatch, codec: &str) -> Result<RecordBatch> {
     .map_err(|e| Error::Compute(e.to_string()))
 }
 
-/// The codec chain written in DDL: "LZ4", "ZSTD(3)", "GCD, LZ4", "GCD, ZSTD(3)".
+/// The codec chain written in DDL: `[GCD|Delta|DoubleDelta][, ][LZ4|ZSTD(n)]`, a lone
+/// transform, or "NONE".
 fn parse_chain(codecs: &str) -> Result<crate::common::clickhouse_sizes::Chain> {
-    use crate::common::clickhouse_sizes::{Chain, Compression};
+    use crate::common::clickhouse_sizes::{Chain, Compression, Transform};
     let bad = || Error::InvalidInput(format!("unparsable codecs {codecs:?}"));
-    let (gcd, rest) = match codecs.strip_prefix("GCD,") {
-        Some(rest) => (true, rest.trim()),
-        None => (false, codecs.trim()),
-    };
+    let codecs = codecs.trim();
+    if codecs == "NONE" {
+        return Ok(Chain {
+            transform: Transform::None,
+            compression: Compression::None,
+        });
+    }
+    let (transform, rest) = [
+        ("GCD", Transform::Gcd),
+        ("DoubleDelta", Transform::DoubleDelta),
+        ("Delta", Transform::Delta),
+    ]
+    .into_iter()
+    .find_map(|(name, t)| {
+        codecs
+            .strip_prefix(name)
+            .filter(|r| r.is_empty() || r.starts_with(','))
+            .map(|r| (t, r.strip_prefix(',').unwrap_or(r).trim()))
+    })
+    .unwrap_or((Transform::None, codecs));
     let compression = match rest {
+        "" if transform != Transform::None && codecs.find(',').is_none() => Compression::None,
         "LZ4" => Compression::Lz4,
         z => match z
             .strip_prefix("ZSTD(")
@@ -396,7 +414,10 @@ fn parse_chain(codecs: &str) -> Result<crate::common::clickhouse_sizes::Chain> {
             None => return Err(bad()),
         },
     };
-    Ok(Chain { gcd, compression })
+    Ok(Chain {
+        transform,
+        compression,
+    })
 }
 
 /// One row: `clickhouse_type` (the type of `column`'s own Arrow type, nullable when it has
@@ -404,7 +425,7 @@ fn parse_chain(codecs: &str) -> Result<crate::common::clickhouse_sizes::Chain> {
 /// when the type has no ClickHouse type, `bytes` null also when GCD does not apply.
 /// Private: tests and `to_chbench`.
 pub fn clickhouse_profile(batch: &RecordBatch, column: &str, codecs: &str) -> Result<RecordBatch> {
-    use crate::common::clickhouse_sizes::{emulate, streams, ChLayout};
+    use crate::common::clickhouse_sizes::{emulate, streams, ChLayout, Transform};
     use crate::recommenders::engine::{clickhouse_type, physical_stats};
     let chain = parse_chain(codecs)?;
     let arr = batch
@@ -417,14 +438,14 @@ pub fn clickhouse_profile(batch: &RecordBatch, column: &str, codecs: &str) -> Re
         let applies = matches!(
             &layout,
             ChLayout::Fixed {
-                gcd_applies: true,
+                int_codecs: true,
                 ..
             }
         ) || matches!(
             &layout,
-            ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { gcd_applies: true, .. })
+            ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { int_codecs: true, .. })
         );
-        if !chain.gcd || applies {
+        if chain.transform == Transform::None || applies {
             let st = streams(arr.as_ref(), &layout).map_err(Error::Compute)?;
             bytes = Some(emulate(&st, chain).map_err(Error::Compute)?.bytes);
         }
@@ -484,13 +505,24 @@ mod tests {
 
     #[test]
     fn chain_parser() {
-        use crate::common::clickhouse_sizes::Compression;
+        use crate::common::clickhouse_sizes::{Compression, Transform};
         let c = parse_chain("GCD, ZSTD(3)").unwrap();
-        assert!(c.gcd && c.compression == Compression::Zstd(3));
+        assert!(c.transform == Transform::Gcd && c.compression == Compression::Zstd(3));
         let c = parse_chain("LZ4").unwrap();
-        assert!(!c.gcd && c.compression == Compression::Lz4);
-        assert_eq!(parse_chain("GCD, LZ4").unwrap().ddl(), "GCD, LZ4");
-        for bad in ["", "GCD", "ZSTD", "ZSTD(x)", "Delta, LZ4"] {
+        assert!(c.transform == Transform::None && c.compression == Compression::Lz4);
+        for ok in [
+            "GCD, LZ4",
+            "Delta, LZ4",
+            "DoubleDelta, ZSTD(1)",
+            "GCD",
+            "Delta",
+            "DoubleDelta",
+            "NONE",
+            "ZSTD(3)",
+        ] {
+            assert_eq!(parse_chain(ok).unwrap().ddl(), ok);
+        }
+        for bad in ["", "ZSTD", "ZSTD(x)", "Delta,", "Deltas", "Gorilla, LZ4"] {
             assert!(parse_chain(bad).is_err(), "{bad}");
         }
     }

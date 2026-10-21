@@ -1,6 +1,6 @@
 //! Analytic pruning, then emulation: GCD and compression choices (spec 2026-10-19 §4).
 
-use crate::common::clickhouse_sizes::{Chain, Compression};
+use crate::common::clickhouse_sizes::{Chain, Compression, Transform};
 
 /// The four keywords (spec §4.3).
 #[derive(Clone, Debug, PartialEq)]
@@ -191,7 +191,10 @@ pub(crate) fn decide(
 
     let mut families = Vec::new();
     for gcd in flags {
-        let chain = |compression| Chain { gcd, compression };
+        let chain = |compression| Chain {
+            transform: Transform::from_gcd(gcd),
+            compression,
+        };
         let (lz4, hist) = measure(chain(Compression::Lz4))?;
         let mut measured = vec![(Compression::Lz4, lz4)];
         let (fires, shortcut) = incompressible(&hist, distinct_ratio, p.zstd_min_saving);
@@ -230,7 +233,7 @@ pub(crate) fn decide(
         .find(|f| f.gcd == winner_gcd)
         .expect("the winning family was measured");
     let chain = Chain {
-        gcd: win.gcd,
+        transform: Transform::from_gcd(win.gcd),
         compression: win.pick.0,
     };
     let bytes = win.pick.1;
@@ -239,7 +242,7 @@ pub(crate) fn decide(
     for f in &families {
         for &(c, b) in &f.measured {
             let codecs = Chain {
-                gcd: f.gcd,
+                transform: Transform::from_gcd(f.gcd),
                 compression: c,
             }
             .ddl();
@@ -343,7 +346,10 @@ mod tests {
     type Table = HashMap<Chain, (u64, [u64; 256])>;
 
     fn table(gcd: bool, lz4: u64, z: [u64; 3], h: [u64; 256], t: &mut Table) {
-        let c = |compression| Chain { gcd, compression };
+        let c = |compression| Chain {
+            transform: Transform::from_gcd(gcd),
+            compression,
+        };
         t.insert(c(Compression::Lz4), (lz4, h));
         for (l, b) in [1, 3, 9].into_iter().zip(z) {
             t.insert(c(Compression::Zstd(l)), (b, h));
@@ -386,7 +392,7 @@ mod tests {
         table(false, 2000, [1000, 990, 985], skewed(), &mut t);
         let p = CompressionParams::default();
         let (d, calls) = run(&t, Some((3, 3 << 40, false)), "", 0.1, &p);
-        assert!(calls.iter().all(|c| !c.gcd));
+        assert!(calls.iter().all(|c| c.transform != Transform::Gcd));
         let g: Vec<_> = d.candidates.iter().filter(|r| r.codecs == "GCD").collect();
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].outcome, "pruned");
@@ -403,7 +409,7 @@ mod tests {
         table(false, 2000, [1000, 990, 985], skewed(), &mut t);
         table(true, 2000, [1000, 985, 980], skewed(), &mut t);
         let (d, _) = run(&t, Some((4, 1020, false)), "", 0.1, &p);
-        assert!(!d.chain.gcd);
+        assert!(d.chain.transform != Transform::Gcd);
         assert!(d
             .candidates
             .iter()
@@ -413,7 +419,7 @@ mod tests {
         table(false, 2000, [1000, 990, 985], skewed(), &mut t);
         table(true, 2000, [950, 940, 935], skewed(), &mut t);
         let (d, _) = run(&t, Some((4, 1020, false)), "", 0.1, &p);
-        assert!(d.chain.gcd);
+        assert!(d.chain.transform == Transform::Gcd);
         assert_eq!(d.bytes, 940);
         assert_eq!(d.candidates[0].codecs, "GCD, ZSTD(9)");
         assert!(d

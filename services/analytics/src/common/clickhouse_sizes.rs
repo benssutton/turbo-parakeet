@@ -13,11 +13,11 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ChLayout {
     /// Little-endian fixed-width values; `signed` for the GCD codec's magnitude;
-    /// `gcd_applies` for integer, decimal, Date, Date32, DateTime and DateTime64 types.
+    /// `int_codecs` for integer, decimal, Date, Date32, DateTime and DateTime64 types.
     Fixed {
         width: usize,
         signed: bool,
-        gcd_applies: bool,
+        int_codecs: bool,
     },
     /// Per row a varint length and the bytes.
     String,
@@ -40,15 +40,15 @@ pub(crate) struct Stream {
     /// `row_ends` equal the stream length, and it is cut into blocks by bytes alone (an
     /// approximation of ClickHouse, where the dictionary is one unit per part).
     pub row_ends: Vec<u64>,
-    /// (value width, signed) when the GCD codec applies to this stream.
-    pub gcd_width: Option<(usize, bool)>,
+    /// (value width, signed) for integer streams: the GCD, Delta and DoubleDelta codecs apply.
+    pub int_width: Option<(usize, bool)>,
 }
 
 fn stream(bytes: Vec<u8>, row_ends: Vec<u64>) -> Stream {
     Stream {
         bytes,
         row_ends,
-        gcd_width: None,
+        int_width: None,
     }
 }
 
@@ -84,7 +84,7 @@ fn fixed_stream(
     a: &dyn Array,
     width: usize,
     signed: bool,
-    gcd_applies: bool,
+    int_codecs: bool,
 ) -> Result<Stream, String> {
     let mut out = Vec::with_capacity(a.len() * width);
     macro_rules! prim {
@@ -142,7 +142,7 @@ fn fixed_stream(
     Ok(Stream {
         bytes: out,
         row_ends: fixed_ends(a.len(), width),
-        gcd_width: gcd_applies.then_some((width, signed)),
+        int_width: int_codecs.then_some((width, signed)),
     })
 }
 
@@ -331,8 +331,8 @@ pub(crate) fn streams(a: &dyn Array, layout: &ChLayout) -> Result<Vec<Stream>, S
         ChLayout::Fixed {
             width,
             signed,
-            gcd_applies,
-        } => Ok(vec![fixed_stream(a, *width, *signed, *gcd_applies)?]),
+            int_codecs,
+        } => Ok(vec![fixed_stream(a, *width, *signed, *int_codecs)?]),
         ChLayout::String => Ok(vec![string_stream(a)?]),
         ChLayout::FixedString(n) => Ok(vec![fixed_string_stream(a, *n)?]),
         ChLayout::LowCardinality => low_cardinality_streams(a, false),
@@ -390,30 +390,60 @@ pub(crate) fn streams(a: &dyn Array, layout: &ChLayout) -> Result<Vec<Stream>, S
     }
 }
 
+/// The transform codec before the compression (spec 2026-10-23 §3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Transform {
+    None,
+    Gcd,
+    Delta,
+    DoubleDelta,
+}
+
+impl Transform {
+    pub(crate) fn from_gcd(gcd: bool) -> Self {
+        if gcd {
+            Transform::Gcd
+        } else {
+            Transform::None
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Compression {
+    /// No generic compression: the spike and `clickhouse_profile` only, never chosen.
+    None,
     Lz4,
     Zstd(i32),
 }
 
-/// A codec chain: optional GCD, then a compression.
+/// A codec chain: an optional transform, then a compression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Chain {
-    pub gcd: bool,
+    pub transform: Transform,
     pub compression: Compression,
 }
 
 impl Chain {
-    /// As written in DDL: "LZ4", "ZSTD(3)", "GCD, LZ4", "GCD, ZSTD(3)".
+    /// As written in DDL: "LZ4", "ZSTD(3)", "GCD, LZ4", "Delta, ZSTD(3)", "DoubleDelta",
+    /// "NONE" for no codec at all.
     pub(crate) fn ddl(&self) -> String {
-        let c = match self.compression {
-            Compression::Lz4 => "LZ4".to_string(),
-            Compression::Zstd(l) => format!("ZSTD({l})"),
+        let t = match self.transform {
+            Transform::None => None,
+            Transform::Gcd => Some("GCD"),
+            Transform::Delta => Some("Delta"),
+            Transform::DoubleDelta => Some("DoubleDelta"),
         };
-        if self.gcd {
-            format!("GCD, {c}")
-        } else {
-            c
+        let c = match self.compression {
+            Compression::None => None,
+            Compression::Lz4 => Some("LZ4".to_string()),
+            Compression::Zstd(l) => Some(format!("ZSTD({l})")),
+        };
+        match (t, c) {
+            (None, None) => "NONE".to_string(),
+            (Some(t), None) => t.to_string(),
+            (None, Some(c)) => c,
+            (Some(t), Some(c)) => format!("{t}, {c}"),
         }
     }
 }
@@ -538,6 +568,143 @@ fn gcd_transform(block: &[u8], width: usize, signed: bool) -> Cow<'_, [u8]> {
     Cow::Owned(out)
 }
 
+/// Little-endian value of the first `w` bytes of `c`, zero-extended.
+fn read_le(c: &[u8], w: usize) -> u64 {
+    let mut buf = [0u8; 8];
+    buf[..w].copy_from_slice(&c[..w]);
+    u64::from_le_bytes(buf)
+}
+
+/// ClickHouse `Delta(width)` on one block (CompressionCodecDelta.cpp): header
+/// `[width, bytes_to_skip]`, the `len % width` leading bytes verbatim, then each value minus the
+/// previous one (the first minus 0), wrapping at the width. Widths other than 1, 2, 4, 8 leave
+/// the block unchanged.
+fn delta_transform(block: &[u8], width: usize) -> Cow<'_, [u8]> {
+    if !matches!(width, 1 | 2 | 4 | 8) {
+        return Cow::Borrowed(block);
+    }
+    let skip = block.len() % width;
+    let mut out = Vec::with_capacity(block.len() + 2);
+    out.extend_from_slice(&[width as u8, skip as u8]);
+    out.extend_from_slice(&block[..skip]);
+    let mut prev = 0u64;
+    for c in block[skip..].chunks_exact(width) {
+        let v = read_le(c, width);
+        out.extend_from_slice(&v.wrapping_sub(prev).to_le_bytes()[..width]);
+        prev = v;
+    }
+    Cow::Owned(out)
+}
+
+/// MSB-first bit stream (ClickHouse `BitWriter`: first bit written = top bit of the first
+/// byte; `flush` pads the last byte with zeros).
+struct BitWriter {
+    out: Vec<u8>,
+    acc: u64,
+    n: u32,
+}
+
+impl BitWriter {
+    /// The low `bits` (0..=64) of `v`.
+    fn write(&mut self, bits: u32, v: u64) {
+        for i in (0..bits).rev() {
+            self.acc = self.acc << 1 | (v >> i & 1);
+            self.n += 1;
+            if self.n == 8 {
+                self.out.push(self.acc as u8);
+                (self.acc, self.n) = (0, 0);
+            }
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.n > 0 {
+            self.out.push((self.acc << (8 - self.n)) as u8);
+        }
+        self.out
+    }
+}
+
+/// (prefix bits, prefix, data bits incl. the sign bit) of a double-delta, `getDeltaWriteSpec`.
+fn dd_spec(v: i64) -> (u32, u64, u32) {
+    if v > -63 && v < 64 {
+        (2, 0b10, 7)
+    } else if v > -255 && v < 256 {
+        (3, 0b110, 9)
+    } else if v > -2047 && v < 2048 {
+        (4, 0b1110, 12)
+    } else if v > i64::from(i32::MIN) && v < i64::from(i32::MAX) {
+        (5, 0b11110, 32)
+    } else {
+        (5, 0b11111, 64)
+    }
+}
+
+/// ClickHouse `DoubleDelta` on one block (CompressionCodecDoubleDelta.cpp): header
+/// `[width, bytes_to_skip]`, the leading `len % width` bytes verbatim, a UInt32 item count, the
+/// first value and the first delta (`width` bytes each; absent when the block has fewer than
+/// 1 / 2 items), then per further item a bit-packed double-delta: `0` for zero, else a prefix
+/// (`10`, `110`, `1110`, `11110`, `11111` for 7 / 9 / 12 / 32 / 64 data bits), a sign bit
+/// (1 = negative) and `data_bits - 1` bits of `|dd| - 1` (the width's minimum: `2^(8w-1) - 1`),
+/// MSB first, the last byte zero-padded.
+fn double_delta_transform(block: &[u8], width: usize) -> Cow<'_, [u8]> {
+    if !matches!(width, 1 | 2 | 4 | 8) {
+        return Cow::Borrowed(block);
+    }
+    let skip = block.len() % width;
+    let items = (block.len() - skip) / width;
+    let mask = if width == 8 {
+        u64::MAX
+    } else {
+        (1u64 << (8 * width)) - 1
+    };
+    let mut out = Vec::with_capacity(block.len() / 4 + 16);
+    out.extend_from_slice(&[width as u8, skip as u8]);
+    out.extend_from_slice(&block[..skip]);
+    out.extend_from_slice(&(items as u32).to_le_bytes());
+    let mut vals = block[skip..].chunks_exact(width).map(|c| read_le(c, width));
+    let Some(first) = vals.next() else {
+        return Cow::Owned(out);
+    };
+    out.extend_from_slice(&first.to_le_bytes()[..width]);
+    let Some(second) = vals.next() else {
+        return Cow::Owned(out);
+    };
+    let mut prev_delta = second.wrapping_sub(first) & mask;
+    out.extend_from_slice(&prev_delta.to_le_bytes()[..width]);
+    let mut prev = second;
+    let shift = 64 - 8 * width as u32;
+    let mut w = BitWriter { out, acc: 0, n: 0 };
+    for v in vals {
+        let delta = v.wrapping_sub(prev) & mask;
+        let dd = delta.wrapping_sub(prev_delta) & mask;
+        (prev_delta, prev) = (delta, v);
+        if dd == 0 {
+            w.write(1, 0);
+            continue;
+        }
+        let signed = ((dd << shift) as i64) >> shift;
+        let abs = if dd == 1u64 << (8 * width as u32 - 1) {
+            mask >> 1
+        } else {
+            signed.unsigned_abs() - 1
+        };
+        let (pb, prefix, data) = dd_spec(signed);
+        w.write(pb, prefix);
+        w.write(1, u64::from(signed < 0));
+        w.write(data - 1, abs);
+    }
+    Cow::Owned(w.finish())
+}
+
+/// A compression block of a two-codec chain is a `CompressionCodecMultiple` payload: a codec
+/// count byte, one method byte per codec, and the first codec's output carries its own 9-byte
+/// block header (method, compressed size, decompressed size) into the compressor. Modelled for
+/// the Delta / DoubleDelta chains only; the calibrated GCD chains stay as they were (the spike,
+/// spec 2026-10-23 Task 4, decides whether GCD shares it).
+const MULTIPLE_HEADER: u64 = 3;
+const INNER_BLOCK_HEADER: usize = 9;
+
 fn binary_gcd(mut a: u128, mut b: u128) -> u128 {
     while b != 0 {
         (a, b) = (b, a % b);
@@ -547,6 +714,7 @@ fn binary_gcd(mut a: u128, mut b: u128) -> u128 {
 
 fn compressed_len(bytes: &[u8], c: Compression) -> Result<u64, String> {
     match c {
+        Compression::None => Ok(bytes.len() as u64),
         Compression::Lz4 => {
             lz4::block::compress(bytes, Some(lz4::block::CompressionMode::DEFAULT), false)
                 .map(|v| v.len() as u64)
@@ -569,15 +737,34 @@ pub(crate) fn emulate(streams: &[Stream], chain: Chain) -> Result<Emulated, Stri
         .par_iter()
         .map(|&(s, (a, b))| {
             let raw = &s.bytes[a..b];
-            let data = match s.gcd_width {
-                Some((w, signed)) if chain.gcd => gcd_transform(raw, w, signed),
+            let mut extra = 0;
+            let data = match (s.int_width, chain.transform) {
+                (Some((w, signed)), Transform::Gcd) => gcd_transform(raw, w, signed),
+                (Some((w, _)), t @ (Transform::Delta | Transform::DoubleDelta)) => {
+                    let body = if t == Transform::Delta {
+                        delta_transform(raw, w)
+                    } else {
+                        double_delta_transform(raw, w)
+                    };
+                    if chain.compression == Compression::None {
+                        body
+                    } else {
+                        extra = MULTIPLE_HEADER;
+                        let mut v = vec![0u8; INNER_BLOCK_HEADER];
+                        v.extend_from_slice(&body);
+                        Cow::Owned(v)
+                    }
+                }
                 _ => Cow::Borrowed(raw),
             };
             let mut h = [0u64; 256];
             for &x in data.iter() {
                 h[x as usize] += 1;
             }
-            Ok((BLOCK_HEADER + compressed_len(&data, chain.compression)?, h))
+            Ok((
+                BLOCK_HEADER + extra + compressed_len(&data, chain.compression)?,
+                h,
+            ))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let mut out = Emulated {
@@ -815,7 +1002,7 @@ pub(crate) fn skip_index_bytes(
     block_rows: u64,
 ) -> Result<u64, String> {
     let lz4 = Chain {
-        gcd: false,
+        transform: Transform::None,
         compression: Compression::Lz4,
     };
     match kind {
@@ -863,7 +1050,7 @@ mod tests {
         ChLayout::Fixed {
             width,
             signed,
-            gcd_applies: true,
+            int_codecs: true,
         }
     }
     fn nullable(l: ChLayout) -> ChLayout {
@@ -877,8 +1064,8 @@ mod tests {
         assert_eq!(s.len(), 2);
         assert_eq!(s[0].bytes, [0, 0, 1]);
         assert_eq!(s[1].bytes, [1, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0]);
-        assert_eq!(s[1].gcd_width, Some((4, true)));
-        assert_eq!(s[0].gcd_width, None);
+        assert_eq!(s[1].int_width, Some((4, true)));
+        assert_eq!(s[0].int_width, None);
     }
 
     #[test]
@@ -887,12 +1074,12 @@ mod tests {
         let l = ChLayout::Fixed {
             width: 8,
             signed: true,
-            gcd_applies: false,
+            int_codecs: false,
         };
         let s = streams(&a, &l).unwrap();
         assert_eq!(s[0].bytes[..8], 1500i64.to_le_bytes());
         assert_eq!(s[0].bytes[8..], (-1i64).to_le_bytes());
-        assert_eq!(s[0].gcd_width, None);
+        assert_eq!(s[0].int_width, None);
     }
 
     #[test]
@@ -1074,7 +1261,7 @@ mod tests {
     #[test]
     fn histogram_and_sizes() {
         let lz4 = Chain {
-            gcd: false,
+            transform: Transform::None,
             compression: Compression::Lz4,
         };
         let e = emulate(&[plain(vec![0u8; 10], 1)], lz4).unwrap();
@@ -1090,15 +1277,22 @@ mod tests {
         assert_eq!(e.bytes, BLOCK_HEADER + payload);
         // The histogram counts the post-GCD bytes: header 1000 = E8 03, then 1, 2, 3.
         let mut s = plain(i64s(&[1000, 2000, 3000]), 8);
-        s.gcd_width = Some((8, true));
-        let e = emulate(&[s], Chain { gcd: true, ..lz4 }).unwrap();
+        s.int_width = Some((8, true));
+        let e = emulate(
+            &[s],
+            Chain {
+                transform: Transform::Gcd,
+                ..lz4
+            },
+        )
+        .unwrap();
         assert_eq!(e.histogram.iter().sum::<u64>(), 32);
         assert_eq!(
             (e.histogram[0xE8], e.histogram[3], e.histogram[1]),
             (1, 2, 1)
         );
         let z = Chain {
-            gcd: false,
+            transform: Transform::None,
             compression: Compression::Zstd(3),
         };
         assert!(emulate(&[plain(vec![1; 100], 1)], z).unwrap().bytes > BLOCK_HEADER);
@@ -1106,11 +1300,151 @@ mod tests {
 
     #[test]
     fn chain_ddl() {
-        let c = |gcd, compression| Chain { gcd, compression }.ddl();
-        assert_eq!(c(false, Compression::Lz4), "LZ4");
-        assert_eq!(c(false, Compression::Zstd(3)), "ZSTD(3)");
-        assert_eq!(c(true, Compression::Lz4), "GCD, LZ4");
-        assert_eq!(c(true, Compression::Zstd(3)), "GCD, ZSTD(3)");
+        use Compression as C;
+        use Transform as T;
+        let d = |transform, compression| {
+            Chain {
+                transform,
+                compression,
+            }
+            .ddl()
+        };
+        assert_eq!(d(T::None, C::Lz4), "LZ4");
+        assert_eq!(d(T::None, C::Zstd(3)), "ZSTD(3)");
+        assert_eq!(d(T::Gcd, C::Lz4), "GCD, LZ4");
+        assert_eq!(d(T::Gcd, C::Zstd(3)), "GCD, ZSTD(3)");
+        assert_eq!(d(T::Delta, C::Lz4), "Delta, LZ4");
+        assert_eq!(d(T::Delta, C::Zstd(1)), "Delta, ZSTD(1)");
+        assert_eq!(d(T::DoubleDelta, C::Lz4), "DoubleDelta, LZ4");
+        assert_eq!(d(T::DoubleDelta, C::Zstd(9)), "DoubleDelta, ZSTD(9)");
+        assert_eq!(d(T::Gcd, C::None), "GCD");
+        assert_eq!(d(T::Delta, C::None), "Delta");
+        assert_eq!(d(T::DoubleDelta, C::None), "DoubleDelta");
+        assert_eq!(d(T::None, C::None), "NONE");
+    }
+
+    #[test]
+    fn delta_transform_cases() {
+        let u32s = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() };
+        let input = u32s(&[1, 3, 6]);
+        let t = delta_transform(&input, 4);
+        assert_eq!(t.as_ref(), [&[4u8, 0][..], &u32s(&[1, 2, 3])].concat());
+        // a 2-byte remainder is copied right after the header
+        let mut b = vec![9u8, 8];
+        b.extend(u32s(&[1, 3]));
+        b.truncate(10);
+        assert_eq!(b.len() % 4, 2);
+        let t = delta_transform(&b, 4);
+        assert_eq!(t[..4], [4, 2, 9, 8]);
+        assert_eq!(t[4..], u32s(&[1, 2])[..]);
+        // wraps at the width
+        assert_eq!(delta_transform(&[250, 5], 1).as_ref(), [1, 0, 250, 11]);
+        // widths outside 1/2/4/8 pass through
+        assert_eq!(delta_transform(&[1, 2, 3], 3).as_ref(), [1, 2, 3]);
+    }
+
+    /// The decoder of CompressionCodecDoubleDelta (decompressDataForType), bit by bit.
+    fn double_delta_decode(enc: &[u8]) -> Vec<u8> {
+        let width = enc[0] as usize;
+        let skip = enc[1] as usize;
+        let mut out = enc[2..2 + skip].to_vec();
+        let mut pos = 2 + skip;
+        let items = u32::from_le_bytes(enc[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        let mask = if width == 8 {
+            u64::MAX
+        } else {
+            (1u64 << (8 * width)) - 1
+        };
+        if items == 0 {
+            return out;
+        }
+        let first = read_le(&enc[pos..], width);
+        pos += width;
+        out.extend_from_slice(&first.to_le_bytes()[..width]);
+        if items == 1 {
+            return out;
+        }
+        let mut delta = read_le(&enc[pos..], width);
+        pos += width;
+        let mut value = first.wrapping_add(delta) & mask;
+        out.extend_from_slice(&value.to_le_bytes()[..width]);
+        let bits = &enc[pos..];
+        let mut at = 0usize;
+        let mut take = |n: u32| -> u64 {
+            let mut v = 0u64;
+            for _ in 0..n {
+                v = v << 1 | u64::from(bits[at / 8] >> (7 - at % 8) & 1);
+                at += 1;
+            }
+            v
+        };
+        for _ in 2..items {
+            let mut ones = 0;
+            while ones < 5 && take(1) == 1 {
+                ones += 1;
+            }
+            let data = [0, 7, 9, 12, 32, 64][ones];
+            let dd = if data == 0 {
+                0
+            } else {
+                let neg = take(1) == 1;
+                let m = take(data - 1) + 1;
+                (if neg { m.wrapping_neg() } else { m }) & mask
+            };
+            delta = delta.wrapping_add(dd) & mask;
+            value = value.wrapping_add(delta) & mask;
+            out.extend_from_slice(&value.to_le_bytes()[..width]);
+        }
+        out
+    }
+
+    #[test]
+    fn double_delta_sizes_and_roundtrip() {
+        let u64s = |v: &[u64]| -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() };
+        let regular: Vec<u64> = (0..1000).map(|i| 1_000_000 + 60 * i).collect();
+        let input = u64s(&regular);
+        let t = double_delta_transform(&input, 8);
+        assert_eq!(t.len(), 2 + 4 + 8 + 8 + 998usize.div_ceil(8));
+        assert_eq!(double_delta_decode(&t), u64s(&regular));
+        // degenerate blocks
+        for n in 0..4usize {
+            let v: Vec<u64> = (0..n as u64).map(|i| i * i).collect();
+            let input = u64s(&v);
+            let t = double_delta_transform(&input, 8);
+            assert_eq!(double_delta_decode(&t), u64s(&v), "{n}");
+        }
+        // width 1, values 0, 1, 3, 3: d = 1, 2, 0 so dd = 1 ("10" 0 000000), -2 ("10" 1 000001)
+        let t = double_delta_transform(&[0, 1, 3, 3], 1);
+        assert_eq!(t[..], [1, 0, 4, 0, 0, 0, 0, 1, 0x80, 0x50, 0x40]);
+        // pseudo-random blocks at every width, with extreme steps and unaligned tails
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for case in 0..200usize {
+            let width = [1usize, 2, 4, 8][case % 4];
+            let n = (next() % 300) as usize + (case % 7);
+            let extra = (next() % 3) as usize % width;
+            let top = 1u64 << (8 * width - 1);
+            let mut b = Vec::new();
+            for i in 0..n {
+                let r = next();
+                let v = match (case / 4) % 4 {
+                    0 => r,
+                    1 => (i as u64).wrapping_mul(r % 5),
+                    2 => [0, u64::MAX, top, top - 1][(r % 4) as usize],
+                    _ => (i as u64) * 7 + r % 3,
+                };
+                b.extend_from_slice(&v.to_le_bytes()[..width]);
+            }
+            b.extend((0..extra).map(|_| next() as u8));
+            let t = double_delta_transform(&b, width);
+            assert_eq!(double_delta_decode(&t), b, "case {case}");
+        }
     }
 
     fn ints(f: impl Fn(usize) -> i64, n: usize) -> Int64Array {

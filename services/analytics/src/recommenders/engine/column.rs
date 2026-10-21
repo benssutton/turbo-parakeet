@@ -204,6 +204,7 @@ pub(crate) fn ipc_choice(
             let codec = match c.compression {
                 Compression::Lz4 => Codec::Lz4Frame,
                 Compression::Zstd(l) => Codec::Zstd(l),
+                Compression::None => return Err("no IPC compression".to_string()),
             };
             let (mut bytes, mut hist) = (0u64, [0u64; 256]);
             for a in arrs {
@@ -318,12 +319,12 @@ pub(crate) fn clickhouse_choice_over(
     let applies = matches!(
         &layout,
         ChLayout::Fixed {
-            gcd_applies: true,
+            int_codecs: true,
             ..
         }
     ) || matches!(
         &layout,
-        ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { gcd_applies: true, .. })
+        ChLayout::Nullable(inner) if matches!(**inner, ChLayout::Fixed { int_codecs: true, .. })
     );
     // Signedness is the ClickHouse layout's (Date / DateTime are unsigned), not the Arrow type's.
     let layout_signed = match &layout {
@@ -484,6 +485,7 @@ fn ipc_cells(ipc: Option<(Compression, u64)>) -> [AnyValue<'static>; 3] {
             AnyValue::Null,
             AnyValue::UInt64(n),
         ],
+        Some((Compression::None, _)) => [AnyValue::Null, AnyValue::Null, AnyValue::Null],
         Some((Compression::Zstd(l), n)) => [
             AnyValue::StringOwned("ZSTD".into()),
             AnyValue::Int32(l),
