@@ -400,6 +400,7 @@ pub(crate) enum Transform {
 }
 
 impl Transform {
+    #[cfg(test)]
     pub(crate) fn from_gcd(gcd: bool) -> Self {
         if gcd {
             Transform::Gcd

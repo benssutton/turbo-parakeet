@@ -173,7 +173,7 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 ///
 /// `zstd_levels` points to `n_zstd_levels` ZSTD levels to try (non-empty, distinct, each in
 /// 1..=22; 0 or an invalid list returns 1); `zstd_level_tolerance`, `zstd_min_saving`
-/// and `gcd_min_saving` are fractions in [0, 1) (defaults 0.01, 0.10, 0.01; spec
+/// and `transform_min_saving` are fractions in [0, 1) (defaults 0.01, 0.10, 0.01; spec
 /// 2026-10-19 §4.3). A null `zstd_levels` with `n_zstd_levels > 0` returns 1.
 ///
 /// `skip_granularities` / `set_max_sizes` / `bloom_fprs` point to `n_*` values each (non-empty;
@@ -202,7 +202,7 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
     n_zstd_levels: usize,
     zstd_level_tolerance: f64,
     zstd_min_saving: f64,
-    gcd_min_saving: f64,
+    transform_min_saving: f64,
     skip_granularities: *const u32,
     n_skip_granularities: usize,
     set_max_sizes: *const u64,
@@ -250,7 +250,7 @@ pub unsafe extern "C" fn analytics_streaming_recommender_new(
             zstd_levels,
             zstd_level_tolerance,
             zstd_min_saving,
-            gcd_min_saving,
+            transform_min_saving,
             skip_granularities,
             set_max_sizes,
             bloom_fprs,
@@ -350,7 +350,7 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
     n_zstd_levels: usize,
     zstd_level_tolerance: f64,
     zstd_min_saving: f64,
-    gcd_min_saving: f64,
+    transform_min_saving: f64,
     skip_granularities: *const u32,
     n_skip_granularities: usize,
     set_max_sizes: *const u64,
@@ -387,7 +387,7 @@ pub unsafe extern "C" fn analytics_oneshot_recommender_new(
             zstd_levels,
             zstd_level_tolerance,
             zstd_min_saving,
-            gcd_min_saving,
+            transform_min_saving,
             skip_granularities,
             set_max_sizes,
             bloom_fprs,

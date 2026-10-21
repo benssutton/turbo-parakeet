@@ -59,7 +59,7 @@ class OneShotRecommender:
     §4): `zstd_levels` are the ZSTD levels tried (distinct, each in 1…22);
     `zstd_level_tolerance` the relative size slack within which the lowest level wins;
     `zstd_min_saving` the smallest relative saving that makes ZSTD preferable to LZ4;
-    `gcd_min_saving` the smallest relative saving that keeps a GCD codec. The three
+    `transform_min_saving` the smallest relative saving that keeps a transform codec (GCD, Delta, DoubleDelta) over no transform. The three
     fractions lie in [0, 1).
 
     Skip indexes (spec docs/superpowers/specs/2026-10-20-skip-index-recommendations-design.md
@@ -89,7 +89,7 @@ class OneShotRecommender:
         zstd_levels: Sequence[int] = (1, 3, 9),
         zstd_level_tolerance: float = 0.01,
         zstd_min_saving: float = 0.10,
-        gcd_min_saving: float = 0.01,
+        transform_min_saving: float = 0.01,
         skip_granularities: Sequence[int] = (1, 2, 4, 8),
         set_max_sizes: Sequence[int] = (125, 250),
         bloom_fprs: Sequence[float] = (0.025,),
@@ -108,7 +108,7 @@ class OneShotRecommender:
             zstd_levels=list(zstd_levels),
             zstd_level_tolerance=zstd_level_tolerance,
             zstd_min_saving=zstd_min_saving,
-            gcd_min_saving=gcd_min_saving,
+            transform_min_saving=transform_min_saving,
             skip_granularities=list(skip_granularities),
             set_max_sizes=list(set_max_sizes),
             bloom_fprs=list(bloom_fprs),

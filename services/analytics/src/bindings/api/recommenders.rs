@@ -31,7 +31,7 @@ fn compression(
     zstd_levels: Vec<i32>,
     zstd_level_tolerance: f64,
     zstd_min_saving: f64,
-    gcd_min_saving: f64,
+    transform_min_saving: f64,
 ) -> Result<CompressionParams> {
     // ClickHouse accepts ZSTD(1) … ZSTD(22).
     let range = 1..=22;
@@ -54,7 +54,7 @@ fn compression(
     for (name, v) in [
         ("zstd_level_tolerance", zstd_level_tolerance),
         ("zstd_min_saving", zstd_min_saving),
-        ("gcd_min_saving", gcd_min_saving),
+        ("transform_min_saving", transform_min_saving),
     ] {
         if !(v.is_finite() && (0.0..1.0).contains(&v)) {
             return Err(Error::InvalidInput(format!(
@@ -66,7 +66,7 @@ fn compression(
         zstd_levels,
         zstd_level_tolerance,
         zstd_min_saving,
-        gcd_min_saving,
+        transform_min_saving,
     })
 }
 
@@ -164,7 +164,7 @@ pub struct OneShotParams {
     pub zstd_levels: Vec<i32>,
     pub zstd_level_tolerance: f64,
     pub zstd_min_saving: f64,
-    pub gcd_min_saving: f64,
+    pub transform_min_saving: f64,
     /// Skip-index keywords (spec 2026-10-20 §4).
     pub skip_granularities: Vec<u32>,
     pub set_max_sizes: Vec<u64>,
@@ -186,7 +186,7 @@ impl OneShotRecommender {
             p.zstd_levels,
             p.zstd_level_tolerance,
             p.zstd_min_saving,
-            p.gcd_min_saving,
+            p.transform_min_saving,
         )?;
         let skip = skip_params(
             p.skip_granularities,
@@ -248,7 +248,7 @@ pub struct StreamingParams {
     pub zstd_levels: Vec<i32>,
     pub zstd_level_tolerance: f64,
     pub zstd_min_saving: f64,
-    pub gcd_min_saving: f64,
+    pub transform_min_saving: f64,
     /// Skip-index keywords (spec 2026-10-20 §4).
     pub skip_granularities: Vec<u32>,
     pub set_max_sizes: Vec<u64>,
@@ -278,7 +278,7 @@ impl StreamingRecommender {
             p.zstd_levels,
             p.zstd_level_tolerance,
             p.zstd_min_saving,
-            p.gcd_min_saving,
+            p.transform_min_saving,
         )?;
         let skip = skip_params(
             p.skip_granularities,
@@ -354,7 +354,7 @@ mod tests {
             zstd_levels: vec![1, 3, 9],
             zstd_level_tolerance: 0.01,
             zstd_min_saving: 0.10,
-            gcd_min_saving: 0.01,
+            transform_min_saving: 0.01,
             skip_granularities: vec![1, 2, 4, 8],
             set_max_sizes: vec![125, 250],
             bloom_fprs: vec![0.025],
@@ -413,7 +413,7 @@ mod tests {
                 ..streaming_params()
             },
             StreamingParams {
-                gcd_min_saving: -0.1,
+                transform_min_saving: -0.1,
                 ..streaming_params()
             },
             StreamingParams {
@@ -476,7 +476,7 @@ mod tests {
             zstd_levels: vec![1, 3, 9],
             zstd_level_tolerance: 0.01,
             zstd_min_saving: 0.10,
-            gcd_min_saving: 0.01,
+            transform_min_saving: 0.01,
             skip_granularities: vec![1, 2, 4, 8],
             set_max_sizes: vec![125, 250],
             bloom_fprs: vec![0.025],

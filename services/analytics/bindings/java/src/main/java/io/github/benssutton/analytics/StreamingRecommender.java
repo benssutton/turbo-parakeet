@@ -46,7 +46,7 @@ public final class StreamingRecommender extends NativeRecommender {
             JAVA_LONG,  // size_t n_zstd_levels
             JAVA_DOUBLE,  // double zstd_level_tolerance
             JAVA_DOUBLE,  // double zstd_min_saving
-            JAVA_DOUBLE,  // double gcd_min_saving
+            JAVA_DOUBLE,  // double transform_min_saving
             ADDRESS,    // const uint32_t *skip_granularities
             JAVA_LONG,  // size_t n_skip_granularities
             ADDRESS,    // const uint64_t *set_max_sizes
@@ -87,7 +87,7 @@ public final class StreamingRecommender extends NativeRecommender {
                     (long) params.zstdLevels().size(),
                     params.zstdLevelTolerance(),
                     params.zstdMinSaving(),
-                    params.gcdMinSaving(),
+                    params.transformMinSaving(),
                     arena.allocateFrom(JAVA_INT, params.skipGranularities().stream().mapToInt(Integer::intValue).toArray()),
                     (long) params.skipGranularities().size(),
                     arena.allocateFrom(JAVA_LONG, params.setMaxSizes().stream().mapToLong(Long::longValue).toArray()),

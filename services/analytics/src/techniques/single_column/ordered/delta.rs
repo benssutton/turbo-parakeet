@@ -4,8 +4,6 @@
 //! bytes of deltas under a random row order. Nulls are skipped: deltas are taken between
 //! consecutive non-null values.
 
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::HashMap;
 
 use foldhash::fast::RandomState;

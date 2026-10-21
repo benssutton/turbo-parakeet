@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::common::arrow_io::export_series;
-use crate::common::clickhouse_sizes::{emulate, streams, ChLayout, Chain, Compression};
+use crate::common::clickhouse_sizes::{emulate, streams, ChLayout, Chain, Compression, Stream};
 use crate::common::ipc_sizes::{
     classic_layout, ipc_body, ipc_body_bytes, layout_sizes, sizes_of, Codec, Sizes,
 };
+use crate::techniques::delta::{self, DeltaStats};
 use crate::techniques::describe::conclusions::Conclusions;
 use crate::techniques::describe::{describe_one, value_fields, Described, Row};
 use arrow_array::{Array, ArrayRef};
@@ -218,12 +219,48 @@ pub(crate) fn ipc_choice(
             }
             Ok((bytes, hist))
         },
-        None,
-        "",
+        Transforms {
+            gcd: None,
+            gcd_note: "",
+            delta: None,
+        },
         distinct_ratio,
         &params.compression,
     )?;
     Ok((lz4, (decision.chain.compression, decision.bytes)))
+}
+
+/// Delta statistics of the integer streams of `st` (one entry per array: one-shot one array,
+/// streaming the sampled blocks), deltas within each stream; None when no stream is an
+/// integer stream of width 1, 2, 4 or 8.
+fn stream_delta_stats(st: &[Vec<Stream>]) -> Option<DeltaStats> {
+    let mut acc: Option<DeltaStats> = None;
+    for s in st.iter().flatten() {
+        let Some((w, signed)) = s.int_width.filter(|&(w, _)| matches!(w, 1 | 2 | 4 | 8)) else {
+            continue;
+        };
+        let values: Vec<i128> = s
+            .bytes
+            .chunks_exact(w)
+            .map(|c| {
+                let mut b = [0u8; 8];
+                b[..w].copy_from_slice(c);
+                let u = u64::from_le_bytes(b);
+                if signed {
+                    let shift = 64 - 8 * w as u32;
+                    (((u << shift) as i64) >> shift) as i128
+                } else {
+                    u as i128
+                }
+            })
+            .collect();
+        let d = delta::scan(&values);
+        acc = Some(match acc {
+            Some(a) => delta::merge(a, d),
+            None => d,
+        });
+    }
+    acc
 }
 
 /// A column's ClickHouse type, chain, emulated size and every chain considered.
@@ -351,8 +388,15 @@ pub(crate) fn clickhouse_choice_over(
             }
             Ok((scale(bytes), hist))
         },
-        gcd,
-        note,
+        Transforms {
+            gcd,
+            gcd_note: note,
+            delta: if applies {
+                stream_delta_stats(&st)
+            } else {
+                None
+            },
+        },
         distinct_ratio,
         &params.compression,
     )?;

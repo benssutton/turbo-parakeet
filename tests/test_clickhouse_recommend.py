@@ -1,5 +1,7 @@
 """ClickHouse recommendations, Arrow IPC compression choice and the chbench handoff (spec 2026-10-19)."""
 
+from decimal import Decimal
+
 import polars as pl
 import pyarrow as pa
 import pytest
@@ -38,7 +40,7 @@ def test_lz4_frame_body_sizes_equal_pyarrow(make_frame):
         ({"zstd_levels": (0,)}, "zstd_levels"),
         ({"zstd_levels": (23,)}, "zstd_levels"),
         ({"zstd_min_saving": 1.0}, "zstd_min_saving"),
-        ({"gcd_min_saving": -0.1}, "gcd_min_saving"),
+        ({"transform_min_saving": -0.1}, "transform_min_saving"),
         ({"zstd_level_tolerance": float("nan")}, "zstd_level_tolerance"),
     ],
 )
@@ -97,7 +99,7 @@ def test_clickhouse_types_and_codecs():
 
 def test_compression_keywords_change_choices():
     base = one_shot(ch_frame())
-    assert not one_shot(ch_frame(), gcd_min_saving=0.99)["thousands"][
+    assert not one_shot(ch_frame(), transform_min_saving=0.99)["thousands"][
         "clickhouse_codecs"
     ].startswith("GCD")
     levels = one_shot(ch_frame(), zstd_levels=(3,))
@@ -107,6 +109,71 @@ def test_compression_keywords_change_choices():
     eager = one_shot(ch_frame(), zstd_min_saving=0.0)
     assert "ZSTD" in eager["small"]["clickhouse_codecs"]
     assert base["small"]["clickhouse_type"] == eager["small"]["clickhouse_type"]
+
+
+def delta_frame(n: int = 200_000) -> pl.DataFrame:
+    import numpy as np
+
+    rng = np.random.default_rng(1)
+    steps = rng.choice([-100, 100], n).astype(np.int64)
+    return pl.DataFrame(
+        {
+            "regular": pl.Series(
+                np.arange(n, dtype=np.int64) * 1_000 + 1_700_000_000_123
+            ).cast(pl.Datetime("ms")),
+            "walk": 10**12 + np.cumsum(steps),
+            "random_int": rng.integers(-(2**62), 2**62, n).astype(np.int64),
+            "float": rng.random(n),
+            "text": rng.choice(["alpha", "beta", "gamma"], n),
+            "dec": pl.Series(
+                [Decimal(int(v) * 10**8) / 100 for v in rng.integers(1, 10**18, n)],
+                dtype=pl.Decimal(30, 2),
+            ),
+        }
+    )
+
+
+def _delta_rows(rows, col):
+    return [
+        c
+        for c in rows[col]["clickhouse_candidates"]
+        if c["codecs"].startswith(("Delta", "DoubleDelta"))
+    ]
+
+
+def check_delta_choices(rows):
+    assert rows["regular"]["clickhouse_codecs"].startswith("DoubleDelta")
+    assert any(c["codecs"].startswith("Delta") for c in _delta_rows(rows, "regular"))
+    assert rows["walk"]["clickhouse_codecs"].startswith("Delta")
+    ri = _delta_rows(rows, "random_int")
+    assert ri and all(c["outcome"] == "pruned" for c in ri)
+    assert all("delta" in c["evidence"] for c in ri)
+    for col in ("float", "text", "dec"):
+        assert not _delta_rows(rows, col), col
+
+
+def test_delta_families_one_shot():
+    rows = one_shot(delta_frame())
+    check_delta_choices(rows)
+
+
+def test_transform_min_saving_disables_delta():
+    rows = one_shot(delta_frame(), transform_min_saving=0.9999)
+    for col in ("regular", "walk", "random_int"):
+        codec = rows[col]["clickhouse_codecs"]
+        assert not codec.startswith(("GCD", "Delta", "DoubleDelta")), (col, codec)
+
+
+def test_delta_families_streaming_parity():
+    frame = delta_frame()
+    one = one_shot(frame)
+    streamed = StreamingRecommender(reservoir_rows=frame.height + 65_536)
+    streamed.add(frame)
+    got = {r["column"]: r for r in streamed.result().iter_rows(named=True)}
+    check_delta_choices(got)
+    for name, r in got.items():
+        assert r["clickhouse_codecs"] == one[name]["clickhouse_codecs"], name
+        assert r["clickhouse_size_bytes"] == one[name]["clickhouse_size_bytes"], name
 
 
 def test_unmappable_type_has_a_reason():

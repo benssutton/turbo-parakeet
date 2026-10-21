@@ -1,6 +1,8 @@
-//! Analytic pruning, then emulation: GCD and compression choices (spec 2026-10-19 §4).
+//! Analytic pruning, then emulation: transform (GCD, Delta, DoubleDelta) and compression
+//! choices (specs 2026-10-19 §4, 2026-10-23 §4–5).
 
 use crate::common::clickhouse_sizes::{Chain, Compression, Transform};
+use crate::techniques::delta::DeltaStats;
 
 /// The four keywords (spec §4.3).
 #[derive(Clone, Debug, PartialEq)]
@@ -8,7 +10,7 @@ pub(crate) struct CompressionParams {
     pub zstd_levels: Vec<i32>,
     pub zstd_level_tolerance: f64,
     pub zstd_min_saving: f64,
-    pub gcd_min_saving: f64,
+    pub transform_min_saving: f64,
 }
 
 impl Default for CompressionParams {
@@ -17,7 +19,7 @@ impl Default for CompressionParams {
             zstd_levels: vec![1, 3, 9],
             zstd_level_tolerance: 0.01,
             zstd_min_saving: 0.10,
-            gcd_min_saving: 0.01,
+            transform_min_saving: 0.01,
         }
     }
 }
@@ -41,6 +43,31 @@ pub(crate) fn gcd_survives(g: u128, max_abs: u128, signed: bool) -> (bool, Strin
     (
         after < before,
         format!("gcd {g}: {before} → {after} bytes at max |value| {max_abs}"),
+    )
+}
+
+/// Spec 2026-10-23 §4: Delta survives iff the mean delta bytes < the mean value bytes.
+pub(crate) fn delta_survives(s: &DeltaStats) -> (bool, String) {
+    let (v, d) = (s.value_bytes_mean(), s.delta_bytes_mean());
+    if d.is_nan() {
+        return (false, "too few values".to_string());
+    }
+    (d < v, format!("delta {d:.2} B vs value {v:.2} B"))
+}
+
+/// DoubleDelta survives iff the mean double-delta bytes < min(mean value bytes, mean delta bytes).
+pub(crate) fn double_delta_survives(s: &DeltaStats) -> (bool, String) {
+    let (v, d, dd) = (
+        s.value_bytes_mean(),
+        s.delta_bytes_mean(),
+        s.double_delta_bytes_mean(),
+    );
+    if dd.is_nan() {
+        return (false, "too few values".to_string());
+    }
+    (
+        dd < v.min(d),
+        format!("double delta {dd:.2} B vs min(value {v:.2} B, delta {d:.2} B)"),
     )
 }
 
@@ -116,14 +143,33 @@ pub(crate) struct Decision {
     pub candidates: Vec<CodecCandidate>,
 }
 
-/// One considered chain family (GCD or not): its measured rows and its pick.
+/// One considered chain family (one transform): its measured rows and its pick.
 struct Family {
-    gcd: bool,
+    transform: Transform,
     /// (compression, bytes) of every measured chain.
     measured: Vec<(Compression, u64)>,
     pick: (Compression, u64),
     /// Best ZSTD size among the measured levels.
     zstd_best: Option<u64>,
+}
+
+/// What `decide` may transform: the column's statistics, where known.
+pub(crate) struct Transforms<'a> {
+    /// Some((g, max_abs, signed)) when GCD applies (the byte-width rule).
+    pub gcd: Option<(u128, u128, bool)>,
+    /// Why GCD is missing when unknown; "" when GCD does not apply at all.
+    pub gcd_note: &'a str,
+    /// Delta statistics when Delta / DoubleDelta apply (integer stream, width 1/2/4/8).
+    pub delta: Option<DeltaStats>,
+}
+
+fn transform_name(t: Transform) -> &'static str {
+    match t {
+        Transform::None => "",
+        Transform::Gcd => "GCD",
+        Transform::Delta => "Delta",
+        Transform::DoubleDelta => "DoubleDelta",
+    }
 }
 
 fn pruned(codecs: String, evidence: String) -> CodecCandidate {
@@ -161,38 +207,50 @@ fn lost_to_pick(c: Compression, b: u64, f: &Family, p: &CompressionParams) -> St
     }
 }
 
-/// Spec §4.1–4.2. `measure(chain)` emulates one chain → (bytes, histogram of the
-/// uncompressed bytes); `gcd` is Some((g, max_abs, signed)) when GCD applies to the column,
-/// None otherwise or when unknown (`gcd_note` then says why, or is "" when GCD does not
-/// apply at all — then no GCD row is emitted).
+/// Spec §4.1–4.2 and 2026-10-23 §4–5. `measure(chain)` emulates one chain → (bytes,
+/// histogram of the uncompressed bytes). Families: no transform plus each transform that
+/// survives its pruning rule; each is measured (LZ4, then ZSTD levels unless the shortcut
+/// fires on its histogram). The winner is the transform family with the smallest pick that
+/// saves `transform_min_saving` over the plain pick (ties: GCD, Delta, DoubleDelta).
 pub(crate) fn decide(
     mut measure: impl FnMut(Chain) -> Result<(u64, [u64; 256]), String>,
-    gcd: Option<(u128, u128, bool)>,
-    gcd_note: &str,
+    tr: Transforms,
     distinct_ratio: f64,
     p: &CompressionParams,
 ) -> Result<Decision, String> {
     let mut pruned_rows = Vec::new();
-    let mut flags = vec![false];
-    match gcd {
+    let mut flags = vec![Transform::None];
+    match tr.gcd {
         Some((g, max_abs, signed)) => {
             let (ok, evidence) = gcd_survives(g, max_abs, signed);
             if ok {
-                flags.push(true);
+                flags.push(Transform::Gcd);
             } else {
                 pruned_rows.push(pruned("GCD".to_string(), evidence));
             }
         }
-        None if !gcd_note.is_empty() => {
-            pruned_rows.push(pruned("GCD".to_string(), gcd_note.to_string()));
+        None if !tr.gcd_note.is_empty() => {
+            pruned_rows.push(pruned("GCD".to_string(), tr.gcd_note.to_string()));
         }
         None => {}
     }
+    if let Some(s) = &tr.delta {
+        for (t, (ok, evidence)) in [
+            (Transform::Delta, delta_survives(s)),
+            (Transform::DoubleDelta, double_delta_survives(s)),
+        ] {
+            if ok {
+                flags.push(t);
+            } else {
+                pruned_rows.push(pruned(transform_name(t).to_string(), evidence));
+            }
+        }
+    }
 
     let mut families = Vec::new();
-    for gcd in flags {
+    for transform in flags {
         let chain = |compression| Chain {
-            transform: Transform::from_gcd(gcd),
+            transform,
             compression,
         };
         let (lz4, hist) = measure(chain(Compression::Lz4))?;
@@ -216,52 +274,61 @@ pub(crate) fn decide(
             zstd_best = zstd.iter().map(|&(_, b)| b).min();
         }
         families.push(Family {
-            gcd,
+            transform,
             measured,
             pick,
             zstd_best,
         });
     }
 
-    // GCD wins iff it saves gcd_min_saving over the best non-GCD chain.
     let plain = &families[0];
-    let winner_gcd = families
-        .get(1)
-        .is_some_and(|g| g.pick.1 as f64 <= (1.0 - p.gcd_min_saving) * plain.pick.1 as f64);
-    let win = families
-        .iter()
-        .find(|f| f.gcd == winner_gcd)
-        .expect("the winning family was measured");
+    let qualifies =
+        |f: &Family| f.pick.1 as f64 <= (1.0 - p.transform_min_saving) * plain.pick.1 as f64;
+    let mut win = plain;
+    for f in &families[1..] {
+        if qualifies(f) && (win.transform == Transform::None || f.pick.1 < win.pick.1) {
+            win = f;
+        }
+    }
     let chain = Chain {
-        transform: Transform::from_gcd(win.gcd),
+        transform: win.transform,
         compression: win.pick.0,
     };
     let bytes = win.pick.1;
+    let pct = p.transform_min_saving * 100.0;
 
     let mut rows = Vec::new();
     for f in &families {
         for &(c, b) in &f.measured {
             let codecs = Chain {
-                transform: Transform::from_gcd(f.gcd),
+                transform: f.transform,
                 compression: c,
             }
             .ddl();
             let is_pick = c == f.pick.0;
-            let (outcome, evidence) = if is_pick && f.gcd == winner_gcd {
+            let (outcome, evidence) = if is_pick && f.transform == win.transform {
                 ("chosen", "smallest after pruning".to_string())
-            } else if is_pick && f.gcd {
+            } else if is_pick && f.transform == Transform::None {
                 (
                     "rejected",
                     format!(
-                        "GCD saves < {}% over no GCD ({b} vs {})",
-                        p.gcd_min_saving * 100.0,
+                        "{} saves ≥ {pct}% over no transform: {bytes} vs {b}",
+                        transform_name(win.transform)
+                    ),
+                )
+            } else if is_pick && !qualifies(f) {
+                (
+                    "rejected",
+                    format!(
+                        "{} saves < {pct}% over no transform ({b} vs {})",
+                        transform_name(f.transform),
                         plain.pick.1
                     ),
                 )
             } else if is_pick {
                 (
                     "rejected",
-                    format!("GCD saves ≥ {}%: {bytes} vs {b}", p.gcd_min_saving * 100.0),
+                    format!("{} smaller ({bytes} vs {b})", transform_name(win.transform)),
                 )
             } else {
                 ("rejected", lost_to_pick(c, b, f, p))
@@ -346,8 +413,12 @@ mod tests {
     type Table = HashMap<Chain, (u64, [u64; 256])>;
 
     fn table(gcd: bool, lz4: u64, z: [u64; 3], h: [u64; 256], t: &mut Table) {
+        table_t(Transform::from_gcd(gcd), lz4, z, h, t);
+    }
+
+    fn table_t(transform: Transform, lz4: u64, z: [u64; 3], h: [u64; 256], t: &mut Table) {
         let c = |compression| Chain {
-            transform: Transform::from_gcd(gcd),
+            transform,
             compression,
         };
         t.insert(c(Compression::Lz4), (lz4, h));
@@ -363,6 +434,20 @@ mod tests {
         ratio: f64,
         p: &CompressionParams,
     ) -> (Decision, Vec<Chain>) {
+        let tr = Transforms {
+            gcd,
+            gcd_note: note,
+            delta: None,
+        };
+        run_tr(t, tr, ratio, p)
+    }
+
+    fn run_tr(
+        t: &Table,
+        tr: Transforms,
+        ratio: f64,
+        p: &CompressionParams,
+    ) -> (Decision, Vec<Chain>) {
         let mut calls = Vec::new();
         let d = decide(
             |c| {
@@ -371,8 +456,7 @@ mod tests {
                     .copied()
                     .ok_or_else(|| format!("unmeasured {c:?}"))
             },
-            gcd,
-            note,
+            tr,
             ratio,
             p,
         )
@@ -384,6 +468,18 @@ mod tests {
             .count();
         assert_eq!(chosen, 1);
         (d, calls)
+    }
+
+    fn stats(n: u64, value: u64, delta: u64, double: u64) -> DeltaStats {
+        DeltaStats {
+            n_values: n,
+            n_deltas: n - 1,
+            n_double_deltas: n - 2,
+            value_bytes: value * n,
+            delta_bytes: delta * (n - 1),
+            double_delta_bytes: double * (n - 2),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -459,5 +555,97 @@ mod tests {
         assert_eq!(d.candidates[1].evidence, "gcd unknown");
         let (d, _) = run(&t, None, "", 0.1, &p);
         assert_eq!(d.candidates.len(), 1);
+    }
+
+    #[test]
+    fn delta_survival_rules() {
+        let s = stats(100, 8, 2, 1);
+        assert!(delta_survives(&s).0);
+        assert!(double_delta_survives(&s).0);
+        let s = stats(100, 8, 8, 1);
+        assert!(!delta_survives(&s).0);
+        assert!(double_delta_survives(&s).0);
+        let s = stats(100, 4, 1, 1);
+        assert!(delta_survives(&s).0);
+        let (ok, ev) = double_delta_survives(&s);
+        assert!(!ok);
+        assert_eq!(ev, "double delta 1.00 B vs min(value 4.00 B, delta 1.00 B)");
+        assert_eq!(
+            delta_survives(&stats(100, 8, 2, 1)).1,
+            "delta 2.00 B vs value 8.00 B"
+        );
+        let one = DeltaStats {
+            n_values: 1,
+            value_bytes: 8,
+            ..Default::default()
+        };
+        assert_eq!(delta_survives(&one), (false, "too few values".to_string()));
+        assert_eq!(
+            double_delta_survives(&stats(2, 8, 1, 1)),
+            (false, "too few values".to_string())
+        );
+    }
+
+    fn delta_run(plain: u64, delta: u64, double: u64, s: DeltaStats) -> (Decision, Vec<Chain>) {
+        let mut t = Table::new();
+        table_t(Transform::None, plain, [plain; 3], skewed(), &mut t);
+        table_t(Transform::Delta, delta, [delta; 3], skewed(), &mut t);
+        table_t(
+            Transform::DoubleDelta,
+            double,
+            [double; 3],
+            skewed(),
+            &mut t,
+        );
+        let tr = Transforms {
+            gcd: None,
+            gcd_note: "",
+            delta: Some(s),
+        };
+        run_tr(&t, tr, 0.1, &CompressionParams::default())
+    }
+
+    #[test]
+    fn decide_delta_family_saving_threshold() {
+        let (d, _) = delta_run(1000, 950, 0, stats(100, 8, 2, 8));
+        assert_eq!(d.chain.transform, Transform::Delta);
+        assert_eq!(d.bytes, 950);
+        let (d, _) = delta_run(1000, 995, 0, stats(100, 8, 2, 8));
+        assert_eq!(d.chain.transform, Transform::None);
+        assert!(d.candidates.iter().any(|r| r.codecs == "Delta, LZ4"
+            && r.outcome == "rejected"
+            && r.evidence
+                .contains("Delta saves < 1% over no transform (995 vs 1000)")));
+    }
+
+    #[test]
+    fn decide_double_delta_beats_delta_when_smaller() {
+        let (d, _) = delta_run(1000, 500, 100, stats(100, 8, 2, 1));
+        assert_eq!(d.chain.transform, Transform::DoubleDelta);
+        assert_eq!(d.bytes, 100);
+        assert!(d.candidates.iter().any(|r| r.codecs == "Delta, LZ4"
+            && r.outcome == "rejected"
+            && r.evidence == "DoubleDelta smaller (100 vs 500)"));
+        // a tie goes to the earlier family (Delta)
+        let (d, _) = delta_run(1000, 100, 100, stats(100, 8, 2, 1));
+        assert_eq!(d.chain.transform, Transform::Delta);
+    }
+
+    #[test]
+    fn decide_prunes_delta_families_without_measuring() {
+        let mut t = Table::new();
+        table_t(Transform::None, 1000, [900, 900, 900], skewed(), &mut t);
+        let tr = Transforms {
+            gcd: None,
+            gcd_note: "",
+            delta: Some(stats(100, 4, 4, 4)),
+        };
+        let (d, calls) = run_tr(&t, tr, 0.1, &CompressionParams::default());
+        assert!(calls.iter().all(|c| c.transform == Transform::None));
+        for name in ["Delta", "DoubleDelta"] {
+            let r = d.candidates.iter().find(|r| r.codecs == name).unwrap();
+            assert_eq!(r.outcome, "pruned");
+            assert_eq!(r.predicted_bytes, None);
+        }
     }
 }

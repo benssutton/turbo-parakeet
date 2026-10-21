@@ -21,7 +21,7 @@ import java.util.OptionalLong;
  *                      (non-empty, distinct, each in 1..22; default 1, 3, 9)
  * @param zstdLevelTolerance a higher level wins only if it is smaller by more than this fraction (default 0.01)
  * @param zstdMinSaving ZSTD replaces LZ4 only if it saves at least this fraction (default 0.10)
- * @param gcdMinSaving  the GCD codec is chosen only if it saves at least this fraction (default 0.01)
+ * @param transformMinSaving  a transform codec (GCD, Delta, DoubleDelta) is chosen only if it saves at least this fraction over no transform (default 0.01)
  * (spec 2026-10-19-clickhouse-recommendations-design.md §4.3; each fraction in [0, 1))
  * @param skipGranularities GRANULARITY values tried for the skip indexes (non-empty; default 1, 2, 4, 8)
  * @param setMaxSizes   {@code set(max_size)} values tried (non-empty; default 125, 250)
@@ -35,7 +35,7 @@ public record StreamingParams(long reservoirRows, long blockRows, long categoric
                               int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK,
                               List<String> idColumns, EntropyEstimator entropyEstimator,
                               List<Integer> zstdLevels, double zstdLevelTolerance, double zstdMinSaving,
-                              double gcdMinSaving,
+                              double transformMinSaving,
                               List<Integer> skipGranularities, List<Long> setMaxSizes, List<Double> bloomFprs,
                               double minSkip, double minGain, double maxOverflow) {
 
@@ -58,9 +58,9 @@ public record StreamingParams(long reservoirRows, long blockRows, long categoric
                            int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK,
                            List<String> idColumns, EntropyEstimator entropyEstimator,
                            List<Integer> zstdLevels, double zstdLevelTolerance, double zstdMinSaving,
-                           double gcdMinSaving) {
+                           double transformMinSaving) {
         this(reservoirRows, blockRows, categoricalThreshold, zstdLevel, seed, booleanPairs, topK, idColumns,
-            entropyEstimator, zstdLevels, zstdLevelTolerance, zstdMinSaving, gcdMinSaving, List.of(1, 2, 4, 8), List.of(125L, 250L), List.of(0.025), 0.3, 0.1, 0.1);
+            entropyEstimator, zstdLevels, zstdLevelTolerance, zstdMinSaving, transformMinSaving, List.of(1, 2, 4, 8), List.of(125L, 250L), List.of(0.025), 0.3, 0.1, 0.1);
     }
 
     /** As the canonical constructor, with the default compression keywords. */
