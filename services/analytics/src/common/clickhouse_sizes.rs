@@ -412,7 +412,7 @@ impl Transform {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Compression {
-    /// No generic compression: the spike and `clickhouse_profile` only, never chosen.
+    /// No generic compression: used by the spikes and `clickhouse_profile` only, never chosen.
     None,
     Lz4,
     Zstd(i32),
@@ -520,8 +520,8 @@ fn block_sizes(s: &Stream) -> Vec<u64> {
 }
 
 /// The GCD codec on one block of `width`-byte values: `[gcd] + values / gcd`. The GCD is of
-/// the values' magnitudes (zeros skipped); GCD 0 or 1 leaves the block unchanged. (An
-/// approximation of the real layout, to be checked by a spike.)
+/// the values' magnitudes (zeros skipped); GCD 0 or 1 leaves the block unchanged. (Layout
+/// verified byte-exact against ClickHouse 26.8: spec 2026-10-23 §7.)
 fn gcd_transform(block: &[u8], width: usize, signed: bool) -> Cow<'_, [u8]> {
     if width == 0 || width > 16 || !block.len().is_multiple_of(width) {
         return Cow::Borrowed(block);

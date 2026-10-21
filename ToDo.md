@@ -5,7 +5,7 @@ The objectives these serve (target engines, formats, row order, queries, validat
 
 ToDos are broken into thematic sections in a suggested priority order, but items within each section are in no priority order.  The order in which these are implemented should favour efficiency and code quality.  Item numbers are stable: CLAUDE.md and the specs refer to them.
 
-**Agreed starting order:** 1a–f done, 1g on hold; 5c done; next 3 (1.0 skeleton, 4 and 2 done; 6 + 5g done).
+**Agreed starting order:** 1a–f done, 1g on hold; 5c done; 3 done; next: to be chosen (1.0 skeleton, 4 and 2 done; 6 + 5g done).
 
 ---
 The following ToDos 1 to 7 are largely intended as a clean up of existing code and implementation of encoding and skipping index recommendations.
@@ -35,7 +35,7 @@ g. **On hold** (2026-10-20: needs more design thought — how point and range qu
 - Values are rendered as text the same way as min / max (`common::text::render_value`).
 - Still to decide: identifier columns that are themselves null or ineligible (Int128 / UInt128, Object); List columns with nulls inside.
 
-3. Add techniques to identify candidates for delta and double-delta encoding, and if ToDo #1 above is already implemented, add to the Recommenders.  Calculating the delta and double-delta between consecutive rows and their value range and entropies should indicate candidates.  These are ClickHouse codec recommendations only (Arrow IPC has no delta encoding).
+3. **Done** (spec 2026-10-23): `delta` technique; `Delta` / `DoubleDelta` codec families in both recommenders, pruned by mean significant bytes, calibrated.  Add techniques to identify candidates for delta and double-delta encoding, and if ToDo #1 above is already implemented, add to the Recommenders.  Calculating the delta and double-delta between consecutive rows and their value range and entropies should indicate candidates.  These are ClickHouse codec recommendations only (Arrow IPC has no delta encoding).
 
 4. **Done** (spec 2026-10-18): `entropy*` columns, exact in one-shot and in streaming's exact phase, `sample` / `ams` (default) estimates past it; entropy of list inner values is not done.  Extend the Recommenders to return the entropy of each column.
 - OneShotRecommender: compute it from Describe's existing frequency map (techniques/single_column/unordered/describe/frequencies.rs), one pass over the distinct values with nulls as one category, rather than re-hashing the column with marginal_entropy.rs.
