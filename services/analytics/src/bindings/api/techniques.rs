@@ -55,6 +55,20 @@ pub fn set_index(batch: &RecordBatch, window_rows: u64, max_size: u64) -> Result
     ))
 }
 
+/// `col_name`, `n_non_null`, `estimate`, `std_error`, `sketch_bytes` per column: a
+/// HyperLogLog of 2^precision registers; `precision` in 4..=18, else InvalidInput.
+pub fn hll_distinct(batch: &RecordBatch, precision: u8) -> Result<RecordBatch> {
+    if !(4..=18).contains(&precision) {
+        return Err(Error::InvalidInput(format!(
+            "precision must be in 4..=18, got {precision}"
+        )));
+    }
+    table(crate::techniques::distinct_count::hll_distinct_impl(
+        &columns(batch)?,
+        precision,
+    ))
+}
+
 /// `col_name`, `entropy` per column.
 pub fn marginal_entropy(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::marginal_entropy::marginal_entropy_impl(

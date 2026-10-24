@@ -153,6 +153,12 @@ def set_index(df: Frame, window_rows: int, max_size: int) -> pl.DataFrame:
     return pl.DataFrame(_rs.set_index(_collected(df), window_rows, max_size))
 
 
+def hll_distinct(df: Frame, precision: int) -> pl.DataFrame:
+    """col_name, n_non_null, estimate, std_error, sketch_bytes per column (HyperLogLog,
+    2^precision registers)."""
+    return pl.DataFrame(_rs.hll_distinct(_collected(df), precision))
+
+
 def minhash(df: Frame, name: str, num_perm: int = 128) -> pl.DataFrame:
     """qualified_name ("{name}|{column}"), minhash: List(UInt32) per column."""
     return pl.DataFrame(_rs.minhash(_collected(df), name, num_perm))

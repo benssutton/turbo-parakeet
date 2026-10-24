@@ -368,6 +368,13 @@ fn set_index(
 }
 
 #[pyfunction]
+#[pyo3(signature = (data, precision))]
+fn hll_distinct(py: Python<'_>, data: &Bound<'_, PyAny>, precision: u8) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::hll_distinct(&batch, precision)).map(ArrowTable)
+}
+
+#[pyfunction]
 fn marginal_entropy(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::marginal_entropy(&batch)).map(ArrowTable)
@@ -599,6 +606,7 @@ fn core_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(delta, m)?)?;
     m.add_function(wrap_pyfunction!(minmax_index, m)?)?;
     m.add_function(wrap_pyfunction!(set_index, m)?)?;
+    m.add_function(wrap_pyfunction!(hll_distinct, m)?)?;
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_joint_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(threeway_joint_entropy, m)?)?;
