@@ -8,6 +8,7 @@ Per-column (GCD):     integer_multiples, integer_random
 Per-column, ordered (runs test): runs_int, runs_str
 Shared large frame (agreement / parity tests, benchmarks): large_dataset, large_dataset_mixed
 Per-column (top-k):     top_k_streams
+Per-column (population cardinality): population_samples
 Per-column (describe): describe_mixed, stringified (tests); describe_narrow, describe_wide, describe_nested (benchmarks)
 """
 
@@ -224,6 +225,27 @@ def top_k_streams(
         return pl.Series(name, values.astype(np.int64))
 
     return pl.DataFrame([make(c) for c in columns])
+
+
+def population_samples(
+    n_rows: int, populations: list[tuple[int, str | tuple[str, float]]], seed: int = 42
+) -> tuple[pl.DataFrame, dict[str, int]]:
+    """Int64 columns p0… each drawing `n_rows` values with replacement from a population
+    of exactly D labels (`populations`: (D, "uniform") or (D, ("zipf", alpha))), labels
+    randomly permuted so frequent values are not small integers. Returns the frame and
+    each column's D — the support size, the truth Chao1 / Schnabel estimate."""
+    rng = np.random.default_rng(seed)
+    cols, truth = {}, {}
+    for i, (d, shape) in enumerate(populations):
+        if shape == "uniform":
+            ranks = rng.integers(0, d, n_rows)
+        else:
+            # `_bounded_zipf` returns values in [0, d) (ranks already permuted)
+            ranks = _bounded_zipf(n_rows, d, shape[1], rng)
+        labels = rng.permutation(d).astype(np.int64)
+        cols[f"p{i}"] = labels[ranks]
+        truth[f"p{i}"] = d
+    return pl.DataFrame(cols), truth
 
 
 # ── multi-set techniques ──────────────────────────────────────────────────────

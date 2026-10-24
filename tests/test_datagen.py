@@ -20,6 +20,7 @@ from datagen import (
     mixed_dtypes,
     near_constant,
     near_unique,
+    population_samples,
     related_frames,
     runs_int,
     runs_str,
@@ -282,3 +283,17 @@ def test_large_dataset_mixed_cycles_the_regimes():
         cols = [f"col_{4 * g + k}" for k in range(4)]
         assert mixed.select(cols).equals(large_dataset(**regime).select(cols)), g
     assert mixed["col_5"].null_count() > 0 and mixed["col_1"].null_count() == 0
+
+
+def test_population_samples():
+    frame, truth = population_samples(
+        200_000, [(1_000, "uniform"), (50_000, ("zipf", 1.1))], seed=3
+    )
+    assert frame.columns == ["p0", "p1"] and frame.height == 200_000
+    assert truth == {"p0": 1_000, "p1": 50_000}
+    assert frame["p0"].n_unique() == 1_000  # uniform, 200 draws per label: all seen
+    assert frame["p1"].n_unique() < 50_000  # Zipf: rare labels unseen
+    again, _ = population_samples(
+        200_000, [(1_000, "uniform"), (50_000, ("zipf", 1.1))], seed=3
+    )
+    assert frame.equals(again)
