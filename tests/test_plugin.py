@@ -23,6 +23,7 @@ PACKAGES = (
     "turbo_parakeet.techniques.chi_squared",
     "turbo_parakeet.techniques.marginal_entropy",
     "turbo_parakeet.techniques.distinct_count",
+    "turbo_parakeet.techniques.population_cardinality",
     "turbo_parakeet.techniques.pairwise_entropy",
     "turbo_parakeet.techniques.threeway_entropy",
     "turbo_parakeet.techniques.adjusted_rand",
