@@ -188,3 +188,26 @@ def test_accuracy_compares_entropies_and_mi_in_bits():
     assert out["max_abs_mi_err"] == pytest.approx(0.05)
     assert out["n_missing"] == 0
     assert PairwiseEntropyAmsRust.EXACT is False
+
+
+def _three_column_accuracy(mi):
+    from turbo_parakeet.techniques.pairwise_entropy import PairwiseEntropyPolars
+
+    frames = {
+        "t": pl.DataFrame({"a": [1, 1, 2, 2], "b": [1, 2, 1, 2], "c": [1, 1, 1, 2]})
+    }
+    reference = PairwiseEntropyPolars().add(frames).result()
+    values = reference["mi"].to_list()
+    values[0] = mi
+    result = reference.with_columns(mi=pl.Series("mi", values, dtype=pl.Float64))
+    return PairwiseEntropyPolars().accuracy(frames, result, reference)
+
+
+def test_accuracy_keeps_nan_mi_error():
+    out = _three_column_accuracy(math.nan)
+    assert math.isnan(out["max_abs_mi_err"])
+
+
+def test_accuracy_counts_null_mi_as_missing():
+    out = _three_column_accuracy(None)
+    assert out["n_missing"] == 1

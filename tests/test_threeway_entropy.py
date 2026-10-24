@@ -114,4 +114,5 @@ def test_accuracy_compares_the_joint_entropy_only():
     result = reference.with_columns(h_abc=pl.col("h_abc") * 1.02)
     out = ThreewayEntropyPolars().accuracy(frames, result, reference)
     assert out["max_rel_err"] == pytest.approx(0.02)
+    assert out["n_missing"] == 0
     assert ThreewayEntropyAmsRust.EXACT is False

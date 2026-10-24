@@ -50,11 +50,15 @@ class PairwiseEntropy(Technique):
         self.near_unique_margin = near_unique_margin
 
     def accuracy(self, frames, result, reference):
-        """The default figures over the entropies, plus `max_abs_mi_err` (bits)."""
+        """The default figures over the entropies, plus `max_abs_mi_err` (bits; NaN kept,
+        None when nothing is comparable); `n_missing` also counts a null `mi` where the
+        reference has a value."""
         out = super().accuracy(frames, result, reference)
         computed = reference["status"] == "computed"
-        mi = (result.filter(computed)["mi"] - reference.filter(computed)["mi"]).abs()
-        out["max_abs_mi_err"] = mi.max()
+        got = result.filter(computed)["mi"]
+        want = reference.filter(computed)["mi"]
+        out["max_abs_mi_err"] = (got - want).abs().nan_max()
+        out["n_missing"] += int((got.is_null() & want.is_not_null()).sum())
         return out
 
     def eligible(self, series: pl.Series) -> bool:

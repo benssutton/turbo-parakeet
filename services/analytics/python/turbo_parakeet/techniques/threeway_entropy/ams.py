@@ -11,8 +11,8 @@ class ThreewayEntropyAmsRust(ThreewayEntropy):
     (`num_samples` estimators, O(num_samples) memory) per triplet, rayon-parallel; h_abc
     agrees with the reference within RTOL."""
 
-    # mixed_dtypes(1_000) at num_samples=4096, seed=0: max relative error 3.9% (h_abc), 2.7% (h_ab).
     EXACT = False
+    # mixed_dtypes(1_000) at num_samples=4096, seed=0: max relative error 3.9% (h_abc), 2.7% (h_ab).
     RTOL = 0.05
     ATOL = 1e-9
 
