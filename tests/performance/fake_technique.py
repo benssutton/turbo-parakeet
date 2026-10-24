@@ -3,6 +3,8 @@ FakeSumPolars is the reference, FakeSumRust its exact Rust-named sibling (with a
 allocation, to check the memory figure), FakeSumSketchRust an estimator off by `noise`, and
 FakeSumBroken raises."""
 
+import os
+
 import polars as pl
 
 from turbo_parakeet.techniques.base import Technique
@@ -47,5 +49,18 @@ class FakeSumBroken(FakeSum):
         raise RuntimeError("broken on purpose")
 
 
+class FakeSumSilent(FakeSum):
+    """Exits 0 without printing a result (the child's JSON line)."""
+
+    def _compute(self, frames, combos):
+        os._exit(0)
+
+
 REFERENCE = "FakeSumPolars"
-IMPLEMENTATIONS = ("FakeSumRust", "FakeSumSketchRust", "FakeSumBroken", "FakeSumPolars")
+IMPLEMENTATIONS = (
+    "FakeSumRust",
+    "FakeSumSketchRust",
+    "FakeSumBroken",
+    "FakeSumSilent",
+    "FakeSumPolars",
+)

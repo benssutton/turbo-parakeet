@@ -74,11 +74,28 @@ COLUMNS = [
     "peak_mb",
     "peak_is_lower_bound",
     "agrees",
+    "exact_rust_agrees",
     "algorithmic",
     "parallel",
     "total",
     "speedup_vs_exact_rust",
 ]
+FIXED_DTYPES = {
+    **dict.fromkeys(
+        (
+            "median_ms",
+            "min_ms",
+            "load_mb",
+            "peak_mb",
+            "algorithmic",
+            "parallel",
+            "total",
+        ),
+        pl.Float64,
+    ),
+    **dict.fromkeys(("peak_is_lower_bound", "agrees", "exact_rust_agrees"), pl.Boolean),
+    "speedup_vs_exact_rust": pl.Float64,
+}
 
 
 @dataclass(frozen=True)
@@ -270,19 +287,27 @@ def _measure(
     out: str,
 ) -> dict:
     spec = Path(out).with_suffix(".json")
-    spec.write_text(
-        json.dumps(
-            {
-                "package": package,
-                "implementation": name,
-                "params": kwargs,
-                "frames": frames,
-                "runs": runs,
-                "budget_s": budget_s,
-                "out": out,
-            }
+    try:
+        spec.write_text(
+            json.dumps(
+                {
+                    "package": package,
+                    "implementation": name,
+                    "params": kwargs,
+                    "frames": frames,
+                    "runs": runs,
+                    "budget_s": budget_s,
+                    "out": out,
+                }
+            )
         )
-    )
+    except (TypeError, ValueError) as exc:  # e.g. params that are not JSON
+        print(
+            f"    error: parameters not serialisable: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return {"status": "error"}
     env = {**os.environ, **(SINGLE_THREAD_ENV if threads == "1" else {})}
     try:
         proc = subprocess.run(
@@ -301,7 +326,15 @@ def _measure(
     except subprocess.TimeoutExpired:
         print("    timeout", file=sys.stderr, flush=True)
         return {"status": "timeout"}
-    return json.loads(proc.stdout.strip().splitlines()[-1])
+    try:
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        print(
+            f"    error: child printed no result:\n{(proc.stderr or '')[-500:]}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return {"status": "error"}
 
 
 def _child(spec_path: str) -> None:
@@ -341,14 +374,15 @@ def _child(spec_path: str) -> None:
 def _compare(
     impl, frames: dict, result: pl.DataFrame, other: pl.DataFrame, prefix: str
 ) -> dict:
+    out = {}
+    try:  # a failed comparison must not lose the run's other rows
+        out["agrees"] = not impl.agreement(result, other)
+    except Exception as exc:
+        print(f"    agreement failed: {exc!r}", file=sys.stderr, flush=True)
     try:
-        out = {
-            "agrees": not impl.agreement(result, other),
-            **impl.accuracy(frames, result, other),
-        }
-    except Exception as exc:  # a failed comparison must not lose the run's other rows
-        print(f"    comparison failed: {exc!r}", file=sys.stderr, flush=True)
-        out = {"agrees": False}
+        out.update(impl.accuracy(frames, result, other))
+    except Exception as exc:
+        print(f"    accuracy failed: {exc!r}", file=sys.stderr, flush=True)
     return {prefix + k: v for k, v in out.items()}
 
 
@@ -369,7 +403,11 @@ def _score(
         if result is None or row["implementation"] == reference:
             continue
         cls = classes[row["implementation"]]
-        impl = cls(**kwargs_of[key])
+        try:
+            impl = cls(**kwargs_of[key])
+        except Exception as exc:
+            print(f"    scoring failed: {exc!r}", file=sys.stderr, flush=True)
+            continue
         ref = results.get((reference, row["group"], _threads(reference)[0]))
         if ref is not None:
             row.update(_compare(impl, frames, result, ref, ""))
@@ -403,6 +441,8 @@ def run(
     classes = {n: c for n in names if (c := _load(module, n)) is not None}
     exact_rust = [n for n, c in classes.items() if n.endswith("Rust") and c.EXACT]
     sibling = exact_rust[0] if len(exact_rust) == 1 else None
+    if len({d.name for d in datasets}) != len(datasets):
+        raise ValueError("dataset names must be unique")
     plan = _plan(classes, variants, params, impl_params)
 
     rows: list[dict] = []
@@ -459,17 +499,29 @@ def run(
                 algorithmic=s["algorithmic"], parallel=s["parallel"], total=s["total"]
             )
         del r["group"]
-    return _report(results_name or package.rsplit(".", 1)[-1], package, rows)
+    estimators = {n for n, c in classes.items() if not c.EXACT}
+    return _report(
+        results_name or package.rsplit(".", 1)[-1], package, rows, estimators
+    )
 
 
-def _report(name: str, package: str, rows: list[dict]) -> pl.DataFrame:
+def _report(
+    name: str,
+    package: str,
+    rows: list[dict],
+    estimators: set[str] | frozenset = frozenset(),
+) -> pl.DataFrame:
     for stream in (sys.stdout, sys.stderr):  # tables and "—" on a cp1252 console / pipe
-        stream.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     rows = [{**dict.fromkeys(COLUMNS), **r} for r in rows]
     frame = pl.from_dicts(rows, infer_schema_length=None)
     extras = [c for c in frame.columns if c not in COLUMNS]
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     frame = frame.select(*COLUMNS, *extras).with_columns(
+        pl.col(c).cast(t) for c, t in FIXED_DTYPES.items()
+    )
+    frame = frame.with_columns(
         technique=pl.lit(package.rsplit(".", 1)[-1]),
         cpu_count=pl.lit(os.cpu_count()),
         processor=pl.lit(platform.processor()),
@@ -501,7 +553,9 @@ def _report(name: str, package: str, rows: list[dict]) -> pl.DataFrame:
         )
         print(
             frame.filter(
-                pl.col("agrees").is_not_null(), pl.col("threads") != "1"
+                pl.col("implementation").is_in(sorted(estimators))
+                | (pl.col("agrees") == False),  # noqa: E712
+                pl.col("threads") != "1",
             ).select(*keys[:3], "agrees", *extras, "speedup_vs_exact_rust")
         )
     RESULTS_DIR.mkdir(exist_ok=True)

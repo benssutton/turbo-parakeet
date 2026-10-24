@@ -146,6 +146,7 @@ def test_one_row_per_measurement(bench):
         [
             ("FakeSumPolars", "lo", "default"),
             ("FakeSumBroken", "lo", "default"),
+            ("FakeSumSilent", "lo", "default"),
             ("FakeSumRust", "lo", "N"),
             ("FakeSumRust", "lo", "1"),
             ("FakeSumSketchRust", "lo", "N"),
@@ -158,8 +159,10 @@ def test_one_row_per_measurement(bench):
 
 @pytest.mark.slow
 def test_a_failing_child_is_an_error_row(bench):
-    assert _one(bench, "FakeSumBroken", "lo", "default")["status"] == "error"
-    assert set(bench.filter(pl.col("implementation") != "FakeSumBroken")["status"]) == {
+    failing = ["FakeSumBroken", "FakeSumSilent"]
+    for name in failing:
+        assert _one(bench, name, "lo", "default")["status"] == "error"
+    assert set(bench.filter(~pl.col("implementation").is_in(failing))["status"]) == {
         "ok"
     }
 
@@ -187,3 +190,32 @@ def test_memory_and_speedups(bench):
     assert exact["algorithmic"] is not None and exact["parallel"] is not None
     assert _one(bench, "FakeSumRust", "lo", "1")["algorithmic"] is None
     assert bench["technique"].unique().to_list() == ["fake_technique"]
+
+
+@pytest.mark.slow
+def test_fixed_columns_have_their_dtypes(bench):
+    for column, dtype in harness.FIXED_DTYPES.items():
+        assert bench.schema[column] == dtype, column
+
+
+def test_report_without_an_estimator_keeps_typed_fixed_columns(tmp_path, monkeypatch):
+    monkeypatch.setattr(harness, "RESULTS_DIR", tmp_path)
+    rows = [
+        {
+            "dataset": "d",
+            "implementation": "XPolars",
+            "variant": "default",
+            "threads": "default",
+            "status": "error",
+        }
+    ]
+    frame = harness._report("x", "pkg.x", rows)
+    assert list(frame.columns[: len(harness.COLUMNS)]) == harness.COLUMNS
+    for column, dtype in harness.FIXED_DTYPES.items():
+        assert frame.schema[column] == dtype, column
+
+
+def test_duplicate_dataset_names_are_rejected():
+    ds = Dataset("same", lambda: {})
+    with pytest.raises(ValueError, match="unique"):
+        harness.run(PKG, [ds, ds])
