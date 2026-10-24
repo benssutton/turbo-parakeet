@@ -51,6 +51,8 @@ class Technique(ABC):
     EXACT: ClassVar[bool] = True
     RTOL: ClassVar[float] = 0.0
     ATOL: ClassVar[float] = 0.0
+    # Metrics the default `accuracy` compares (None: every numeric METRICS column).
+    ACCURACY_METRICS: ClassVar[tuple[str, ...] | None] = None
 
     def __init__(self) -> None:
         self._frames: dict[str, pl.DataFrame | pl.LazyFrame] = {}
@@ -267,6 +269,21 @@ class Technique(ABC):
             self.ATOL,
         )
 
+    def accuracy(
+        self,
+        frames: dict[str, pl.DataFrame],
+        result: pl.DataFrame,
+        reference: pl.DataFrame,
+    ) -> dict[str, float | int | None]:
+        """Error figures of `result` against `reference` for the benchmarks (metrics
+        only: never in a result, never a decision): `numeric_errors` over
+        ACCURACY_METRICS. `frames` serves overrides that rebuild ground truth (Top-k).
+        """
+        metrics = self.ACCURACY_METRICS
+        if metrics is None:
+            metrics = tuple(c for c, dt in self.METRICS.items() if dt.is_numeric())
+        return numeric_errors(result, reference, self.key_columns(), list(metrics))
+
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _check(self, rows: pl.DataFrame, expected_rows: int) -> None:
@@ -433,6 +450,44 @@ def metric_mismatches(
             if not same_value(got, want, rtol, atol):
                 problems.append(f"{label}: {m} {got!r} != {want!r}")
     return problems
+
+
+def numeric_errors(
+    result: pl.DataFrame,
+    reference: pl.DataFrame,
+    keys: list[str],
+    metrics: list[str],
+) -> dict[str, float | int | None]:
+    """Relative error |got − want| / |want| of every `metrics` cell the reference computed
+    (equal values, 0/0 and NaN/NaN → 0; NaN elsewhere is kept, so it shows in the max):
+    `max_rel_err`, `p95_rel_err` and `n_missing` (nulls in `result` where the reference has
+    a value). Both frames in canonical order; misaligned keys → ValueError."""
+    if result.select(keys).rows() != reference.select(keys).rows():
+        raise ValueError("key columns differ from the reference")
+    computed = reference["status"] == "computed"
+    got, want = result.filter(computed), reference.filter(computed)
+    g, w = pl.col("g"), pl.col("w")
+    rels, missing = [], 0
+    for c in metrics:
+        pair = pl.DataFrame(
+            {"g": got[c].cast(pl.Float64), "w": want[c].cast(pl.Float64)}
+        )
+        missing += pair.filter(g.is_null() & w.is_not_null()).height
+        rels.append(
+            pair.select(
+                pl.when((g == w) | (g.is_nan() & w.is_nan()))
+                .then(0.0)
+                .otherwise((g - w).abs() / w.abs())
+            ).to_series()
+        )
+    rel = pl.concat(rels).drop_nulls() if rels else pl.Series([], dtype=pl.Float64)
+    if rel.is_empty():
+        return {"max_rel_err": None, "p95_rel_err": None, "n_missing": missing}
+    return {
+        "max_rel_err": rel.nan_max(),
+        "p95_rel_err": rel.quantile(0.95),
+        "n_missing": missing,
+    }
 
 
 def lazy_attributes(package: str, modules: dict[str, str]) -> Callable[[str], type]:

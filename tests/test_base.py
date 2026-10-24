@@ -5,6 +5,7 @@ The toy's metric is the total length of the column names in a combination / 10,
 so every expected value below can be worked out by hand.
 """
 
+import math
 import weakref
 
 import polars as pl
@@ -22,6 +23,7 @@ from turbo_parakeet.techniques.base import (
     group_by_frame,
     lazy_attributes,
     metric_mismatches,
+    numeric_errors,
     same_value,
 )
 
@@ -471,3 +473,55 @@ def test_encodable_and_nested():
     assert not encodable(pl.Binary())
     assert not encodable(pl.Null())
     assert not is_nested(pl.Int64())
+
+
+def _error_frame(m, i, status):
+    return pl.DataFrame(
+        {
+            "df_a": ["t"] * len(m),
+            "col_a": [f"c{n}" for n in range(len(m))],
+            "status": pl.Series(status, dtype=STATUS),
+            "m": pl.Series(m, dtype=pl.Float64),
+            "i": pl.Series(i, dtype=pl.UInt64),
+        }
+    )
+
+
+def test_numeric_errors_relative_error_and_missing():
+    status = ["computed", "computed", "computed", "ineligible"]
+    want = _error_frame([1.0, 0.0, 3.0, None], [10, 20, 30, None], status)
+    got = _error_frame([1.1, 0.0, None, None], [10, 20, 30, None], status)
+    out = numeric_errors(got, want, ["df_a", "col_a"], ["m", "i"])
+    # cells: m 0.1, 0 (0/0), missing; i 0, 0, 0
+    assert out["max_rel_err"] == pytest.approx(0.1)
+    assert out["p95_rel_err"] == pytest.approx(0.1)
+    assert out["n_missing"] == 1
+
+
+def test_numeric_errors_nan_is_kept_but_nan_nan_is_no_error():
+    status = ["computed"] * 3
+    want = _error_frame([1.0, math.nan, 2.0], [1, 1, 1], status)
+    got = _error_frame([1.0, math.nan, math.nan], [1, 1, 1], status)
+    out = numeric_errors(got, want, ["df_a", "col_a"], ["m"])
+    assert math.isnan(out["max_rel_err"])
+    assert out["n_missing"] == 0
+
+
+def test_numeric_errors_rejects_misaligned_rows():
+    status = ["computed"] * 2
+    want = _error_frame([1.0, 2.0], [1, 2], status)
+    got = want.reverse()
+    with pytest.raises(ValueError, match="key columns"):
+        numeric_errors(got, want, ["df_a", "col_a"], ["m"])
+
+
+def test_accuracy_defaults_to_numeric_metrics():
+    frames = {"t": pl.DataFrame({"ab": [1, 2], "c": ["x", "y"]})}
+    reference = PerColumnToy().add(frames).result()
+    result = reference.with_columns(score=pl.col("score") * 1.5)
+    out = PerColumnToy().accuracy(frames, result, reference)
+    assert out == {
+        "max_rel_err": pytest.approx(0.5),
+        "p95_rel_err": pytest.approx(0.5),
+        "n_missing": 0,
+    }
