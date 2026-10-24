@@ -1,6 +1,6 @@
 # Distinct-count, population-cardinality and marginal-entropy techniques (ToDo 17)
 
-Status: draft 2026-10-24.  Sub-project 2 of spec 2026-10-24-benchmark-uniformity-design.md: the Rust kernels that
+Status: implemented 2026-10-24.  Sub-project 2 of spec 2026-10-24-benchmark-uniformity-design.md: the Rust kernels that
 had no technique, and so no benchmark, become three techniques on the uniform contract, each with accuracy tests and
 a benchmark on the uplifted harness.
 
@@ -141,3 +141,12 @@ classes), "All thirteen techniques" → sixteen.  `tests/performance/README.md`:
 Describe or the recommenders calling the new techniques (ToDo 16); a streaming version (techniques are one-shot);
 Apache DataSketches or scikit-bio competitors (optional libraries, not installed); a DataFusion implementation
 (ToDo 15).
+
+## 11. Deviations (as built)
+
+- Binary columns are ineligible (the Rust encoder does not accept them).
+- The population-cardinality reference is `PopulationCardinalityPolars`: Polars `group_by` counts, a NumPy SplitMix split and the Python `estimators.py`.
+- A `truth` mapping reaches `accuracy()` only when the dataset sets it.
+- `DistinctCountPolarsApprox` accepts and ignores `precision`, so benchmark variants can pass it to every estimator.
+- `DistinctCountHllRust` and `DistinctCountPolarsApprox` use ATOL 2 beside the RTOL: register collisions at small d.
+- The §7 claim "within 1% of 50 at p = 14" was wrong: one collision occurs (49.07). Tests use RTOL / ATOL.
