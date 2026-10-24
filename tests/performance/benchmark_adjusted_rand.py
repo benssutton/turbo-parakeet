@@ -1,7 +1,7 @@
 """
 Adjusted Rand Index speed benchmark: AdjustedRandRust vs AdjustedRandSklearn (reference).
 
-Run: /c/Users/Ben/miniconda3/envs/p312/python.exe tests/performance/benchmark_adjusted_rand.py
+Run: python tests/performance/benchmark_adjusted_rand.py
 """
 
 from harness import Dataset, large_dataset, run

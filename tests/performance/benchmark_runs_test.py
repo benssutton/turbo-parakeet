@@ -1,7 +1,7 @@
 """
 Runs-test speed benchmark: RunsTestRust vs RunsTestPolars (reference).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_runs_test.py
+Run: python tests/performance/benchmark_runs_test.py
 
 Shapes: large_dataset (realistic mix); long runs 10M x 4 (REE-friendly, mean run
 1 000, int + string: the kernel hashes once per run, so the per-row scan dominates);

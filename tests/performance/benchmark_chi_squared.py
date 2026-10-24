@@ -1,7 +1,7 @@
 """
 Chi-squared speed benchmark: ChiSquaredRust vs ChiSquaredScipy (reference) vs ChiSquaredPolarsDS.
 
-Run: /c/Users/Ben/miniconda3/envs/p312/python.exe tests/performance/benchmark_chi_squared.py
+Run: python tests/performance/benchmark_chi_squared.py
 """
 
 from harness import Dataset, large_dataset, run

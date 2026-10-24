@@ -40,12 +40,18 @@ open SonarQube issues for turbo-parakeet" or "fix the bugs SonarQube found in
 `services/analytics/src/…`". After Claude changes code, re-run `python scripts/check.py sonar`
 and ask it to re-check.
 
+If the MCP server fails to connect ("Connection closed"): the server is a Docker container that
+needs SonarQube running and `SONARQUBE_TOKEN` in the environment of the process that started
+Claude Code (restart VS Code / the terminal after setting it). The same data is available from
+the web API with the token as a bearer header, e.g. `GET /api/issues/search?componentKeys=turbo-parakeet&resolved=false`;
+`POST /api/issues/do_transition` (`transition=falsepositive` / `accept`) and
+`/api/issues/add_comment` mark findings.
+
 ## What is analysed
 
 - **Python** (`services/analytics/python/turbo_parakeet`, tests) with coverage from `coverage.xml`.
   The reported coverage is Python only.
-- **Rust** (`services/analytics/src`) — this Community Build does analyse Rust (the first
-  analysis counted about 15 000 lines), but it imports no Rust coverage. Clippy
+- **Rust** (`services/analytics/src`) — this Community Build does analyse Rust, but it imports no Rust coverage. Clippy
   (`scripts/check.py lint`) remains the Rust gate; Sonar adds extra rules on top.
 - **Java** (`services/analytics/bindings/java`).
 

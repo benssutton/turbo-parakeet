@@ -6,7 +6,7 @@ generated large dataset; 10M x 4 Int64 columns of 10^3 .. 10^7 distinct values; 
 (Int64 / Float64 / String / Date); 10M x 2 strings. Uniform draws of 10^7 labels over 10^7
 rows see about 63% of them; the reference is exact either way.
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_distinct_count.py
+Run: python tests/performance/benchmark_distinct_count.py
 """
 
 import numpy as np

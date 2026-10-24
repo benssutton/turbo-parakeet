@@ -3,7 +3,7 @@ Pairwise joint entropy benchmark (speed, peak memory, accuracy; harness.py): Pai
 and PairwiseEntropyAmsRust (estimator, also scored against PairwiseEntropyRust) vs
 PairwiseEntropyPolars (reference).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_pairwise_entropy.py
+Run: python tests/performance/benchmark_pairwise_entropy.py
 """
 
 from harness import Dataset, large_dataset, run

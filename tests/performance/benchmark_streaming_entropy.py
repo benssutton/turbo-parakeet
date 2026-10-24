@@ -7,7 +7,7 @@ Per shape and estimator, in a child process (peak memory is per process): one co
 interval, relative error and coverage against the exact entropy (one-shot), add() seconds,
 peak working set above the loaded data.
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_streaming_entropy.py
+Run: python tests/performance/benchmark_streaming_entropy.py
 Results -> tests/performance/results/streaming_entropy.arrow
 """
 

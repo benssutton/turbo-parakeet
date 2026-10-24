@@ -8,7 +8,7 @@ min_bytes_for_wide_part = 0), insert the column as Arrow IPC over HTTP, OPTIMIZE
 (`_plugin.clickhouse_profile`).  Needs the `chbench-ch` container (http://localhost:8123, user
 CLICKHOUSE_USER, password CLICKHOUSE_PASSWORD, database bench).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/spike_clickhouse_delta.py [--rows N]
+Run: python tests/performance/spike_clickhouse_delta.py [--rows N]
 """
 
 from __future__ import annotations

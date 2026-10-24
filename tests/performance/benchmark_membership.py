@@ -1,7 +1,7 @@
 """
 Membership (containment) speed benchmark: BloomRust vs BloomFastbloom vs MembershipExact (reference).
 
-Run: /c/Users/Ben/miniconda3/envs/p312/python.exe tests/performance/benchmark_membership.py
+Run: python tests/performance/benchmark_membership.py
 """
 
 from harness import Dataset, large_dataset, run

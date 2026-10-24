@@ -5,7 +5,7 @@ The objectives these serve (target engines, formats, row order, queries, validat
 
 ToDos are broken into thematic sections in a suggested priority order, but items within each section are in no priority order.  The order in which these are implemented should favour efficiency and code quality.  Item numbers are stable: CLAUDE.md and the specs refer to them.
 
-**Agreed starting order:** 1a–f done, 1g on hold; 5c done; 3 done; next: to be chosen (1.0 skeleton, 4 and 2 done; 6 + 5g done).
+**Agreed starting order:** 1a–f done, 1g on hold; 1.0 skeleton, 2, 3, 4, 5c, 5f, 5g, 6 and 17 done; next: to be chosen.
 
 ---
 The following ToDos 1 to 7 are largely intended as a clean up of existing code and implementation of encoding and skipping index recommendations.

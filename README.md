@@ -12,15 +12,53 @@ C ABI. Technique and architecture details: [CLAUDE.md](CLAUDE.md).
 Use the conda env `p312` (Python 3.12).
 
 1. `pip install -r requirements.txt -r requirements-dev.txt` — pytest, pytest-xdist, black,
-   ruff, maturin and the optional reference libraries (polars-ds, fastbloom-rs, datasketch;
-   their tests are skipped when a library is missing).
-2. Rust: the pinned toolchain (1.96.0 with rustfmt, clippy, llvm-tools) installs itself from
+   ruff, maturin; the accuracy references scipy (chi-squared) and scikit-learn (adjusted Rand),
+   which the tests and benchmarks need; and the optional competing implementations
+   (datasketch, polars-ds, fastbloom-rs) and statsmodels, whose tests are skipped when the
+   library is missing.
+2. Build the extension into the env: `python scripts/check.py build` (`maturin develop
+   --release` in `services/analytics/`; the Python package is an editable install, so Python
+   changes need no rebuild).
+3. Rust: the pinned toolchain (1.96.0 with rustfmt, clippy, llvm-tools) installs itself from
    `rust-toolchain.toml` on first cargo use.
-3. Optional:
+4. Optional:
    - `cargo install cargo-llvm-cov` — the coverage steps.
    - JDK 25 — the Java tests.
    - Docker — local SonarQube, see [sonar/README.md](sonar/README.md).
    - `pre-commit install` — git hooks (commit: rustfmt + black; push: clippy + ruff + Rust tests).
+     The hooks call `python`, so the p312 env must be on `PATH` when you commit or push
+     (activate it, or in Git Bash
+     `export PATH="$HOME/miniconda3/envs/p312:$HOME/miniconda3/envs/p312/Scripts:$PATH"`);
+     otherwise they fail with "Python was not found" and the commit or push is refused.
+
+## Using it
+
+```python
+import polars as pl
+from turbo_parakeet.recommenders import OneShotRecommender
+from turbo_parakeet.techniques.distinct_count import DistinctCountHllRust
+
+frame = pl.read_ipc("data.arrow")
+
+# Recommendations per column: narrowest Arrow / Polars type, IPC compression, ClickHouse type,
+# codec chain and skip index, each with predicted sizes.
+recommendations = OneShotRecommender().add(frame).result()
+
+# Any technique: the same three calls, one flat table of metrics per column / pair / triplet.
+counts = DistinctCountHllRust(precision=14).add({"data": frame}).result()
+```
+
+What is available:
+
+- **Recommenders:** `OneShotRecommender` (one frame) and `StreamingRecommender` (batches over
+  time), with the same output schema; both also have a Java binding.
+- **Techniques** (`turbo_parakeet.techniques.<name>`): per column — `gcd`, `describe`, `top_k`,
+  `distinct_count`, `population_cardinality`, `marginal_entropy`; per column, order-dependent —
+  `runs_test`, `delta`, `minmax_index`, `set_index`; between distinct-value sets — `membership`,
+  `similarity`; between rows of column pairs / triplets — `chi_squared`, `pairwise_entropy`,
+  `threeway_entropy`, `adjusted_rand`. Each has a Rust implementation and an exact reference;
+  details in [CLAUDE.md](CLAUDE.md).
+- **Benchmarks:** [tests/performance/README.md](tests/performance/README.md).
 
 ### Before pushing
 

@@ -1,7 +1,7 @@
 """
 describe speed benchmark: DescribeRust vs DescribeDataFusion vs DescribePolars (reference).
 
-Run: /c/Users/Ben/miniconda3/envs/p312/python.exe tests/performance/benchmark_describe.py
+Run: python tests/performance/benchmark_describe.py
 
 Shapes: large_dataset (realistic mix); narrow 10M x 4 (parallelism inside a
 column — chunked frequency maps and scanners); wide 1M x 100 (parallelism across

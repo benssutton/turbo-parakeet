@@ -3,7 +3,7 @@ Marginal entropy benchmark (speed, peak memory, accuracy; harness.py): MarginalE
 and MarginalEntropyAmsRust (estimator, also scored against MarginalEntropyRust) vs
 MarginalEntropyPolars (reference). The pairwise-entropy shapes.
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_marginal_entropy.py
+Run: python tests/performance/benchmark_marginal_entropy.py
 """
 
 from harness import Dataset, large_dataset, run

@@ -7,7 +7,7 @@ Also, per dataset: one-shot at top_k=0 (the cost of building the top_k maps; the
 frequency-ordered dictionary against pyarrow's first-seen dictionary_encode
 (→ results/recommend_dictionary_order.arrow).
 
-Run: /c/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_recommend.py
+Run: python tests/performance/benchmark_recommend.py
 
 Results → tests/performance/results/recommend.arrow (git-ignored).
 `peak_mb` is the process's peak memory so far (dataset included), where the OS reports it.

@@ -2,7 +2,7 @@
 Top-k benchmark: TopKHeavyKeeperRust and TopKSpaceSavingRust (estimators) vs TopKPolars
 (reference): speed, peak memory and accuracy (harness.py).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_top_k.py [--rows N]
+Run: python tests/performance/benchmark_top_k.py [--rows N]
 
 Shapes: large_dataset (realistic mix); narrow / long (parallelism inside a column:
 SpaceSaving merges 2^20-row chunks, HeavyKeeper cannot); wide (parallelism across columns);

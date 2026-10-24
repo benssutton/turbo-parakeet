@@ -4,7 +4,7 @@ Schnabel estimators, Rust vs the Polars / NumPy reference. Besides speed, the sa
 (8 columns drawn from populations of 10^3 .. 10^6 labels, uniform and Zipf 1.1) score every
 estimate against the known truth (`observed_rel_err`, `chao1_rel_err`, `schnabel_rel_err`, ...).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_population_cardinality.py
+Run: python tests/performance/benchmark_population_cardinality.py
 """
 
 from functools import cache

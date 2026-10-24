@@ -7,7 +7,7 @@ query on both and prints, per operator: works (results identical), DIFFERS (resu
 FAILS (the error). Also reads REE back from an Arrow IPC file. Re-run after a DataFusion upgrade:
 REE is recommended only once MIN / MAX work (the spec's re-evaluation trigger).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/spike_datafusion_ree.py
+Run: python tests/performance/spike_datafusion_ree.py
 """
 
 from __future__ import annotations

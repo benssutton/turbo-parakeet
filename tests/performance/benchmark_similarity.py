@@ -1,7 +1,7 @@
 """
 Set-similarity speed benchmark: MinHashRust vs MinHashDatasketch vs SimilarityExactLRU (reference).
 
-Run: /c/Users/Ben/miniconda3/envs/p312/python.exe tests/performance/benchmark_similarity.py
+Run: python tests/performance/benchmark_similarity.py
 
 The hypothesis here is "probabilistic pruning in Rust beats LRU-cached exact
 checking of every pair"; `agrees` also enforces recall ≥ Similarity.MIN_RECALL.

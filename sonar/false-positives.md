@@ -14,6 +14,9 @@ scipy, datasketch, fastbloom, scikit-learn, DataFusion) are imported lazily on p
 `import turbo_parakeet.techniques.<technique>` does not require every optional library. Sonar's rule only
 sees names bound statically.
 
+`describe` and `chi_squared` were not flagged in the 2026-10-24 analysis, although they use the same
+pattern; their rows are kept so a future flag is recognised.
+
 **Do not:** remove the names from `__all__`, or import the optional modules eagerly.
 
 | File (`services/analytics/python/turbo_parakeet/`) | Names |
@@ -109,13 +112,9 @@ anything else in `AnalyticsException`. A narrower clause does not compile. Marke
 positive*; do not narrow it. (The `RuntimeException`s thrown by the binding were separately
 replaced by `AnalyticsException`.)
 
-## Accepted, deferred (tests frozen) — 14 findings
+## Accepted, deferred (tests frozen) — resolved
 
-Genuine findings in test files that were frozen for the change that introduced this list.
-Marked *Accepted* in Sonar (not false positives); fix when tests may change.
-
-- `python:S5778` (9): building operands / looking up the class outside `pytest.raises` —
-  `tests/test_set_index.py:160,162,305`; `tests/test_minmax_index.py:157,159,164,290`;
-  `tests/test_runs_test.py:155`; `tests/test_top_k.py:180`
-- `python:S9073` (5, minor): split into separate asserts — `tests/test_set_index.py:246`;
-  `tests/test_runs_test.py:201,227`; `tests/test_datagen.py:187,195`
+The 14 test findings once deferred here (`python:S5778` and `python:S9073` in
+`test_set_index.py`, `test_minmax_index.py`, `test_runs_test.py`, `test_top_k.py` and
+`test_datagen.py`) have since been fixed: none came back in the 2026-10-24 analysis after the
+server's database was reset.

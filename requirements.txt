@@ -12,13 +12,14 @@ pyyaml>=6.0  # turbo_parakeet.recommenders.to_chbench (suite files)
 pytest>=9.1.1
 pytest-cov>=7.1
 
-# Baseline implementations
-# (datasketch: turbo_parakeet/techniques/similarity/datasketch.py; polars-ds: turbo_parakeet/techniques/chi_squared/polars_ds.py)
-datasketch>=2.0.0
-polars-ds>=0.13.0
+# Accuracy references — needed: without them the technique has no agreement tests and its
+# benchmark no accuracy figures (the tests are skipped, naming the library)
+scipy>=1.18.1         # ChiSquaredScipy, chi_squared's reference
+scikit-learn>=1.9.1   # AdjustedRandSklearn, adjusted_rand's reference
 
-# Benchmark alternatives — optional; benchmarks degrade gracefully if absent
-scipy>=1.18.1
-fastbloom-rs>=0.5.10
-scikit-learn>=1.9.1
-statsmodels>=0.14  # tests/test_runs_test.py: binary runs-test cross-check (skipped if absent)
+# Competing implementations — optional; their tests are skipped and benchmarks leave them out
+datasketch>=2.0.0     # MinHashDatasketch (similarity)
+polars-ds>=0.13.0     # ChiSquaredPolarsDS (chi_squared)
+fastbloom-rs>=0.5.10  # BloomFastbloom (membership)
+statsmodels>=0.14     # tests/test_runs_test.py: binary runs-test cross-check
+# (datafusion, above, is also DescribeDataFusion and tests/performance/spike_datafusion_ree.py)

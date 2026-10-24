@@ -1,7 +1,7 @@
 """
 MinMax skip-index speed benchmark: MinMaxIndexRust vs MinMaxIndexPolars (reference).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_minmax_index.py
+Run: python tests/performance/benchmark_minmax_index.py
 
 Default window (8 192 rows). Shapes: large_dataset (realistic mix); clustered 10M x 4
 (runs of ~1 000 rows, cardinality 1 000, int + string: index-friendly); random 10M x 4

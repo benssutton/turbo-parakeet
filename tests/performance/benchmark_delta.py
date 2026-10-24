@@ -1,7 +1,7 @@
 """
 Delta speed benchmark: DeltaRust vs DeltaPolars (Python-int reference).
 
-Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_delta.py
+Run: python tests/performance/benchmark_delta.py
 
 Shapes: large_dataset (realistic mix); timestamps 1M x 4 (regular step + jitter, ms);
 wide 20K x 100 (random walks of varying step size). The reference works in Python ints,
