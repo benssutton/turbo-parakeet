@@ -157,7 +157,8 @@ def test_reference_is_exact_and_hll_reports_its_error():
     s = pl.Series("x", list(range(10_000)))
     exact = run(DistinctCountPolars, {"t": s.to_frame()}).row(0, named=True)
     assert exact["n_distinct"] == exact["low"] == exact["high"] == 10_000
-    assert exact["std_error"] == 0.0 and exact["sketch_bytes"] is None
+    assert exact["std_error"] == 0.0
+    assert exact["sketch_bytes"] is None
     hll = run(DistinctCountHllRust, {"t": s.to_frame()}, precision=10).row(
         0, named=True
     )
@@ -175,4 +176,5 @@ def test_polars_approx_accepts_and_ignores_precision():
     a = run(DistinctCountPolarsApprox, {"t": s}).row(0, named=True)
     b = run(DistinctCountPolarsApprox, {"t": s}, precision=10).row(0, named=True)
     assert a["n_distinct"] == b["n_distinct"]
-    assert a["std_error"] is None and a["low"] is None
+    assert a["std_error"] is None
+    assert a["low"] is None

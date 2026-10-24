@@ -149,7 +149,8 @@ def test_truth_for_no_computed_column_returns_only_the_defaults():
     out = PopulationCardinalityPolars().accuracy(
         frames, result, result, truth={("t", "absent"): 10}
     )
-    assert "observed_rel_err" not in out and "schnabel_coverage" not in out
+    assert "observed_rel_err" not in out
+    assert "schnabel_coverage" not in out
     assert "max_rel_err" in out
 
 

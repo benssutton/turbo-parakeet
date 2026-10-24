@@ -175,7 +175,8 @@ def test_int64_extremes_do_not_wrap(impl):
     assert r["delta_min"] == r["delta_max"] == Decimal(2**64 - 1)
     assert r["delta_bytes_mean"] == 9.0
     assert r["value_bytes_mean"] == 8.0
-    assert r["n_deltas"] == 1 and r["double_delta_min"] is None
+    assert r["n_deltas"] == 1
+    assert r["double_delta_min"] is None
 
 
 @pytest.mark.parametrize("impl", ALL)

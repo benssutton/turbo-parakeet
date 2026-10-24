@@ -119,7 +119,8 @@ def test_no_python_file_uses_parquet():
         check=True,
     ).stdout.split()
     paths = [ROOT / t for t in tracked if ROOT / t != Path(__file__).resolve()]
-    assert paths and parquet_uses(paths) == []
+    assert paths
+    assert parquet_uses(paths) == []
 
 
 def test_polars_crate_builds_without_parquet():

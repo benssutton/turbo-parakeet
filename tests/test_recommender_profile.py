@@ -243,25 +243,29 @@ def test_streaming_absent_column_null_exemplar_takes_the_batch_start_ids():
 
 @pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
 def test_id_column_errors(cls):
+    rec = cls(id_columns=["missing"])
+    frame = pl.DataFrame({"a": [1]})
     with pytest.raises(ValueError, match="not in the input"):
-        cls(id_columns=["missing"]).add(pl.DataFrame({"a": [1]}))
+        rec.add(frame)
     with pytest.raises(ValueError, match="duplicate id column"):
-        cls(id_columns=["a", "a"]).add(pl.DataFrame({"a": [1]}))
+        cls(id_columns=["a", "a"])
 
 
 def test_streaming_id_column_missing_from_a_later_batch():
     rec = StreamingRecommender(id_columns=["k"])
     rec.add(pl.DataFrame({"k": [1], "a": [2]}))
+    later = pl.DataFrame({"a": [3]})
     with pytest.raises(ValueError, match="not in the input"):
-        rec.add(pl.DataFrame({"a": [3]}))
+        rec.add(later)
 
 
 def test_streaming_failed_add_leaves_the_result_unchanged():
     rec = StreamingRecommender(id_columns=["k"])
     rec.add(pl.DataFrame({"k": [1, 2], "a": [None, 2]}))
     before = rec.result()
+    bad = pl.DataFrame({"a": [3, None]})
     with pytest.raises(ValueError):
-        rec.add(pl.DataFrame({"a": [3, None]}))
+        rec.add(bad)
     assert rec.result().equals(before)
     rec.add(pl.DataFrame({"k": [3], "a": [4]}))
     assert rec.result().row(0, named=True)["n_rows"] == 3
@@ -270,12 +274,14 @@ def test_streaming_failed_add_leaves_the_result_unchanged():
 def test_streaming_id_column_type_change_is_rejected():
     rec = StreamingRecommender(id_columns=["k"])
     rec.add(pl.DataFrame({"k": [1], "a": [2]}))
+    changed = pl.DataFrame({"k": ["x"], "a": [3]})
     with pytest.raises(ValueError, match="type changed"):
-        rec.add(pl.DataFrame({"k": ["x"], "a": [3]}))
+        rec.add(changed)
 
 
 @pytest.mark.parametrize("cls", [OneShotRecommender, StreamingRecommender])
 def test_ineligible_id_column_is_rejected(cls):
     frame = pl.DataFrame({"k": pl.Series([1, 2], dtype=pl.Int128), "a": [1, 2]})
+    rec = cls(id_columns=["k"])
     with pytest.raises(ValueError, match="ineligible"):
-        cls(id_columns=["k"]).add(frame)
+        rec.add(frame)

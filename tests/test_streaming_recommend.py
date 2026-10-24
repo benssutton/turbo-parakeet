@@ -271,7 +271,13 @@ def assert_compression_parity(name: str, r: dict, o: dict):
             if c["predicted_bytes"] is not None
         )
         if r["clickhouse_codecs"] != o["clickhouse_codecs"]:
-            assert len(best) > 1 and best[1] <= best[0] * 1.02, (
+            assert len(best) > 1, (
+                name,
+                r["clickhouse_codecs"],
+                o["clickhouse_codecs"],
+                r["clickhouse_candidates"],
+            )
+            assert best[1] <= best[0] * 1.02, (
                 name,
                 r["clickhouse_codecs"],
                 o["clickhouse_codecs"],
@@ -288,7 +294,8 @@ def assert_skip_index_parity(name: str, r: dict, o: dict):
     index and every candidate row equal one-shot's; else the index is equal unless
     one-shot's two best measured candidates are within 0.05 skip_rows."""
     if r["n_sampled_rows"] == 0:
-        assert r["clickhouse_skip_index"] is None and not r["clickhouse_skip_indexes"]
+        assert r["clickhouse_skip_index"] is None
+        assert not r["clickhouse_skip_indexes"]
         return
     if wide_temporal(r, o):
         return
@@ -297,7 +304,12 @@ def assert_skip_index_parity(name: str, r: dict, o: dict):
         got, want = r["clickhouse_skip_indexes"], o["clickhouse_skip_indexes"]
         assert len(got) == len(want), name
         for g, w in zip(got, want):
-            assert skip_key(g) == skip_key(w) and g["outcome"] == w["outcome"], (
+            assert skip_key(g) == skip_key(w), (
+                name,
+                g,
+                w,
+            )
+            assert g["outcome"] == w["outcome"], (
                 name,
                 g,
                 w,
@@ -315,7 +327,13 @@ def assert_skip_index_parity(name: str, r: dict, o: dict):
             ),
             reverse=True,
         )
-        assert len(best) > 1 and best[0] - best[1] <= 0.05, (
+        assert len(best) > 1, (
+            name,
+            r["clickhouse_skip_index"],
+            o["clickhouse_skip_index"],
+            o["clickhouse_skip_indexes"],
+        )
+        assert best[0] - best[1] <= 0.05, (
             name,
             r["clickhouse_skip_index"],
             o["clickhouse_skip_index"],

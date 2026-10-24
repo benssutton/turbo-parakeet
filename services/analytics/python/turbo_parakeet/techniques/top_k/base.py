@@ -244,11 +244,11 @@ class TopK(Technique):
             problems.append(f"mean relative count error {are:.4f} > {self.MAX_ARE}")
         return problems
 
-    def accuracy(self, frames, result, reference):
+    def accuracy(self, frames, result, reference, truth=None):
         """Scores against exact counts rebuilt from `frames` (the reference's list holds only
         k values, so it cannot score counts outside it): `score_top_k` per computed column,
         then the worst — min precision, max are / aae / max_bound_violation — and the max
-        sketch_bytes. `reference` is not used."""
+        sketch_bytes. `reference` and `truth` are not used."""
         scores, sizes = [], []
         rows = zip(
             result.select(self.key_columns()).rows(),
@@ -259,9 +259,9 @@ class TopK(Technique):
         for (df, col), status, top, size in rows:
             if status != "computed":
                 continue
-            truth = true_counts(frames[df][col])
-            if truth.height:
-                scores.append(score_top_k(top, truth, self.k))
+            exact = true_counts(frames[df][col])
+            if exact.height:
+                scores.append(score_top_k(top, exact, self.k))
                 sizes.append(size)
 
         def worst(key, pick):

@@ -216,7 +216,8 @@ def test_memory_and_speedups(bench):
     exact = _one(bench, "FakeSumRust", "lo", "N")
     assert exact["peak_mb"] >= 50  # the 64 MiB ballast
     assert exact["load_mb"] > 0
-    assert exact["algorithmic"] is not None and exact["parallel"] is not None
+    assert exact["algorithmic"] is not None
+    assert exact["parallel"] is not None
     assert _one(bench, "FakeSumRust", "lo", "1")["algorithmic"] is None
     assert bench["technique"].unique().to_list() == ["fake_technique"]
 
@@ -262,7 +263,8 @@ def test_report_third_table_shows_truth_figures_of_exact_rows(
     harness._report("x", "pkg.x", rows)
     third = capsys.readouterr().out.split("zz_truth_rel_err")
     assert len(third) == 2  # the column appears in the third table only
-    assert "XTruthRust" in third[1] and "XPlainRust" not in third[1]
+    assert "XTruthRust" in third[1]
+    assert "XPlainRust" not in third[1]
 
 
 def test_duplicate_dataset_names_are_rejected():

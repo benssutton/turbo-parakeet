@@ -81,7 +81,8 @@ def test_clickhouse_types_and_codecs():
     gcd_rows = [
         c for c in rows["threes"]["clickhouse_candidates"] if c["codecs"] == "GCD"
     ]
-    assert gcd_rows and gcd_rows[0]["outcome"] == "pruned"
+    assert gcd_rows
+    assert gcd_rows[0]["outcome"] == "pruned"
     assert rows["noise"]["clickhouse_codecs"] == "LZ4"
     assert any(
         c["outcome"] == "pruned" and c["codecs"].startswith("ZSTD")
@@ -146,7 +147,8 @@ def check_delta_choices(rows):
     assert any(c["codecs"].startswith("Delta") for c in _delta_rows(rows, "regular"))
     assert rows["walk"]["clickhouse_codecs"].startswith("Delta")
     ri = _delta_rows(rows, "random_int")
-    assert ri and all(c["outcome"] == "pruned" for c in ri)
+    assert ri
+    assert all(c["outcome"] == "pruned" for c in ri)
     assert all("delta" in c["evidence"] for c in ri)
     for col in ("float", "text", "dec"):
         assert not _delta_rows(rows, col), col
@@ -181,7 +183,8 @@ def test_unmappable_type_has_a_reason():
 
     frame = pl.DataFrame({"d": [timedelta(seconds=1), timedelta(seconds=2)]})
     r = one_shot(frame)["d"]
-    assert r["clickhouse_type"] is None and r["clickhouse_codecs"] is None
+    assert r["clickhouse_type"] is None
+    assert r["clickhouse_codecs"] is None
     assert r["clickhouse_candidates"][0]["outcome"] == "pruned"
 
 
@@ -207,7 +210,8 @@ def test_streaming_matches_one_shot_on_ch_frame():
     gcd_rows = [
         c for c in got["threes"]["clickhouse_candidates"] if c["codecs"] == "GCD"
     ]
-    assert gcd_rows and gcd_rows[0]["outcome"] == "pruned"
+    assert gcd_rows
+    assert gcd_rows[0]["outcome"] == "pruned"
     assert got["thousands"]["clickhouse_codecs"].startswith("GCD")
     assert got["noise"]["clickhouse_codecs"] == "LZ4"
 
@@ -393,9 +397,8 @@ def test_to_chbench_normalises_categorical_and_columns(tmp_path):
         assert f.get_batch(0).schema.field("c").type == pa.string()
 
 
-def test_to_chbench_suites_parse_in_chbench(chbench_out):
+def test_to_chbench_suites_parse_in_chbench(chbench_out, monkeypatch):
     import os
-    import sys
     from pathlib import Path
 
     root = Path(
@@ -404,7 +407,7 @@ def test_to_chbench_suites_parse_in_chbench(chbench_out):
     )
     if not root.exists():
         pytest.skip("clickhouse_benchmark not found")
-    sys.path.insert(0, str(root))
+    monkeypatch.syspath_prepend(str(root))
     pytest.importorskip("chbench")
     from chbench.harness.suite import load_suite
 
@@ -416,9 +419,11 @@ def test_to_chbench_suites_parse_in_chbench(chbench_out):
 def test_clickhouse_profile_binding():
     t = pa.table({"a": pa.array([3, 6, 9, None] * 100, pa.int64()), "f": [0.5] * 400})
     p = _plugin.clickhouse_profile(t, "a", "GCD, LZ4")
-    assert p["clickhouse_type"] == "Nullable(Int64)" and p["bytes"] > 0
+    assert p["clickhouse_type"] == "Nullable(Int64)"
+    assert p["bytes"] > 0
     f = _plugin.clickhouse_profile(t, "f", "GCD, LZ4")
-    assert f["clickhouse_type"] == "Float64" and f["bytes"] is None
+    assert f["clickhouse_type"] == "Float64"
+    assert f["bytes"] is None
     assert _plugin.clickhouse_profile(t, "f", "ZSTD(3)")["bytes"] > 0
     with pytest.raises(ValueError):
         _plugin.clickhouse_profile(t, "nope", "LZ4")
@@ -514,7 +519,8 @@ def test_to_chbench_skips_unreproducible_recommended_type(tmp_path, monkeypatch)
     result = OneShotRecommender().add(frame).result()
     monkeypatch.setattr(chbench, "_arrow_type", lambda name: pa.date32())
     skipped = to_chbench(result, frame, tmp_path)
-    assert len(skipped) == 1 and skipped[0][1].startswith(
+    assert len(skipped) == 1
+    assert skipped[0][1].startswith(
         "recommended type not reproducible by a lossless pyarrow cast: "
     )
     assert not (tmp_path / "small.yaml").exists()

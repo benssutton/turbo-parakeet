@@ -49,11 +49,11 @@ class PairwiseEntropy(Technique):
         self.nmi_threshold = nmi_threshold
         self.near_unique_margin = near_unique_margin
 
-    def accuracy(self, frames, result, reference):
+    def accuracy(self, frames, result, reference, truth=None):
         """The default figures over the entropies, plus `max_abs_mi_err` (bits; NaN kept,
         None when nothing is comparable); `n_missing` also counts a null `mi` where the
         reference has a value."""
-        out = super().accuracy(frames, result, reference)
+        out = super().accuracy(frames, result, reference, truth)
         computed = reference["status"] == "computed"
         got = result.filter(computed)["mi"]
         want = reference.filter(computed)["mi"]

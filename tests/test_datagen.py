@@ -207,7 +207,8 @@ LARGE_DTYPES = (pl.Int32, pl.Float64, pl.String, pl.Date)
 
 def test_large_dataset_has_the_former_files_schema():
     df = large_dataset()
-    assert df.shape == (50_000, 101) and df.n_chunks() == 1
+    assert df.shape == (50_000, 101)
+    assert df.n_chunks() == 1
     assert df.columns == ["identity"] + [f"col_{j}" for j in range(100)]
     assert df.schema["identity"] == pl.Int64
     assert df["identity"].to_numpy().tolist() == list(range(50_000))
@@ -219,7 +220,8 @@ def test_large_dataset_defaults():
     df = large_dataset()
     assert sum(df.null_count().row(0)) == 0
     counts = [df[f"col_{4 * g}"].n_unique() for g in range(25)]
-    assert counts[:9] == [100, 20, 10, 7, 5, 4, 3, 3, 2] and counts[-1] == 1
+    assert counts[:9] == [100, 20, 10, 7, 5, 4, 3, 3, 2]
+    assert counts[-1] == 1
     for g in range(25):
         assert df[f"col_{4 * g + 3}"].n_unique() == counts[g]
         assert df[f"col_{4 * g + 1}"].n_unique() == 50_000
@@ -282,14 +284,16 @@ def test_large_dataset_mixed_cycles_the_regimes():
         regime = LARGE_DATASET_REGIMES[g % 5]
         cols = [f"col_{4 * g + k}" for k in range(4)]
         assert mixed.select(cols).equals(large_dataset(**regime).select(cols)), g
-    assert mixed["col_5"].null_count() > 0 and mixed["col_1"].null_count() == 0
+    assert mixed["col_5"].null_count() > 0
+    assert mixed["col_1"].null_count() == 0
 
 
 def test_population_samples():
     frame, truth = population_samples(
         200_000, [(1_000, "uniform"), (50_000, ("zipf", 1.1))], seed=3
     )
-    assert frame.columns == ["p0", "p1"] and frame.height == 200_000
+    assert frame.columns == ["p0", "p1"]
+    assert frame.height == 200_000
     assert truth == {"p0": 1_000, "p1": 50_000}
     assert frame["p0"].n_unique() == 1_000  # uniform, 200 draws per label: all seen
     assert frame["p1"].n_unique() < 50_000  # Zipf: rare labels unseen

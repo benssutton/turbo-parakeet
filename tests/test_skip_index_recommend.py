@@ -61,25 +61,27 @@ def grouped_hashes(bits=62):
 
 def test_sorted_unique_column_gets_minmax():
     index, rows = recommend(sorted_ids())
-    assert index is not None and index.startswith("minmax"), show(rows)
+    assert index is not None, show(rows)
+    assert index.startswith("minmax"), show(rows)
 
 
 def test_clustered_high_cardinality_gets_set():
     index, rows = recommend(clustered())
-    assert index is not None and index.startswith("set(125)"), show(rows)
+    assert index is not None, show(rows)
+    assert index.startswith("set(125)"), show(rows)
 
 
 def test_random_order_gets_no_index():
     index, rows = recommend(random_50())
     assert index is None, show(rows)
-    assert rows and all(r["outcome"] in ("rejected", "pruned") for r in rows), show(
-        rows
-    )
+    assert rows, show(rows)
+    assert all(r["outcome"] in ("rejected", "pruned") for r in rows), show(rows)
 
 
 def test_grouped_random_hashes_get_bloom():
     index, rows = recommend(grouped_hashes())
-    assert index is not None and index.startswith("bloom_filter(0.025)"), show(rows)
+    assert index is not None, show(rows)
+    assert index.startswith("bloom_filter(0.025)"), show(rows)
 
 
 def test_decimal_column_has_no_bloom_candidate():
@@ -90,7 +92,8 @@ def test_decimal_column_has_no_bloom_candidate():
     index, rows = recommend(values)
     bloom = [r for r in rows if r["kind"] == "bloom_filter"]
     assert all(r["outcome"] == "pruned" for r in bloom), show(rows)
-    assert bloom and all("R36" in r["evidence"] for r in bloom), show(rows)
+    assert bloom, show(rows)
+    assert all("R36" in r["evidence"] for r in bloom), show(rows)
     assert index is None or not index.startswith("bloom_filter")
 
 
@@ -102,7 +105,8 @@ def test_min_skip_moves_the_boundary():
 def test_skip_granularities_limit_the_rows():
     _, rows = recommend(sorted_ids(), skip_granularities=(1,))
     measured = [r for r in rows if r["skip_rows"] is not None]
-    assert measured and all(r["granularity"] == 1 for r in measured), show(rows)
+    assert measured, show(rows)
+    assert all(r["granularity"] == 1 for r in measured), show(rows)
 
 
 def test_set_max_sizes_above_the_window_distinct_leave_the_gate():
@@ -111,7 +115,8 @@ def test_set_max_sizes_above_the_window_distinct_leave_the_gate():
         grouped_hashes(), skip_granularities=(1,), set_max_sizes=(1000,)
     )
     sets = [r for r in rows if r["kind"] == "set"]
-    assert sets and any(r["outcome"] != "pruned" for r in sets), show(rows)
+    assert sets, show(rows)
+    assert any(r["outcome"] != "pruned" for r in sets), show(rows)
 
 
 FRAMES = {
@@ -162,7 +167,8 @@ def test_streaming_granularity_capped_by_block_rows():
     rows = row["clickhouse_skip_indexes"]
     for r in rows:
         if r["granularity"] >= 4:
-            assert r["outcome"] == "pruned" and "exceeds block_rows" in r["evidence"]
+            assert r["outcome"] == "pruned"
+            assert "exceeds block_rows" in r["evidence"]
     assert {r["granularity"] for r in rows if r["skip_rows"] is not None} <= {1, 2}
     assert any(r["skip_rows"] is not None for r in rows), show(rows)
     assert {4, 8} <= {r["granularity"] for r in rows if r["outcome"] == "pruned"}
@@ -252,9 +258,8 @@ def test_to_chbench_granularity_suffix(tmp_path):
     assert any(k.endswith("|minmax:4") for k in predicted["sorted"])
 
 
-def test_to_chbench_skip_suites_load_in_chbench(tmp_path):
+def test_to_chbench_skip_suites_load_in_chbench(tmp_path, monkeypatch):
     import os
-    import sys
     from pathlib import Path
 
     root = Path(
@@ -263,7 +268,7 @@ def test_to_chbench_skip_suites_load_in_chbench(tmp_path):
     )
     if not root.exists():
         pytest.skip("clickhouse_benchmark not found")
-    sys.path.insert(0, str(root))
+    monkeypatch.syspath_prepend(str(root))
     pytest.importorskip("chbench")
     from chbench.harness.suite import load_suite
 
@@ -320,7 +325,8 @@ def test_set_max_sizes_above_uint32_is_refused():
 def test_unmeasured_bloom_fpr_is_pruned_with_the_rule():
     _, rows = recommend(grouped_hashes(), bloom_fprs=(0.1,), skip_granularities=(1,))
     bloom = [r for r in rows if r["kind"] == "bloom_filter"]
-    assert bloom and all(r["outcome"] == "pruned" for r in bloom), show(rows)
+    assert bloom, show(rows)
+    assert all(r["outcome"] == "pruned" for r in bloom), show(rows)
     assert all(
         r["evidence"]
         == "bloom_filter fpr 0.1 not measured (chbench R37: 0.001, 0.01, 0.025, 0.05)"
