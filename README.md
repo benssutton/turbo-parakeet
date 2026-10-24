@@ -109,7 +109,8 @@ weekly on Mondays, and on manual dispatch. A newer push cancels a superseded run
 extension, then the llvm-cov report.
 
 Versions are pinned (`requirements-dev.txt`, `rust-toolchain.toml`, committed `Cargo.lock`,
-actions pinned by SHA). Dependabot: Rust and Python weekly, Java and Actions monthly, grouped,
+actions pinned by SHA); `requirements.txt` caps each library below its next major version, so a
+new major arrives through a Dependabot PR. Dependabot: Rust and Python weekly, Java and Actions monthly, grouped,
 with a 7-day cooldown. A cold Rust cache (any `Cargo.lock` change) makes a run about three
 times slower.
 
@@ -122,3 +123,7 @@ times slower.
 | Coverage, CodeQL, Semgrep | not part of `ci` (coverage on demand) | run in CI |
 | Java on pull requests | always | skipped |
 | Operating system | yours (Windows) | Linux every run; Windows weekly |
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).

@@ -1,25 +1,28 @@
+# Each library is capped below its next major version: a new major arrives through a reviewed
+# Dependabot PR, not silently in CI (Polars 2 did, 2026-10-24).
+
 # Build — Rust extension via pyo3/maturin
-maturin>=1.15.0
+maturin>=1.15.0,<2
 
 # Data / columnar format
-polars>=1.44.2
-pyarrow>=14.0
-numpy>=2.5.3
-datafusion>=54.0.0
-pyyaml>=6.0  # turbo_parakeet.recommenders.to_chbench (suite files)
+polars>=1.44.2,<2
+pyarrow>=14.0,<26
+numpy>=2.5.3,<3
+datafusion>=54.0.0,<55
+pyyaml>=6.0,<7  # turbo_parakeet.recommenders.to_chbench (suite files)
 
 # Testing
-pytest>=9.1.1
-pytest-cov>=7.1
+pytest>=9.1.1,<10
+pytest-cov>=7.1,<8
 
 # Accuracy references — needed: without them the technique has no agreement tests and its
 # benchmark no accuracy figures (the tests are skipped, naming the library)
-scipy>=1.18.1         # ChiSquaredScipy, chi_squared's reference
-scikit-learn>=1.9.1   # AdjustedRandSklearn, adjusted_rand's reference
+scipy>=1.18.1,<2         # ChiSquaredScipy, chi_squared's reference
+scikit-learn>=1.9.1,<2   # AdjustedRandSklearn, adjusted_rand's reference
 
 # Competing implementations — optional; their tests are skipped and benchmarks leave them out
-datasketch>=2.0.0     # MinHashDatasketch (similarity)
-polars-ds>=0.13.0     # ChiSquaredPolarsDS (chi_squared)
-fastbloom-rs>=0.5.10  # BloomFastbloom (membership)
-statsmodels>=0.14     # tests/test_runs_test.py: binary runs-test cross-check
+datasketch>=2.0.0,<3     # MinHashDatasketch (similarity)
+polars-ds>=0.13.0,<1     # ChiSquaredPolarsDS (chi_squared)
+fastbloom-rs>=0.5.10,<1  # BloomFastbloom (membership)
+statsmodels>=0.14,<1     # tests/test_runs_test.py: binary runs-test cross-check
 # (datafusion, above, is also DescribeDataFusion and tests/performance/spike_datafusion_ree.py)

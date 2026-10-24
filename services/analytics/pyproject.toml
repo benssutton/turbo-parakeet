@@ -7,9 +7,10 @@ name = "turbo-parakeet"
 version = "0.1"
 description = "Column-relationship analytics over Arrow data, with a Rust core"
 requires-python = ">=3.10"
+license = "MIT"
 dependencies = [
-    "polars>=1.41",
-    "pyyaml",
+    "polars>=1.41,<2",
+    "pyyaml>=6,<7",
 ]
 classifiers = [
   "Programming Language :: Rust",
