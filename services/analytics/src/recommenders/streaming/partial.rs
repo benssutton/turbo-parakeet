@@ -21,7 +21,7 @@ use crate::recommenders::streaming::distinct_sample::{sample_size, DistinctSampl
 use crate::techniques::ams_entropy::AmsEntropy;
 use crate::techniques::describe::{
     arg_extremes, byte_lengths, float_stats, frequency_map, frequency_map_below, lengths,
-    n_midnight, strings, FloatStats, Frequencies, Profile, Range, StringStats,
+    n_midnight, strings, FloatStats, Frequencies, Map, Profile, Range, StringStats,
 };
 use crate::techniques::hll::{hash_key, Hll};
 
@@ -379,20 +379,7 @@ impl BatchStats {
         let classic = export_series(&s.slice(0, 0), CompatLevel::oldest())?
             .data_type()
             .clone();
-        let (size_bytes, rebuilt_polars_bytes) = if body_size(&classic, &Shape::default()).is_ok() {
-            (0, 0)
-        } else {
-            let c = classic_layout(s)?;
-            let rebuilt = match classic {
-                AT::Struct(_) | AT::List(_) | AT::LargeList(_) | AT::FixedSizeList(..) => {
-                    let p = to_polars_layout(&c, &AT::UInt32)
-                        .map_err(|e| polars_err!(ComputeError: "{e}"))?;
-                    ipc_body_bytes(p.as_ref(), None)?
-                }
-                _ => 0,
-            };
-            (ipc_body_bytes(c.as_ref(), None)?, rebuilt)
-        };
+        let (size_bytes, rebuilt_polars_bytes) = measured_sizes(s, &classic)?;
         let (lo, hi) = if has_extremes(s.dtype()) {
             let (a, b) = arg_extremes(s)?;
             (ext_at(s, a)?, ext_at(s, b)?)
@@ -406,37 +393,14 @@ impl BatchStats {
             Some(t) => frequency_map_below(&enc, seed, offset, t, HLL_P),
             None => (frequency_map(&enc, seed, offset), Hll::new(HLL_P)),
         };
-        // The values themselves only for text in the exact phase (`few`).
-        let text = if top.is_none() && map.len() <= 5 && is_text(s.dtype()) {
-            Some(s.cast(&DataType::String)?)
-        } else {
-            None
-        };
-        let mut keys: Vec<KeyStat> = Vec::with_capacity(map.len());
-        for (key, e) in map {
-            let hash = hash_key(key);
-            if top.is_none() {
-                sketch.insert(hash);
-            }
-            let row = (e.first - offset) as usize;
-            keys.push(KeyStat {
-                key,
-                hash,
-                first: e.first,
-                count: e.count,
-                mask: e.mask,
-                len: lens.as_ref().map_or(0, |l| l[row]),
-                text: text
-                    .as_ref()
-                    .and_then(|t| t.str().ok()?.get(row).map(str::to_owned)),
-            });
-        }
-        // First-occurrence order feeds the exact phase's `few` and view blocks (text /
-        // binary levels); the sample itself keeps the k smallest hashes in any order.
-        if top.is_none() && lens.is_some() {
-            keys.sort_unstable_by_key(|k| k.first);
-        }
-        let keys = Some(keys);
+        let keys = Some(key_stats(
+            s,
+            map,
+            &mut sketch,
+            lens.as_deref(),
+            offset,
+            top.is_none(),
+        )?);
         let (min_len, max_len) = lengths(s, lens.as_deref())?;
         let row_keys = ams_seed.map(|seed| {
             let keys = enc
@@ -472,6 +436,67 @@ impl BatchStats {
             is_f32: s.dtype() == &DataType::Float32,
         })
     }
+}
+
+/// (measured classic size, rebuilt Polars-layout size) of a level whose classic type has no
+/// analytic size; (0, 0) when it has one.
+fn measured_sizes(s: &Series, classic: &AT) -> PolarsResult<(u64, u64)> {
+    if body_size(classic, &Shape::default()).is_ok() {
+        return Ok((0, 0));
+    }
+    let c = classic_layout(s)?;
+    let rebuilt = match classic {
+        AT::Struct(_) | AT::List(_) | AT::LargeList(_) | AT::FixedSizeList(..) => {
+            let p =
+                to_polars_layout(&c, &AT::UInt32).map_err(|e| polars_err!(ComputeError: "{e}"))?;
+            ipc_body_bytes(p.as_ref(), None)?
+        }
+        _ => 0,
+    };
+    Ok((ipc_body_bytes(c.as_ref(), None)?, rebuilt))
+}
+
+/// A batch's distinct values as `KeyStat`s. `exact`: the level is in the exact phase, so the
+/// sketch takes each value's hash here, text levels keep their (at most five) values, and
+/// text / binary keys are put in first-occurrence order (feeding `few` and the view blocks;
+/// the sample itself keeps the k smallest hashes in any order).
+fn key_stats(
+    s: &Series,
+    map: Map,
+    sketch: &mut Hll,
+    lens: Option<&[u64]>,
+    offset: u64,
+    exact: bool,
+) -> PolarsResult<Vec<KeyStat>> {
+    // The values themselves only for text in the exact phase (`few`).
+    let text = if exact && map.len() <= 5 && is_text(s.dtype()) {
+        Some(s.cast(&DataType::String)?)
+    } else {
+        None
+    };
+    let mut keys: Vec<KeyStat> = Vec::with_capacity(map.len());
+    for (key, e) in map {
+        let hash = hash_key(key);
+        if exact {
+            sketch.insert(hash);
+        }
+        let row = (e.first - offset) as usize;
+        keys.push(KeyStat {
+            key,
+            hash,
+            first: e.first,
+            count: e.count,
+            mask: e.mask,
+            len: lens.map_or(0, |l| l[row]),
+            text: text
+                .as_ref()
+                .and_then(|t| t.str().ok()?.get(row).map(str::to_owned)),
+        });
+    }
+    if exact && lens.is_some() {
+        keys.sort_unstable_by_key(|k| k.first);
+    }
+    Ok(keys)
 }
 
 /// A level's statistics over the stream so far.

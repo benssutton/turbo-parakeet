@@ -25,20 +25,21 @@ use polars::prelude::{AnyValue, CompatLevel, DataType as PT, PolarsResult, Serie
 use rayon::prelude::*;
 
 use crate::common::arrow_io::{export_series, export_struct, import_batch};
+use crate::common::clickhouse_sizes::ChLayout;
 use crate::common::error::{Error, Result};
 use crate::common::ipc_sizes::{classic_layout, layout_sizes, sizes_of};
 use crate::recommenders::engine::{
     clickhouse_choice_over, entropy_cells, enum_categories, exemplar_cells, exemplar_value,
     ipc_choice, pa_name, pick_by_stats, pick_list_by_stats, pl_name, rec_row, rescale, skip_choice,
-    to_polars_layout, top_k_cell, Entropy, EntropyEstimator, Exemplars, Kind, Params, Rec,
-    RunningStats, SkipCandidate, Target,
+    to_polars_layout, top_k_cell, Entropy, EntropyEstimator, Exemplars, Kind, Level, Params, Pick,
+    Rec, RunningStats, SkipCandidate, Target,
 };
 use crate::recommenders::schema::{id_schema, recommender_fields, with_ids, with_maps, IdCell};
 use crate::recommenders::streaming::partial::{BatchStats, LevelStats};
 use crate::recommenders::streaming::reservoir::{Block, Reservoir};
 use crate::techniques::ams_entropy::{name_key, sketch_seed, MARGINAL};
-use crate::techniques::describe::conclusions::conclude;
-use crate::techniques::describe::{assemble, flatten, value_fields, Row};
+use crate::techniques::describe::conclusions::{conclude, Conclusions};
+use crate::techniques::describe::{assemble, flatten, value_fields, Profile, Row};
 
 /// One column's state.
 pub(crate) struct Column {
@@ -510,31 +511,14 @@ impl Streaming {
     }
 
     fn row(&self, c: &Column, blocks: &[&Block], sampled: u64) -> std::result::Result<Row, String> {
-        let text = |s: &str| AnyValue::StringOwned(s.into());
         let u = |v: Option<u64>| v.map_or(AnyValue::Null, AnyValue::UInt64);
         let dtype = c.dtype.as_ref().filter(|_| !c.ineligible);
-        let mut row: Row = vec![
-            text(&c.name),
-            text(if dtype.is_some() {
-                "computed"
-            } else {
-                "ineligible"
-            }),
-            text(&c.input_type),
-            AnyValue::UInt64(c.first_row),
-            AnyValue::UInt64(self.n_rows),
-            if c.ineligible {
-                AnyValue::Null
-            } else {
-                AnyValue::UInt64(c.outer.n_null)
-            },
-        ];
+        let mut row = self.row_head(c, dtype.is_some());
         let Some(dtype) = dtype else {
             row.resize(recommender_fields(true).len(), AnyValue::Null);
             return Ok(row);
         };
         let t = self.params.categorical_threshold;
-        let err = |e: polars::prelude::PolarsError| e.to_string();
 
         // Levels from statistics.
         let o = &c.outer;
@@ -555,14 +539,7 @@ impl Streaming {
             .map(|((i, it), ip)| conclude(it, i.n, i.n_null, ip, t));
         let ilvl = match (inner, &ip, &ic) {
             (Some((i, it)), Some(ip), Some(ic)) => {
-                let iclassic = i
-                    .classic
-                    .clone()
-                    .ok_or("an inner level has absorbed no batch")?;
-                let mut l = level(it, &iclassic, ip, i, ic.est, "inner: ");
-                let iv = view_shape(&l, i, c.views_input.1);
-                (l.size_bytes, l.size_note) = original_size(&iclassic, &iv, None, i);
-                Some((l, iv))
+                Some(inner_level(i, it, ip, ic, c.views_input.1)?)
             }
             _ => None,
         };
@@ -574,16 +551,7 @@ impl Streaming {
             original_polars(&classic, &ov, iv.as_ref()).map_or(o.polars_bytes, |b| b as u64);
 
         // The choice, proven by statistics.
-        let pick = match &ilvl {
-            Some(il) => {
-                let width = match dtype {
-                    PT::Array(_, w) => Some(*w as i32),
-                    _ => None,
-                };
-                pick_list_by_stats(&lvl, il, width, &self.params)?
-            }
-            None => pick_by_stats(&lvl, &self.params)?,
-        };
+        let pick = self.pick_of(dtype, &lvl, ilvl.as_ref())?;
 
         // Uncompressed sizes: analytic (the original's where it has a closed form).
         let key = pick.target.polars_key().unwrap_or(AT::UInt32);
@@ -596,46 +564,19 @@ impl Streaming {
         };
 
         // ZSTD sizes and the cross-check on the sampled blocks.
-        let mut z = [0u64; 4]; // original Arrow, original Polars, recommended Arrow, recommended Polars
-                               // Each block's recommended Arrow array and Polars layout, kept for the compression
-                               // and ClickHouse choices (the sample is bounded by `reservoir_rows`).
-        let mut arrow_blocks: Vec<ArrayRef> = Vec::with_capacity(blocks.len());
-        let mut polars_blocks: Vec<ArrayRef> = Vec::with_capacity(blocks.len());
-        for b in blocks {
-            let s = block_series(b, &c.name, dtype, c.views_input).map_err(err)?;
-            let bc = classic_layout(&s).map_err(err)?;
-            let sz = sizes_of(&s, &bc, self.params.zstd_level).map_err(err)?;
-            z[0] += sz[1];
-            z[1] += sz[3];
-            if original {
-                z[2] += sz[1];
-                z[3] += sz[3];
-                polars_blocks.push(export_series(&s, CompatLevel::newest()).map_err(err)?);
-                arrow_blocks.push(bc);
-                continue;
-            }
-            let a = recast(
-                &pick,
-                dtype,
-                &bc,
-                &p,
-                inner.map(|(_, it)| it).zip(ip.as_ref()),
-            )
-            .map_err(|e| {
-                format!(
-                    "cross-check {:?} → {}: {e}",
-                    c.name,
-                    pa_name(&pick.target.arrow_type())
-                )
-            })?;
-            let polars = to_polars_layout(&a, &key)?;
-            let rz =
-                layout_sizes(a.as_ref(), polars.as_ref(), self.params.zstd_level).map_err(err)?;
-            z[2] += rz[1];
-            z[3] += rz[3];
-            arrow_blocks.push(a);
-            polars_blocks.push(polars);
-        }
+        let Sampled {
+            z,
+            arrow_blocks,
+            polars_blocks,
+        } = self.sampled_blocks(
+            c,
+            dtype,
+            blocks,
+            &pick,
+            &key,
+            &p,
+            inner.map(|(_, it)| it).zip(ip.as_ref()),
+        )?;
         let scale = |x: u64| {
             (sampled > 0).then(|| (x as f64 * self.n_rows as f64 / sampled as f64).round() as u64)
         };
@@ -647,12 +588,7 @@ impl Streaming {
         let nullable = nullable(&pick.target, o, inner.map(|(i, _)| i));
 
         // Arrow IPC compression and the ClickHouse column, from the sampled blocks.
-        let non_null = o.n - o.n_null;
-        let distinct_ratio = if non_null == 0 {
-            1.0
-        } else {
-            p.freq.n_unique as f64 / non_null as f64
-        };
+        let distinct_ratio = distinct_ratio(o, &p);
         let has_sample = sampled > 0 && !arrow_blocks.is_empty();
         let mut whole: Option<ArrayRef> = None;
         let (arrow_lz4, arrow_ipc, polars_lz4, polars_ipc) = if has_sample {
@@ -668,23 +604,7 @@ impl Streaming {
         } else {
             (None, None, None, None)
         };
-        // The recommended values' running statistics: a list recast to scalars reads its
-        // inner level.
-        let (stats_level, src) = match (inner, &rec_t) {
-            (Some((i, it)), t)
-                if !matches!(t, AT::List(_) | AT::LargeList(_) | AT::FixedSizeList(..)) =>
-            {
-                (i, it)
-            }
-            _ => (o, dtype),
-        };
-        let running = rescale(src, &rec_t).map(|f| RunningStats {
-            range: stats_level.int_range().map(|(a, b)| (a / f, b / f)),
-            gcd: stats_level.gcd.map(|g| g.unsigned_abs() / f.unsigned_abs()),
-            max_abs: stats_level.int_range().map_or(0, |(a, b)| {
-                (a / f).unsigned_abs().max((b / f).unsigned_abs())
-            }),
-        });
+        let (running, gcd_note) = running_stats(o, dtype, inner, &rec_t);
         // A LowCardinality dictionary is written once per part: emulate it on the whole sample
         // (one dictionary), not per block, which would count it once per block.
         let low_card = enum_values.is_none()
@@ -698,58 +618,20 @@ impl Streaming {
             nullable,
             enum_values.as_deref(),
             running.as_ref(),
-            &format!("GCD unknown in streaming for values derived from {src}"),
+            &gcd_note,
             has_sample.then_some(a.as_slice()),
             &scale_up,
             distinct_ratio,
             &self.params,
         )?;
-        // Skip indexes: windows are scanned inside each sampled block, so a granularity whose
-        // window exceeds `block_rows` is pruned (one row per granularity, kind MinMax, naming
-        // the reason for every kind). Index sizes scale to the stream like `ch_size`.
-        let (skip_index, skip_candidates) = match (&whole, ch.ty.as_deref().zip(ch.layout.as_ref()))
-        {
-            (Some(w), chl @ Some(_)) => {
-                let mut sp = self.params.skip.clone();
-                let mut extra = Vec::new();
-                sp.granularities.retain(|&g| {
-                    let rows = u64::from(g) * 8_192;
-                    if rows <= self.block_rows {
-                        return true;
-                    }
-                    extra.push(SkipCandidate {
-                        measured: None,
-                        kind: Kind::MinMax,
-                        granularity: g,
-                        outcome: "pruned",
-                        evidence: format!(
-                            "window of {rows} rows exceeds block_rows {}",
-                            self.block_rows
-                        ),
-                    });
-                    false
-                });
-                let mut at = 0;
-                let segments: Vec<(usize, usize)> = arrow_blocks
-                    .iter()
-                    .map(|b| {
-                        at += b.len();
-                        (at - b.len(), at)
-                    })
-                    .collect();
-                skip_choice(
-                    w.as_ref(),
-                    chl,
-                    enum_values.as_deref(),
-                    ch.size,
-                    &segments,
-                    &sp,
-                    self.n_rows as f64 / sampled as f64,
-                    extra,
-                )
-            }
-            _ => (None, Vec::new()),
-        };
+        let (skip_index, skip_candidates) = self.stream_skip_index(
+            whole.as_ref(),
+            ch.ty.as_deref().zip(ch.layout.as_ref()),
+            enum_values.as_deref(),
+            ch.size,
+            &arrow_blocks,
+            sampled,
+        );
         let rec = Rec {
             nullable,
             arrow_type: pa_name(&rec_t),
@@ -778,42 +660,8 @@ impl Streaming {
         };
         row.extend(p.row(&oc));
         row.push(u(o.n_midnight));
-        let entropy = match &o.sample {
-            None => Some(Entropy::from_counts(std::iter::empty(), o.n_null, o.n)),
-            Some(d) if d.is_exact() => Some(Entropy::from_counts(
-                d.held_counts().into_iter(),
-                o.n_null,
-                o.n,
-            )),
-            Some(d) => match (&o.ams, self.params.entropy_estimator) {
-                (Some(a), EntropyEstimator::Ams) => {
-                    let (h, se) = a.estimate_with_se();
-                    Some(Entropy::from_ams(h, se, o.n))
-                }
-                _ => {
-                    // D̂ is HyperLogLog's (accurate); `est_cardinality`'s Schnabel overshoots at d/n < 0.5.
-                    let non_null = (o.n - o.n_null) as f64;
-                    let dd = match p.freq.hll {
-                        Some((e, se, seen)) => {
-                            let seen = seen as f64;
-                            (
-                                e.max(seen).min(non_null),
-                                (e * (1.0 - 3.0 * se)).max(seen).min(non_null),
-                                (e * (1.0 + 3.0 * se)).max(seen).min(non_null),
-                            )
-                        }
-                        None => (
-                            oc.est.est_cardinality,
-                            oc.est.est_low.unwrap_or(oc.est.est_cardinality),
-                            oc.est.est_high.unwrap_or(oc.est.est_cardinality),
-                        ),
-                    };
-                    let counts = d.held_counts();
-                    Some(Entropy::from_sample(&counts, dd, o.n_null, o.n))
-                }
-            },
-        };
-        row.extend(entropy_cells(entropy.as_ref()));
+        let entropy = self.level_entropy(o, &p, &oc);
+        row.extend(entropy_cells(Some(&entropy)));
         row.extend(exemplar_cells(Some(&c.exemplars)));
         row.extend([
             AnyValue::UInt64(lvl.size_bytes),
@@ -839,5 +687,253 @@ impl Streaming {
             AnyValue::UInt64(blocks.len() as u64),
         ]);
         Ok(row)
+    }
+
+    /// The leading cells: `column, status, dtype, first_row, n_rows, n_null`.
+    fn row_head(&self, c: &Column, computed: bool) -> Row {
+        let text = |s: &str| AnyValue::StringOwned(s.into());
+        vec![
+            text(&c.name),
+            text(if computed { "computed" } else { "ineligible" }),
+            text(&c.input_type),
+            AnyValue::UInt64(c.first_row),
+            AnyValue::UInt64(self.n_rows),
+            if c.ineligible {
+                AnyValue::Null
+            } else {
+                AnyValue::UInt64(c.outer.n_null)
+            },
+        ]
+    }
+
+    /// The choice, proven by statistics: a list's inner level is picked with it.
+    fn pick_of(
+        &self,
+        dtype: &PT,
+        lvl: &Level,
+        ilvl: Option<&Level>,
+    ) -> std::result::Result<Pick, String> {
+        let Some(il) = ilvl else {
+            return pick_by_stats(lvl, &self.params);
+        };
+        let width = match dtype {
+            PT::Array(_, w) => Some(*w as i32),
+            _ => None,
+        };
+        pick_list_by_stats(lvl, il, width, &self.params)
+    }
+
+    /// ZSTD sizes of the sampled blocks (original Arrow, original Polars, recommended Arrow,
+    /// recommended Polars) and each block's recommended Arrow array and Polars layout, kept
+    /// for the compression and ClickHouse choices (the sample is bounded by `reservoir_rows`).
+    /// The cross-check: every block is recast to the pick.
+    #[allow(clippy::too_many_arguments)]
+    fn sampled_blocks(
+        &self,
+        c: &Column,
+        dtype: &PT,
+        blocks: &[&Block],
+        pick: &Pick,
+        key: &AT,
+        p: &Profile,
+        inner: Option<(&PT, &Profile)>,
+    ) -> std::result::Result<Sampled, String> {
+        let err = |e: polars::prelude::PolarsError| e.to_string();
+        let original = matches!(pick.target, Target::Original(_));
+        let mut z = [0u64; 4];
+        let mut arrow_blocks: Vec<ArrayRef> = Vec::with_capacity(blocks.len());
+        let mut polars_blocks: Vec<ArrayRef> = Vec::with_capacity(blocks.len());
+        for b in blocks {
+            let s = block_series(b, &c.name, dtype, c.views_input).map_err(err)?;
+            let bc = classic_layout(&s).map_err(err)?;
+            let sz = sizes_of(&s, &bc, self.params.zstd_level).map_err(err)?;
+            z[0] += sz[1];
+            z[1] += sz[3];
+            if original {
+                z[2] += sz[1];
+                z[3] += sz[3];
+                polars_blocks.push(export_series(&s, CompatLevel::newest()).map_err(err)?);
+                arrow_blocks.push(bc);
+                continue;
+            }
+            let a = recast(pick, dtype, &bc, p, inner).map_err(|e| {
+                format!(
+                    "cross-check {:?} → {}: {e}",
+                    c.name,
+                    pa_name(&pick.target.arrow_type())
+                )
+            })?;
+            let polars = to_polars_layout(&a, key)?;
+            let rz =
+                layout_sizes(a.as_ref(), polars.as_ref(), self.params.zstd_level).map_err(err)?;
+            z[2] += rz[1];
+            z[3] += rz[3];
+            arrow_blocks.push(a);
+            polars_blocks.push(polars);
+        }
+        Ok(Sampled {
+            z,
+            arrow_blocks,
+            polars_blocks,
+        })
+    }
+
+    /// Skip indexes: windows are scanned inside each sampled block, so a granularity whose
+    /// window exceeds `block_rows` is pruned (one row per granularity, kind MinMax, naming
+    /// the reason for every kind). Index sizes scale to the stream like `ch_size`.
+    fn stream_skip_index(
+        &self,
+        whole: Option<&ArrayRef>,
+        ch: Option<(&str, &ChLayout)>,
+        enum_values: Option<&[String]>,
+        ch_size: Option<u64>,
+        arrow_blocks: &[ArrayRef],
+        sampled: u64,
+    ) -> (Option<String>, Vec<SkipCandidate>) {
+        let (Some(w), Some(_)) = (whole, ch) else {
+            return (None, Vec::new());
+        };
+        let mut sp = self.params.skip.clone();
+        let mut extra = Vec::new();
+        sp.granularities.retain(|&g| {
+            let rows = u64::from(g) * 8_192;
+            if rows <= self.block_rows {
+                return true;
+            }
+            extra.push(SkipCandidate {
+                measured: None,
+                kind: Kind::MinMax,
+                granularity: g,
+                outcome: "pruned",
+                evidence: format!(
+                    "window of {rows} rows exceeds block_rows {}",
+                    self.block_rows
+                ),
+            });
+            false
+        });
+        let mut at = 0;
+        let segments: Vec<(usize, usize)> = arrow_blocks
+            .iter()
+            .map(|b| {
+                at += b.len();
+                (at - b.len(), at)
+            })
+            .collect();
+        skip_choice(
+            w.as_ref(),
+            ch,
+            enum_values,
+            ch_size,
+            &segments,
+            &sp,
+            self.n_rows as f64 / sampled as f64,
+            extra,
+        )
+    }
+
+    /// The level's entropy: exact while the sample is, else AMS or the sample's estimate.
+    fn level_entropy(&self, o: &LevelStats, p: &Profile, oc: &Conclusions) -> Entropy {
+        match &o.sample {
+            None => Entropy::from_counts(std::iter::empty(), o.n_null, o.n),
+            Some(d) if d.is_exact() => {
+                Entropy::from_counts(d.held_counts().into_iter(), o.n_null, o.n)
+            }
+            Some(d) => match (&o.ams, self.params.entropy_estimator) {
+                (Some(a), EntropyEstimator::Ams) => {
+                    let (h, se) = a.estimate_with_se();
+                    Entropy::from_ams(h, se, o.n)
+                }
+                _ => {
+                    let dd = sample_distinct(o, p, oc);
+                    Entropy::from_sample(&d.held_counts(), dd, o.n_null, o.n)
+                }
+            },
+        }
+    }
+}
+
+/// A list's inner level and its original size (the view shape it measures with).
+fn inner_level<'a>(
+    i: &LevelStats,
+    it: &'a PT,
+    ip: &'a Profile,
+    ic: &Conclusions,
+    views_input: bool,
+) -> std::result::Result<(Level<'a>, ViewShape), String> {
+    let iclassic = i
+        .classic
+        .clone()
+        .ok_or("an inner level has absorbed no batch")?;
+    let mut l = level(it, &iclassic, ip, i, ic.est, "inner: ");
+    let iv = view_shape(&l, i, views_input);
+    (l.size_bytes, l.size_note) = original_size(&iclassic, &iv, None, i);
+    Ok((l, iv))
+}
+
+/// Distinct values over non-null values (1 when there are none).
+fn distinct_ratio(o: &LevelStats, p: &Profile) -> f64 {
+    let non_null = o.n - o.n_null;
+    if non_null == 0 {
+        1.0
+    } else {
+        p.freq.n_unique as f64 / non_null as f64
+    }
+}
+
+/// The recommended values' running statistics (a list recast to scalars reads its inner
+/// level) and the note for a GCD unknown from them.
+fn running_stats(
+    o: &LevelStats,
+    dtype: &PT,
+    inner: Option<(&LevelStats, &PT)>,
+    rec_t: &AT,
+) -> (Option<RunningStats>, String) {
+    let (stats_level, src) = match (inner, rec_t) {
+        (Some((i, it)), t)
+            if !matches!(t, AT::List(_) | AT::LargeList(_) | AT::FixedSizeList(..)) =>
+        {
+            (i, it)
+        }
+        _ => (o, dtype),
+    };
+    let running = rescale(src, rec_t).map(|f| RunningStats {
+        range: stats_level.int_range().map(|(a, b)| (a / f, b / f)),
+        gcd: stats_level.gcd.map(|g| g.unsigned_abs() / f.unsigned_abs()),
+        max_abs: stats_level.int_range().map_or(0, |(a, b)| {
+            (a / f).unsigned_abs().max((b / f).unsigned_abs())
+        }),
+    });
+    (
+        running,
+        format!("GCD unknown in streaming for values derived from {src}"),
+    )
+}
+
+/// The sampled blocks' sizes and recommended arrays (`Streaming::sampled_blocks`).
+struct Sampled {
+    z: [u64; 4],
+    arrow_blocks: Vec<ArrayRef>,
+    polars_blocks: Vec<ArrayRef>,
+}
+
+/// The distinct count of a sampled level with its +-3 sigma interval: HyperLogLog's
+/// (accurate; `est_cardinality`'s Schnabel overshoots at d/n < 0.5), else the conclusions'.
+fn sample_distinct(o: &LevelStats, p: &Profile, oc: &Conclusions) -> (f64, f64, f64) {
+    let non_null = (o.n - o.n_null) as f64;
+    match p.freq.hll {
+        Some((e, se, seen)) => {
+            let seen = seen as f64;
+            (
+                e.max(seen).min(non_null),
+                (e * (1.0 - 3.0 * se)).max(seen).min(non_null),
+                (e * (1.0 + 3.0 * se)).max(seen).min(non_null),
+            )
+        }
+        None => (
+            oc.est.est_cardinality,
+            oc.est.est_low.unwrap_or(oc.est.est_cardinality),
+            oc.est.est_high.unwrap_or(oc.est.est_cardinality),
+        ),
     }
 }

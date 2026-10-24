@@ -344,50 +344,62 @@ pub(crate) fn streams(a: &dyn Array, layout: &ChLayout) -> Result<Vec<Stream>, S
             out.extend(streams(a, inner)?);
             Ok(out)
         }
-        ChLayout::Array(inner) => {
-            let (ends, child) = list_parts(a)?;
-            let offsets: Vec<u8> = ends[1..].iter().flat_map(|e| e.to_le_bytes()).collect();
-            let mut out = vec![stream(offsets, fixed_ends(a.len(), 8))];
-            for s in streams(child.as_ref(), inner)? {
-                let whole = s
-                    .row_ends
-                    .first()
-                    .is_some_and(|f| s.row_ends.iter().all(|e| e == f));
-                let row_ends = if whole {
-                    vec![s.bytes.len() as u64; a.len()]
-                } else {
-                    ends[1..]
-                        .iter()
-                        .map(|&e| {
-                            if e == 0 {
-                                0
-                            } else {
-                                s.row_ends[e as usize - 1]
-                            }
-                        })
-                        .collect()
-                };
-                out.push(Stream { row_ends, ..s });
+        ChLayout::Array(inner) => array_streams(a, inner),
+        ChLayout::Tuple(fields) => tuple_streams(a, fields),
+    }
+}
+
+/// `Array(inner)`: the offsets stream, then the child's streams with their row ends lifted to
+/// the list rows.
+fn array_streams(a: &dyn Array, inner: &ChLayout) -> Result<Vec<Stream>, String> {
+    let (ends, child) = list_parts(a)?;
+    let offsets: Vec<u8> = ends[1..].iter().flat_map(|e| e.to_le_bytes()).collect();
+    let mut out = vec![stream(offsets, fixed_ends(a.len(), 8))];
+    for s in streams(child.as_ref(), inner)? {
+        let row_ends = list_row_ends(&s, &ends[1..], a.len());
+        out.push(Stream { row_ends, ..s });
+    }
+    Ok(out)
+}
+
+/// A child stream's row ends per list row: all rows alike when the stream is one whole block,
+/// else the child's end after each list's last item (0 for an empty prefix).
+fn list_row_ends(s: &Stream, list_ends: &[u64], rows: usize) -> Vec<u64> {
+    let whole = s
+        .row_ends
+        .first()
+        .is_some_and(|f| s.row_ends.iter().all(|e| e == f));
+    if whole {
+        return vec![s.bytes.len() as u64; rows];
+    }
+    list_ends
+        .iter()
+        .map(|&e| {
+            if e == 0 {
+                0
+            } else {
+                s.row_ends[e as usize - 1]
             }
-            Ok(out)
-        }
-        ChLayout::Tuple(fields) => {
-            let s = a
-                .as_struct_opt()
-                .ok_or_else(|| format!("type {} is not a struct", a.data_type()))?;
-            if s.num_columns() != fields.len() {
-                return Err("struct and tuple layout differ in field count".to_string());
-            }
-            let mut out = Vec::new();
-            for (col, l) in s.columns().iter().zip(fields) {
-                match s.nulls() {
-                    Some(nb) => out.extend(streams(with_nulls(col, nb)?.as_ref(), l)?),
-                    None => out.extend(streams(col.as_ref(), l)?),
-                }
-            }
-            Ok(out)
+        })
+        .collect()
+}
+
+/// `Tuple(fields)`: each struct field's streams, a null struct row nulling its fields.
+fn tuple_streams(a: &dyn Array, fields: &[ChLayout]) -> Result<Vec<Stream>, String> {
+    let s = a
+        .as_struct_opt()
+        .ok_or_else(|| format!("type {} is not a struct", a.data_type()))?;
+    if s.num_columns() != fields.len() {
+        return Err("struct and tuple layout differ in field count".to_string());
+    }
+    let mut out = Vec::new();
+    for (col, l) in s.columns().iter().zip(fields) {
+        match s.nulls() {
+            Some(nb) => out.extend(streams(with_nulls(col, nb)?.as_ref(), l)?),
+            None => out.extend(streams(col.as_ref(), l)?),
         }
     }
+    Ok(out)
 }
 
 /// The transform codec before the compression (spec 2026-10-23 §3).
@@ -526,39 +538,14 @@ fn gcd_transform(block: &[u8], width: usize, signed: bool) -> Cow<'_, [u8]> {
     if width == 0 || width > 16 || !block.len().is_multiple_of(width) {
         return Cow::Borrowed(block);
     }
-    let read = |c: &[u8]| -> u128 {
-        let mut buf = [0u8; 16];
-        buf[..width].copy_from_slice(c);
-        if signed && c[width - 1] & 0x80 != 0 {
-            buf[width..].fill(0xFF);
-        }
-        u128::from_le_bytes(buf)
-    };
-    let magnitude = |v: u128| {
-        if signed {
-            (v as i128).unsigned_abs()
-        } else {
-            v
-        }
-    };
-    let mut g = 0u128;
-    for c in block.chunks_exact(width) {
-        let m = magnitude(read(c));
-        if m == 0 {
-            continue;
-        }
-        g = if g == 0 { m } else { binary_gcd(g, m) };
-        if g == 1 {
-            return Cow::Borrowed(block);
-        }
-    }
+    let g = block_gcd(block, width, signed);
     if g <= 1 || (signed && g > i128::MAX as u128) {
         return Cow::Borrowed(block);
     }
     let mut out = Vec::with_capacity(block.len() + width);
     out.extend_from_slice(&g.to_le_bytes()[..width]);
     for c in block.chunks_exact(width) {
-        let v = read(c);
+        let v = read_wide(c, width, signed);
         let q = if signed {
             ((v as i128) / g as i128) as u128
         } else {
@@ -567,6 +554,38 @@ fn gcd_transform(block: &[u8], width: usize, signed: bool) -> Cow<'_, [u8]> {
         out.extend_from_slice(&q.to_le_bytes()[..width]);
     }
     Cow::Owned(out)
+}
+
+/// The `width`-byte little-endian value `c`, sign-extended to 128 bits when `signed`.
+fn read_wide(c: &[u8], width: usize, signed: bool) -> u128 {
+    let mut buf = [0u8; 16];
+    buf[..width].copy_from_slice(c);
+    if signed && c[width - 1] & 0x80 != 0 {
+        buf[width..].fill(0xFF);
+    }
+    u128::from_le_bytes(buf)
+}
+
+/// GCD of the magnitudes of a block's `width`-byte values, zeros skipped (0 when all are
+/// zero); stops at 1.
+fn block_gcd(block: &[u8], width: usize, signed: bool) -> u128 {
+    let mut g = 0u128;
+    for c in block.chunks_exact(width) {
+        let v = read_wide(c, width, signed);
+        let m = if signed {
+            (v as i128).unsigned_abs()
+        } else {
+            v
+        };
+        if m == 0 {
+            continue;
+        }
+        g = if g == 0 { m } else { binary_gcd(g, m) };
+        if g == 1 {
+            break;
+        }
+    }
+    g
 }
 
 /// Little-endian value of the first `w` bytes of `c`, zero-extended.

@@ -36,19 +36,19 @@ do not refactor to chase the score.
 - `top_k/base.py` `TopK.agreement` (16): a single pass building found / wanted / rel per
   column, then three checks
 
-## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (5, CRITICAL)
+## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (4, CRITICAL)
 
 Not false positives in the strict sense: the scores are right, but the functions were judged
 not worth splitting (no natural seam; splitting costs readability for one or two points).
 Marked *False positive* in Sonar so the dashboard is clean; do not refactor to chase the score.
 
 - `recommenders/streaming/mod.rs` `Streaming::add` (16)
-- `recommenders/streaming/partial.rs` `BatchStats::of` (16): one pass per statistic, no seam
 - `recommenders/engine/candidates.rs` `Rules::float` (16)
 - `techniques/single_column/unordered/gcd.rs` `gcd_slice` (17): generic closures on a hot path inflate the score
 - `common/encode.rs` `encode_series` (17): a flat dtype dispatch, one arm per type
 
-(`DistinctSample::absorb` reached 19 and was split instead: `admit_exact` holds the
+(`DistinctSample::absorb` reached 19, `BatchStats::of` 20 and `Streaming::row` 29, and the ClickHouse size
+emulator's `streams` 20 and `gcd_transform` 23; all were split instead. `DistinctSample::absorb`: `admit_exact` holds the
 exact-phase bookkeeping.)
 
 ## `python:S1172` — unused function parameter (3, MAJOR)
