@@ -21,23 +21,13 @@ added here; the baseline columns of §5 are what ToDo 15 will report against.
 
 ## 2. Package declarations
 
-Each technique package already declares `REFERENCE` and `IMPLEMENTATIONS`.  It also declares
+An **estimator** is an implementation class with `EXACT = False` — the existing `Technique.EXACT` class
+attribute, already `False` on `BloomRust`, `BloomFastbloom`, `MinHashRust`, `MinHashDatasketch`,
+`TopKHeavyKeeperRust` and `TopKSpaceSavingRust`.  `PairwiseEntropyAmsRust` and `ThreewayEntropyAmsRust` gain
+`EXACT = False` (only Similarity's `agreement` reads the attribute today, so nothing else changes).
 
-```python
-ESTIMATORS: tuple[str, ...] = ()   # implementations whose results are estimates (sketches)
-```
-
-| package | ESTIMATORS |
-|---|---|
-| pairwise_entropy | `PairwiseEntropyAmsRust` |
-| threeway_entropy | `ThreewayEntropyAmsRust` |
-| top_k | `TopKHeavyKeeperRust`, `TopKSpaceSavingRust` |
-| membership | `BloomRust`, `BloomFastbloom` |
-| similarity | `MinHashRust`, `MinHashDatasketch` |
-| all others | `()` |
-
-The **exact Rust sibling** of an estimator is the package's Rust implementation (name ending `Rust`) not in
-`ESTIMATORS`, if there is exactly one (pairwise / threeway entropy); otherwise none (top-k, membership,
+The **exact Rust sibling** of an estimator is the package's Rust implementation (name ending `Rust`) with
+`EXACT = True`, if there is exactly one (pairwise / threeway entropy); otherwise none (top-k, membership,
 similarity).
 
 ## 3. Harness architecture
@@ -81,7 +71,7 @@ existing environment columns: cpu_count, processor, versions, timestamp).
 class Variant:
     label: str
     params: dict = {}            # every implementation
-    estimator_params: dict = {}  # ESTIMATORS only (e.g. memory_bytes, num_samples)
+    estimator_params: dict = {}  # estimators (EXACT = False) only, e.g. memory_bytes, num_samples
 ```
 
 `variants` defaults to `[Variant("default")]`, so existing scripts are unchanged.  Variants apply to every
@@ -126,12 +116,14 @@ def accuracy(self, frames: dict, result: pl.DataFrame, reference: pl.DataFrame) 
 Metrics only, never in a technique's result table and never a decision.
 
 **Default.**  Rows aligned on the key columns (misaligned → ValueError).  Over the rows the reference computed,
-for every numeric column of `METRICS` (integer, float, decimal): relative error |got − want| / |want|, with 0/0
+for every column of `ACCURACY_METRICS` (a new class attribute; `None`, the default, means every numeric column
+of `METRICS` — integer, float, decimal): relative error |got − want| / |want|, with 0/0
 counted as 0 and NaN elsewhere kept (it shows up as NaN in the max).  Returns `max_rel_err`, `p95_rel_err`
 (over all those cells) and `n_missing` (nulls in `result` where the reference computed).  Non-numeric metrics are
 ignored.  This reproduces `benchmark_ams_entropy.py`'s `max_rel_err` / `p95_rel_err` / `n_missing`.
 
-**Pairwise entropy** adds `max_abs_mi_err` (as the AMS script did).
+**Pairwise entropy** sets `ACCURACY_METRICS = ("h_a", "h_b", "h_ab")` (relative MI / NMI error is meaningless
+where MI ≈ 0) and adds `max_abs_mi_err` (as the AMS script did); **threeway entropy** sets `("h_abc",)`.
 
 **Top-k** overrides it.  Ground truth is rebuilt from `frames` (exact counts of every distinct non-null value per
 column, values as text), not from the reference's list, which holds only k values.  Per column, as
@@ -155,7 +147,8 @@ maximum of the others, plus `sketch_bytes` (max).  Datasets that need per-column
 memory and accuracy columns with no script change beyond any `exclude` the AMS script carried.
 
 **Deleted:** `benchmark_top_k_accuracy.py`, `benchmark_ams_entropy.py`, and their results files
-(`top_k_accuracy.arrow`, `ams_entropy.arrow`, git-ignored).
+(`top_k_accuracy.arrow`, `ams_entropy.arrow`, git-ignored).  `benchmark_streaming_entropy.py` imports
+`memory_mb` from the harness instead.  The top-k grid runs with `runs=3` (as threeway entropy already does).
 
 **All other benchmark scripts:** unchanged unless a dataset needs a narrower `exclude` because children now run
 it at 1 thread with memory measured (none expected).
