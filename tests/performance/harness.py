@@ -177,7 +177,17 @@ def memory_mb() -> tuple[float, float]:
         return maxrss / 2**20, maxrss / 2**20
     with open("/proc/self/statm") as f:  # pages
         current = int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
-    return current / 2**20, maxrss / 2**10  # ru_maxrss is KiB on Linux
+    # ru_maxrss is KiB on Linux, sampled by the kernel apart from statm's resident pages: it can
+    # trail the current figure by a few pages, so the peak is at least the current value.
+    current_mb = current / 2**20
+    return current_mb, max(maxrss / 2**10, current_mb)
+
+
+def _read_ipc(path: str) -> pl.DataFrame:
+    """An Arrow IPC file read whole into memory: no memory map, so no file lock blocks the
+    temporary directory's cleanup on Windows (and no `memory_map` keyword, gone in Polars 2).
+    """
+    return pl.read_ipc(Path(path).read_bytes())
 
 
 def time_call(
@@ -363,7 +373,7 @@ def peak_extra(
 
 def _child(spec_path: str) -> None:
     spec = json.loads(Path(spec_path).read_text())
-    frames = {n: pl.read_ipc(p, memory_map=False) for n, p in spec["frames"].items()}
+    frames = {n: _read_ipc(p) for n, p in spec["frames"].items()}
     cls = getattr(importlib.import_module(spec["package"]), spec["implementation"])
     gc.collect()
     load_mb, peak_before = memory_mb()
@@ -513,7 +523,7 @@ def run(
                     _measure(package, name, kwargs, paths, threads, runs, budget_s, out)
                 )
                 if row["status"] == "ok":
-                    results[name, label, threads] = pl.read_ipc(out, memory_map=False)
+                    results[name, label, threads] = _read_ipc(out)
                     kwargs_of[name, label, threads] = kwargs
             truth = ds.truth() if ds.truth else None
             _score(
