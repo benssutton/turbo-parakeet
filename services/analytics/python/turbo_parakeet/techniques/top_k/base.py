@@ -67,6 +67,54 @@ def _binary_as_text(s: pl.Series) -> pl.Series:
         return pl.Series(s.name, [_utf8(b) for b in s.to_list()], dtype=pl.String)
 
 
+def true_counts(series: pl.Series) -> pl.DataFrame:
+    """Exact count of every distinct non-null value, count desc; values rendered as `top_k`
+    renders them (arrow-rs text; binary as text, non-UTF-8 → null)."""
+    from turbo_parakeet import _plugin
+
+    counts = series.drop_nulls().value_counts(sort=True, name="__true")
+    values = counts[series.name]
+    if values.dtype == pl.Binary:
+        values = _binary_as_text(values)
+    truth = pl.DataFrame(
+        {
+            "value": _plugin.render(values) if counts.height else [],
+            "true": counts["__true"].cast(pl.UInt64),
+        },
+        schema={"value": pl.String, "true": pl.UInt64},
+    )
+    if truth["value"].null_count() > 1:  # several non-UTF-8 binaries render as one null
+        truth = truth.group_by("value").agg(pl.col("true").sum())
+        truth = truth.sort("true", descending=True)
+    return truth
+
+
+def score_top_k(top: list[dict], truth: pl.DataFrame, k: int) -> dict:
+    """Benchmark scores of one column's reported items against `true_counts`:
+    precision (tie-aware: reported values whose true count ≥ the true k-th count, ÷ min(k,
+    distinct values)), are / aae (mean relative / absolute count error over reported
+    values) and max_bound_violation (how far the true count falls outside [count − error,
+    count]; null when no bound is reported)."""
+    floor = truth["true"][k - 1] if truth.height >= k else 0
+    reported = pl.DataFrame(
+        top, schema={"value": pl.String, "count": pl.UInt64, "error": pl.UInt64}
+    ).join(truth, on="value", how="left", nulls_equal=True)
+    count = reported["count"].cast(pl.Int64)
+    true = reported["true"].cast(pl.Int64)
+    err = (count - true).abs()
+    violation = None
+    if reported["error"].null_count() == 0 and reported.height:
+        lower = count - reported["error"].cast(pl.Int64)
+        gaps = [(lower - true).max(), (true - count).max()]
+        violation = max(0, *(g for g in gaps if g is not None))
+    return {
+        "precision": (true >= floor).sum() / min(k, truth.height),
+        "are": (err / true).mean(),
+        "aae": err.mean(),
+        "max_bound_violation": violation,
+    }
+
+
 class TopK(Technique):
     """Each eligible column's k most frequent non-null values, ranked by count desc then the
     row of an occurrence (the first row, for the exact reference), with `n_non_null` and the
@@ -195,6 +243,38 @@ class TopK(Technique):
         if self.MAX_ARE is not None and are > self.MAX_ARE:
             problems.append(f"mean relative count error {are:.4f} > {self.MAX_ARE}")
         return problems
+
+    def accuracy(self, frames, result, reference):
+        """Scores against exact counts rebuilt from `frames` (the reference's list holds only
+        k values, so it cannot score counts outside it): `score_top_k` per computed column,
+        then the worst — min precision, max are / aae / max_bound_violation — and the max
+        sketch_bytes. `reference` is not used."""
+        scores, sizes = [], []
+        rows = zip(
+            result.select(self.key_columns()).rows(),
+            result["status"],
+            result["top_k"].to_list(),
+            result["sketch_bytes"],
+        )
+        for (df, col), status, top, size in rows:
+            if status != "computed":
+                continue
+            truth = true_counts(frames[df][col])
+            if truth.height:
+                scores.append(score_top_k(top, truth, self.k))
+                sizes.append(size)
+
+        def worst(key, pick):
+            values = [s[key] for s in scores if s[key] is not None]
+            return pick(values) if values else None
+
+        return {
+            "precision": worst("precision", min),
+            "are": worst("are", max),
+            "aae": worst("aae", max),
+            "max_bound_violation": worst("max_bound_violation", max),
+            "sketch_bytes": max((s for s in sizes if s is not None), default=None),
+        }
 
     def _item_problems(
         self, label: str, item: dict, true: int | None, floor: int

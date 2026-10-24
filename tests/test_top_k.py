@@ -219,3 +219,76 @@ def test_dominated():
     frame = pl.DataFrame({"a": [1], "b": [1], "c": [1]})
     out = run(cls, {"t": frame})
     assert out["dominated"].to_list() == [True, False, None]
+
+
+from turbo_parakeet.techniques.top_k.base import score_top_k, true_counts  # noqa: E402
+
+STREAM = pl.Series("x", ["a"] * 10 + ["b"] * 5 + ["c"] * 5 + ["d"])
+
+
+def _item(value, count, error):
+    return {"value": value, "count": count, "error": error}
+
+
+def test_true_counts_every_value_count_desc():
+    truth = true_counts(STREAM)
+    assert truth.schema == {"value": pl.String, "true": pl.UInt64}
+    assert dict(truth.rows()) == {"a": 10, "b": 5, "c": 5, "d": 1}
+    assert truth["true"].to_list() == [10, 5, 5, 1]
+
+
+def test_score_top_k_is_tie_aware():
+    # b and c tie at the k-th count (5): reporting c instead of b is still exact.
+    s = score_top_k([_item("a", 10, 0), _item("c", 6, 2)], true_counts(STREAM), k=2)
+    assert s["precision"] == 1.0
+    assert s["are"] == pytest.approx(0.1)  # (0 + 1/5) / 2
+    assert s["aae"] == pytest.approx(0.5)
+    assert s["max_bound_violation"] == 0  # 5 in [6 - 2, 6]
+
+
+def test_score_top_k_bound_violation_and_wrong_value():
+    truth = true_counts(STREAM)
+    s = score_top_k([_item("a", 10, 0), _item("c", 6, 0)], truth, k=2)
+    assert s["max_bound_violation"] == 1  # true 5 < count - error = 6
+    s = score_top_k([_item("a", 10, 0), _item("d", 1, None)], truth, k=2)
+    assert s["precision"] == 0.5  # d's true count 1 < the k-th count 5
+    assert s["max_bound_violation"] is None  # no bound reported
+
+
+def test_accuracy_of_the_reference_is_perfect():
+    from turbo_parakeet.techniques.top_k import TopKPolars
+
+    frames = {"t": STREAM.to_frame()}
+    reference = TopKPolars(k=2).add(frames).result()
+    out = TopKPolars(k=2).accuracy(frames, reference, reference)
+    assert out == {
+        "precision": 1.0,
+        "are": 0.0,
+        "aae": 0.0,
+        "max_bound_violation": 0,
+        "sketch_bytes": None,
+    }
+
+
+@pytest.mark.parametrize("name", ["TopKSpaceSavingRust", "TopKHeavyKeeperRust"])
+def test_accuracy_end_to_end_for_sketches(name):
+    import turbo_parakeet.techniques.top_k as mod
+
+    ints = pl.Series("i", [1] * 50 + [2] * 30 + [3] * 10 + list(range(10, 20)))
+    strs = pl.Series("s", ["a"] * 50 + ["b"] * 30 + ["c"] * 10 + list("defghijklm"))
+    blobs = pl.Series("b", [b"a"] * 50 + [b"b"] * 30 + [b"\xff"] * 10 + [b"z"] * 10)
+    frames = {"t": pl.DataFrame([ints, strs, blobs])}
+    result = getattr(mod, name)(k=3).add(frames).result()
+    ref = mod.TopKPolars(k=3).add(frames).result()
+    out = getattr(mod, name)(k=3).accuracy(frames, result, ref)
+    assert out["precision"] == 1.0
+    assert out["max_bound_violation"] in (None, 0)
+    assert out["sketch_bytes"] > 0
+    assert out["are"] < 0.05
+
+
+def test_true_counts_render_like_top_k_rows():
+    ints = pl.Series("i", [3, 3, 1, None])
+    assert dict(true_counts(ints).rows()) == {"3": 2, "1": 1}
+    blobs = pl.Series("b", [b"a", b"a", b"\xff"])
+    assert dict(true_counts(blobs).rows()) == {"a": 2, None: 1}
