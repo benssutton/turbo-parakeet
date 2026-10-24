@@ -119,6 +119,49 @@ def _compression(codecs: str) -> str:
     return codecs.split(", ")[-1]
 
 
+def _row_skip(r: dict | None, in_frame: bool) -> str | None:
+    """Why a result row cannot become a suite; None when it can."""
+    if r is None:
+        return "not in the result"
+    if not in_frame:
+        return "not in frame"
+    if r["status"] != "computed":
+        return f"status {r['status']}"
+    rec_type = r["clickhouse_type"]
+    if rec_type is None:
+        return "no ClickHouse type"
+    if any(n in rec_type for n in _NESTED):
+        return "nested type"
+    if r["clickhouse_codecs"] is None:
+        return "no codec chosen (no sample)"
+    return None
+
+
+def _no_base_type(orig: dict) -> bool:
+    t = orig["clickhouse_type"]
+    return t is None or any(n in t for n in _NESTED)
+
+
+def _recommended_table(col: str, arr, datafusion_type: str):
+    """(the dataset cast to the recommended Arrow type or None when it cannot be, whether the
+    type equals the original's, the failure text or None)."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    same = True
+    try:
+        target = _arrow_type(datafusion_type)
+        if target == arr.type:
+            return pa.table({col: arr}), True, None
+        same = False
+        cast = pc.cast(arr, target, safe=True)
+        if cast.null_count != arr.null_count:
+            raise ValueError("the cast changed the null count")
+        return pa.table({col: cast}), False, None
+    except (pa.ArrowException, ValueError, NotImplementedError) as e:
+        return None, same, str(e)
+
+
 def to_chbench(
     result: pl.DataFrame,
     frame,
@@ -136,7 +179,6 @@ def to_chbench(
     as it is), each with its own `.arrow` and `.predicted.json`; otherwise one `<name>` suite.
     Spec §7."""
     import pyarrow as pa
-    import pyarrow.compute as pc
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -147,53 +189,116 @@ def to_chbench(
     taken: set[str] = set()
     for col in wanted:
         r = rows.get(col)
-        if r is None or col not in table.column_names:
-            skipped.append((col, "not in the result" if r is None else "not in frame"))
-            continue
-        if r["status"] != "computed":
-            skipped.append((col, f"status {r['status']}"))
-            continue
-        rec_type = r["clickhouse_type"]
-        if rec_type is None:
-            skipped.append((col, "no ClickHouse type"))
-            continue
-        if any(n in rec_type for n in _NESTED):
-            skipped.append((col, "nested type"))
-            continue
-        if r["clickhouse_codecs"] is None:
-            skipped.append((col, "no codec chosen (no sample)"))
+        reason = _row_skip(r, col in table.column_names)
+        if reason:
+            skipped.append((col, reason))
             continue
         arr = _plain(table[col].combine_chunks())
         orig_one = pa.table({col: arr})
         orig = _plugin.clickhouse_profile(orig_one, col, "LZ4")
-        if orig["clickhouse_type"] is None or any(
-            n in orig["clickhouse_type"] for n in _NESTED
-        ):
+        if _no_base_type(orig):
             skipped.append((col, "original type has no chbench base type"))
             continue
         name = _sanitise(col, taken)
-        rec_one, same = orig_one, True
-        try:
-            target = _arrow_type(r["datafusion_type"])
-            if target != arr.type:
-                same = False
-                cast = pc.cast(arr, target, safe=True)
-                if cast.null_count != arr.null_count:
-                    raise ValueError("the cast changed the null count")
-                rec_one = pa.table({col: cast})
-        except (pa.ArrowException, ValueError, NotImplementedError) as e:
+        rec_one, same, error = _recommended_table(col, arr, r["datafusion_type"])
+        if rec_one is None:
             skipped.append(
                 (
                     col,
-                    f"recommended type not reproducible by a lossless pyarrow cast: {e}",
+                    f"recommended type not reproducible by a lossless pyarrow cast: {error}",
                 )
             )
-            rec_one = None
-        if rec_one is not None:
+        else:
             _write(out, name, col, rec_one, r, orig, original=False)
         if not same:
             _write(out, f"{name}_original", col, orig_one, r, orig, original=True)
     return skipped
+
+
+def _recommended_codec(rec_type: str, chosen: str) -> str:
+    """The codec-axis value of the recommendation: LowCardinality, the transform or none."""
+    head = chosen.split(", ")[0]
+    if rec_type.startswith("LowCardinality("):
+        return "LowCardinality"
+    if head in _TRANSFORMS:
+        return head
+    return "none"
+
+
+class _Cells:
+    """The predicted column bytes of the (codec, compression) cells of one suite."""
+
+    def __init__(self, one, col: str, r: dict, rec_codec: str, original: bool):
+        self.one, self.col, self.rec_codec, self.original = (
+            one,
+            col,
+            rec_codec,
+            original,
+        )
+        self.candidates = {
+            c["codecs"]: c["predicted_bytes"] for c in r["clickhouse_candidates"] or []
+        }
+        self.profile: dict[str, int | None] = {}
+
+    def measured(self, chain: str) -> int | None:
+        if chain not in self.profile:
+            self.profile[chain] = _plugin.clickhouse_profile(self.one, self.col, chain)[
+                "bytes"
+            ]
+        return self.profile[chain]
+
+    def codecs(self, comp: str) -> list[str]:
+        if not self.original:
+            return list(dict.fromkeys([self.rec_codec, "none"]))
+        rec = self.rec_codec
+        has = rec in _TRANSFORMS and self.measured(f"{rec}, {comp}") is not None
+        return ["none", rec] if has else ["none"]
+
+    def predict(self, k: str, c: str) -> int | None:
+        chain = f"{k}, {c}" if k in _TRANSFORMS else c
+        if self.original or (self.rec_codec == "LowCardinality" and k == "none"):
+            return None if k == "LowCardinality" else self.measured(chain)
+        return self.candidates.get(chain)
+
+
+def _predicted(
+    base: str, cells: _Cells, codecs: list[str], comps: list[str], skip, r: dict
+) -> dict:
+    """`predicted.json`: column bytes per cell, plus the chosen index's cells with its bytes."""
+    predicted = {f"{base}|{k}|{c}": cells.predict(k, c) for k in codecs for c in comps}
+    if skip:
+        index_bytes = _index_bytes(r)
+        for k in codecs:
+            for c in comps:
+                predicted[f"{base}|{k}|{c}|{skip}"] = {
+                    "column_bytes": cells.predict(k, c),
+                    "index_bytes": index_bytes,
+                }
+    return predicted
+
+
+def _queries(base: str) -> dict:
+    kinds = [{"kind": "full_scan"}] + [
+        {"kind": "filter", "target_fraction": f, "predicate": "in", "values": 1}
+        for f in (0.001, 0.01, 0.05)
+    ]
+    if _RANGE_TYPES.match(base):
+        kinds.append({"kind": "filter", "target_fraction": 0.10, "predicate": "range"})
+    return {
+        "kinds": kinds,
+        "query_condition_cache": [False],
+        "cache_mode": ["warm"],
+        "samples": 10,
+    }
+
+
+def _write_arrow(path: Path, one) -> None:
+    import pyarrow as pa
+
+    with pa.ipc.new_file(
+        path, one.schema, options=pa.ipc.IpcWriteOptions(compression=None)
+    ) as w:
+        w.write_table(one.combine_chunks(), max_chunksize=None)
 
 
 def _write(
@@ -205,60 +310,20 @@ def _write(
     import pyarrow as pa
     import yaml
 
-    rec_type = r["clickhouse_type"]
-    base = _base(orig["clickhouse_type"] if original else rec_type)
     chosen = r["clickhouse_codecs"]
+    base = _base(orig["clickhouse_type"] if original else r["clickhouse_type"])
     comp = _compression(chosen)
-    head = chosen.split(", ")[0]
-    rec_codec = (
-        "LowCardinality"
-        if rec_type.startswith("LowCardinality(")
-        else head if head in _TRANSFORMS else "none"
-    )
     comps = list(dict.fromkeys([comp, "LZ4"]))
-    profile: dict[str, int | None] = {}
-
-    def measured(chain: str) -> int | None:
-        if chain not in profile:
-            profile[chain] = _plugin.clickhouse_profile(one, col, chain)["bytes"]
-        return profile[chain]
-
-    if original:
-        has = rec_codec in _TRANSFORMS and measured(f"{rec_codec}, {comp}") is not None
-        codecs = ["none", rec_codec] if has else ["none"]
-    else:
-        codecs = list(dict.fromkeys([rec_codec, "none"]))
-    candidates = {
-        c["codecs"]: c["predicted_bytes"] for c in r["clickhouse_candidates"] or []
-    }
-
-    def predict(k: str, c: str) -> int | None:
-        chain = f"{k}, {c}" if k in _TRANSFORMS else c
-        if original or (rec_codec == "LowCardinality" and k == "none"):
-            return None if k == "LowCardinality" else measured(chain)
-        return candidates.get(chain)
-
-    predicted = {f"{base}|{k}|{c}": predict(k, c) for k in codecs for c in comps}
+    rec_codec = _recommended_codec(r["clickhouse_type"], chosen)
+    cells = _Cells(one, col, r, rec_codec, original)
+    codecs = cells.codecs(comp)
     skip = None if original else _skip_axis(r.get("clickhouse_skip_index"))
-    if skip:
-        index_bytes = _index_bytes(r)
-        for k in codecs:
-            for c in comps:
-                predicted[f"{base}|{k}|{c}|{skip}"] = {
-                    "column_bytes": predict(k, c),
-                    "index_bytes": index_bytes,
-                }
+    predicted = _predicted(base, cells, codecs, comps, skip, r)
 
     dataset = {"path": f"{name}.arrow", "column": col}
     t = one.schema.field(col).type
     if base.startswith("Decimal") and pa.types.is_decimal(t):
         dataset["decimal_places"] = t.scale
-    kinds = [{"kind": "full_scan"}] + [
-        {"kind": "filter", "target_fraction": f, "predicate": "in", "values": 1}
-        for f in (0.001, 0.01, 0.05)
-    ]
-    if _RANGE_TYPES.match(base):
-        kinds.append({"kind": "filter", "target_fraction": 0.10, "predicate": "range"})
     suite = {
         "name": name,
         "dataset": dataset,
@@ -271,12 +336,7 @@ def _write(
             "skip_index": [skip, "none"] if skip else ["none"],
             "compression": comps,
         },
-        "queries": {
-            "kinds": kinds,
-            "query_condition_cache": [False],
-            "cache_mode": ["warm"],
-            "samples": 10,
-        },
+        "queries": _queries(base),
         "results": {"percentiles": [50, 90, 99]},
     }
     (out / f"{name}.yaml").write_text(
@@ -285,9 +345,4 @@ def _write(
     (out / f"{name}.predicted.json").write_text(
         json.dumps(predicted, indent=2), encoding="utf-8"
     )
-    with pa.ipc.new_file(
-        out / f"{name}.arrow",
-        one.schema,
-        options=pa.ipc.IpcWriteOptions(compression=None),
-    ) as w:
-        w.write_table(one.combine_chunks(), max_chunksize=None)
+    _write_arrow(out / f"{name}.arrow", one)
