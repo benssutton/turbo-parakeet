@@ -29,10 +29,13 @@ def count(impl: str, s: pl.Series, **params) -> dict:
     return run(load(impl), {"t": s.to_frame()}, **params).row(0, named=True)
 
 
-def tolerance(impl: str) -> float:
-    """Relative tolerance of an implementation's estimate: 0 for exact ones."""
+def tolerance(impl: str) -> tuple[float, float]:
+    """(rtol, atol) of an implementation's estimate: (0, 0) for exact ones."""
     cls = load(impl)
-    return 0.0 if cls.EXACT else cls().RTOL
+    if cls.EXACT:
+        return 0.0, 0.0
+    inst = cls()
+    return inst.RTOL, inst.ATOL
 
 
 # 1. Contract
@@ -76,8 +79,9 @@ def test_small_column_counts_non_null_values(impl):
     r = count(impl, s)
     assert r["n_non_null"] == 857
     # HLL p=14 reads 49.07 here (a register collision, deterministic): within the
-    # implementation's own tolerance, exact for the reference.
-    assert r["n_distinct"] == pytest.approx(50, rel=tolerance(impl))
+    # implementation's ATOL, exact for the reference.
+    rtol, atol = tolerance(impl)
+    assert r["n_distinct"] == pytest.approx(50, rel=rtol, abs=atol)
     if r["std_error"] is not None:  # Polars' sketch exposes no interval
         assert r["low"] <= r["n_distinct"] <= r["high"] <= 857
 
@@ -85,7 +89,8 @@ def test_small_column_counts_non_null_values(impl):
 @pytest.mark.parametrize("impl", ALL)
 def test_floats_are_canonical(impl):
     r = count(impl, pl.Series("f", [0.0, -0.0, float("nan"), float("nan"), None]))
-    assert r["n_distinct"] == pytest.approx(2, rel=tolerance(impl))
+    rtol, atol = tolerance(impl)
+    assert r["n_distinct"] == pytest.approx(2, rel=rtol, abs=atol)
 
 
 @pytest.mark.parametrize("impl", ALL)
@@ -112,11 +117,35 @@ def test_other_dtypes_are_counted(impl):
     )
     got = run(load(impl), {"t": frame}).select("col_a", "status", "n_distinct")
     want = {"dec": 2, "date": 3, "dtm": 3, "dur": 3, "time": 3, "bool": 2}
+    rtol, atol = tolerance(impl)
     for row in got.iter_rows(named=True):
         assert row["status"] == "computed"
         assert row["n_distinct"] == pytest.approx(
-            want[row["col_a"]], rel=tolerance(impl)
+            want[row["col_a"]], rel=rtol, abs=atol
         )
+
+
+def test_hll_small_d_collision_is_within_atol():
+    # mixed_dtypes(2000) `uint32_skewed`: exact 30, HLL 29.03 (one register collision),
+    # relative error just under RTOL; the absolute tolerance covers such cases.
+    from turbo_parakeet.techniques.distinct_count import (
+        DistinctCountHllRust,
+        DistinctCountPolars,
+    )
+
+    frames = {"t": mixed_dtypes(2000)}
+    got = DistinctCountHllRust().add(frames).result()
+    want = DistinctCountPolars().add(frames).result()
+    assert DistinctCountHllRust().agreement(got, want) == []
+    joined = got.join(want, on=["df_a", "col_a"], suffix="_ref").filter(
+        pl.col("n_distinct").is_not_null()
+    )
+    # at large d the error is relative (RTOL, checked by agreement above); at small d it
+    # is a collision or two
+    small = joined.filter(pl.col("n_distinct_ref") <= 100)
+    assert small.height > 0
+    err = (small["n_distinct"] - small["n_distinct_ref"].cast(pl.Float64)).abs()
+    assert err.max() < 2
 
 
 def test_reference_is_exact_and_hll_reports_its_error():

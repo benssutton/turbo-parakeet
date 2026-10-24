@@ -28,6 +28,8 @@ class DistinctCountPolarsApprox(DistinctCount):
 
     EXACT = False
     RTOL = 0.05
+    # one or two register collisions at small d (Polars' sketch is a HyperLogLog too)
+    ATOL = 2.0
 
     def __init__(self, *, precision: int | None = None):
         """`precision` is accepted and ignored so benchmark variants can pass it to every

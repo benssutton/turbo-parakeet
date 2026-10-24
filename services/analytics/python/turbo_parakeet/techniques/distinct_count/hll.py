@@ -7,7 +7,10 @@ from turbo_parakeet.techniques.distinct_count.base import DistinctCount
 
 class DistinctCountHllRust(DistinctCount):
     """Rust extension `hll_distinct`: one 2^precision-register HyperLogLog per 64K-row
-    chunk, merged by register max, Ertl's estimator; rayon across columns and chunks."""
+    chunk, merged by register max, Ertl's estimator; rayon across columns and chunks. At
+    small d the +-3 sigma interval (from the asymptotic 1.04 / sqrt(m) standard error) can
+    miss the exact count by a register collision: it is reported as specified, not a
+    guarantee."""
 
     EXACT = False
 
@@ -20,6 +23,9 @@ class DistinctCountHllRust(DistinctCount):
         self.precision = precision
         # agreement: within 4 standard errors of the exact count
         self.RTOL = 4 * 1.04 / math.sqrt(2**precision)
+
+    # one or two register collisions at small d; each costs about one value (1/d relative)
+    ATOL = 2.0
 
     def _compute(self, frames, combos):
         rows = {}  # (frame, column) -> plugin row; one binding call per frame
