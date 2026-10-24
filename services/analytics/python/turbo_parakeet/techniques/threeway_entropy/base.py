@@ -20,6 +20,7 @@ class ThreewayEntropy(Technique):
     METRICS = {"h_abc": pl.Float64, "n_rows": pl.UInt32}
     CONCLUSIONS = {"near_unique": pl.Boolean}
     RTOL = 1e-5
+    ACCURACY_METRICS = ("h_abc",)
     ATOL = 1e-12
 
     def __init__(self, *, near_unique_margin: float = 0.1):

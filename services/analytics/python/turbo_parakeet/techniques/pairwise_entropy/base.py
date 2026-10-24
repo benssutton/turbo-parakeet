@@ -36,6 +36,8 @@ class PairwiseEntropy(Technique):
     CONCLUSIONS = {"redundant": pl.Boolean, "near_unique": pl.Boolean}
     RTOL = 1e-5
     ATOL = 1e-12
+    # Relative MI / NMI error is meaningless where MI ~ 0: MI is compared in bits instead.
+    ACCURACY_METRICS = ("h_a", "h_b", "h_ab")
 
     def __init__(self, *, nmi_threshold: float = 0.9, near_unique_margin: float = 0.1):
         super().__init__()
@@ -46,6 +48,14 @@ class PairwiseEntropy(Technique):
             )
         self.nmi_threshold = nmi_threshold
         self.near_unique_margin = near_unique_margin
+
+    def accuracy(self, frames, result, reference):
+        """The default figures over the entropies, plus `max_abs_mi_err` (bits)."""
+        out = super().accuracy(frames, result, reference)
+        computed = reference["status"] == "computed"
+        mi = (result.filter(computed)["mi"] - reference.filter(computed)["mi"]).abs()
+        out["max_abs_mi_err"] = mi.max()
+        return out
 
     def eligible(self, series: pl.Series) -> bool:
         return series.len() > 0 and encodable(series.dtype)

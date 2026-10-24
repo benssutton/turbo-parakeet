@@ -172,3 +172,19 @@ def test_ams_seed_is_reproducible_and_num_samples_checked():
     PairwiseEntropyAmsRust(num_samples=2**20)
     with pytest.raises(ValueError, match="seed"):
         PairwiseEntropyAmsRust(seed=-1)
+
+
+def test_accuracy_compares_entropies_and_mi_in_bits():
+    from turbo_parakeet.techniques.pairwise_entropy import (
+        PairwiseEntropyAmsRust,
+        PairwiseEntropyPolars,
+    )
+
+    frames = {"t": pl.DataFrame({"a": [1, 1, 2, 2], "b": [1, 2, 1, 2]})}
+    reference = PairwiseEntropyPolars().add(frames).result()
+    result = reference.with_columns(h_ab=pl.col("h_ab") * 1.01, mi=pl.col("mi") + 0.05)
+    out = PairwiseEntropyPolars().accuracy(frames, result, reference)
+    assert out["max_rel_err"] == pytest.approx(0.01)
+    assert out["max_abs_mi_err"] == pytest.approx(0.05)
+    assert out["n_missing"] == 0
+    assert PairwiseEntropyAmsRust.EXACT is False

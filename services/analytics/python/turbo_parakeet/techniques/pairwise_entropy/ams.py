@@ -15,6 +15,7 @@ class PairwiseEntropyAmsRust(PairwiseEntropy):
     RTOL; MI / NMI within the error the entropies propagate (see `agreement`)."""
 
     # mixed_dtypes(1_000) at num_samples=4096, seed=0: max relative error 2.7% (h_ab).
+    EXACT = False
     RTOL = 0.05
     ATOL = 1e-9
 

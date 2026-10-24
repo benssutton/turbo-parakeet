@@ -99,3 +99,19 @@ def test_ams_num_samples_checked():
         ThreewayEntropyAmsRust(num_samples=0)
     with pytest.raises(ValueError, match="num_samples"):
         ThreewayEntropyAmsRust(num_samples=2**20 + 1)
+
+
+def test_accuracy_compares_the_joint_entropy_only():
+    from turbo_parakeet.techniques.threeway_entropy import (
+        ThreewayEntropyAmsRust,
+        ThreewayEntropyPolars,
+    )
+
+    frames = {
+        "t": pl.DataFrame({"a": [1, 1, 2, 2], "b": [1, 2, 1, 2], "c": [1, 1, 1, 2]})
+    }
+    reference = ThreewayEntropyPolars().add(frames).result()
+    result = reference.with_columns(h_abc=pl.col("h_abc") * 1.02)
+    out = ThreewayEntropyPolars().accuracy(frames, result, reference)
+    assert out["max_rel_err"] == pytest.approx(0.02)
+    assert ThreewayEntropyAmsRust.EXACT is False

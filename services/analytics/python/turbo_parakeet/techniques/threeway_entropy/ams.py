@@ -12,6 +12,7 @@ class ThreewayEntropyAmsRust(ThreewayEntropy):
     agrees with the reference within RTOL."""
 
     # mixed_dtypes(1_000) at num_samples=4096, seed=0: max relative error 3.9% (h_abc), 2.7% (h_ab).
+    EXACT = False
     RTOL = 0.05
     ATOL = 1e-9
 
