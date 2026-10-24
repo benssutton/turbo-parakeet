@@ -1,6 +1,6 @@
 # Uniform technique benchmarks: speed, memory and accuracy (ToDo 5f)
 
-Status: draft 2026-10-24.  Sub-project 1 of 2; sub-project 2 (new techniques for the kernels that have no
+Status: implemented 2026-10-24.  Sub-project 1 of 2; sub-project 2 (new techniques for the kernels that have no
 benchmark: HyperLogLog, Schnabel / Chao1, marginal entropy) is ToDo 17 and gets its own spec.
 
 ## 1. Goal
