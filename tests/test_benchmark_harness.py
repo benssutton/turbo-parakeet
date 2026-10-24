@@ -244,6 +244,27 @@ def test_report_without_an_estimator_keeps_typed_fixed_columns(tmp_path, monkeyp
         assert frame.schema[column] == dtype, column
 
 
+def test_report_third_table_shows_truth_figures_of_exact_rows(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(harness, "RESULTS_DIR", tmp_path)
+    base = {"dataset": "d", "variant": "default", "threads": "N", "status": "ok"}
+    rows = [
+        {**base, "implementation": "XPlainRust", "agrees": True, "max_rel_err": 0.0},
+        {
+            **base,
+            "implementation": "XTruthRust",
+            "agrees": True,
+            "max_rel_err": 0.0,
+            "zz_truth_rel_err": 0.123,
+        },
+    ]
+    harness._report("x", "pkg.x", rows)
+    third = capsys.readouterr().out.split("zz_truth_rel_err")
+    assert len(third) == 2  # the column appears in the third table only
+    assert "XTruthRust" in third[1] and "XPlainRust" not in third[1]
+
+
 def test_duplicate_dataset_names_are_rejected():
     ds = Dataset("same", lambda: {})
     with pytest.raises(ValueError, match="unique"):

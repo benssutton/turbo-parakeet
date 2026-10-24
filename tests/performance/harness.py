@@ -592,10 +592,18 @@ def _report(
                 *keys[:3], "algorithmic", "parallel", "total"
             )
         )
+        # technique-specific accuracy figures (truth errors, ...) count as worth showing
+        specific = [
+            c for c in extras if c not in ("max_rel_err", "p95_rel_err", "n_missing")
+        ]
+        has_figure = pl.any_horizontal(
+            [pl.col(c).is_not_null() for c in specific] or [pl.lit(False)]
+        )
         print(
             frame.filter(
                 pl.col("implementation").is_in(sorted(estimators))
-                | (pl.col("agrees") == False),  # noqa: E712
+                | (pl.col("agrees") == False)  # noqa: E712
+                | has_figure,
                 pl.col("threads") != "1",
             ).select(*keys[:3], "agrees", *extras, "speedup_vs_exact_rust")
         )

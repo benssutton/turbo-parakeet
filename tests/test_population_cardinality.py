@@ -113,3 +113,75 @@ def test_truth_figures_by_hand():
     assert out["chao1_coverage"] == 0.0
     assert out["schnabel_n_undefined"] == 0
     assert "max_rel_err" in out  # the default agreement figures are kept
+
+
+def test_truth_figures_over_several_columns():
+    from turbo_parakeet.techniques.population_cardinality import (
+        PopulationCardinalityPolars,
+    )
+
+    frames = {
+        "t": pl.DataFrame(
+            {"dense": np.arange(100_000) % 1_000, "distinct": np.arange(100_000)}
+        )
+    }
+    result = run(PopulationCardinalityPolars, frames)
+    truth = {("t", "dense"): 1_000, ("t", "distinct"): 100_000}
+    out = PopulationCardinalityPolars().accuracy(frames, result, result, truth=truth)
+    assert out["schnabel_n_undefined"] == 1  # d/n = 1 on the distinct column
+    assert out["schnabel_coverage"] == 1.0  # the dense interval contains D, one defined
+    assert (
+        out["chao1_coverage"] == 0.5
+    )  # dense contains D, distinct (Chao1 5e9) does not
+    dense = result.filter(pl.col("col_a") == "dense").row(0, named=True)
+    assert out["schnabel_rel_err"] == pytest.approx(
+        abs(dense["schnabel"] - 1_000) / 1_000
+    )
+
+
+def test_truth_for_no_computed_column_returns_only_the_defaults():
+    from turbo_parakeet.techniques.population_cardinality import (
+        PopulationCardinalityPolars,
+    )
+
+    frames = {"t": pl.DataFrame({"x": np.arange(1_000) % 10})}
+    result = run(PopulationCardinalityPolars, frames)
+    out = PopulationCardinalityPolars().accuracy(
+        frames, result, result, truth={("t", "absent"): 10}
+    )
+    assert "observed_rel_err" not in out and "schnabel_coverage" not in out
+    assert "max_rel_err" in out
+
+
+# 4. Null alignment and seeds
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+@pytest.mark.parametrize("seed", [0, 5])
+def test_nulls_keep_their_original_row_index(impl, seed):
+    s = pl.Series("x", [None, "a", None, "a", "b", None, "c", "c", "c", "d"] * 50)
+    frames = {"t": s.to_frame()}
+    cls = load(impl)
+    assert_agrees(
+        cls(seed=seed),
+        run(cls, frames, seed=seed),
+        run(reference(PKG), frames, seed=seed),
+    )
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_seed_changes_the_split(impl):
+    s = pl.Series("x", np.random.default_rng(0).integers(0, 3_000, 20_000))
+    r0, r1 = (stats(impl, s, seed=k) for k in (0, 1))
+    assert r0["schnabel"] != r1["schnabel"]
+    assert r0["n_distinct"] == r1["n_distinct"]
+
+
+@pytest.mark.parametrize("impl", OTHERS)
+@pytest.mark.parametrize("seed", [0, 1])
+def test_seeded_estimates_equal_the_reference(impl, seed):
+    s = pl.Series("x", np.random.default_rng(0).integers(0, 3_000, 20_000))
+    got = stats(impl, s, seed=seed)
+    ref = run(reference(PKG), {"t": s.to_frame()}, seed=seed).row(0, named=True)
+    for k in ("schnabel", "schnabel_low", "schnabel_high", "chao1"):
+        assert got[k] == pytest.approx(ref[k], rel=1e-9, nan_ok=True), k
