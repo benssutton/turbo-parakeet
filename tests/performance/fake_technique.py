@@ -23,6 +23,18 @@ class FakeSum(Technique):
     def eligible(self, series: pl.Series) -> bool:
         return series.dtype.is_numeric()
 
+    def accuracy(self, frames, result, reference, truth=None):
+        """The default figures, plus `truth_rel_err` (max |total − truth| / truth) when the
+        dataset carries a truth."""
+        out = super().accuracy(frames, result, reference)
+        if truth is not None:
+            got = {
+                (d, c): t
+                for d, c, t in zip(result["df_a"], result["col_a"], result["total"])
+            }
+            out["truth_rel_err"] = max(abs(got[k] - t) / t for k, t in truth.items())
+        return out
+
     def _compute(self, frames, combos):
         ballast = b"x" * (
             self.ballast_mb * 2**20

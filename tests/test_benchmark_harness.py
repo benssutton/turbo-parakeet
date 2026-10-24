@@ -147,6 +147,7 @@ def bench(tmp_path_factory):
                     lambda: {
                         "t": pl.DataFrame({"a": [1.0, 2.0, 3.0], "b": [10, 20, 30]})
                     },
+                    truth=lambda: {("t", "a"): 6.0, ("t", "b"): 60.0},
                 )
             ],
             impl_params={"FakeSumRust": {"ballast_mb": 64}},
@@ -247,3 +248,13 @@ def test_duplicate_dataset_names_are_rejected():
     ds = Dataset("same", lambda: {})
     with pytest.raises(ValueError, match="unique"):
         harness.run(PKG, [ds, ds])
+
+
+@pytest.mark.slow
+def test_truth_reaches_the_accuracy_hook(bench):
+    assert _one(bench, "FakeSumRust", "lo", "N")["truth_rel_err"] == 0.0
+    assert _one(bench, "FakeSumSketchRust", "hi", "N")[
+        "truth_rel_err"
+    ] == pytest.approx(0.2)
+    # truth goes to the reference comparison only
+    assert "exact_rust_truth_rel_err" not in bench.columns

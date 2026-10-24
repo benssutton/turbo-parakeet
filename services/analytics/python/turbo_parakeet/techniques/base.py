@@ -274,10 +274,13 @@ class Technique(ABC):
         frames: dict[str, pl.DataFrame],
         result: pl.DataFrame,
         reference: pl.DataFrame,
+        truth: dict[tuple[str, str], float] | None = None,
     ) -> dict[str, float | int | None]:
         """Error figures of `result` against `reference` for the benchmarks (metrics
         only: never in a result, never a decision): `numeric_errors` over
         ACCURACY_METRICS. `frames` serves overrides that rebuild ground truth (Top-k).
+        `truth` ((frame, column) → a known true value, from benchmark datasets that have
+        one) is ignored by the default; overrides that can use it do.
         """
         metrics = self.ACCURACY_METRICS
         if metrics is None:

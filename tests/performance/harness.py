@@ -30,7 +30,8 @@ Accuracy (never a gate; the pytest suite is the correctness gate): each result i
 with the reference's (`agrees` = impl.agreement() finds nothing, plus impl.accuracy()'s
 figures) and an estimator's (EXACT = False) also with its exact Rust sibling's — the one
 Rust implementation with EXACT = True, if there is exactly one — as `exact_rust_*` and
-`speedup_vs_exact_rust`. Variants: `Variant.estimator_params` go to estimators only, so the
+`speedup_vs_exact_rust`. A `Dataset.truth` reaches the reference comparison's
+`accuracy(..., truth=...)`. Variants: `Variant.estimator_params` go to estimators only, so the
 exact implementations run once per distinct `Variant.params` (their rows carry the first
 such variant's label).
 """
@@ -109,6 +110,9 @@ class Dataset:
     exclude: tuple[
         str, ...
     ] = ()  # implementations not run on this dataset (e.g. would exhaust memory)
+    truth: Callable[[], dict[tuple[str, str], float]] | None = (
+        None  # (frame, column) → known true value, passed to accuracy()
+    )
 
 
 @dataclass(frozen=True)
@@ -393,7 +397,12 @@ def _child(spec_path: str) -> None:
 
 
 def _compare(
-    impl, frames: dict, result: pl.DataFrame, other: pl.DataFrame, prefix: str
+    impl,
+    frames: dict,
+    result: pl.DataFrame,
+    other: pl.DataFrame,
+    prefix: str,
+    truth: dict | None = None,
 ) -> dict:
     out = {}
     try:  # a failed comparison must not lose the run's other rows
@@ -401,7 +410,8 @@ def _compare(
     except Exception as exc:
         print(f"    agreement failed: {exc!r}", file=sys.stderr, flush=True)
     try:
-        out.update(impl.accuracy(frames, result, other))
+        extra = {"truth": truth} if truth is not None else {}
+        out.update(impl.accuracy(frames, result, other, **extra))
     except Exception as exc:
         print(f"    accuracy failed: {exc!r}", file=sys.stderr, flush=True)
     return {prefix + k: v for k, v in out.items()}
@@ -415,6 +425,7 @@ def _score(
     classes: dict,
     reference: str,
     sibling: str | None,
+    truth: dict | None = None,
 ) -> None:
     """Fill one dataset's agreement / accuracy columns in place."""
     row_of = {(r["implementation"], r["variant"], r["threads"]): r for r in rows}
@@ -431,7 +442,7 @@ def _score(
             continue
         ref = results.get((reference, row["group"], _threads(reference)[0]))
         if ref is not None:
-            row.update(_compare(impl, frames, result, ref, ""))
+            row.update(_compare(impl, frames, result, ref, "", truth))
         if sibling is None or cls.EXACT:
             continue
         sib = results.get((sibling, row["group"], row["threads"]))
@@ -504,8 +515,16 @@ def run(
                 if row["status"] == "ok":
                     results[name, label, threads] = pl.read_ipc(out, memory_map=False)
                     kwargs_of[name, label, threads] = kwargs
+            truth = ds.truth() if ds.truth else None
             _score(
-                ds_rows, results, kwargs_of, frames, classes, module.REFERENCE, sibling
+                ds_rows,
+                results,
+                kwargs_of,
+                frames,
+                classes,
+                module.REFERENCE,
+                sibling,
+                truth,
             )
             rows += ds_rows
             del frames, results
