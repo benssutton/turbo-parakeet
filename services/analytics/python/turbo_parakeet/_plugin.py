@@ -159,6 +159,12 @@ def hll_distinct(df: Frame, precision: int) -> pl.DataFrame:
     return pl.DataFrame(_rs.hll_distinct(_collected(df), precision))
 
 
+def population_cardinality(df: Frame, seed: int) -> pl.DataFrame:
+    """col_name, n_non_null, n_distinct, f1, f2, chao1[_low, _high], schnabel[_low, _high]
+    per column (Schnabel NaN when undefined)."""
+    return pl.DataFrame(_rs.population_cardinality(_collected(df), seed))
+
+
 def minhash(df: Frame, name: str, num_perm: int = 128) -> pl.DataFrame:
     """qualified_name ("{name}|{column}"), minhash: List(UInt32) per column."""
     return pl.DataFrame(_rs.minhash(_collected(df), name, num_perm))

@@ -69,6 +69,16 @@ pub fn hll_distinct(batch: &RecordBatch, precision: u8) -> Result<RecordBatch> {
     ))
 }
 
+/// `col_name` + PopulationCardinality's metrics per column; `seed` sets the 3-way split.
+pub fn population_cardinality(batch: &RecordBatch, seed: u64) -> Result<RecordBatch> {
+    table(
+        crate::techniques::population_cardinality::population_cardinality_impl(
+            &columns(batch)?,
+            seed,
+        ),
+    )
+}
+
 /// `col_name`, `entropy` per column.
 pub fn marginal_entropy(batch: &RecordBatch) -> Result<RecordBatch> {
     table(crate::techniques::marginal_entropy::marginal_entropy_impl(

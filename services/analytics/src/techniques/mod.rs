@@ -12,5 +12,5 @@ pub(crate) use pairwise::unordered::{bloomfilter, minhash};
 pub(crate) use single_column::ordered::{delta, runs_test, skip_index};
 pub(crate) use single_column::unordered::{
     ams_entropy, cardinality_estimators, describe, distinct_count, gcd, heavy_keeper, hll,
-    marginal_entropy, space_saving, top_k,
+    marginal_entropy, population_cardinality, space_saving, top_k,
 };

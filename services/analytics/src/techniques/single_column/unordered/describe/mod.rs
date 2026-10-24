@@ -5,7 +5,7 @@
 pub(crate) mod conclusions;
 mod extremes;
 mod floats;
-mod frequencies;
+pub(crate) mod frequencies;
 mod profile;
 mod scanners;
 

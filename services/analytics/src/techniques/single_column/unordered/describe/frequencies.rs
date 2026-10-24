@@ -380,6 +380,14 @@ mod tests {
     }
 
     #[test]
+    fn subsets_match_independent_splitmix_values() {
+        assert_eq!(
+            (0..8).map(|r| subset(0, r)).collect::<Vec<_>>(),
+            [1, 2, 1, 0, 1, 2, 2, 0]
+        );
+    }
+
+    #[test]
     fn subsets_are_roughly_uniform() {
         let mut counts = [0u64; 3];
         for row in 0..30_000 {

@@ -375,6 +375,17 @@ fn hll_distinct(py: Python<'_>, data: &Bound<'_, PyAny>, precision: u8) -> PyRes
 }
 
 #[pyfunction]
+#[pyo3(signature = (data, seed))]
+fn population_cardinality(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    seed: u64,
+) -> PyResult<ArrowTable> {
+    let batch = read_batch(data)?;
+    run(py, || api::population_cardinality(&batch, seed)).map(ArrowTable)
+}
+
+#[pyfunction]
 fn marginal_entropy(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::marginal_entropy(&batch)).map(ArrowTable)
@@ -607,6 +618,7 @@ fn core_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(minmax_index, m)?)?;
     m.add_function(wrap_pyfunction!(set_index, m)?)?;
     m.add_function(wrap_pyfunction!(hll_distinct, m)?)?;
+    m.add_function(wrap_pyfunction!(population_cardinality, m)?)?;
     m.add_function(wrap_pyfunction!(marginal_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_joint_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(threeway_joint_entropy, m)?)?;
