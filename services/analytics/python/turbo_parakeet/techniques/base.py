@@ -461,8 +461,9 @@ def numeric_errors(
     """Relative error |got − want| / |want| of every `metrics` cell the reference computed
     (equal values, 0/0 and NaN/NaN → 0; NaN elsewhere is kept, so it shows in the max):
     `max_rel_err`, `p95_rel_err` and `n_missing` (nulls in `result` where the reference has
-    a value). Both frames in canonical order; misaligned keys → ValueError."""
-    if result.select(keys).rows() != reference.select(keys).rows():
+    a value). A reference value of 0 with a non-zero result gives inf (kept, so it shows in
+    the max). Both frames in canonical order; misaligned keys → ValueError."""
+    if not result.select(keys).equals(reference.select(keys)):
         raise ValueError("key columns differ from the reference")
     computed = reference["status"] == "computed"
     got, want = result.filter(computed), reference.filter(computed)
@@ -472,14 +473,15 @@ def numeric_errors(
         pair = pl.DataFrame(
             {"g": got[c].cast(pl.Float64), "w": want[c].cast(pl.Float64)}
         )
-        missing += pair.filter(g.is_null() & w.is_not_null()).height
-        rels.append(
-            pair.select(
-                pl.when((g == w) | (g.is_nan() & w.is_nan()))
-                .then(0.0)
-                .otherwise((g - w).abs() / w.abs())
-            ).to_series()
+        out = pair.select(
+            pl.when((g == w) | (g.is_nan() & w.is_nan()))
+            .then(0.0)
+            .otherwise((g - w).abs() / w.abs())
+            .alias("rel"),
+            (g.is_null() & w.is_not_null()).alias("miss"),
         )
+        missing += out["miss"].sum()
+        rels.append(out["rel"])
     rel = pl.concat(rels).drop_nulls() if rels else pl.Series([], dtype=pl.Float64)
     if rel.is_empty():
         return {"max_rel_err": None, "p95_rel_err": None, "n_missing": missing}

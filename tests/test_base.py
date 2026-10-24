@@ -525,3 +525,58 @@ def test_accuracy_defaults_to_numeric_metrics():
         "p95_rel_err": pytest.approx(0.5),
         "n_missing": 0,
     }
+
+
+def test_numeric_errors_p95_differs_from_max():
+    status = ["computed"] * 20
+    want = _error_frame([1.0] * 20, [1] * 20, status)
+    got = _error_frame([1.0] * 19 + [2.0], [1] * 20, status)
+    out = numeric_errors(got, want, ["df_a", "col_a"], ["m"])
+    # errors: nineteen 0 and one 1.0; 'nearest' quantile picks index round(0.95 * 19) = 18
+    assert out == {"max_rel_err": 1.0, "p95_rel_err": 0.0, "n_missing": 0}
+
+
+def test_numeric_errors_nothing_computed():
+    none = {"max_rel_err": None, "p95_rel_err": None, "n_missing": 0}
+    want = _error_frame([1.0, 2.0], [1, 2], ["ineligible"] * 2)
+    got = _error_frame([5.0, None], [1, 2], ["ineligible"] * 2)
+    assert numeric_errors(got, want, ["df_a", "col_a"], ["m"]) == none
+    ok = _error_frame([1.0, 2.0], [1, 2], ["computed"] * 2)
+    assert numeric_errors(ok, ok, ["df_a", "col_a"], []) == none
+
+
+def test_numeric_errors_zero_reference_nonzero_result_is_inf():
+    status = ["computed"] * 2
+    want = _error_frame([0.0, 1.0], [0, 1], status)
+    got = _error_frame([0.5, 1.0], [0, 1], status)
+    out = numeric_errors(got, want, ["df_a", "col_a"], ["m"])
+    assert out["max_rel_err"] == math.inf
+
+
+class TwoMetricToy(PerColumnToy):
+    METRICS = {"score": pl.Float64, "other": pl.Float64, "label": pl.String}
+
+    def _compute(self, frames, combos):
+        n = [sum(len(c) for _, c in k) / 10 for k in combos]
+        return self.metrics_frame(
+            combos, {"score": n, "other": n, "label": ["x"] * len(combos)}
+        )
+
+
+def test_accuracy_skips_non_numeric_metrics_by_default():
+    frames = {"t": pl.DataFrame({"ab": [1, 2]})}
+    reference = TwoMetricToy().add(frames).result()
+    result = reference.with_columns(other=pl.col("other") * 2, label=pl.lit("changed"))
+    out = TwoMetricToy().accuracy(frames, result, reference)
+    assert out["max_rel_err"] == pytest.approx(1.0)  # `other`; `label` is skipped
+
+
+def test_accuracy_restricts_to_accuracy_metrics():
+    class OnlyScore(TwoMetricToy):
+        ACCURACY_METRICS = ("score",)
+
+    frames = {"t": pl.DataFrame({"ab": [1, 2]})}
+    reference = OnlyScore().add(frames).result()
+    result = reference.with_columns(other=pl.col("other") * 2)
+    out = OnlyScore().accuracy(frames, result, reference)
+    assert out == {"max_rel_err": 0.0, "p95_rel_err": 0.0, "n_missing": 0}
