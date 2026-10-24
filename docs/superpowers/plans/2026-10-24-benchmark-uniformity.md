@@ -675,7 +675,7 @@ reading the dataset from Arrow IPC files the parent wrote once. The child (this 
 `--child spec.json`) collects garbage, notes its working set (`load_mb`), runs the warm-up
 Impl(**params).add(frames).result() and reports `peak_mb`, the peak working set above
 `load_mb` (the OS peak never resets, so only a fresh process gives a clean figure;
-`peak_is_lower_bound` when the warm-up never exceeded the load-time peak), then times `runs`
+`peak_is_upper_bound` when the warm-up never exceeded the load-time peak, so `peak_mb` only bounds the figure from above), then times `runs`
 runs (fresh instance each) → median / min. A warm-up over `budget_s` is "skipped: over
 budget". Params cross as JSON (tuples arrive as lists).
 
@@ -734,7 +734,7 @@ COLUMNS = [
     "min_ms",
     "load_mb",
     "peak_mb",
-    "peak_is_lower_bound",
+    "peak_is_upper_bound",
     "agrees",
     "algorithmic",
     "parallel",
@@ -982,7 +982,7 @@ def _child(spec_path: str) -> None:
     info = {
         "load_mb": load_mb,
         "peak_mb": peak[0] - load_mb,
-        "peak_is_lower_bound": peak[0] == peak_before,
+        "peak_is_upper_bound": peak_extra(load_mb, peak_before, peak[0])[1],
     }
     if times is None:
         info.update(
@@ -1137,7 +1137,7 @@ def _report(name: str, package: str, rows: list[dict]) -> pl.DataFrame:
     with pl.Config(tbl_rows=-1, tbl_cols=-1, tbl_width_chars=250, fmt_str_lengths=40):
         print(
             frame.select(
-                *keys, "median_ms", "min_ms", "peak_mb", "peak_is_lower_bound", "agrees", "status"
+                *keys, "median_ms", "min_ms", "peak_mb", "peak_is_upper_bound", "agrees", "status"
             )
         )
         print(
@@ -1347,7 +1347,7 @@ Replace the bullet that starts with ``- `tests/performance/benchmark_<technique>
 - `tests/performance/benchmark_<technique>.py` — **speed, peak memory and accuracy** (spec 2026-10-24): ~20-line scripts calling
   `harness.run(package, datasets[, variants])`. One child process per (dataset, implementation, variant, threads), reading the dataset
   from Arrow IPC written once: the warm-up `Impl(**params).add(frames).result()` gives `peak_mb` (working set above the loaded data;
-  `peak_is_lower_bound`), then 5 timed runs (fresh instance) give median/min. Rust implementations run at N and 1 threads
+  `peak_is_upper_bound`: true when the warm-up never exceeded the load-time peak, so `peak_mb` only bounds the figure from above), then 5 timed runs (fresh instance) give median/min. Rust implementations run at N and 1 threads
   (`RAYON_NUM_THREADS=1`, `POLARS_MAX_THREADS=1`): **algorithmic** (fastest non-Rust ÷ Rust@1), **parallel** (Rust@1 ÷ Rust@N),
   **total**. Every result is scored against the reference — `agrees` (`agreement()`) and `Technique.accuracy()` (default: max / p95
   relative error over `ACCURACY_METRICS` and `n_missing`; Top-k: tie-aware precision, ARE / AAE, bound violations against exact

@@ -52,7 +52,7 @@ params, frame files and output path.  The child:
 1. reads its frames (`pl.read_ipc(..., memory_map=False)`), imports the class;
 2. `gc.collect()`, records `load_mb` (current working set) and the peak so far;
 3. runs the warm-up `cls(**params).add(frames).result()`; `peak_mb` = peak working set after it − `load_mb`;
-   `peak_is_lower_bound` = the peak did not move (the run never exceeded the load-time peak);
+   `peak_is_upper_bound` = the peak did not move (the warm-up never exceeded the load-time peak, so `peak_mb` only bounds the figure from above);
 4. if the warm-up took longer than `budget_s`: reports `skipped: over budget` and stops;
 5. runs `runs` timed repeats (fresh instance each) → `median_ms`, `min_ms`;
 6. writes the last result to the output path (Arrow IPC) and prints one JSON line.
@@ -87,7 +87,7 @@ One row per (dataset, implementation, variant, threads):
 |---|---|
 | keys | `dataset`, `implementation`, `variant`, `threads`, `status` |
 | speed | `median_ms`, `min_ms` |
-| memory | `load_mb`, `peak_mb`, `peak_is_lower_bound` |
+| memory | `load_mb`, `peak_mb`, `peak_is_upper_bound` |
 | vs reference | `agrees`, accuracy columns (§6) |
 | vs exact Rust | `exact_rust_agrees`, accuracy columns prefixed `exact_rust_`, `speedup_vs_exact_rust` |
 | speedups (Rust rows, `threads = N`) | `algorithmic`, `parallel`, `total` |
@@ -188,8 +188,8 @@ AMS outcome notes point at `benchmark_top_k.py` / the entropy benchmarks.  ToDo.
 
 - One process per measurement: ≈ 1 s start-up (Polars + extension import) per child, plus reading the frames.
   Top-k has the largest grid: per 10M-row stream ≈ 2 reference + 24 estimator children.
-- `peak_mb` includes allocator caching and is a working-set figure, not a heap figure; `peak_is_lower_bound`
-  flags the runs whose figure only bounds the truth from below.  Comparable between implementations on one
+- `peak_mb` includes allocator caching and is a working-set figure, not a heap figure; `peak_is_upper_bound`
+  flags the runs whose figure only bounds the truth from above.  Comparable between implementations on one
   machine, not across machines.
 - Timing in a fresh child excludes nothing the in-process loop included (warm-up is still discarded), so speed
   figures stay comparable with earlier results.

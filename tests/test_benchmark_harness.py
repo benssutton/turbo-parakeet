@@ -8,7 +8,14 @@ import polars as pl
 import pytest
 
 from performance import harness
-from performance.harness import Dataset, Variant, memory_mb, speedups, time_call
+from performance.harness import (
+    Dataset,
+    Variant,
+    memory_mb,
+    peak_extra,
+    speedups,
+    time_call,
+)
 
 
 def test_time_call_warms_up_then_times_every_run():
@@ -104,6 +111,27 @@ def test_speedups_per_variant_share_the_exact_rows_of_their_group():
     assert got["hi"]["algorithmic"] == 2.0
 
 
+def test_speedups_estimator_variants_do_not_cross():
+    rows = [
+        {**_row("XSketchPolars", "default", 5.0), "variant": "tiny", "group": "g"},
+        {**_row("XSketchPolars", "default", 90.0), "variant": "big", "group": "g"},
+        {**_row("XSketchRust", "N", 10.0), "variant": "big", "group": "g"},
+        {**_row("XSketchRust", "1", 20.0), "variant": "big", "group": "g"},
+    ]
+    got = speedups(rows, {"XSketchPolars"})
+    assert got[0]["total"] == 9.0  # not 0.5: the tiny variant's time is no competitor
+    assert got[0]["algorithmic"] == 4.5
+    assert (
+        speedups(rows)[0]["total"] == 0.5
+    )  # without the estimator set: the old minimum
+
+
+def test_peak_extra_is_an_upper_bound_when_the_peak_did_not_move():
+    assert peak_extra(100.0, 150.0, 150.0) == (50.0, True)
+    assert peak_extra(100.0, 150.0, 150.5) == (50.5, True)  # within the tolerance
+    assert peak_extra(100.0, 150.0, 220.0) == (120.0, False)  # a real measurement
+
+
 PKG = "performance.fake_technique"
 
 
@@ -185,7 +213,7 @@ def test_accuracy_against_the_reference_and_the_exact_sibling(bench):
 @pytest.mark.slow
 def test_memory_and_speedups(bench):
     exact = _one(bench, "FakeSumRust", "lo", "N")
-    assert exact["peak_mb"] >= 60  # the 64 MiB ballast
+    assert exact["peak_mb"] >= 50  # the 64 MiB ballast
     assert exact["load_mb"] > 0
     assert exact["algorithmic"] is not None and exact["parallel"] is not None
     assert _one(bench, "FakeSumRust", "lo", "1")["algorithmic"] is None

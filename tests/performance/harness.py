@@ -13,9 +13,12 @@ reading the dataset from Arrow IPC files the parent wrote once. The child (this 
 `--child spec.json`) collects garbage, notes its working set (`load_mb`), runs the warm-up
 Impl(**params).add(frames).result() and reports `peak_mb`, the peak working set above
 `load_mb` (the OS peak never resets, so only a fresh process gives a clean figure;
-`peak_is_lower_bound` when the warm-up never exceeded the load-time peak), then times `runs`
-runs (fresh instance each) → median / min. A warm-up over `budget_s` is "skipped: over
-budget". Params cross as JSON (tuples arrive as lists).
+`peak_is_upper_bound` when the warm-up never exceeded the load-time peak, so `peak_mb` only
+bounds the figure from above), then times `runs` runs (fresh instance each) → median / min.
+A warm-up over `budget_s` is "skipped: over budget". Params cross as JSON (tuples arrive as
+lists). The parent holds the frames and every result while the children run (RAM / disk
+pressure on very large datasets), and the "N" thread runs inherit the caller's environment
+(a user-set RAYON_NUM_THREADS caps them).
 
 Rust implementations run at N threads and at 1 (RAYON_NUM_THREADS=1, POLARS_MAX_THREADS=1 —
 both pools are fixed at process start):
@@ -62,6 +65,7 @@ from datagen import large_dataset as generated_large_dataset  # noqa: E402
 RESULTS_DIR = Path(__file__).parent / "results"
 SINGLE_THREAD_ENV = {"RAYON_NUM_THREADS": "1", "POLARS_MAX_THREADS": "1"}
 CHILD_TIMEOUT_S = 1800
+PEAK_TOLERANCE_MB = 1.0  # a peak this close to the load-time peak never moved
 COLUMNS = [
     "dataset",
     "implementation",
@@ -72,7 +76,7 @@ COLUMNS = [
     "min_ms",
     "load_mb",
     "peak_mb",
-    "peak_is_lower_bound",
+    "peak_is_upper_bound",
     "agrees",
     "exact_rust_agrees",
     "algorithmic",
@@ -93,7 +97,7 @@ FIXED_DTYPES = {
         ),
         pl.Float64,
     ),
-    **dict.fromkeys(("peak_is_lower_bound", "agrees", "exact_rust_agrees"), pl.Boolean),
+    **dict.fromkeys(("peak_is_upper_bound", "agrees", "exact_rust_agrees"), pl.Boolean),
     "speedup_vs_exact_rust": pl.Float64,
 }
 
@@ -193,23 +197,31 @@ def time_call(
     return times, result
 
 
-def speedups(rows: list[dict]) -> list[dict]:
+def speedups(
+    rows: list[dict], estimators: set[str] | frozenset = frozenset()
+) -> list[dict]:
     """Per (dataset, variant, Rust implementation); the non-Rust competitors are the rows of
-    the same dataset and params group (rows without a group form one)."""
+    the same dataset and params group (rows without a group form one); a non-Rust estimator
+    competes only with the Rust rows of its own variant."""
     out = []
     ok = [r for r in rows if r["status"] == "ok"]
     for dataset, group in dict.fromkeys((r["dataset"], r.get("group")) for r in ok):
         same = [r for r in ok if r["dataset"] == dataset and r.get("group") == group]
-        others = [
-            r["median_ms"] for r in same if not r["implementation"].endswith("Rust")
-        ]
-        best = min(others) if others else None
         rust = dict.fromkeys(
             (r["implementation"], r.get("variant"))
             for r in same
             if r["implementation"].endswith("Rust")
         )
         for impl, variant in rust:
+            others = [
+                r["median_ms"]
+                for r in same
+                if not r["implementation"].endswith("Rust")
+                and (
+                    r["implementation"] not in estimators or r.get("variant") == variant
+                )
+            ]
+            best = min(others) if others else None
 
             def median(threads: str) -> float | None:
                 return next(
@@ -337,6 +349,14 @@ def _measure(
         return {"status": "error"}
 
 
+def peak_extra(
+    load_mb: float, peak_before: float, peak_after: float
+) -> tuple[float, bool]:
+    """(peak_mb, is_upper_bound). The OS peak never resets: if the warm-up did not raise it
+    past the load-time peak, `peak_after - load_mb` only bounds the extra from above."""
+    return peak_after - load_mb, peak_after <= peak_before + PEAK_TOLERANCE_MB
+
+
 def _child(spec_path: str) -> None:
     spec = json.loads(Path(spec_path).read_text())
     frames = {n: pl.read_ipc(p, memory_map=False) for n, p in spec["frames"].items()}
@@ -350,10 +370,11 @@ def _child(spec_path: str) -> None:
         spec["budget_s"],
         on_warmup=lambda: peak.append(memory_mb()[1]),
     )
+    peak_mb, is_upper_bound = peak_extra(load_mb, peak_before, peak[0])
     info = {
         "load_mb": load_mb,
-        "peak_mb": peak[0] - load_mb,
-        "peak_is_lower_bound": peak[0] == peak_before,
+        "peak_mb": peak_mb,
+        "peak_is_upper_bound": is_upper_bound,
     }
     if times is None:
         info.update(
@@ -489,8 +510,10 @@ def run(
             rows += ds_rows
             del frames, results
 
+    estimators = {n for n, c in classes.items() if not c.EXACT}
     by_key = {
-        (s["dataset"], s["variant"], s["implementation"]): s for s in speedups(rows)
+        (s["dataset"], s["variant"], s["implementation"]): s
+        for s in speedups(rows, estimators)
     }
     for r in rows:
         s = by_key.get((r["dataset"], r["variant"], r["implementation"]))
@@ -499,7 +522,6 @@ def run(
                 algorithmic=s["algorithmic"], parallel=s["parallel"], total=s["total"]
             )
         del r["group"]
-    estimators = {n for n, c in classes.items() if not c.EXACT}
     return _report(
         results_name or package.rsplit(".", 1)[-1], package, rows, estimators
     )
@@ -541,7 +563,7 @@ def _report(
                 "median_ms",
                 "min_ms",
                 "peak_mb",
-                "peak_is_lower_bound",
+                "peak_is_upper_bound",
                 "agrees",
                 "status",
             )
