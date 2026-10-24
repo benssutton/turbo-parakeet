@@ -1,5 +1,5 @@
 """
-Distinct-count benchmark (speed, peak memory, accuracy; harness.py): DistinctCountRust
+Distinct-count benchmark (speed, peak memory, accuracy; harness.py): DistinctCountHllRust
 (HyperLogLog, estimator, one variant per precision) and DistinctCountPolarsApprox (which
 ignores `precision`, so its variants repeat) vs the exact Polars reference. Shapes: the
 generated large dataset; 10M x 4 Int64 columns of 10^3 .. 10^7 distinct values; wide 1M x 100
