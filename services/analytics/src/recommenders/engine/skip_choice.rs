@@ -60,42 +60,8 @@ pub(crate) fn skip_choice(
     if arr.data_type().is_nested() || matches!(arr.data_type(), arrow_schema::DataType::Null) {
         return none;
     }
-    // A dictionary is decoded first: Polars would import it as a Categorical in the process-global
-    // category mapping, and a global Categorical column's exported size counts every category in
-    // it, so the size of unrelated columns would depend on which columns were imported before.
-    // The population ranks values (a Categorical by string) either way.
-    // An Enum column is the exception: ClickHouse compares an Enum's category codes, so it is
-    // ranked by category index (its position in `enum_values`), as the skip-index techniques do.
-    let enum_index = enum_values.filter(|_| is_enum_type(ch_type));
-    let decoded = match (enum_index, arr.data_type()) {
-        (Some(cats), _) => {
-            let index: std::collections::HashMap<&str, u32> = cats
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (c.as_str(), i as u32))
-                .collect();
-            let Ok(text) = arrow_cast::cast(arr, &arrow_schema::DataType::Utf8) else {
-                return none;
-            };
-            let Some(text) = text.as_any().downcast_ref::<arrow_array::StringArray>() else {
-                return none;
-            };
-            let codes: arrow_array::UInt32Array = text
-                .iter()
-                .map(|v| v.and_then(|s| index.get(s).copied()))
-                .collect();
-            if codes.null_count() != text.null_count() {
-                return none;
-            }
-            arrow_array::make_array(codes.to_data())
-        }
-        (None, arrow_schema::DataType::Dictionary(_, values)) => {
-            let Ok(a) = arrow_cast::cast(arr, values) else {
-                return none;
-            };
-            a
-        }
-        _ => arrow_array::make_array(arr.to_data()),
+    let Some(decoded) = decode_for_population(arr, ch_type, enum_values) else {
+        return none;
     };
     let field = Field::new("x", decoded.data_type().clone(), true);
     let Ok(series) = import_array(&field, &decoded) else {
@@ -109,54 +75,140 @@ pub(crate) fn skip_choice(
     }
 
     let mut pruned = extra_pruned;
+    let (bloom_ok, bloom_fprs) = screen_bloom_fprs(ch_type, p, &mut pruned);
+    let scan = Scan {
+        pop: &pop,
+        arr,
+        layout,
+        segments,
+        bytes_scale,
+    };
+    let mut cheap = Vec::new();
+    for &g in &p.granularities {
+        cheap.push(scan.measure(Kind::MinMax, g, None));
+        for &m in &p.set_max_sizes {
+            cheap.push(scan.measure(Kind::Set(m), g, Some(m)));
+        }
+    }
+    let bloom = || {
+        if bloom_ok {
+            scan.bloom(p, &bloom_fprs)
+        } else {
+            Vec::new()
+        }
+    };
+    let rows = decide_skip(cheap, pruned, bloom, ch_size, p);
+    let chosen = rows
+        .iter()
+        .find(|r| r.outcome == "chosen")
+        .map(|r| format!("{} GRANULARITY {}", r.kind.ddl(), r.granularity));
+    (chosen, rows)
+}
+
+/// The array the population ranks. A dictionary is decoded first: Polars would import it as a
+/// Categorical in the process-global category mapping, and a global Categorical column's exported
+/// size counts every category in it, so the size of unrelated columns would depend on which columns
+/// were imported before. The population ranks values (a Categorical by string) either way.
+/// An Enum column is the exception: ClickHouse compares an Enum's category codes, so it is
+/// ranked by category index (its position in `enum_values`), as the skip-index techniques do.
+fn decode_for_population(
+    arr: &dyn Array,
+    ch_type: &str,
+    enum_values: Option<&[String]>,
+) -> Option<arrow_array::ArrayRef> {
+    let enum_index = enum_values.filter(|_| is_enum_type(ch_type));
+    match (enum_index, arr.data_type()) {
+        (Some(cats), _) => enum_codes(arr, cats),
+        (None, arrow_schema::DataType::Dictionary(_, values)) => arrow_cast::cast(arr, values).ok(),
+        _ => Some(arrow_array::make_array(arr.to_data())),
+    }
+}
+
+/// An Enum column's category codes (`UInt32`); None when a value is not a category.
+fn enum_codes(arr: &dyn Array, cats: &[String]) -> Option<arrow_array::ArrayRef> {
+    let index: std::collections::HashMap<&str, u32> = cats
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.as_str(), i as u32))
+        .collect();
+    let text = arrow_cast::cast(arr, &arrow_schema::DataType::Utf8).ok()?;
+    let text = text.as_any().downcast_ref::<arrow_array::StringArray>()?;
+    let codes: arrow_array::UInt32Array = text
+        .iter()
+        .map(|v| v.and_then(|s| index.get(s).copied()))
+        .collect();
+    (codes.null_count() == text.null_count()).then(|| arrow_array::make_array(codes.to_data()))
+}
+
+/// A `bloom_filter` candidate that is pruned before measuring.
+fn bloom_pruned(fpr: f64, p: &SkipParams, evidence: String) -> SkipCandidate {
+    SkipCandidate {
+        measured: None,
+        kind: Kind::Bloom(fpr),
+        granularity: p.granularities.first().copied().unwrap_or(1),
+        outcome: "pruned",
+        evidence,
+    }
+}
+
+/// Whether `bloom_filter` applies to the column, and the false-positive rates to measure. Rates
+/// on an unsupported type, or outside chbench's R37 table (no size model), go to `pruned` with
+/// the rule.
+fn screen_bloom_fprs(
+    ch_type: &str,
+    p: &SkipParams,
+    pruned: &mut Vec<SkipCandidate>,
+) -> (bool, Vec<f64>) {
     let bloom_ok = !bloom_unsupported(ch_type);
     if !bloom_ok {
         for &fpr in &p.bloom_fprs {
-            pruned.push(SkipCandidate {
-                measured: None,
-                kind: Kind::Bloom(fpr),
-                granularity: p.granularities.first().copied().unwrap_or(1),
-                outcome: "pruned",
-                evidence: format!("bloom_filter is not supported on {ch_type} (chbench R36)"),
-            });
+            let evidence = format!("bloom_filter is not supported on {ch_type} (chbench R36)");
+            pruned.push(bloom_pruned(fpr, p, evidence));
         }
     }
-
-    // A false-positive rate outside chbench's R37 table has no size model: pruned, with the rule.
     let known: Vec<f64> = BLOOM_BITS_PER_VALUE.iter().map(|(f, _)| *f).collect();
     let mut bloom_fprs = Vec::new();
     for &fpr in &p.bloom_fprs {
         if bloom_ok && !known.contains(&fpr) {
             let list: Vec<String> = known.iter().map(f64::to_string).collect();
-            pruned.push(SkipCandidate {
-                measured: None,
-                kind: Kind::Bloom(fpr),
-                granularity: p.granularities.first().copied().unwrap_or(1),
-                outcome: "pruned",
-                evidence: format!(
-                    "bloom_filter fpr {fpr} not measured (chbench R37: {})",
-                    list.join(", ")
-                ),
-            });
+            let evidence = format!(
+                "bloom_filter fpr {fpr} not measured (chbench R37: {})",
+                list.join(", ")
+            );
+            pruned.push(bloom_pruned(fpr, p, evidence));
         } else {
             bloom_fprs.push(fpr);
         }
     }
+    (bloom_ok, bloom_fprs)
+}
 
-    let n = pop.n();
-    let measure = |kind: Kind, g: u32, max_size: Option<u64>| -> Measured {
+/// What every measurement of one column shares.
+struct Scan<'a> {
+    pop: &'a Population,
+    arr: &'a dyn Array,
+    layout: &'a ChLayout,
+    segments: &'a [(usize, usize)],
+    bytes_scale: f64,
+}
+
+impl Scan<'_> {
+    /// One index kind at one granularity: `max_size` None is `minmax`, Some(m) a `set(m)`.
+    fn measure(&self, kind: Kind, g: u32, max_size: Option<u64>) -> Measured {
+        let pop = self.pop;
+        let segments = self.segments;
         let block_rows = u64::from(g) * GRANULE_ROWS;
-        let (w, _) = windows(n, block_rows);
+        let (w, _) = windows(pop.n(), block_rows);
         let (sums, expected, index) = match max_size {
             None => (
-                over_segments(segments, w, 0, |r| minmax::scan(&pop, w as usize, r)),
-                minmax::baseline(&pop, w),
+                over_segments(segments, w, 0, |r| minmax::scan(pop, w as usize, r)),
+                minmax::baseline(pop, w),
                 IndexKind::MinMax,
             ),
             Some(m) => {
-                let b = set::baseline(&pop, w, m);
+                let b = set::baseline(pop, w, m);
                 (
-                    over_segments(segments, w, pop.d(), |r| set::scan(&pop, w as usize, m, r)),
+                    over_segments(segments, w, pop.d(), |r| set::scan(pop, w as usize, m, r)),
                     (b.skip_rows, b.skip_values),
                     match kind {
                         Kind::Bloom(fpr) => IndexKind::Bloom { fpr },
@@ -166,43 +218,34 @@ pub(crate) fn skip_choice(
             }
         };
         measured(
-            &pop,
+            pop,
             w,
             &sums,
             expected,
             kind,
             g,
             index,
-            arr,
-            layout,
-            bytes_scale,
+            self.arr,
+            self.layout,
+            self.bytes_scale,
         )
-    };
-
-    let mut cheap = Vec::new();
-    for &g in &p.granularities {
-        cheap.push(measure(Kind::MinMax, g, None));
-        for &m in &p.set_max_sizes {
-            cheap.push(measure(Kind::Set(m), g, Some(m)));
-        }
     }
-    let bloom = || {
-        if !bloom_ok {
-            return Vec::new();
-        }
+
+    /// The `bloom_filter` fallback: the unlimited set's skip shares thinned by (1 − fpr).
+    fn bloom(&self, p: &SkipParams, fprs: &[f64]) -> Vec<Measured> {
         let mut out = Vec::new();
         for &g in &p.granularities {
-            let unlimited = measure(Kind::Set(0), g, Some(0));
-            for &fpr in &bloom_fprs {
+            let unlimited = self.measure(Kind::Set(0), g, Some(0));
+            for &fpr in fprs {
                 let keep = 1.0 - fpr;
                 let bytes = skip_index_bytes(
-                    arr,
-                    layout,
+                    self.arr,
+                    self.layout,
                     IndexKind::Bloom { fpr },
                     u64::from(g) * GRANULE_ROWS,
                 )
                 .ok()
-                .map(|b| scaled(b, bytes_scale));
+                .map(|b| scaled(b, self.bytes_scale));
                 out.push(Measured {
                     kind: Kind::Bloom(fpr),
                     skip_rows: unlimited.skip_rows * keep,
@@ -215,13 +258,7 @@ pub(crate) fn skip_choice(
             }
         }
         out
-    };
-    let rows = decide_skip(cheap, pruned, bloom, ch_size, p);
-    let chosen = rows
-        .iter()
-        .find(|r| r.outcome == "chosen")
-        .map(|r| format!("{} GRANULARITY {}", r.kind.ddl(), r.granularity));
-    (chosen, rows)
+    }
 }
 
 fn scaled(bytes: u64, scale: f64) -> u64 {

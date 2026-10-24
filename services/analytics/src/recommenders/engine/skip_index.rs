@@ -181,6 +181,23 @@ pub(crate) fn decide_skip(
     p: &SkipParams,
 ) -> Vec<SkipCandidate> {
     let mut rows = pruned;
+    let mut passing = screen_cheap(cheap, &mut rows, p);
+    if passing.is_empty() {
+        passing = screen_bloom_candidates(bloom(), column_bytes, &mut rows, p);
+    }
+    let winners = per_kind_winners(&passing, &mut rows);
+    choose_across_kinds(winners, &mut rows);
+    sort_rows(&mut rows);
+    rows
+}
+
+/// Steps 1–2 over the minmax / set measurements: the finished rows go to `rows`, the survivors
+/// are returned.
+fn screen_cheap(
+    cheap: Vec<Measured>,
+    rows: &mut Vec<SkipCandidate>,
+    p: &SkipParams,
+) -> Vec<Measured> {
     let mut passing = Vec::new();
     for m in cheap {
         match screen(m, p) {
@@ -188,16 +205,29 @@ pub(crate) fn decide_skip(
             Err(m) => passing.push(m),
         }
     }
-    if passing.is_empty() {
-        for m in bloom() {
-            match screen_bloom(m, column_bytes, p) {
-                Ok(r) => rows.push(r),
-                Err(m) => passing.push(m),
-            }
+    passing
+}
+
+/// Step 3 over the bloom measurements: the finished rows go to `rows`, the survivors are returned.
+fn screen_bloom_candidates(
+    bloom: Vec<Measured>,
+    column_bytes: Option<u64>,
+    rows: &mut Vec<SkipCandidate>,
+    p: &SkipParams,
+) -> Vec<Measured> {
+    let mut passing = Vec::new();
+    for m in bloom {
+        match screen_bloom(m, column_bytes, p) {
+            Ok(r) => rows.push(r),
+            Err(m) => passing.push(m),
         }
     }
+    passing
+}
 
-    // Step 4: per kind, the largest granularity within TIE of the kind's best.
+/// Step 4: per kind, the largest granularity within TIE of the kind's best; the others are
+/// rejected into `rows`.
+fn per_kind_winners(passing: &[Measured], rows: &mut Vec<SkipCandidate>) -> Vec<Measured> {
     let mut winners: Vec<Measured> = Vec::new();
     let mut done = vec![false; passing.len()];
     for i in 0..passing.len() {
@@ -226,45 +256,52 @@ pub(crate) fn decide_skip(
         }
         winners.push(passing[win].clone());
     }
+    winners
+}
 
-    // Step 5: across kinds.
-    if !winners.is_empty() {
-        let best = winners.iter().map(|m| m.skip_rows).fold(f64::MIN, f64::max);
-        let tied = |m: &Measured| m.skip_rows >= best - TIE;
-        let pick = winners
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| tied(m))
-            .min_by(|(_, a), (_, b)| {
-                a.bytes
-                    .unwrap_or(u64::MAX)
-                    .cmp(&b.bytes.unwrap_or(u64::MAX))
-                    .then(a.kind.rank().cmp(&b.kind.rank()))
-            })
-            .map(|(i, _)| i)
-            .expect("a winner is within the tie of the best");
-        let label = format!(
-            "{} G{}",
-            winners[pick].kind.ddl(),
-            winners[pick].granularity
-        );
-        for (i, m) in winners.into_iter().enumerate() {
-            if i == pick {
-                let ev = format!(
-                    "skip {:.2}, gain {:.2} over random order",
-                    m.skip_rows,
-                    m.skip_rows - m.expected_skip_rows
-                );
-                rows.push(row(m, "chosen", ev));
-            } else if tied(&m) {
-                rows.push(row(m, "rejected", format!("larger index than {label}")));
-            } else {
-                rows.push(row(m, "rejected", format!("lower skip than {label}")));
-            }
+/// Step 5: across kinds, the highest `skip_rows`; ties within TIE go to the smaller index, then
+/// the lower kind rank. Every winner becomes a row.
+fn choose_across_kinds(winners: Vec<Measured>, rows: &mut Vec<SkipCandidate>) {
+    if winners.is_empty() {
+        return;
+    }
+    let best = winners.iter().map(|m| m.skip_rows).fold(f64::MIN, f64::max);
+    let tied = |m: &Measured| m.skip_rows >= best - TIE;
+    let pick = winners
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| tied(m))
+        .min_by(|(_, a), (_, b)| {
+            a.bytes
+                .unwrap_or(u64::MAX)
+                .cmp(&b.bytes.unwrap_or(u64::MAX))
+                .then(a.kind.rank().cmp(&b.kind.rank()))
+        })
+        .map(|(i, _)| i)
+        .expect("a winner is within the tie of the best");
+    let label = format!(
+        "{} G{}",
+        winners[pick].kind.ddl(),
+        winners[pick].granularity
+    );
+    for (i, m) in winners.into_iter().enumerate() {
+        if i == pick {
+            let ev = format!(
+                "skip {:.2}, gain {:.2} over random order",
+                m.skip_rows,
+                m.skip_rows - m.expected_skip_rows
+            );
+            rows.push(row(m, "chosen", ev));
+        } else if tied(&m) {
+            rows.push(row(m, "rejected", format!("larger index than {label}")));
+        } else {
+            rows.push(row(m, "rejected", format!("lower skip than {label}")));
         }
     }
+}
 
-    // Chosen first, then skip_rows descending; rows without measurements last.
+/// Chosen first, then skip_rows descending; rows without measurements last.
+fn sort_rows(rows: &mut [SkipCandidate]) {
     rows.sort_by(|a, b| {
         let skip = |r: &SkipCandidate| r.measured.as_ref().map(|m| m.skip_rows);
         (b.outcome == "chosen")
@@ -276,7 +313,6 @@ pub(crate) fn decide_skip(
                 (None, None) => Ordering::Equal,
             })
     });
-    rows
 }
 
 #[cfg(test)]

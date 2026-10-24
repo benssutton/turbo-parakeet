@@ -219,6 +219,45 @@ pub(crate) fn decide(
     p: &CompressionParams,
 ) -> Result<Decision, String> {
     let mut pruned_rows = Vec::new();
+    let flags = surviving_transforms(&tr, &mut pruned_rows);
+
+    let mut families = Vec::new();
+    for transform in flags {
+        families.push(measure_family(
+            transform,
+            &mut measure,
+            distinct_ratio,
+            p,
+            &mut pruned_rows,
+        )?);
+    }
+
+    let plain = &families[0];
+    let mut win = plain;
+    for f in &families[1..] {
+        if qualifies(f, plain, p) && (win.transform == Transform::None || f.pick.1 < win.pick.1) {
+            win = f;
+        }
+    }
+    let chain = Chain {
+        transform: win.transform,
+        compression: win.pick.0,
+    };
+    let bytes = win.pick.1;
+
+    let mut rows = candidate_rows(&families, win, p);
+    rows.sort_by_key(|r| r.predicted_bytes);
+    rows.extend(pruned_rows);
+    Ok(Decision {
+        chain,
+        bytes,
+        candidates: rows,
+    })
+}
+
+/// The transforms worth measuring: none, plus each of GCD / Delta / DoubleDelta that survives
+/// its pruning rule; the others become `pruned` rows.
+fn surviving_transforms(tr: &Transforms, pruned_rows: &mut Vec<CodecCandidate>) -> Vec<Transform> {
     let mut flags = vec![Transform::None];
     match tr.gcd {
         Some((g, max_abs, signed)) => {
@@ -246,93 +285,66 @@ pub(crate) fn decide(
             }
         }
     }
+    flags
+}
 
-    let mut families = Vec::new();
-    for transform in flags {
-        let chain = |compression| Chain {
-            transform,
-            compression,
-        };
-        let (lz4, hist) = measure(chain(Compression::Lz4))?;
-        let mut measured = vec![(Compression::Lz4, lz4)];
-        let (fires, shortcut) = incompressible(&hist, distinct_ratio, p.zstd_min_saving);
-        let (pick, zstd_best);
-        if fires {
-            for &l in &p.zstd_levels {
-                pruned_rows.push(pruned(chain(Compression::Zstd(l)).ddl(), shortcut.clone()));
-            }
-            pick = (Compression::Lz4, lz4);
-            zstd_best = None;
-        } else {
-            let mut zstd = Vec::with_capacity(p.zstd_levels.len());
-            for &l in &p.zstd_levels {
-                let (bytes, _) = measure(chain(Compression::Zstd(l)))?;
-                zstd.push((l, bytes));
-                measured.push((Compression::Zstd(l), bytes));
-            }
-            pick = choose_compression(lz4, &zstd, p);
-            zstd_best = zstd.iter().map(|&(_, b)| b).min();
-        }
-        families.push(Family {
-            transform,
-            measured,
-            pick,
-            zstd_best,
-        });
-    }
-
-    let plain = &families[0];
-    let qualifies =
-        |f: &Family| f.pick.1 as f64 <= (1.0 - p.transform_min_saving) * plain.pick.1 as f64;
-    let mut win = plain;
-    for f in &families[1..] {
-        if qualifies(f) && (win.transform == Transform::None || f.pick.1 < win.pick.1) {
-            win = f;
-        }
-    }
-    let chain = Chain {
-        transform: win.transform,
-        compression: win.pick.0,
+/// Measures one transform's chains: LZ4, then the ZSTD levels unless the shortcut fires on the
+/// LZ4 histogram (the skipped levels become `pruned` rows).
+fn measure_family(
+    transform: Transform,
+    measure: &mut impl FnMut(Chain) -> Result<(u64, [u64; 256]), String>,
+    distinct_ratio: f64,
+    p: &CompressionParams,
+    pruned_rows: &mut Vec<CodecCandidate>,
+) -> Result<Family, String> {
+    let chain = |compression| Chain {
+        transform,
+        compression,
     };
-    let bytes = win.pick.1;
-    let pct = p.transform_min_saving * 100.0;
+    let (lz4, hist) = measure(chain(Compression::Lz4))?;
+    let mut measured = vec![(Compression::Lz4, lz4)];
+    let (fires, shortcut) = incompressible(&hist, distinct_ratio, p.zstd_min_saving);
+    let (pick, zstd_best);
+    if fires {
+        for &l in &p.zstd_levels {
+            pruned_rows.push(pruned(chain(Compression::Zstd(l)).ddl(), shortcut.clone()));
+        }
+        pick = (Compression::Lz4, lz4);
+        zstd_best = None;
+    } else {
+        let mut zstd = Vec::with_capacity(p.zstd_levels.len());
+        for &l in &p.zstd_levels {
+            let (bytes, _) = measure(chain(Compression::Zstd(l)))?;
+            zstd.push((l, bytes));
+            measured.push((Compression::Zstd(l), bytes));
+        }
+        pick = choose_compression(lz4, &zstd, p);
+        zstd_best = zstd.iter().map(|&(_, b)| b).min();
+    }
+    Ok(Family {
+        transform,
+        measured,
+        pick,
+        zstd_best,
+    })
+}
 
+/// Whether a family's pick saves `transform_min_saving` over the plain pick.
+fn qualifies(f: &Family, plain: &Family, p: &CompressionParams) -> bool {
+    f.pick.1 as f64 <= (1.0 - p.transform_min_saving) * plain.pick.1 as f64
+}
+
+/// One row per measured chain of every family, with the outcome against the winning family.
+fn candidate_rows(families: &[Family], win: &Family, p: &CompressionParams) -> Vec<CodecCandidate> {
     let mut rows = Vec::new();
-    for f in &families {
+    for f in families {
         for &(c, b) in &f.measured {
             let codecs = Chain {
                 transform: f.transform,
                 compression: c,
             }
             .ddl();
-            let is_pick = c == f.pick.0;
-            let (outcome, evidence) = if is_pick && f.transform == win.transform {
-                ("chosen", "smallest after pruning".to_string())
-            } else if is_pick && f.transform == Transform::None {
-                (
-                    "rejected",
-                    format!(
-                        "{} saves ≥ {pct}% over no transform: {bytes} vs {b}",
-                        transform_name(win.transform)
-                    ),
-                )
-            } else if is_pick && !qualifies(f) {
-                (
-                    "rejected",
-                    format!(
-                        "{} saves < {pct}% over no transform ({b} vs {})",
-                        transform_name(f.transform),
-                        plain.pick.1
-                    ),
-                )
-            } else if is_pick {
-                (
-                    "rejected",
-                    format!("{} smaller ({bytes} vs {b})", transform_name(win.transform)),
-                )
-            } else {
-                ("rejected", lost_to_pick(c, b, f, p))
-            };
+            let (outcome, evidence) = chain_outcome(c, b, f, win, &families[0], p);
             rows.push(CodecCandidate {
                 codecs,
                 predicted_bytes: Some(b),
@@ -341,13 +353,49 @@ pub(crate) fn decide(
             });
         }
     }
-    rows.sort_by_key(|r| r.predicted_bytes);
-    rows.extend(pruned_rows);
-    Ok(Decision {
-        chain,
-        bytes,
-        candidates: rows,
-    })
+    rows
+}
+
+/// Outcome and evidence of measured chain `(c, b)` of family `f`; `win` is the winning family,
+/// `plain` the no-transform one.
+fn chain_outcome(
+    c: Compression,
+    b: u64,
+    f: &Family,
+    win: &Family,
+    plain: &Family,
+    p: &CompressionParams,
+) -> (&'static str, String) {
+    let bytes = win.pick.1;
+    let pct = p.transform_min_saving * 100.0;
+    let is_pick = c == f.pick.0;
+    if is_pick && f.transform == win.transform {
+        ("chosen", "smallest after pruning".to_string())
+    } else if is_pick && f.transform == Transform::None {
+        (
+            "rejected",
+            format!(
+                "{} saves ≥ {pct}% over no transform: {bytes} vs {b}",
+                transform_name(win.transform)
+            ),
+        )
+    } else if is_pick && !qualifies(f, plain, p) {
+        (
+            "rejected",
+            format!(
+                "{} saves < {pct}% over no transform ({b} vs {})",
+                transform_name(f.transform),
+                plain.pick.1
+            ),
+        )
+    } else if is_pick {
+        (
+            "rejected",
+            format!("{} smaller ({bytes} vs {b})", transform_name(win.transform)),
+        )
+    } else {
+        ("rejected", lost_to_pick(c, b, f, p))
+    }
 }
 
 #[cfg(test)]

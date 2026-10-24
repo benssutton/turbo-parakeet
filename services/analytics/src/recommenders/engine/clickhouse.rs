@@ -80,20 +80,7 @@ pub(crate) fn clickhouse_type(
     let (ty, layout) = match t {
         AT::Dictionary(_, _) if enum_values.is_some() => enum_type(enum_values.unwrap_or(&[])),
         AT::Dictionary(_, v) if matches!(**v, AT::Utf8 | AT::LargeUtf8) => {
-            // LowCardinality cannot sit inside Nullable: the nullable form is
-            // LowCardinality(Nullable(String)). The layout only tells the emulator that nulls
-            // occur: it stores no null map (null is dictionary key 0).
-            return Ok(if nullable {
-                (
-                    "LowCardinality(Nullable(String))".to_string(),
-                    ChLayout::Nullable(Box::new(ChLayout::LowCardinality)),
-                )
-            } else {
-                (
-                    "LowCardinality(String)".to_string(),
-                    ChLayout::LowCardinality,
-                )
-            });
+            return Ok(low_cardinality_string(nullable));
         }
         AT::Boolean => ("Bool".to_string(), fixed(1, false, false)),
         AT::Int8 => ("Int8".to_string(), fixed(1, true, true)),
@@ -106,29 +93,10 @@ pub(crate) fn clickhouse_type(
         AT::UInt64 => ("UInt64".to_string(), fixed(8, false, true)),
         AT::Float32 => ("Float32".to_string(), fixed(4, true, false)),
         AT::Float64 => ("Float64".to_string(), fixed(8, true, false)),
-        AT::Decimal32(p, s) | AT::Decimal64(p, s) | AT::Decimal128(p, s) => match *p {
-            0..=9 => (format!("Decimal32({s})"), fixed(4, true, true)),
-            10..=18 => (format!("Decimal64({s})"), fixed(8, true, true)),
-            _ => (format!("Decimal128({s})"), fixed(16, true, true)),
-        },
+        AT::Decimal32(p, s) | AT::Decimal64(p, s) | AT::Decimal128(p, s) => decimal_type(*p, *s),
         AT::Date32 if in_range(range, DATE_MAX_DAYS) => ("Date".to_string(), fixed(2, false, true)),
         AT::Date32 => ("Date32".to_string(), fixed(4, true, true)),
-        AT::Timestamp(unit, tz) => {
-            if *unit == TimeUnit::Second && in_range(range, DATETIME_MAX_SECONDS) {
-                let ty = match tz {
-                    Some(tz) => format!("DateTime('{tz}')"),
-                    None => "DateTime".to_string(),
-                };
-                (ty, fixed(4, false, true))
-            } else {
-                let p = precision_digits(unit);
-                let ty = match tz {
-                    Some(tz) => format!("DateTime64({p}, '{tz}')"),
-                    None => format!("DateTime64({p})"),
-                };
-                (ty, fixed(8, true, true))
-            }
-        }
+        AT::Timestamp(unit, tz) => timestamp_type(unit, tz.as_deref(), range),
         AT::Time32(u) | AT::Time64(u) => (
             format!("Time64({})", precision_digits(u)),
             fixed(8, true, false),
@@ -144,27 +112,7 @@ pub(crate) fn clickhouse_type(
             let (ty, layout) = clickhouse_type(f.data_type(), None, f.is_nullable(), None)?;
             (format!("Array({ty})"), ChLayout::Array(Box::new(layout)))
         }
-        AT::Struct(fields) => {
-            if let Some(AT::Timestamp(u, _)) = fields.first().map(|f| f.data_type()) {
-                if *t == timestamp_with_offset(*u) {
-                    return Err("timestamp_with_offset has no ClickHouse type".to_string());
-                }
-            }
-            if fields.is_empty() {
-                return Err("empty struct has no ClickHouse type".to_string());
-            }
-            let mut names = Vec::with_capacity(fields.len());
-            let mut layouts = Vec::with_capacity(fields.len());
-            for f in fields.iter() {
-                let (ty, layout) = clickhouse_type(f.data_type(), None, f.is_nullable(), None)?;
-                names.push(format!("{} {ty}", quote_ident(f.name())));
-                layouts.push(layout);
-            }
-            (
-                format!("Tuple({})", names.join(", ")),
-                ChLayout::Tuple(layouts),
-            )
-        }
+        AT::Struct(fields) => tuple_type(t, fields)?,
         other => return Err(format!("{other} has no ClickHouse type")),
     };
     // ClickHouse cannot make Array or Tuple Nullable.
@@ -178,7 +126,78 @@ pub(crate) fn clickhouse_type(
     }
 }
 
-/// The factor by which a column's original physical values (integers; decimal unscaled
+/// A dictionary of text. LowCardinality cannot sit inside Nullable: the nullable form is
+/// LowCardinality(Nullable(String)). The layout only tells the emulator that nulls occur: it
+/// stores no null map (null is dictionary key 0).
+fn low_cardinality_string(nullable: bool) -> (String, ChLayout) {
+    if nullable {
+        (
+            "LowCardinality(Nullable(String))".to_string(),
+            ChLayout::Nullable(Box::new(ChLayout::LowCardinality)),
+        )
+    } else {
+        (
+            "LowCardinality(String)".to_string(),
+            ChLayout::LowCardinality,
+        )
+    }
+}
+
+/// `Decimal32` / `Decimal64` / `Decimal128` by precision.
+fn decimal_type(precision: u8, scale: i8) -> (String, ChLayout) {
+    match precision {
+        0..=9 => (format!("Decimal32({scale})"), fixed(4, true, true)),
+        10..=18 => (format!("Decimal64({scale})"), fixed(8, true, true)),
+        _ => (format!("Decimal128({scale})"), fixed(16, true, true)),
+    }
+}
+
+/// `DateTime` when the unit is seconds and `range` fits, else `DateTime64(precision)`.
+fn timestamp_type(
+    unit: &TimeUnit,
+    tz: Option<&str>,
+    range: Option<(i128, i128)>,
+) -> (String, ChLayout) {
+    if *unit == TimeUnit::Second && in_range(range, DATETIME_MAX_SECONDS) {
+        let ty = match tz {
+            Some(tz) => format!("DateTime('{tz}')"),
+            None => "DateTime".to_string(),
+        };
+        (ty, fixed(4, false, true))
+    } else {
+        let p = precision_digits(unit);
+        let ty = match tz {
+            Some(tz) => format!("DateTime64({p}, '{tz}')"),
+            None => format!("DateTime64({p})"),
+        };
+        (ty, fixed(8, true, true))
+    }
+}
+
+/// A struct as `Tuple(name type, ...)`; Err for the offset timestamp and the empty struct.
+fn tuple_type(t: &AT, fields: &arrow_schema::Fields) -> Result<(String, ChLayout), String> {
+    if let Some(AT::Timestamp(u, _)) = fields.first().map(|f| f.data_type()) {
+        if *t == timestamp_with_offset(*u) {
+            return Err("timestamp_with_offset has no ClickHouse type".to_string());
+        }
+    }
+    if fields.is_empty() {
+        return Err("empty struct has no ClickHouse type".to_string());
+    }
+    let mut names = Vec::with_capacity(fields.len());
+    let mut layouts = Vec::with_capacity(fields.len());
+    for f in fields.iter() {
+        let (ty, layout) = clickhouse_type(f.data_type(), None, f.is_nullable(), None)?;
+        names.push(format!("{} {ty}", quote_ident(f.name())));
+        layouts.push(layout);
+    }
+    Ok((
+        format!("Tuple({})", names.join(", ")),
+        ChLayout::Tuple(layouts),
+    ))
+}
+
+// The factor by which a column's original physical values (integers; decimal unscaled
 /// values; Date days; Datetime values in their unit) divide to give the recommended type's
 /// physical values, so the running GCD and range carry over. None when the recommended
 /// values are not an exact rescaling of the original ones (text-derived numbers, float →
