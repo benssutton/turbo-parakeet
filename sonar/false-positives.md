@@ -5,7 +5,7 @@ in the local SonarQube server (status lives in its database: `docker compose dow
 loses it, so re-mark after a reset using this list). Review before acting on a Sonar finding
 of the same rule; add new entries here when a finding is rejected.
 
-## `python:S5807` — "Change or remove this string; X is not defined" (12, BLOCKER)
+## `python:S5807` — "Change or remove this string; X is not defined" (16, BLOCKER)
 
 **Why it is wrong:** the packages' `__init__.py` define a module-level `__getattr__`
 (PEP 562, `turbo_parakeet.techniques.base.lazy_attributes`), so every name in `__all__` resolves on access;
@@ -27,6 +27,9 @@ sees names bound statically.
 | `threeway_entropy/__init__.py` | `ThreewayEntropyPolars` |
 | `adjusted_rand/__init__.py` | `AdjustedRandSklearn` |
 | `top_k/__init__.py` | `TopKPolars` |
+| `distinct_count/__init__.py` | `DistinctCountPolars`, `DistinctCountPolarsApprox` |
+| `marginal_entropy/__init__.py` | `MarginalEntropyPolars` |
+| `population_cardinality/__init__.py` | `PopulationCardinalityPolars` |
 
 ## `python:S3776` — cognitive complexity 16 against the limit of 15 (1, CRITICAL)
 
@@ -36,7 +39,7 @@ do not refactor to chase the score.
 - `top_k/base.py` `TopK.agreement` (16): a single pass building found / wanted / rel per
   column, then three checks
 
-## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (4, CRITICAL)
+## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (6, CRITICAL)
 
 Not false positives in the strict sense: the scores are right, but the functions were judged
 not worth splitting (no natural seam; splitting costs readability for one or two points).
@@ -46,10 +49,21 @@ Marked *False positive* in Sonar so the dashboard is clean; do not refactor to c
 - `recommenders/engine/candidates.rs` `Rules::float` (16)
 - `techniques/single_column/unordered/gcd.rs` `gcd_slice` (17): generic closures on a hot path inflate the score
 - `common/encode.rs` `encode_series` (17): a flat dtype dispatch, one arm per type
+- `bindings/api/recommenders.rs` `skip_params` (16): one check per skip-index keyword, each its own error
+- `common/clickhouse_sizes.rs` test `delta_transform_cases` (17): a table of hand-worked cases in one unit test
 
 (`DistinctSample::absorb` reached 19, `BatchStats::of` 20 and `Streaming::row` 29, and the ClickHouse size
 emulator's `streams` 20 and `gcd_transform` 23; all were split instead. `DistinctSample::absorb`: `admit_exact` holds the
 exact-phase bookkeeping.)
+
+## `python:S107` — too many parameters (4, MAJOR)
+
+`recommenders/oneshot.py` `OneShotRecommender.__init__` (16), `recommenders/streaming.py`
+`StreamingRecommender.__init__` (19), and their `_plugin.py` wrappers `oneshot_recommender` /
+`streaming_recommender`. Every parameter is a keyword-only recommender option that mirrors the
+Rust API, the C ABI (`capi.rs`) and the Java `OneShotParams` / `StreamingParams`; grouping them
+into a config object would change the public API of four bindings for no behavioural gain.
+Marked *Accepted* (won't fix), not *False positive*: the count is right.
 
 ## `python:S1172` — unused function parameter (3, MAJOR)
 
