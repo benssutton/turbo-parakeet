@@ -1,5 +1,6 @@
 """
-Pairwise joint entropy speed benchmark: PairwiseEntropyRust and PairwiseEntropyAmsRust vs
+Pairwise joint entropy benchmark (speed, peak memory, accuracy; harness.py): PairwiseEntropyRust
+and PairwiseEntropyAmsRust (estimator, also scored against PairwiseEntropyRust) vs
 PairwiseEntropyPolars (reference).
 
 Run: C:/Users/Alexander/miniconda3/envs/p312/python.exe tests/performance/benchmark_pairwise_entropy.py

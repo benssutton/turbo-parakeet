@@ -26,10 +26,10 @@ import polars as pl
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))  # tests/: datagen
-sys.path.insert(0, str(HERE))  # memory_mb
+sys.path.insert(0, str(HERE))  # harness
 
-from benchmark_ams_entropy import memory_mb  # noqa: E402
 from datagen import large_dataset_mixed  # noqa: E402
+from harness import memory_mb  # noqa: E402
 
 from turbo_parakeet.recommenders import (  # noqa: E402
     OneShotRecommender,
