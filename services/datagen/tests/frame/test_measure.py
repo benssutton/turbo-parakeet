@@ -29,3 +29,11 @@ def test_relation_metrics():
     assert containment(b, a) == 1.0 and containment(a, b) == 2 / 3
     assert math.isclose(nmi(a, pa.array([1, 2, 3, None])), 1.0)
     assert joint_distinct(pa.array([1, 1, 2]), pa.array([1, 2, 1])) == 3
+
+
+def test_nmi_of_two_unique_columns_is_cheap():
+    # The joint ids span d_a * d_b (here 10^10): counting them must not allocate that.
+    n = 100_000
+    a = pa.array(np.arange(n))
+    b = pa.array(np.random.default_rng(0).permutation(n))
+    assert math.isclose(nmi(a, b), 1.0)

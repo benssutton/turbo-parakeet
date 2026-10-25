@@ -70,8 +70,8 @@ def _ids_with_null(a: pa.Array) -> np.ndarray:
 
 
 def _entropy(ids: np.ndarray) -> float:
-    p = np.bincount(ids) / ids.size
-    p = p[p > 0]
+    # Counted by sorting, not bincount: joint ids span d_a * d_b.
+    p = np.unique(ids, return_counts=True)[1] / ids.size
     return float(-(p * np.log2(p)).sum())
 
 
