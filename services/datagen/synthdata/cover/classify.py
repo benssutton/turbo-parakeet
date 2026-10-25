@@ -158,7 +158,7 @@ def family_of(dtype) -> str | None:
     return None
 
 
-def _base(s: pl.Series) -> tuple[pa.Array, bool]:
+def base_values_of(s: pl.Series) -> tuple[pa.Array, bool]:
     """A column's non-null base values for column_stats: (array, integer base?)."""
     s = s.drop_nulls()
     dt = s.dtype
@@ -184,7 +184,7 @@ def coverage_of(frame: pl.DataFrame) -> Coverage:
         fam = family_of(frame.schema[name])
         if fam is None:
             continue
-        values, integer = _base(frame[name])
+        values, integer = base_values_of(frame[name])
         if isinstance(values, pa.ChunkedArray):
             values = values.combine_chunks()
         measured[name] = classify(column_stats(values, frame.height, integer), fam)
