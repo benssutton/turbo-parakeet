@@ -1,13 +1,12 @@
 """Calibrate the skip-index predictions (skip share, index bytes) against chbench on a live server.
 
-Standalone (never collected by pytest).  Needs the `chbench-ch` container and the sibling repo
-`clickhouse_benchmark` (spec 2026-10-20 §8.3, §10).  For each frame: recommend, `to_chbench`, run
-every suite whose recommender chose a skip index (point queries only, one sample), read the results
+Standalone (never collected by pytest).  Needs the `chbench-ch` container (services/bench/CLAUDE.md, Environment).  For each
+frame: recommend, `to_chbench`, run every suite whose recommender chose a skip index (point queries only, one sample), read the results
 store directly (predicate SQL, `selected_marks`, `index_compressed_bytes`), compute for each queried
 value the exact predicted skip share from the suite's dataset in stored order, and write
 `results/skip_index_calibration.arrow` plus a summary.
 
-    python tests/performance/calibrate_skip_indexes.py [--chbench PATH] [--workers N] [--keep]
+    python tests/performance/calibrate_skip_indexes.py [--workers N] [--keep]
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 import shutil
 import sqlite3
@@ -31,6 +29,7 @@ import pyarrow as pa
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+BENCH = ROOT / "services" / "bench"  # chbench runs with this as its working directory
 sys.path[:0] = [str(ROOT / "tests")]
 
 import datagen  # noqa: E402
@@ -74,7 +73,7 @@ def prepare_suite(path: Path) -> dict:
     return suite
 
 
-def run_suite(chbench_root: Path, yaml_path: Path, store: Path, cache: Path) -> str:
+def run_suite(yaml_path: Path, store: Path, cache: Path) -> str:
     run = subprocess.run(
         [
             sys.executable,
@@ -87,7 +86,7 @@ def run_suite(chbench_root: Path, yaml_path: Path, store: Path, cache: Path) -> 
             "--cache-dir",
             str(cache),
         ],
-        cwd=chbench_root,
+        cwd=BENCH,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -273,18 +272,11 @@ TYPES = (
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--chbench",
-        default=os.environ.get(
-            "CHBENCH_DIR", str(ROOT.parent / "clickhouse_benchmark")
-        ),
-    )
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--reuse", help="a kept work dir: skip recommending and running")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    chbench_root = Path(args.chbench)
     work = Path(args.reuse or tempfile.mkdtemp(prefix="calibrate_skip_"))
     suites: list[tuple[str, Path, str]] = []
     frames = (
@@ -323,7 +315,7 @@ def main() -> None:
             []
             if args.reuse
             else [
-                pool.submit(run_suite, chbench_root, p, work / f"{p.stem}.db", cache)
+                pool.submit(run_suite, p, work / f"{p.stem}.db", cache)
                 for _, p, _ in suites
             ]
         )
