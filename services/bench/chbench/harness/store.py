@@ -32,9 +32,9 @@ Three additions go beyond those five tables as first designed:
 Every write to `datasets`, `tables` and `queries` is an `INSERT ... ON
 CONFLICT DO UPDATE`, idempotent on the table's primary key (`created_at` is
 never in the UPDATE's SET list, so a re-run keeps the row's original creation
-time). `samples` has no natural key -- it is append-only by design (task
-brief point 4: samples accumulate across runs so `samples_held` can report
-how many are already banked) -- so `insert_sample` is a plain INSERT,
+time). `samples` has no natural key -- it is append-only by design
+(samples accumulate across runs so `samples_held` can report how many are
+already banked) -- so `insert_sample` is a plain INSERT,
 committed immediately after it runs: a Ctrl-C between samples loses at most
 the sample in flight, never an earlier one.
 

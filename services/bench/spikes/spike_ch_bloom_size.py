@@ -1,5 +1,5 @@
 """Spike 10: how ClickHouse sizes `bloom_filter`, `minmax` and `set` skip
-indexes (task 1 of the skip-index cross-repository plan).
+indexes, for the skip-index recommendations.
 
 For each shape of an Int64 column of 1 000 000 rows:
 

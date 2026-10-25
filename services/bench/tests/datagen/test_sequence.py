@@ -151,7 +151,7 @@ def test_interarrival_layout_preserves_the_multiset(cv):
 
 @pytest.mark.parametrize("cv", [0.5, 1.0, 2.0])
 def test_interarrival_layout_moves_achieved_cv_toward_target(cv):
-    """The constructive draw undershoots; refinement (Task 10) closes the gap. Here
+    """The constructive draw undershoots; refinement closes the gap. Here
     we only require the ordering to be right."""
     support, counts = float_mset()
     y = layout_interarrival(support, counts, cv, np.random.default_rng(1))
@@ -160,7 +160,7 @@ def test_interarrival_layout_moves_achieved_cv_toward_target(cv):
 
 
 def test_achieved_cv_is_monotone_in_the_input_cv():
-    """This is what makes the Task 10 bisection converge."""
+    """This is what makes the refine bisection converge."""
     support, counts = float_mset()
     got = [
         interarrival_cv(

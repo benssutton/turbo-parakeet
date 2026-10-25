@@ -23,9 +23,8 @@ __all__ = ["arrow_type_string", "file_digest", "read_column", "path_spec"]
 
 def arrow_type_string(dtype: pa.DataType) -> str:
     """The supported `arrow_type` spelling of `dtype`; SpecError naming the
-    type when
-    chbench's vocabulary cannot express it (large_string, decimal256, list,
-    ...)."""
+    type when chbench's vocabulary cannot express it (large_string,
+    decimal256, list, ...)."""
     for name, ctor in _SCALARS.items():
         if dtype == ctor():
             return name

@@ -4,7 +4,7 @@ This is the only module that touches pyarrow types. It takes the flat numpy
 array of values produced by the two-stage generator and produces the
 pyarrow.Array the loader writes to ClickHouse.
 
-Order of operations, fixed by the task brief:
+Order of operations, fixed:
   1. Round float/decimal values to `decimal_places`. The generator already
      rounds at draw time, but this must not assume that.
   2. Range-check the *rounded* values against the target type's representable
@@ -15,7 +15,7 @@ Order of operations, fixed by the task brief:
      generator broke its own invariant. It matters most for decimals:
      Decimal32(9,8) holds -9.99999999..9.99999999, and a draw in
      [9.999999995, 10) rounds to exactly 10 and overflows even though the
-     pre-round value looked safe (spikes/FINDINGS.md, Plan 1).
+     pre-round value looked safe (spikes/FINDINGS.md).
   3. Chunk into list<T> arrays if the type is a list.
   4. Inject nulls -- null_count at the outer level, array_null_count at the
      inner level for lists -- at uniformly random positions drawn from rng.

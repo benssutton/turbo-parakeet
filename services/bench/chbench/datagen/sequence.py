@@ -198,7 +198,7 @@ def layout_interarrival(
 
     Lifted from `spikes/spike_interarrival.py` keeping only the start-to-start
     gap mode (5.9 to 33.6 percent relative error); the free-gap mode measured
-    42 to 45 percent and is rejected. The draw undershoots: Task 10's refine
+    42 to 45 percent and is rejected. The draw undershoots: the refine
     pass bisects on the input CV, which is why the achieved CV must be
     monotone in it.
 

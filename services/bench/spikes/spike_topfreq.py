@@ -1,6 +1,6 @@
 """Spike 6: does the runs layout work for the top-frequency dichotomy?
 
-Every Plan 1 layout row used the median dichotomy on numeric data. The design
+Every earlier layout row used the median dichotomy on numeric data. The design
 routes string and categorical columns through the top-frequency dichotomy
 instead, which for skewed data gives a far more lopsided split. This measures
 what that does to the achievable runs z-score.

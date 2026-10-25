@@ -1,7 +1,7 @@
 """One monotone bisection, shared by every search in the generator.
 
-Plan 1 produced three hand-rolled searches with three different status
-vocabularies, and the findings require a clamp and an invalid bracket to be
+The generator once had three hand-rolled searches with three different
+status vocabularies, and the findings require a clamp and an invalid bracket to be
 distinguished. This defines that vocabulary once.
 
 Callers: the entropy solve on the power-law exponent, the

@@ -376,7 +376,7 @@ def filter_sql(name: str, variant: TableVariant, predicate_sql: str) -> str:
     (_exact_count_projection)`), which counts fully-covered granules from
     the primary index and reads only the boundary granules. Measured on a
     200 000-row `Float64` table sorted by `v` with a 10 % range filter
-    (`Task 7` report): `EXPLAIN indexes = 1` selected `Granules: 4/25`, yet
+    (measured in an earlier run): `EXPLAIN indexes = 1` selected `Granules: 4/25`, yet
     `SelectedMarks = 2`, `SelectedRanges = 2` and `read_rows = 16385` for
     20 000 matched rows. That measures index lookup, not column
     decompression, and flatters every primary-key variant; the aggregate

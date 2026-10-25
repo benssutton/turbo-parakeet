@@ -1,6 +1,6 @@
 """Spike 8: can pure numpy remove the inter-arrival layout's Python loop?
 
-Task 13's profile of `generate()` with an `interarrival_cv` target at
+A profile of `generate()` with an `interarrival_cv` target at
 10 000 000 rows and cardinality 0.75 put 96 percent of the runtime in
 `sequence.layout_interarrival`, whose `for j in range(m)` loop does one
 `np.repeat` and two list appends per repeat-run, 2.5 million times per
@@ -12,7 +12,7 @@ The vectorised function below makes exactly the same random draws in the
 same order as the package function, so for the same generator state it must
 produce the same array; the spike checks that with `np.array_equal`, times
 both on the same full-scale multiset, and prints all three. The vectorised
-function lives here only; Plan 3 lifts it into `chbench/` if the owner
+function lives here only; it could be lifted into `chbench/` if the owner
 agrees.
 
 Run from the repository root or from inside spikes/: this file puts the

@@ -7,7 +7,7 @@ reconfiguration of a real (non-tty) stdout that would otherwise raise
 (FINDINGS §5).
 
 `run --dry-run` is exercised against a small temporary suite rather than
-`suites/float_codecs.yaml`: the grid assertion the task brief names is the
+`suites/float_codecs.yaml`: the grid assertion needed is the
 T64-on-Float64 skip reason, and `float_codecs.yaml`'s codec axis is
 `[Gorilla, Delta, DoubleDelta]` with no T64 at all, while its dataset is
 10 000 000 rows -- a five-second generation and an 80 MB Arrow file for a

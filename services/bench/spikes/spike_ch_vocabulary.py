@@ -1,5 +1,5 @@
 """Spike 9: the ClickHouse type / codec / skip-index vocabulary behind the
-turbo-parakeet recommendations (task 13 of the cross-repository plan).
+turbo-parakeet recommendations.
 
 For every type the recommender may emit, the script runs chbench's DDL form
 (Wide parts forced, `CODEC(<codec>, <compression>)`, `LowCardinality` as a

@@ -1,8 +1,9 @@
 """Calibrate the ClickHouse size emulator against bytes measured by chbench on a live server.
 
-Standalone (never collected by pytest).  Needs the `chbench-ch` container (services/bench/CLAUDE.md, Environment).  For each
-frame: recommend, `to_chbench`, run every suite with chbench (storage bytes only), join the measured compressed bytes of the data column with
-`<name>.predicted.json`, write `results/clickhouse_calibration.arrow` and print a summary.
+Standalone (never collected by pytest).  Needs the `chbench-ch` container (services/bench/CLAUDE.md,
+Environment).  For each frame: recommend, `to_chbench`, run every suite with chbench (storage bytes only),
+join the measured compressed bytes of the data column with `<name>.predicted.json`, write
+`results/clickhouse_calibration.arrow` and print a summary.
 
     python tests/performance/calibrate_clickhouse_sizes.py [--workers N] [--keep]
 """

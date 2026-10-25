@@ -494,8 +494,8 @@ def test_solve_dispersion_hits_reachable_targets(target):
 
 
 def test_solve_dispersion_does_not_report_a_false_clamp():
-    """The Plan 1 defect: a naive bracket straddles the mean-sign crossing, so the
-    high end is negative and every positive target trivially clamps."""
+    """A naive bracket straddles the mean-sign crossing, so the high end is
+    negative and every positive target trivially clamps."""
     s = uc1(index_of_dispersion=2.0)
     r = solve_dispersion(s, np.random.default_rng(s.seed), 2.0)
     assert r.status is not SolveStatus.CLAMPED_HIGH

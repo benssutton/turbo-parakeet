@@ -515,11 +515,12 @@ def large_dataset(
     mean_run: float = 1,
     clustering: float = 0.0,
 ) -> pl.DataFrame:
-    """The shared large frame: `identity` (Int64 0..n) then 25 groups of (Int32, Float64,
-    3-letter String, Date), Int32 / Date distinct counts stepping down from 100 to 1. Settings apply to every column but
-    `identity`: `mean_run` (geometric run length), `clustering` (1 sorted, 0 drawn
-    order, in between: a share 1 − clustering of positions shuffled after sorting),
-    `null_rate` (Bernoulli). Cached: callers must not modify the frame in place."""
+    """The shared large frame: `identity` (Int64 0..n) then 25 groups of (Int32,
+    Float64, 3-letter String, Date), Int32 / Date distinct counts stepping down
+    from 100 to 1. Settings apply to every column but `identity`: `mean_run`
+    (geometric run length), `clustering` (1 sorted, 0 drawn order, in between: a
+    share 1 − clustering of positions shuffled after sorting), `null_rate`
+    (Bernoulli). Cached: callers must not modify the frame in place."""
     regime = {"null_rate": null_rate, "mean_run": mean_run, "clustering": clustering}
     return _large(n_rows, seed, (regime,))
 

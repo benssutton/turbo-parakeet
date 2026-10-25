@@ -2,8 +2,7 @@
 
 This is the only module that raises on bad input. Everything downstream is
 best-effort (a missed target warns, never fails), so every malformed
-combination must be caught
-here, with a message naming the fields involved.
+combination must be caught here, with a message naming the fields involved.
 """
 
 from __future__ import annotations
@@ -59,7 +58,8 @@ def parse_arrow_type(s: str) -> pa.DataType:
     """Parse one of the supported `arrow_type` strings. Raises SpecError
     otherwise.
 
-    Decimal precision limits are per width: 9, 18 and 38. list<T> nests exactly one
+    Decimal precision limits are per width: 9, 18 and 38. list<T> nests exactly
+    one
     scalar; list of list is not supported.
     """
     return _parse(s, allow_list=True)
@@ -223,9 +223,9 @@ class DatasetSpec:
     array_len_range: tuple[int, int] | None = None
     array_null_count: int = 0
     tolerances: Tolerances = field(default_factory=Tolerances)
-    # Real-data source: when `path` is set the
-    # other fields are measured from the file (`realdata.path_spec`), not
-    # generation recipes; `content_hash` pins the file's bytes and column.
+    # Real-data source: when `path` is set the other fields are measured from
+    # the file (`realdata.path_spec`), not generation recipes; `content_hash`
+    # pins the file's bytes and column.
     path: str | None = None
     column: str | None = None
     content_hash: str | None = None

@@ -3,12 +3,12 @@
 Stage 2's inter-arrival layout (`sequence.layout_interarrival`) draws its
 start-to-start gaps from a gamma parameterised by the *target* CV, but the
 achieved CV always undershoots: 5.9 percent relative at CV 0.5, rising to
-33.6 percent at CV 2.0 (spikes/FINDINGS.md; Task 9). A single multiplicative
+33.6 percent at CV 2.0 (spikes/FINDINGS.md). A single multiplicative
 rescaling cannot correct this -- the miss grows by a factor of six across the
 target range for the start-to-start gap mode in use -- so this instead
 bisects the gamma's *input* CV against the metric of the regenerated
 sequence, exactly as `solve.solve_monotone` already does for the stage 1
-entropy and dispersion solves. Task 9 measured achieved CV strictly monotone
+entropy and dispersion solves. Achieved CV was measured strictly monotone
 in input CV, which is what makes the bisection converge.
 
 `runs_z` needs no refinement (the construction hits the integer run count

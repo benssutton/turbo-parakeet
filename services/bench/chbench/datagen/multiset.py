@@ -415,7 +415,7 @@ class Multiset:
 def build_multiset(
     spec: DatasetSpec, rng: np.random.Generator, sigma: float | None = None
 ) -> Multiset:
-    """Stage 1: the support (Task 5) and how many times each value appears.
+    """Stage 1: the support and how many times each value appears.
 
     An entropy target picks a power-law exponent by bisection against the ACTUAL
     support size (which may be below spec.support_size after collapse); otherwise

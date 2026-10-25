@@ -7,8 +7,7 @@ Arrow, and assemble the manifest.
 
 The manifest is where the best-effort contract (a missed target warns, never
 fails) becomes visible. For every metric the DatasetSpec targeted it records
-the target,
-the value achieved on the final array, whether that landed inside tolerance,
+the target, the value achieved on the final array, whether that landed inside tolerance,
 and the status and message of any solve. A missed tolerance is a warning,
 never an exception; a clamp is recorded distinctly from a near miss because
 the solve's `status` says so (`clamped_low` or `clamped_high`) and its
@@ -116,17 +115,16 @@ class Manifest:
 
     achieved:          metric name -> value measured on the final values, before
                        wrapping. Always holds cardinality_ratio and entropy_bits,
-                       plus every metric the DatasetSpec targeted. `nan` when the
-                       metric
+                       plus every metric the DatasetSpec targeted. `nan` when the metric
                        is undefined for the column (e.g. runs_z on a constant).
     targets:           metric name -> the DatasetSpec's target, for targeted
                        metrics only.
     within_tolerance:  metric name -> whether |achieved - target| is inside the
                        DatasetSpec's tolerance (relative for interarrival_cv,
-                       absolute
-                       otherwise). `None` for interarrival_cv when runs_z is also
-                       targeted: the settled combined-target behaviour records the
-                       achieved CV without applying its tolerance.
+                       absolute otherwise). `None` for interarrival_cv when
+                       runs_z is also targeted: the settled combined-target
+                       behaviour records the achieved CV without applying its
+                       tolerance.
     solves:            metric name -> `SolveRecord` for the solve that chose the
                        parameter for it (entropy_bits, index_of_dispersion,
                        interarrival_cv), or for the runs layout (runs_z: a

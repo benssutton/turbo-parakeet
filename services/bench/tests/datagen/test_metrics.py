@@ -91,7 +91,7 @@ def test_largest_remainder_sums_exactly():
     assert c.tolist() == [4, 2, 1]
 
 
-# --- new: the three defects the Plan 1 final review found ---
+# --- new: the three defects the final review found ---
 
 
 def test_runs_z_constant_column_returns_nan_not_raises():

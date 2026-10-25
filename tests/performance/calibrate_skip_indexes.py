@@ -1,10 +1,10 @@
 """Calibrate the skip-index predictions (skip share, index bytes) against chbench on a live server.
 
-Standalone (never collected by pytest).  Needs the `chbench-ch` container (services/bench/CLAUDE.md, Environment).  For each
-frame: recommend, `to_chbench`, run every suite whose recommender chose a skip index (point queries only, one sample), read the results
-store directly (predicate SQL, `selected_marks`, `index_compressed_bytes`), compute for each queried
-value the exact predicted skip share from the suite's dataset in stored order, and write
-`results/skip_index_calibration.arrow` plus a summary.
+Standalone (never collected by pytest).  Needs the `chbench-ch` container (services/bench/CLAUDE.md,
+Environment).  For each frame: recommend, `to_chbench`, run every suite whose recommender chose a skip index
+(point queries only, one sample), read the results store directly (predicate SQL, `selected_marks`,
+`index_compressed_bytes`), compute for each queried value the exact predicted skip share from the
+suite's dataset in stored order, and write `results/skip_index_calibration.arrow` plus a summary.
 
     python tests/performance/calibrate_skip_indexes.py [--workers N] [--keep]
 """
