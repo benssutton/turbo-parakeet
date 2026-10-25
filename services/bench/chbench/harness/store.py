@@ -511,7 +511,7 @@ class Store:
         """
         row = self.conn.execute(
             "SELECT suite_yaml FROM runs WHERE suite_name = ? "
-            "ORDER BY started_at DESC LIMIT 1",
+            "ORDER BY started_at DESC, rowid DESC LIMIT 1",  # rowid: same-tick runs
             (suite_name,),
         ).fetchone()
         return row[0] if row and row[0] else None
