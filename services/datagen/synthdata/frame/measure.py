@@ -55,9 +55,10 @@ def column_stats(values: pa.Array, rows: int, integer: bool) -> dict:
 
 
 def containment(child: pa.Array, parent: pa.Array) -> float:
-    """Share of the child's distinct non-null values that are among the parent's."""
+    """Share of the child's distinct non-null values that are among the parent's (NaN
+    when the two base types differ, e.g. a relabel to another type)."""
     c = pc.unique(child.drop_null())
-    if len(c) == 0:
+    if len(c) == 0 or c.type != parent.type:
         return NAN
     inside = pc.is_in(c, value_set=pc.unique(parent.drop_null()))
     return pc.sum(inside).as_py() / len(c)
