@@ -135,6 +135,11 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
       FK → PK case. Add a containment-heavy recall fixture to `tests/test_similarity.py` (`datagen.containment_pairs`);
       derive the candidate threshold from the overlap threshold and the cardinality ratio.
     - `minhash.rs` `bucket_pairs` is O(|bucket|²) per band: document it as a scaling concern for dense buckets.
+    - Tiny Bloom filters overshoot `fp_rate` (0.01): at n = 1 distinct value the geometry is (m = 16, k = 12) and ≈ 25% of
+      disjoint queries are false positives (BloomRust 0.247, Fastbloom 0.252; theory ≈ 0.06%); still 2–5× `fp_rate` up to
+      n ≈ 10 (BloomRust n = 2 / 5 / 10: 0.045 / 0.049 / 0.031), close to 1% from n ≈ 30 (0.014). Suspected: degenerate
+      double-hash probes in a few-byte filter. Fix with a minimum filter size / better probe derivation and a per-filter
+      FP test at small n (found by a constant column of the covering frame; the Fastbloom agreement case is xfailed).
 
 ## Analytics — structure
 
@@ -153,6 +158,9 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
     `Technique.enumerate` runs every compatible combination. Add the optional explicit list; 19 and 20 need it
     (101 columns = 166 650 triplets).
 16. **Uniform interfaces** where parameters have the same meaning, and consistent optional parameters.
+    - `AdjustedRandSklearn._labels` casts every column to String, which Polars refuses for Duration
+      (InvalidOperationError) although the base treats Duration as eligible; cast temporal columns to their physical
+      integer first.
 17. **Consolidate counting.** Frequency counts are taken separately in Describe, entropy and elsewhere; review and share.
 18. **DataFusion in the technique benchmarks.** Deterministic techniques: Rust vs Python Polars vs Python DataFusion.
     Probabilistic techniques: Rust probabilistic vs Rust deterministic, and Rust probabilistic vs Python probabilistic vs
