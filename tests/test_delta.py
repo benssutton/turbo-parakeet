@@ -122,7 +122,7 @@ def test_agrees_every_eligible_dtype(impl):
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_across_chunk_boundaries(impl):
     rng = np.random.default_rng(3)
-    n = 300_000
+    n = 2 * 65_536 + 300  # Rust CHUNK = 1 << 16: two boundaries, the last chunk partial
     walk = np.cumsum(rng.integers(-1_000, 1_001, n)) + 10**12
     nulls = rng.random(n) < 0.05
     ts = np.cumsum(rng.integers(995, 1_006, n)).astype("datetime64[ms]")
