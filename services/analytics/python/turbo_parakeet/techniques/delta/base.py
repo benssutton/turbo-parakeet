@@ -1,6 +1,5 @@
 """Delta / DoubleDelta statistics: how well ClickHouse's Delta and DoubleDelta codecs suit a
-column in its row order (spec docs/superpowers/specs/2026-10-23-delta-codecs-design.md §2).
-"""
+column in its row order."""
 
 import polars as pl
 

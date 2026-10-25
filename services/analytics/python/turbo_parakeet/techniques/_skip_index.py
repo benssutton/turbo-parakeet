@@ -1,6 +1,6 @@
-"""Shared base of the skip-index techniques — turbo_parakeet.techniques.minmax_index and turbo_parakeet.techniques.set_index
-(spec docs/superpowers/specs/2026-10-16-skip-index-techniques-design.md) — and the arithmetic
-their Polars references share (they share none with the Rust kernels)."""
+"""Shared base of the skip-index techniques — turbo_parakeet.techniques.minmax_index and
+turbo_parakeet.techniques.set_index — and the arithmetic their Polars references share
+(they share none with the Rust kernels)."""
 
 import math
 

@@ -1,4 +1,4 @@
-//! The skip-index choice for one column (spec 2026-10-20 §2–§5): measure `minmax` / `set(N)` per
+//! The skip-index choice for one column: measure `minmax` / `set(N)` per
 //! granularity (and `bloom_filter` lazily, as the fallback) on the recommended array in its stored
 //! order, then decide with `decide_skip`.
 
@@ -16,7 +16,7 @@ use arrow_schema::Field;
 /// ClickHouse rows per granule.
 const GRANULE_ROWS: u64 = 8_192;
 
-/// Chbench R36: types on which ClickHouse rejects `bloom_filter`.
+/// Types on which ClickHouse 26.8 rejects `bloom_filter` (services/bench/spikes/FINDINGS.md §9).
 fn bloom_unsupported(ch_type: &str) -> bool {
     let mut t = ch_type;
     while let Some(inner) = t
@@ -152,8 +152,8 @@ fn bloom_pruned(fpr: f64, p: &SkipParams, evidence: String) -> SkipCandidate {
 }
 
 /// Whether `bloom_filter` applies to the column, and the false-positive rates to measure. Rates
-/// on an unsupported type, or outside chbench's R37 table (no size model), go to `pruned` with
-/// the rule.
+/// on an unsupported type, or outside the measured bloom size table (no size model), go to
+/// `pruned` with the rule.
 fn screen_bloom_fprs(
     ch_type: &str,
     p: &SkipParams,
@@ -162,7 +162,8 @@ fn screen_bloom_fprs(
     let bloom_ok = !bloom_unsupported(ch_type);
     if !bloom_ok {
         for &fpr in &p.bloom_fprs {
-            let evidence = format!("bloom_filter is not supported on {ch_type} (chbench R36)");
+            let evidence =
+                format!("bloom_filter is not supported on {ch_type} (ClickHouse 26.8 rejects it)");
             pruned.push(bloom_pruned(fpr, p, evidence));
         }
     }
@@ -172,7 +173,7 @@ fn screen_bloom_fprs(
         if bloom_ok && !known.contains(&fpr) {
             let list: Vec<String> = known.iter().map(f64::to_string).collect();
             let evidence = format!(
-                "bloom_filter fpr {fpr} not measured (chbench R37: {})",
+                "bloom_filter fpr {fpr} not measured (measured fprs: {})",
                 list.join(", ")
             );
             pruned.push(bloom_pruned(fpr, p, evidence));

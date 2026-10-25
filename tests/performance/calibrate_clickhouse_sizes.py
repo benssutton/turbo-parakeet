@@ -1,11 +1,11 @@
 """Calibrate the ClickHouse size emulator against bytes measured by chbench on a live server.
 
-Standalone (never collected by pytest).  Needs the `chbench-ch` container and the sibling repo
-`clickhouse_benchmark` (spec 2026-10-19 §10).  For each frame: recommend, `to_chbench`, run every suite
-with chbench (storage bytes only), join the measured compressed bytes of the data column with
-`<name>.predicted.json`, write `results/clickhouse_calibration.arrow` and print a summary.
+Standalone (never collected by pytest).  Needs the `chbench-ch` container (services/bench/CLAUDE.md,
+Environment).  For each frame: recommend, `to_chbench`, run every suite with chbench (storage bytes only),
+join the measured compressed bytes of the data column with `<name>.predicted.json`, write
+`results/clickhouse_calibration.arrow` and print a summary.
 
-    python tests/performance/calibrate_clickhouse_sizes.py [--chbench PATH] [--workers N] [--keep]
+    python tests/performance/calibrate_clickhouse_sizes.py [--workers N] [--keep]
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +26,7 @@ import pyarrow as pa
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+BENCH = ROOT / "services" / "bench"  # chbench runs with this as its working directory
 sys.path[:0] = [str(ROOT / "tests")]
 
 import datagen  # noqa: E402
@@ -91,7 +91,7 @@ def delta_frames() -> dict[str, pl.DataFrame]:
 def widen(yaml_path: Path) -> None:
     """Measure every transform on a delta-frame suite, not only the recommended one: the codec
     axis becomes none / GCD / Delta / DoubleDelta and the compression axis LZ4 / ZSTD(1) / ZSTD(3),
-    predictions from the emulator on the suite's own dataset (spec 2026-10-23 §6)."""
+    predictions from the emulator on the suite's own dataset."""
     from turbo_parakeet import _plugin
 
     suite = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
@@ -116,7 +116,7 @@ def widen(yaml_path: Path) -> None:
     )
 
 
-def run_suite(chbench_root: Path, yaml_path: Path, work: Path) -> tuple[str, str]:
+def run_suite(yaml_path: Path, work: Path) -> tuple[str, str]:
     name = yaml_path.stem
     suite = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     suite["queries"] = MINIMAL_QUERIES
@@ -134,7 +134,7 @@ def run_suite(chbench_root: Path, yaml_path: Path, work: Path) -> tuple[str, str
             "--cache-dir",
             str(cache),
         ],
-        cwd=chbench_root,
+        cwd=BENCH,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -144,7 +144,7 @@ def run_suite(chbench_root: Path, yaml_path: Path, work: Path) -> tuple[str, str
         return name, f"run failed: {run.stderr[-500:] or run.stdout[-500:]}"
     rep = subprocess.run(
         [*base, "report", "--suite", name, "--csv", str(out), "--store", str(store)],
-        cwd=chbench_root,
+        cwd=BENCH,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -159,18 +159,10 @@ def run_suite(chbench_root: Path, yaml_path: Path, work: Path) -> tuple[str, str
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--chbench",
-        default=os.environ.get(
-            "CHBENCH_DIR", str(ROOT.parent / "clickhouse_benchmark")
-        ),
-        help="the clickhouse_benchmark checkout (env CHBENCH_DIR; default: next to this repo)",
-    )
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--keep", action="store_true")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    chbench_root = Path(args.chbench)
     work = Path(tempfile.mkdtemp(prefix="calibrate_ch_"))
     frames = {"large": datagen.large_dataset_mixed(), **gcd_frames(), **delta_frames()}
 
@@ -191,7 +183,7 @@ def main() -> None:
     # Suite names are column names; make them unique across frames for the stores.
     errors = {}
     with ThreadPoolExecutor(args.workers) as pool:
-        futs = [pool.submit(run_suite, chbench_root, p, p.parent) for _, p in suites]
+        futs = [pool.submit(run_suite, p, p.parent) for _, p in suites]
         for i, f in enumerate(futs):
             name, err = f.result()
             if err:

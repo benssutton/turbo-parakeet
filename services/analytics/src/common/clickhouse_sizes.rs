@@ -1,4 +1,4 @@
-//! ClickHouse on-disk size emulation (spec 2026-10-19 §3).
+//! ClickHouse on-disk size emulation.
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -402,7 +402,7 @@ fn tuple_streams(a: &dyn Array, fields: &[ChLayout]) -> Result<Vec<Stream>, Stri
     Ok(out)
 }
 
-/// The transform codec before the compression (spec 2026-10-23 §3).
+/// The transform codec before the compression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Transform {
     None,
@@ -533,7 +533,7 @@ fn block_sizes(s: &Stream) -> Vec<u64> {
 
 /// The GCD codec on one block of `width`-byte values: `[gcd] + values / gcd`. The GCD is of
 /// the values' magnitudes (zeros skipped); GCD 0 or 1 leaves the block unchanged. (Layout
-/// verified byte-exact against ClickHouse 26.8: spec 2026-10-23 §7.)
+/// verified byte-exact against ClickHouse 26.8.)
 fn gcd_transform(block: &[u8], width: usize, signed: bool) -> Cow<'_, [u8]> {
     if width == 0 || width > 16 || !block.len().is_multiple_of(width) {
         return Cow::Borrowed(block);
@@ -721,7 +721,7 @@ fn double_delta_transform(block: &[u8], width: usize) -> Cow<'_, [u8]> {
 /// count byte, one method byte per codec, and the compressor's own 9-byte block header (kept
 /// inside the payload): 12 bytes on top of the outer `BLOCK_HEADER`. The transform's output
 /// carries its own 9-byte block header (method, compressed size, decompressed size) into the
-/// compressor. Measured against ClickHouse 26.8 (spec 2026-10-23 §7).
+/// compressor. Measured against ClickHouse 26.8.
 const MULTIPLE_HEADER: u64 = 3 + 9;
 // Method bytes (CompressionMethodByte.h); only their entropy matters here.
 const DELTA_METHOD: u8 = 0x92;
@@ -829,10 +829,10 @@ pub(crate) fn emulate(streams: &[Stream], chain: Chain) -> Result<Emulated, Stri
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Skip indexes (chbench R37)
+// Skip indexes (sizes measured on ClickHouse 26.8: services/bench/spikes/FINDINGS.md §10)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Bloom filter bits per distinct value of an index block, by false-positive rate (chbench R37).
+/// Bloom filter bits per distinct value of an index block, by false-positive rate (measured).
 pub(crate) const BLOOM_BITS_PER_VALUE: [(f64, u64); 4] =
     [(0.001, 15), (0.01, 10), (0.025, 8), (0.05, 7)];
 
@@ -1064,7 +1064,7 @@ pub(crate) fn skip_index_bytes(
                 .find(|(f, _)| *f == fpr)
                 .ok_or_else(|| {
                     format!(
-                        "bloom_filter fpr {fpr} not measured (chbench R37: 0.001, 0.01, 0.025, 0.05)"
+                        "bloom_filter fpr {fpr} not measured (measured fprs: 0.001, 0.01, 0.025, 0.05)"
                     )
                 })?
                 .1;
@@ -1311,7 +1311,7 @@ mod tests {
         // [width, skip], the GCD (1 when none), then the values
         assert_eq!(gcd_body(&[2, 3], 1, false).as_ref(), [1, 0, 1, 2, 3]);
         assert_eq!(gcd_body(&[10, 20], 1, false).as_ref(), [1, 0, 10, 1, 2]);
-        // measured on ClickHouse 26.8 (spec 2026-10-23 §7): codec alone = outer header + body;
+        // measured on ClickHouse 26.8: codec alone = outer header + body;
         // two codecs add the Multiple header (3) + the compressor's own 9-byte header
         let mut s = plain(vec![0u8; 8], 1);
         s.int_width = Some((1, false));

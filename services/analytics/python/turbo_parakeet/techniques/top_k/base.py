@@ -1,5 +1,4 @@
-"""Top-k most frequent values per column (spec
-docs/superpowers/specs/2026-10-12-heavy-hitters-top-k-design.md).
+"""Top-k most frequent values per column.
 
 Implementations rank items as rows of the RANKED schema (one per column and rank: the row
 of an occurrence, the count and the error bound); the base renders each value from its row

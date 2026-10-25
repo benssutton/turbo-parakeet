@@ -1,5 +1,4 @@
-//! Top-k value frequencies (spec docs/superpowers/specs/2026-10-07-top-k-frequencies-design.md):
-//! the frequency-ordered dictionary.
+//! Top-k value frequencies: the frequency-ordered dictionary.
 
 use super::*;
 use crate::techniques::describe::Ranking;
@@ -17,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// `a` (a dictionary) with its keys renumbered by `ranking`: the most frequent value takes
-/// key 0, the next key 1, and so on (spec §5). Values the ranking lacks (only those behind
+/// key 0, the next key 1, and so on. Values the ranking lacks (only those behind
 /// null lists, which Describe's flatten skips) follow every ranked value in their existing
 /// order. The decoded values and the key type are unchanged; any other array, or one already
 /// in order, is returned as is.
@@ -79,7 +78,7 @@ fn reorder<K: ArrowDictionaryKeyType>(
     Ok(Arc::new(dict))
 }
 
-/// One `top_k` / `inner_top_k` cell (spec §3): the first `k` entries of the level's ranking
+/// One `top_k` / `inner_top_k` cell: the first `k` entries of the level's ranking
 /// when its dictionary candidate (`{prefix}string→dictionary`) was proposed and not rejected,
 /// else null. Built as a list of (key, value) structs; `schema::with_maps` makes it a map.
 pub(crate) fn top_k_cell(

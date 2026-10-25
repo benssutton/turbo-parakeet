@@ -2,7 +2,7 @@
 //! minimum counter and inherits its count as an over-count bound ε, so a tracked key's true
 //! count lies in [count − ε, count] and every key above n/m is tracked. Mergeable with the
 //! bound intact (Agarwal et al., "Mergeable Summaries", PODS 2012), so the kernel counts fixed
-//! row chunks in parallel and merges them in order. Spec 2026-10-12 §3.2.
+//! row chunks in parallel and merges them in order.
 
 use polars::prelude::*;
 use rayon::prelude::*;

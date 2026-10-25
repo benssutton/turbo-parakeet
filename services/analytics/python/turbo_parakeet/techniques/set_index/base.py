@@ -1,5 +1,4 @@
-"""ClickHouse set(max_size) skip-index suitability per column (spec
-docs/superpowers/specs/2026-10-16-skip-index-techniques-design.md)."""
+"""ClickHouse set(max_size) skip-index suitability per column."""
 
 import polars as pl
 

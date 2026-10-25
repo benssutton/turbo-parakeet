@@ -33,7 +33,7 @@ pub(crate) struct Rec {
     pub lossy: bool,
     pub candidates: Vec<Candidate>,
     /// LZ4_FRAME body size of the Arrow layout; the Arrow IPC compression chosen and its
-    /// size (spec 2026-10-19 §5). None until the compression choice lands.
+    /// size. None until the compression choice lands.
     pub arrow_lz4: Option<u64>,
     pub arrow_ipc: Option<(Compression, u64)>,
     pub polars_lz4: Option<u64>,
@@ -43,8 +43,8 @@ pub(crate) struct Rec {
     pub ch_chain: Option<Chain>,
     pub ch_size: Option<u64>,
     pub ch_candidates: Vec<CodecCandidate>,
-    /// The ClickHouse skip index as `"<ddl> GRANULARITY <g>"` and every candidate (spec
-    /// 2026-10-20 §6). None / empty until the skip-index choice lands.
+    /// The ClickHouse skip index as `"<ddl> GRANULARITY <g>"` and every candidate. None /
+    /// empty until the skip-index choice lands.
     pub skip_index: Option<String>,
     pub skip_candidates: Vec<SkipCandidate>,
 }
@@ -124,7 +124,7 @@ pub(crate) fn recommend(
     } else {
         let key = chosen.target.polars_key().unwrap_or(AT::UInt32);
         let layout = to_polars_layout(&chosen.array, &key).map_err(err)?;
-        // Spec B §5.4 step 6: the Polars layout only widens, so it must cast back exactly.
+        // The Polars layout only widens, so it must cast back exactly.
         first_mismatch(
             &chosen.array,
             &arrow_cast(layout.as_ref(), &t).map_err(err)?,
@@ -190,7 +190,7 @@ pub(crate) fn recommend(
 }
 
 /// The Arrow IPC compression for a column held as `arrs` (one array one-shot, the sampled
-/// blocks streaming; spec 2026-10-19 §5): its LZ4_FRAME body size and the choice with its
+/// blocks streaming): its LZ4_FRAME body size and the choice with its
 /// size. Byte counts are summed over the arrays, then passed through `scale` (the sample →
 /// column factor); the histograms stay unscaled.
 pub(crate) fn ipc_choice(
@@ -467,7 +467,7 @@ fn clickhouse_candidates_series(c: &[CodecCandidate]) -> Series {
         .into_series()
 }
 
-/// `clickhouse_skip_indexes` cell: one struct per skip-index candidate (spec 2026-10-20 §6).
+/// `clickhouse_skip_indexes` cell: one struct per skip-index candidate.
 fn skip_candidates_series(c: &[SkipCandidate]) -> Series {
     let text = |name: &str, v: Vec<String>| {
         StringChunked::from_iter_values(name.into(), v.into_iter()).into_series()
@@ -566,8 +566,8 @@ pub(crate) fn rec_row(r: &Rec) -> Row {
     row
 }
 
-/// One column's statistics, collected by the one-shot recommender's `add` (spec
-/// 2026-10-04 §3.1); `row` recommends from them on the column's actual values.
+/// One column's statistics, collected by the one-shot recommender's `add`; `row` recommends
+/// from them on the column's actual values.
 pub(crate) struct Prepared {
     series: Series,
     classic: ArrayRef,
@@ -592,7 +592,7 @@ pub(crate) fn prepare(s: Series, input_type: &AT, params: &Params) -> PolarsResu
 }
 
 impl Prepared {
-    /// The first non-null and first null row (spec 2026-10-18 §4).
+    /// The first non-null and first null row.
     pub(crate) fn exemplar_rows(&self) -> (Option<u64>, Option<u64>) {
         let f = &self.described.outer.freq;
         (f.first_row, f.first_null)
@@ -750,7 +750,7 @@ mod tests {
             ],
         );
         assert_eq!(rec(s).arrow_type, "uint8");
-        // Null lists and null items both occur: the column stays a list (Spec B §4.4).
+        // Null lists and null items both occur: the column stays a list.
         let both = Series::new(
             "x".into(),
             [
@@ -760,7 +760,7 @@ mod tests {
             ],
         );
         assert_eq!(rec(both).arrow_type, "list<item: uint8>");
-        // Inner values {1}: 0 ≤ min, max ≤ 1 → Boolean ties UInt8 in size and wins on rank (§4.1, §4.2).
+        // Inner values {1}: 0 ≤ min, max ≤ 1 → Boolean ties UInt8 in size and wins on rank.
         let ones = Series::new(
             "x".into(),
             [

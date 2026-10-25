@@ -1,4 +1,4 @@
-"""ClickHouse recommendations, Arrow IPC compression choice and the chbench handoff (spec 2026-10-19)."""
+"""ClickHouse recommendations, Arrow IPC compression choice and the chbench handoff."""
 
 from decimal import Decimal
 
@@ -250,7 +250,7 @@ def test_streaming_without_sample():
             assert not r[k], (r["column"], k)
 
 
-# ---- to_chbench (spec 2026-10-19 §7) ----------------------------------------------------
+# ---- to_chbench -------------------------------------------------------------------------
 
 
 def chbench_frame(n: int = 50_000) -> pl.DataFrame:
@@ -398,17 +398,11 @@ def test_to_chbench_normalises_categorical_and_columns(tmp_path):
 
 
 def test_to_chbench_suites_parse_in_chbench(chbench_out, monkeypatch):
-    import os
     from pathlib import Path
 
-    root = Path(
-        os.environ.get("CHBENCH_DIR")
-        or Path(__file__).resolve().parents[1].parent / "clickhouse_benchmark"
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "services" / "bench")
     )
-    if not root.exists():
-        pytest.skip("clickhouse_benchmark not found")
-    monkeypatch.syspath_prepend(str(root))
-    pytest.importorskip("chbench")
     from chbench.harness.suite import load_suite
 
     out, _, suites = chbench_out

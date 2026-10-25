@@ -1,9 +1,17 @@
 # turbo-parakeet
 
-Recommends how to store and query tabular data efficiently in ClickHouse, DataFusion and
-Polars, from patterns and relationships between columns within and between dataframes. Python API
-over a Rust extension (pyo3, Arrow at the FFI boundary), with a Java binding over the same
-C ABI. Technique and architecture details: [CLAUDE.md](CLAUDE.md).
+A toolkit for storing and querying columnar data efficiently in ClickHouse, DataFusion and Polars. It recommends column
+types, encodings, compression, skip indexes and sort orders from patterns and relationships between columns, and tests
+those recommendations empirically. Three components:
+
+1. **Synthetic data** — seeded generators with targeted statistics (`services/bench/chbench/datagen`, `tests/datagen.py`;
+   to be consolidated).
+2. **Analytics** — `services/analytics/`: techniques and recommenders; Python API over a Rust extension (pyo3, Arrow at
+   the FFI boundary), with a Java binding over the same C ABI.
+3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of ClickHouse table variants,
+   runs query grids and reports sizes and timings.
+
+Objectives and architecture: [CLAUDE.md](CLAUDE.md); planned work: [ToDo.md](ToDo.md).
 
 ## Building and testing locally
 
@@ -15,7 +23,7 @@ Use the conda env `p312` (Python 3.12).
    ruff, maturin; the accuracy references scipy (chi-squared) and scikit-learn (adjusted Rand),
    which the tests and benchmarks need; and the optional competing implementations
    (datasketch, polars-ds, fastbloom-rs) and statsmodels, whose tests are skipped when the
-   library is missing.
+   library is missing. It also installs the bench's `clickhouse-connect` and `rich`.
 2. Build the extension into the env: `python scripts/check.py build` (`maturin develop
    --release` in `services/analytics/`; the Python package is an editable install, so Python
    changes need no rebuild).
@@ -25,6 +33,7 @@ Use the conda env `p312` (Python 3.12).
    - `cargo install cargo-llvm-cov` — the coverage steps.
    - JDK 25 — the Java tests.
    - Docker — local SonarQube, see [sonar/README.md](sonar/README.md).
+   - Docker with the `chbench-ch` ClickHouse container — the bench's integration tests and the calibration scripts (see [services/bench/CLAUDE.md](services/bench/CLAUDE.md)).
    - `pre-commit install` — git hooks (commit: rustfmt + black; push: clippy + ruff + Rust tests).
      The hooks call `python`, so the p312 env must be on `PATH` when you commit or push
      (activate it, or in Git Bash
@@ -57,8 +66,17 @@ What is available:
   `runs_test`, `delta`, `minmax_index`, `set_index`; between distinct-value sets — `membership`,
   `similarity`; between rows of column pairs / triplets — `chi_squared`, `pairwise_entropy`,
   `threeway_entropy`, `adjusted_rand`. Each has a Rust implementation and an exact reference;
-  details in [CLAUDE.md](CLAUDE.md).
+  details in [services/analytics/CLAUDE.md](services/analytics/CLAUDE.md).
 - **Benchmarks:** [tests/performance/README.md](tests/performance/README.md).
+
+Run a benchmark suite (needs the ClickHouse container):
+
+```
+cd services/bench
+python -m chbench.cli run suites/int_encodings.yaml --dry-run   # the grid, without running it
+python -m chbench.cli run suites/int_encodings.yaml
+python -m chbench.cli report --suite int_encodings
+```
 
 ### Before pushing
 
@@ -72,6 +90,7 @@ Run `python scripts/check.py ci` with the p312 Python. It runs these steps, in o
 | `build` | `maturin develop --release` |
 | `test-rust` | `cargo test --lib` |
 | `test-py` | pytest on 4 pytest-xdist workers (`-n 4` in `pytest.ini`; `-n 0` for serial) |
+| `test-bench` | pytest for `services/bench` (its own run; tests needing ClickHouse skip without the server) |
 | `test-java` | builds the C library with Cargo profile `ci` (release without fat LTO), then `./mvnw test` with JaCoCo |
 
 Groups: `fast` = `fmt-check` + `lint` + `layering`; `check` = everything except `test-java`; `ci` = all of
@@ -82,7 +101,7 @@ On demand:
 - `coverage-rust-full` — Rust coverage from the unit tests merged with the Python tests run
   against an instrumented extension (what CI uploads to Codecov). The normal extension is
   restored afterwards.
-- `coverage-py` — Python coverage (`coverage.xml`, `htmlcov/`).
+- `coverage-py` — Python coverage (`coverage.xml`, `htmlcov/`; the bench's in `services/bench/coverage.xml`).
 - `sonar` — Python and Java coverage, then the SonarQube scanner (needs Docker,
   `SONARQUBE_TOKEN` and the compose stack running).
 
@@ -97,7 +116,7 @@ weekly on Mondays, and on manual dispatch. A newer push cancels a superseded run
 | Job | When | What it runs |
 |---|---|---|
 | Linting & Formatting | always | `check.py fast` |
-| Rust Tests & Coverage | always | `check.py coverage-rust-full`, then Codecov upload |
+| Rust Tests & Coverage | always | `check.py coverage-rust-full`, then `check.py test-bench`, then Codecov upload |
 | Java Tests | not on pull requests | `check.py test-java` (profile `ci`); weekly and dispatch also run it with `CAPI_PROFILE=release` |
 | Python Tests (Windows) | weekly and dispatch only | `check.py build` (release), then `check.py test-py` |
 | CodeQL | pull requests, weekly, dispatch (not pushes; public repos only) | CodeQL analysis |

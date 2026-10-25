@@ -26,7 +26,7 @@ pub(crate) fn validate_common(zstd_level: i32, boolean_pairs: &[(String, String)
     Ok(())
 }
 
-/// The compression keywords (spec 2026-10-19 §4.3) as engine parameters, checked.
+/// The compression keywords as engine parameters, checked.
 fn compression(
     zstd_levels: Vec<i32>,
     zstd_level_tolerance: f64,
@@ -70,7 +70,7 @@ fn compression(
     })
 }
 
-/// The skip-index keywords (spec 2026-10-20 §4) as engine parameters, checked.
+/// The skip-index keywords as engine parameters, checked.
 fn skip_params(
     granularities: Vec<u32>,
     set_max_sizes: Vec<u64>,
@@ -149,7 +149,7 @@ fn validate_ids(id_columns: &[String]) -> Result<()> {
     }
 }
 
-/// Keywords of the one-shot recommender (spec 2026-10-04 §3.4).
+/// Keywords of the one-shot recommender.
 #[derive(Clone, Debug)]
 pub struct OneShotParams {
     pub categorical_threshold: u64,
@@ -160,12 +160,12 @@ pub struct OneShotParams {
     pub top_k: u64,
     /// Columns identifying the exemplar rows (typed `exemplar_id` structs); may be empty.
     pub id_columns: Vec<String>,
-    /// ZSTD levels tried for the Arrow IPC / ClickHouse choices (spec 2026-10-19 §4.3).
+    /// ZSTD levels tried for the Arrow IPC / ClickHouse choices.
     pub zstd_levels: Vec<i32>,
     pub zstd_level_tolerance: f64,
     pub zstd_min_saving: f64,
     pub transform_min_saving: f64,
-    /// Skip-index keywords (spec 2026-10-20 §4).
+    /// Skip-index keywords.
     pub skip_granularities: Vec<u32>,
     pub set_max_sizes: Vec<u64>,
     pub bloom_fprs: Vec<f64>,
@@ -228,7 +228,7 @@ impl OneShotRecommender {
     }
 }
 
-/// Keywords of the streaming recommender (spec 2026-09-29 §7.1).
+/// Keywords of the streaming recommender.
 #[derive(Clone, Debug)]
 pub struct StreamingParams {
     /// Rows of contiguous blocks kept for ZSTD sizes and the cross-check (0: none).
@@ -244,12 +244,12 @@ pub struct StreamingParams {
     pub entropy_estimator: EntropyEstimator,
     /// Columns identifying the exemplar rows (typed `exemplar_id` structs); may be empty.
     pub id_columns: Vec<String>,
-    /// ZSTD levels tried for the Arrow IPC / ClickHouse choices (spec 2026-10-19 §4.3).
+    /// ZSTD levels tried for the Arrow IPC / ClickHouse choices.
     pub zstd_levels: Vec<i32>,
     pub zstd_level_tolerance: f64,
     pub zstd_min_saving: f64,
     pub transform_min_saving: f64,
-    /// Skip-index keywords (spec 2026-10-20 §4).
+    /// Skip-index keywords.
     pub skip_granularities: Vec<u32>,
     pub set_max_sizes: Vec<u64>,
     pub bloom_fprs: Vec<f64>,

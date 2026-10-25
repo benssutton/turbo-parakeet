@@ -1,4 +1,4 @@
-//! Exemplar cells (spec 2026-10-18 §4): first non-null and first null rows, and the value.
+//! Exemplar cells: first non-null and first null rows, and the value.
 
 use polars::prelude::{AnyValue, PolarsResult, Series};
 

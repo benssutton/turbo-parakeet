@@ -1,4 +1,4 @@
-//! Entropy cells (spec 2026-10-18 §3): exact, the bottom-k sample estimate, the AMS estimate.
+//! Entropy cells: exact, the bottom-k sample estimate, the AMS estimate.
 
 use polars::prelude::AnyValue;
 
@@ -50,7 +50,7 @@ impl Entropy {
         Self::exact(h.max(0.0)) // the SIMD sum can leave -4e-16 on a constant column
     }
 
-    /// Bottom-k sample estimate (spec §3.3): `counts` are the k' held values' exact counts,
+    /// Bottom-k sample estimate: `counts` are the k' held values' exact counts,
     /// `d` = (est_cardinality, est_low, est_high) of the non-null distinct values.
     pub(crate) fn from_sample(counts: &[u64], d: (f64, f64, f64), n_null: u64, n: u64) -> Self {
         let k = counts.len() as f64;
@@ -94,7 +94,7 @@ impl Entropy {
         }
     }
 
-    /// AMS estimate with its standard error (spec §3.3), interval ±3σ.
+    /// AMS estimate with its standard error, interval ±3σ.
     pub(crate) fn from_ams(value: f64, se: f64, n: u64) -> Self {
         Entropy {
             value: clamp(value, n),

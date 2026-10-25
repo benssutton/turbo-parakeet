@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chbench"
+version = "0.1.0"
+description = "Benchmark framework for ClickHouse storage optimisations"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pyarrow>=18",
+    "pyyaml",
+    "clickhouse-connect",
+    "rich",
+]
+
+[project.scripts]
+chbench = "chbench.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["chbench*"]

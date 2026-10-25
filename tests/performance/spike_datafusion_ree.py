@@ -1,11 +1,10 @@
 """
-Does DataFusion query run-end-encoded (REE) columns? (spec
-docs/superpowers/specs/2026-10-21-run-end-encoding-design.md §2)
+Does DataFusion query run-end-encoded (REE) columns?
 
 Registers the same data plain and run-end-encoded (Int64 and Utf8 columns with nulls), runs each
 query on both and prints, per operator: works (results identical), DIFFERS (results differ) or
 FAILS (the error). Also reads REE back from an Arrow IPC file. Re-run after a DataFusion upgrade:
-REE is recommended only once MIN / MAX work (the spec's re-evaluation trigger).
+REE is recommended only once MIN / MAX work.
 
 Run: python tests/performance/spike_datafusion_ree.py
 """

@@ -1,0 +1,28 @@
+name: int_encodings
+dataset:
+  rows: 10000000
+  arrow_type: int32
+  value_range: [1000000, 9999999]
+  null_count: 0
+  cardinality_ratio: 0.0001      # 1000 distinct values at 10M rows
+  entropy_bits: 4.0
+  runs_z: -0.25
+  seed: 42
+clickhouse:
+  type: [Int32, UInt32, String]
+  nullable: [false]
+  primary_key: [false]
+  projection: [false]
+  codec: [none, T64, Delta, LowCardinality]
+  skip_index: [minmax, bloom_filter, "set(100)"]
+  compression: [LZ4]
+queries:
+  kinds:
+    - {kind: full_scan}
+    - {kind: filter, target_fraction: 0.05, predicate: in, values: 1}
+    - {kind: filter, target_fraction: 0.20, predicate: in, values: 5}
+  query_condition_cache: [true, false]
+  cache_mode: [warm, cold]
+  samples: 10
+results:
+  percentiles: [50, 90, 99]

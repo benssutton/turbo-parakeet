@@ -1,7 +1,6 @@
 //! The recommendation engine: the narrowest value-preserving Arrow type per column — candidate
-//! types, cast and verify, choice, Polars layout (spec
-//! docs/superpowers/specs/2026-09-26-recommend-technique-design.md). Items are re-exported flat:
-//! callers write `crate::recommenders::engine::recommend`.
+//! types, cast and verify, choice, Polars layout. Items are re-exported flat: callers write
+//! `crate::recommenders::engine::recommend`.
 
 mod analytic_sizes;
 mod candidates;

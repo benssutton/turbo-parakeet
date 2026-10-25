@@ -1,7 +1,6 @@
 """Shared by tests/test_minmax_index.py and tests/test_set_index.py: dtypes to cover, a
-brute-force oracle evaluating every window directly from the spec's definitions
-(docs/superpowers/specs/2026-10-16-skip-index-techniques-design.md §2.3), and a Monte Carlo of
-the random-order baselines (under a random order every window is a uniform w-subset of the
+brute-force oracle evaluating every window directly from the definitions, and a Monte Carlo
+of the random-order baselines (under a random order every window is a uniform w-subset of the
 rows)."""
 
 import math

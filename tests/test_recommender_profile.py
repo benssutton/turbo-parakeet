@@ -1,4 +1,4 @@
-"""Entropy and exemplar columns of both recommenders (spec 2026-10-18 §3, §4)."""
+"""Entropy and exemplar columns of both recommenders."""
 
 import math
 from datetime import date
@@ -139,7 +139,7 @@ def test_streaming_entropy_after_overflow(make, estimator):
         rec.add(frame.slice(off, 50_000))
     r = rec.result().row(0, named=True)
     assert r["entropy_method"] == estimator
-    # Spec 2026-10-18 §3.3: the sample estimator is weak on skewed columns (heavy values outside the
+    # The sample estimator is weak on skewed columns (heavy values outside the
     # sample); only its interval coverage is asserted there (the AMS estimator must meet the 5% bar).
     if not (estimator == "sample" and make is STREAMS[1].values[0]):
         assert r["entropy"] == pytest.approx(exact, rel=0.05)

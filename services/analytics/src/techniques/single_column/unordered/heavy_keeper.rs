@@ -2,7 +2,7 @@
 //! Flows", USENIX ATC 2018), final version: d = 2 arrays of (fingerprint, count) buckets with
 //! count-with-exponential-decay (a different key decays a bucket with probability b^−C), plus a
 //! min-heap of the top k with selective increment and fingerprint-collision detection. No
-//! merge: a column is fed in row order. Spec 2026-10-12 §3.1.
+//! merge: a column is fed in row order.
 
 use polars::prelude::*;
 use rayon::prelude::*;

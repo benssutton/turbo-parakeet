@@ -1,5 +1,4 @@
-"""ClickHouse minmax skip-index suitability per column (spec
-docs/superpowers/specs/2026-10-16-skip-index-techniques-design.md)."""
+"""ClickHouse minmax skip-index suitability per column."""
 
 from turbo_parakeet.techniques._skip_index import SkipIndex
 

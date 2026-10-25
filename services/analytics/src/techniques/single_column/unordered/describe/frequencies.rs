@@ -36,7 +36,7 @@ pub(crate) type Ext<T> = (u64, T);
 pub(crate) type Ranked = Vec<(u64, u64)>;
 
 /// A text level's distinct non-null values as (text, count), in `Ranked` order: the
-/// recommenders' `top_k` and frequency-ordered dictionary (spec 2026-10-07 §4).
+/// recommenders' `top_k` and frequency-ordered dictionary.
 pub(crate) type Ranking = Vec<(String, u64)>;
 
 /// `Ranked` order: count descending, ties to the earlier first row.
@@ -68,10 +68,10 @@ pub(crate) struct Frequencies {
     /// Every distinct value in `Ranked` order, when `frequencies` was given a `rank_up_to`
     /// and `n_unique` is within it.
     pub ranked: Option<Ranked>,
-    /// Shannon entropy in bits, null one category (spec 2026-10-18 §3.1); None when built by
+    /// Shannon entropy in bits, null one category; None when built by
     /// streaming's `LevelStats::profile` (it estimates its own).
     pub entropy: Option<f64>,
-    /// Row of the first non-null / first null value (one-shot exemplars, spec §4); None from
+    /// Row of the first non-null / first null value (one-shot exemplars); None from
     /// streaming's profile, and when there is no such row.
     pub first_row: Option<u64>,
     pub first_null: Option<u64>,

@@ -185,8 +185,7 @@ def describe_columns(
     df: pl.DataFrame, seed: int, categorical_threshold: int
 ) -> pl.DataFrame:
     """column + Describe's value metrics and Rust's conclusions per column, then the
-    private estimator inputs (argmin / argmax, f1, f2, capture history; spec
-    2026-10-01 §13.8)."""
+    private estimator inputs (argmin / argmax, f1, f2, capture history)."""
     return pl.DataFrame(_rs.describe_columns(df, seed, categorical_threshold))
 
 

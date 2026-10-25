@@ -1,10 +1,10 @@
 //! Analytic pruning, then emulation: transform (GCD, Delta, DoubleDelta) and compression
-//! choices (specs 2026-10-19 §4, 2026-10-23 §4–5).
+//! choices.
 
 use crate::common::clickhouse_sizes::{Chain, Compression, Transform};
 use crate::techniques::delta::DeltaStats;
 
-/// The four keywords (spec §4.3).
+/// The four keywords.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CompressionParams {
     pub zstd_levels: Vec<i32>,
@@ -30,7 +30,7 @@ pub(crate) fn bytes_needed(m: u128, signed: bool) -> u32 {
     bits.div_ceil(8).max(1)
 }
 
-/// Spec §4.1: GCD is a candidate only if dividing by `g` frees a byte at the maximum
+/// GCD is a candidate only if dividing by `g` frees a byte at the maximum
 /// magnitude. Returns (survives, evidence).
 pub(crate) fn gcd_survives(g: u128, max_abs: u128, signed: bool) -> (bool, String) {
     if g <= 1 {
@@ -46,7 +46,7 @@ pub(crate) fn gcd_survives(g: u128, max_abs: u128, signed: bool) -> (bool, Strin
     )
 }
 
-/// Spec 2026-10-23 §4: Delta survives iff the mean delta bytes < the mean value bytes.
+/// Delta survives iff the mean delta bytes < the mean value bytes.
 pub(crate) fn delta_survives(s: &DeltaStats) -> (bool, String) {
     let (v, d) = (s.value_bytes_mean(), s.delta_bytes_mean());
     if d.is_nan() {
@@ -87,7 +87,8 @@ pub(crate) fn byte_entropy(h: &[u64; 256]) -> f64 {
         .sum()
 }
 
-/// Spec §4.2's shortcut: ZSTD cannot save `min_saving` over LZ4. Returns (fires, evidence).
+/// The near-incompressible shortcut: ZSTD cannot save `min_saving` over LZ4. Returns (fires,
+/// evidence).
 pub(crate) fn incompressible(
     h: &[u64; 256],
     distinct_ratio: f64,
@@ -104,7 +105,7 @@ pub(crate) fn incompressible(
     )
 }
 
-/// Spec §4.2: the lowest level within tolerance of the best ZSTD size, then ZSTD over LZ4
+/// The lowest level within tolerance of the best ZSTD size, then ZSTD over LZ4
 /// only if it saves `min_saving`. `zstd`: (level, bytes), any order, may be empty.
 pub(crate) fn choose_compression(
     lz4: u64,
@@ -207,11 +208,11 @@ fn lost_to_pick(c: Compression, b: u64, f: &Family, p: &CompressionParams) -> St
     }
 }
 
-/// Spec §4.1–4.2 and 2026-10-23 §4–5. `measure(chain)` emulates one chain → (bytes,
-/// histogram of the uncompressed bytes). Families: no transform plus each transform that
-/// survives its pruning rule; each is measured (LZ4, then ZSTD levels unless the shortcut
-/// fires on its histogram). The winner is the transform family with the smallest pick that
-/// saves `transform_min_saving` over the plain pick (ties: GCD, Delta, DoubleDelta).
+/// `measure(chain)` emulates one chain → (bytes, histogram of the uncompressed bytes).
+/// Families: no transform plus each transform that survives its pruning rule; each is measured
+/// (LZ4, then ZSTD levels unless the shortcut fires on its histogram). The winner is the
+/// transform family with the smallest pick that saves `transform_min_saving` over the plain
+/// pick (ties: GCD, Delta, DoubleDelta).
 pub(crate) fn decide(
     mut measure: impl FnMut(Chain) -> Result<(u64, [u64; 256]), String>,
     tr: Transforms,

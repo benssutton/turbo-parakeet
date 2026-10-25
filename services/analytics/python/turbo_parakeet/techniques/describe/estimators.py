@@ -61,9 +61,9 @@ def schnabel(
 
 
 def estimate(d: int, n: int, f1: int, f2: int, history: Sequence[int]) -> dict:
-    """The estimate picked by rule (spec 2026-10-01 §4) for an exact count d of n
-    non-null values: d/n ≥ 0.5 → d itself ("observed"); below, Schnabel when valid,
-    else Chao1, floored at d. Same rule as cardinality_estimators::pick_estimate."""
+    """The estimate picked by rule for an exact count d of n non-null values: d/n ≥ 0.5
+    → d itself ("observed"); below, Schnabel when valid, else Chao1, floored at d. Same
+    rule as cardinality_estimators::pick_estimate."""
     if n == 0:
         return _picked(False, 0.0, "observed", 0.0, 0.0, None)
     if d / n >= 0.5:

@@ -6,10 +6,12 @@ maturin>=1.15.0,<2
 
 # Data / columnar format
 polars>=2.0.0,<3
-pyarrow>=14.0,<26
+pyarrow>=18.0,<26
 numpy>=2.5.3,<3
 datafusion>=55.0.0,<56
-pyyaml>=6.0,<7  # turbo_parakeet.recommenders.to_chbench (suite files)
+pyyaml>=6.0,<7  # to_chbench suite files; services/bench suites
+clickhouse-connect>=1.1.1,<2  # services/bench: the ClickHouse client
+rich>=15.0,<16                # services/bench: the report tables
 
 # Testing
 pytest>=9.1.1,<10

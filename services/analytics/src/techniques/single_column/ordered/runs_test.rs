@@ -1,5 +1,4 @@
-//! One-sample runs test over k categories (spec
-//! docs/superpowers/specs/2026-10-13-runs-test-design.md).
+//! One-sample runs test over k categories.
 //!
 //! R = the number of maximal runs of equal consecutive values — the length of an Arrow
 //! run-end-encoded array's run_ends. Under random ordering of the same multiset (n rows,

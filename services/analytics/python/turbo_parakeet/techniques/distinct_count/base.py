@@ -1,5 +1,4 @@
-"""How many distinct non-null values each column holds (per-column scope; spec
-docs/superpowers/specs/2026-10-24-cardinality-entropy-techniques-design.md §2)."""
+"""How many distinct non-null values each column holds (per-column scope)."""
 
 import polars as pl
 

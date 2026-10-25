@@ -1,5 +1,5 @@
-//! Skip-index decisions (spec 2026-10-20 §4): gate, set overflow, bloom fallback and economics,
-//! granularity within a kind, choice across kinds.
+//! Skip-index decisions in five steps: (1) gate, (2) set overflow, (3) bloom fallback and
+//! economics, (4) granularity within a kind, (5) choice across kinds.
 
 use std::cmp::Ordering;
 
@@ -167,7 +167,7 @@ fn screen_bloom(
     Err(m)
 }
 
-/// Spec §4 steps 1–5. `cheap`: the minmax / set measurements; `pruned`: rows already pruned by
+/// Steps 1–5. `cheap`: the minmax / set measurements; `pruned`: rows already pruned by
 /// the caller (ineligible kinds, too-large granularities); `bloom()` is called only when no cheap
 /// candidate passed steps 1–2, and returns the bloom measurements; `column_bytes`: the column's
 /// predicted ClickHouse compressed bytes (None → bloom rows pruned "no ClickHouse size").

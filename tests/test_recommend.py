@@ -131,7 +131,7 @@ def test_lazy_input_with_an_ineligible_column():
     want = OneShotRecommender().add(frame).result()
     out = OneShotRecommender().add(frame.lazy()).result()
     assert out.equals(want)
-    # Ineligible columns come first (spec §3), as in streaming.
+    # Ineligible columns come first, as in streaming.
     assert out["column"].to_list() == ["w", "a", "s"]
     assert out["status"].to_list() == ["ineligible", "computed", "computed"]
 
@@ -466,7 +466,7 @@ KNOWN = [
     pytest.param(
         pl.Series("x", ["123", "45", "-7"]), {}, "int8", "Int8", id="string_integer"
     ),
-    # Categorical / Enum sources are already dictionaries: step 2 narrows the key or drops the dictionary (§5.2).
+    # Categorical / Enum sources are already dictionaries: step 2 narrows the key or drops the dictionary.
     # Categorical exports dictionary<uint32, large_string> (400 + 24 + 8 bytes); two values → UInt8 keys (104 + 16 + 8).
     pytest.param(
         pl.Series("x", ["a", "b"] * 50, dtype=pl.Categorical),
@@ -742,9 +742,9 @@ def _unlist(s: pl.Series, target: str) -> pl.Series:
 
 
 def frequency_ordered(arr: pa.Array) -> pa.Array:
-    """`arr` with every dictionary's keys renumbered as the recommender measures them
-    (spec 2026-10-07 §5): the most frequent value takes key 0, ties go to the value seen
-    first; values never seen follow. Lists are rebuilt around their reordered values."""
+    """`arr` with every dictionary's keys renumbered as the recommender measures them: the
+    most frequent value takes key 0, ties go to the value seen first; values never seen
+    follow. Lists are rebuilt around their reordered values."""
     t = arr.type
     # The list branches assume compacted lists (no values behind null rows, not sliced), as
     # Polars-built rechunked test frames are.
@@ -944,7 +944,7 @@ def test_rust_conclusions_match_describe():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# top_k (spec docs/superpowers/specs/2026-10-07-top-k-frequencies-design.md)
+# top_k
 
 WORDS = ["b", "a", "b", None, "c", "a", "b"]
 

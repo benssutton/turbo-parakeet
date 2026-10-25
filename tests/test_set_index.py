@@ -4,7 +4,6 @@ Set skip-index accuracy tests — every implementation in turbo_parakeet.techniq
 Oracles: hand-worked known answers, a brute-force window-by-window oracle
 (skip_index_helpers.oracle), SetIndexPolars (the reference) and a Monte Carlo of the
 random-order baseline (exact when max_size = 0, a normal approximation otherwise).
-Semantics: spec 2026-10-16-skip-index-techniques §2.
 
 Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
@@ -38,7 +37,7 @@ PKG = "turbo_parakeet.techniques.set_index"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
-TOY = [0, 0, 0, 1, 0, 0, 0, 2]  # A A A B A A A C (spec §7)
+TOY = [0, 0, 0, 1, 0, 0, 0, 2]  # A A A B A A A C
 
 
 def stats(impl: str, s: pl.Series, **params) -> dict:

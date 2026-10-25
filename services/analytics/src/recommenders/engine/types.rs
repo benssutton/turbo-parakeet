@@ -3,7 +3,7 @@
 use arrow_schema::{DataType as AT, Field as AField, Fields, TimeUnit};
 use std::sync::Arc;
 
-/// Hierarchy rank (Spec B §4.1): breaks ties between candidates of equal projected size.
+/// Hierarchy rank: breaks ties between candidates of equal projected size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Rank {
     Null,
@@ -266,7 +266,7 @@ pub(crate) fn pl_name(t: &AT, column: &str, enum_values: Option<&[String]>, key:
 }
 
 /// The Arrow type Polars exports (CompatLevel::newest) for a column Polars holds as
-/// the type recommended by `t` (Spec B §5.5); `key` is a dictionary's Polars key.
+/// the type recommended by `t`; `key` is a dictionary's Polars key.
 pub(crate) fn polars_layout(t: &AT, key: &AT) -> AT {
     let field = |f: &Arc<AField>| {
         Arc::new(AField::new(

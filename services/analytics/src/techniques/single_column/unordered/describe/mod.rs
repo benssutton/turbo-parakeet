@@ -1,6 +1,5 @@
-//! Describe: the per-column profile for choosing narrower, more compressible Arrow types
-//! (spec docs/superpowers/specs/2026-09-26-describe-technique-design.md). `conclusions` turns
-//! the profile into min / max, cardinality estimates and a class.
+//! Describe: the per-column profile for choosing narrower, more compressible Arrow types.
+//! `conclusions` turns the profile into min / max, cardinality estimates and a class.
 
 pub(crate) mod conclusions;
 mod extremes;

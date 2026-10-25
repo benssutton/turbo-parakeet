@@ -105,8 +105,8 @@ abstract sealed class NativeRecommender implements AutoCloseable
     }
 
     /**
-     * One row per column (spec docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md
-     * §4); the state is kept. The returned reader holds one batch; the caller closes it.
+     * One row per column; the state is kept. The returned reader holds one batch; the caller
+     * closes it.
      *
      * @throws AnalyticsException    for a failure inside the Rust kernels
      * @throws IllegalStateException when closed

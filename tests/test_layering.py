@@ -1,6 +1,6 @@
 """scripts/check_layering.py: the Rust crate's dependency rule (bindings -> recommenders ->
 techniques -> common), on synthetic trees and on the real one.
-Also: no Parquet anywhere (CLAUDE.md § Project Objectives, Formats)."""
+Also: no Parquet anywhere (CLAUDE.md, Project Objectives: Formats)."""
 
 import importlib.util
 import re

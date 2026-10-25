@@ -1,4 +1,4 @@
-"""Skip-index recommendations (spec 2026-10-20): keyword validation and one-shot known answers."""
+"""Skip-index recommendations: keyword validation and one-shot known answers."""
 
 import numpy as np
 import polars as pl
@@ -93,7 +93,7 @@ def test_decimal_column_has_no_bloom_candidate():
     bloom = [r for r in rows if r["kind"] == "bloom_filter"]
     assert all(r["outcome"] == "pruned" for r in bloom), show(rows)
     assert bloom, show(rows)
-    assert all("R36" in r["evidence"] for r in bloom), show(rows)
+    assert all("not supported on" in r["evidence"] for r in bloom), show(rows)
     assert index is None or not index.startswith("bloom_filter")
 
 
@@ -174,7 +174,7 @@ def test_streaming_granularity_capped_by_block_rows():
     assert {4, 8} <= {r["granularity"] for r in rows if r["outcome"] == "pruned"}
 
 
-# ---- to_chbench: the skip-index axis and point queries (spec §8.2) ------------------------
+# ---- to_chbench: the skip-index axis and point queries ------------------------------------
 
 
 def chbench_suites(tmp_path, frames, **kw):
@@ -259,17 +259,11 @@ def test_to_chbench_granularity_suffix(tmp_path):
 
 
 def test_to_chbench_skip_suites_load_in_chbench(tmp_path, monkeypatch):
-    import os
     from pathlib import Path
 
-    root = Path(
-        os.environ.get("CHBENCH_DIR")
-        or Path(__file__).resolve().parents[1].parent / "clickhouse_benchmark"
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "services" / "bench")
     )
-    if not root.exists():
-        pytest.skip("clickhouse_benchmark not found")
-    monkeypatch.syspath_prepend(str(root))
-    pytest.importorskip("chbench")
     from chbench.harness.suite import load_suite
 
     _, suites, _ = chbench_suites(
@@ -329,6 +323,6 @@ def test_unmeasured_bloom_fpr_is_pruned_with_the_rule():
     assert all(r["outcome"] == "pruned" for r in bloom), show(rows)
     assert all(
         r["evidence"]
-        == "bloom_filter fpr 0.1 not measured (chbench R37: 0.001, 0.01, 0.025, 0.05)"
+        == "bloom_filter fpr 0.1 not measured (measured fprs: 0.001, 0.01, 0.025, 0.05)"
         for r in bloom
     ), show(rows)

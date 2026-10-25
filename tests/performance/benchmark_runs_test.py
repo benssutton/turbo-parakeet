@@ -6,7 +6,8 @@ Run: python tests/performance/benchmark_runs_test.py
 Shapes: large_dataset (realistic mix); long runs 10M x 4 (REE-friendly, mean run
 1 000, int + string: the kernel hashes once per run, so the per-row scan dominates);
 random 10M x 4 (R ≈ n, one hash insert per row — the worst case); wide 1M x 100 (mean runs
-1 / 10 / 100 / 1 000; parallelism across columns). Results: spec 2026-10-13-runs-test §10.
+1 / 10 / 100 / 1 000; parallelism across columns). Results: Rust total 16.9x large_dataset,
+3.9x wide, 3.0x long runs, 1.2x random.
 """
 
 import polars as pl

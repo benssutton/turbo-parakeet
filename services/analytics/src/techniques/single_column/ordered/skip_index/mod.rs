@@ -1,6 +1,5 @@
-//! Skip-index techniques (spec docs/superpowers/specs/2026-10-16-skip-index-techniques-design.md):
-//! how well a column, in its row order, suits ClickHouse's `minmax` and `set(max_size)`
-//! data-skipping indexes.
+//! Skip-index techniques: how well a column, in its row order, suits ClickHouse's `minmax` and
+//! `set(max_size)` data-skipping indexes.
 //!
 //! A window of w rows (one index block: `index_granularity × GRANULARITY`) slides one row at a
 //! time, so every granule alignment counts once. For a point query `col = v`, a window's skip is

@@ -1,7 +1,7 @@
 """Project checks: the same commands locally and in CI (.github/workflows/ci-cd.yml).
 
     python scripts/check.py fast        # formatting + lint (seconds)
-    python scripts/check.py check       # fast + build the extension + Rust and Python tests
+    python scripts/check.py check       # fast + build the extension + Rust, Python and bench tests
     python scripts/check.py ci          # check + the Java binding tests (what the pipeline runs)
     python scripts/check.py <step> ...  # any steps, in order (see STEPS)
 
@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CRATE = ROOT / "services" / "analytics"
 JAVA = CRATE / "bindings" / "java"
+BENCH = ROOT / "services" / "bench"
 PY = sys.executable
 WINDOWS = os.name == "nt"
 MVNW = str(JAVA / ("mvnw.cmd" if WINDOWS else "mvnw"))
@@ -86,6 +87,13 @@ def test_rust() -> None:
 
 def test_py() -> None:
     _run([PY, "-m", "pytest", "-q"])
+
+
+def test_bench() -> None:
+    # Its own pytest run, rooted at services/bench (its pytest.ini): the bench's `tests`
+    # package would shadow the root tests/ in one session. Tests needing ClickHouse skip
+    # when the server is unreachable.
+    _run([PY, "-m", "pytest", "-q"], BENCH)
 
 
 # Cargo profile of the C ABI library the Java tests load: `ci` (release without fat LTO,
@@ -195,6 +203,23 @@ def coverage_rust_full() -> None:
 
 def coverage_py() -> None:
     _run([PY, "-m", "pytest", "--cov=.", "--cov-report=xml", "--cov-report=html", "-q"])
+    _run([PY, "-m", "pytest", "--cov=chbench", "--cov-report=xml", "-q"], BENCH)
+    _repo_relative_coverage(BENCH / "coverage.xml", BENCH / "chbench")
+
+
+def _repo_relative_coverage(report: Path, source: Path) -> None:
+    """Rewrite a coverage.xml whose file names are relative to `source` so they are relative
+    to the repository root, as in the root coverage.xml (what the Sonar scanner resolves).
+    """
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(report)
+    prefix = source.relative_to(ROOT).as_posix()
+    for cls in tree.iter("class"):
+        cls.set("filename", f"{prefix}/{cls.get('filename')}")
+    for src in tree.iter("source"):
+        src.text = str(ROOT)
+    tree.write(report, encoding="utf-8", xml_declaration=True)
 
 
 def _sonar_network() -> str:
@@ -261,6 +286,7 @@ STEPS = {
     "build": build,
     "test-rust": test_rust,
     "test-py": test_py,
+    "test-bench": test_bench,
     "test-java": test_java,
     "coverage-rust": coverage_rust,
     "coverage-rust-full": coverage_rust_full,  # unit + pytest, merged
@@ -269,7 +295,15 @@ STEPS = {
 }
 GROUPS = {
     "fast": ["fmt-check", "lint", "layering"],
-    "check": ["fmt-check", "lint", "layering", "build", "test-rust", "test-py"],
+    "check": [
+        "fmt-check",
+        "lint",
+        "layering",
+        "build",
+        "test-rust",
+        "test-py",
+        "test-bench",
+    ],
     "ci": [
         "fmt-check",
         "lint",
@@ -277,6 +311,7 @@ GROUPS = {
         "build",
         "test-rust",
         "test-py",
+        "test-bench",
         "test-java",
     ],
 }

@@ -1,11 +1,10 @@
 """
 Top-k accuracy tests — every implementation in turbo_parakeet.techniques.top_k.
 
-Oracles: known answers and TopKPolars (exact group-by counts), the reference. Semantics
-(spec docs/superpowers/specs/2026-10-12-heavy-hitters-top-k-design.md): each eligible
-column's k most frequent non-null values as arrow-rs text, count desc then first row;
-`error` is SpaceSaving's over-count bound (0 exact, null HeavyKeeper); `dominated` = top-1
-share ≥ dominance_threshold.
+Oracles: known answers and TopKPolars (exact group-by counts), the reference. Semantics:
+each eligible column's k most frequent non-null values as arrow-rs text, count desc then
+first row; `error` is SpaceSaving's over-count bound (0 exact, null HeavyKeeper);
+`dominated` = top-1 share ≥ dominance_threshold.
 
 Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """

@@ -1,4 +1,4 @@
-//! The analytical techniques, by the taxonomy in ToDo.md: single-column or pairwise, ordered
+//! The analytical techniques, by the taxonomy in services/analytics/CLAUDE.md (Source layout): single-column or pairwise, ordered
 //! or not. Each is a stand-alone module with an Arrow-in / Arrow-out kernel. The leaves are
 //! re-exported flat: `crate::techniques::describe`, `crate::techniques::hll`, …
 

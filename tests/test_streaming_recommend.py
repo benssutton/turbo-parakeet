@@ -1,6 +1,6 @@
 """
 StreamingRecommender accuracy tests. Oracles: OneShotRecommender on the batches
-concatenated diagonally (parity, spec §6); the pyarrow IPC oracle (_sizes) for ZSTD
+concatenated diagonally (parity); the pyarrow IPC oracle (_sizes) for ZSTD
 sizes; a complete sample for the sampled ZSTD estimate; hand-worked known answers.
 Accuracy only — nothing here is timed.
 """
@@ -229,7 +229,7 @@ def wide_temporal(r: dict, o: dict) -> bool:
 
 
 def assert_compression_parity(name: str, r: dict, o: dict):
-    """ClickHouse and Arrow IPC compression columns (spec 2026-10-19 §6): equal when the
+    """ClickHouse and Arrow IPC compression columns: equal when the
     sampled block is the whole column; else sizes within 2% and the same codecs unless
     the best chains are within 2%."""
     whole = r["n_sampled_rows"] == r["n_rows"] and r["n_sampled_blocks"] == 1
@@ -290,7 +290,7 @@ def skip_key(c: dict):
 
 
 def assert_skip_index_parity(name: str, r: dict, o: dict):
-    """Skip indexes (spec 2026-10-20 §7): with the whole column in one sampled block the
+    """Skip indexes: with the whole column in one sampled block the
     index and every candidate row equal one-shot's; else the index is equal unless
     one-shot's two best measured candidates are within 0.05 skip_rows."""
     if r["n_sampled_rows"] == 0:
@@ -342,8 +342,7 @@ def assert_skip_index_parity(name: str, r: dict, o: dict):
 
 
 def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: bool):
-    """Parity spec (docs/superpowers/specs/2026-10-01-recommender-parity-design.md)
-    §7 / §10: equal recommendations, sizes, candidates and shared value columns; ZSTD
+    """Parity: equal recommendations, sizes, candidates and shared value columns; ZSTD
     when N ≤ block_rows.
 
     Known, accepted differences, narrowed per column:
@@ -383,7 +382,7 @@ def assert_parity(streamed: pl.DataFrame, frame: pl.DataFrame, single_batch: boo
         )
         assert_compression_parity(name, r, o)
         assert_skip_index_parity(name, r, o)
-        # Both rank by exact counts while the dictionary is a candidate (spec 2026-10-07 §4).
+        # Both rank by exact counts while the dictionary is a candidate.
         for k in ("top_k", "inner_top_k"):
             assert r[k] == o[k], (name, k, r[k], o[k])
         exact_cols = [
@@ -494,7 +493,7 @@ def test_result_keeps_the_state():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. Parity with OneShotRecommender (spec §6)
+# 2. Parity with OneShotRecommender
 
 
 @pytest.mark.parametrize("batch_rows", [1, 7, 60, 200])

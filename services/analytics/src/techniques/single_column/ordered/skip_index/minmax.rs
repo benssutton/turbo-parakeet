@@ -136,7 +136,7 @@ mod tests {
         scan(p, w, 0..p.ids.len() - w + 1)
     }
 
-    /// A A A B A A A C (spec §7).
+    /// A A A B A A A C.
     const TOY: [Option<i64>; 8] = [
         Some(0),
         Some(0),

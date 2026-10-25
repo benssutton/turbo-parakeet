@@ -1,4 +1,4 @@
-//! Block reservoir (streaming spec §4.5): the stream is cut into contiguous blocks of
+//! Block reservoir: the stream is cut into contiguous blocks of
 //! `block_rows` rows; a uniform random sample of `capacity` blocks is kept by Li's
 //! Algorithm L (seeded). Blocks keep row order, so ZSTD sizes measured on them match
 //! an IPC file written in `block_rows` batches. A kept block holds compact copies of
