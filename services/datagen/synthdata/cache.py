@@ -1,18 +1,21 @@
-"""The Arrow IPC cache for generated datasets.
+"""The Arrow IPC caches for generated datasets and frames.
 
 The cache is Arrow IPC in the file format (Feather v2) uncompressed, at
 `<cache_dir>/<dataset_id>.arrow`, with the manifest as JSON beside it. IPC
 keeps the exact Arrow type and buffers, so the cached column is bit-identical
-to what the loader inserts, with no encode or decode step.
+to what the loader inserts, with no encode or decode step. Frames
+(`load_or_generate_frame`) are cached the same way at `<frame_id>.arrow`.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import polars as pl
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -20,7 +23,13 @@ from synthdata.column import metrics, realdata
 from synthdata.column.spec import DatasetSpec, SpecError
 from synthdata.generate import COLUMN_NAME, Dataset, Manifest, generate, observed
 
-__all__ = ["save", "load_path", "load_or_generate"]
+__all__ = [
+    "cache_dir",
+    "save",
+    "load_path",
+    "load_or_generate",
+    "load_or_generate_frame",
+]
 
 
 def _paths(dataset_id: str, cache_dir: Path) -> tuple[Path, Path]:
@@ -103,3 +112,32 @@ def load_or_generate(spec: DatasetSpec, cache_dir: Path) -> Dataset:
     dataset = generate(spec)
     save(dataset, cache_dir)
     return dataset
+
+
+def cache_dir() -> Path:
+    """$SYNTHDATA_CACHE, else ~/.cache/synthdata."""
+    return Path(os.environ.get("SYNTHDATA_CACHE", Path.home() / ".cache" / "synthdata"))
+
+
+def load_or_generate_frame(spec, strict: bool = False, directory: Path | None = None):
+    """The frame for `spec` from the cache, or generated and cached (atomic writes, so
+    parallel test workers can share the directory). Strict re-checks a cached manifest.
+    """
+    from synthdata.frame import FrameManifest, check, frame_id, generate_frame
+
+    directory = Path(directory or cache_dir())
+    fid = frame_id(spec)
+    data, meta = directory / f"{fid}.arrow", directory / f"{fid}.json"
+    if data.exists() and meta.exists():
+        manifest = FrameManifest.from_json(meta.read_text(encoding="utf-8"))
+        if strict:
+            check(spec, manifest)
+        return pl.read_ipc(data.read_bytes()), manifest
+    df, manifest = generate_frame(spec, strict)
+    directory.mkdir(parents=True, exist_ok=True)
+    tmp = directory / f"{fid}.{os.getpid()}.tmp"
+    df.write_ipc(tmp)
+    os.replace(tmp, data)
+    tmp.write_text(manifest.to_json(), encoding="utf-8")
+    os.replace(tmp, meta)
+    return df, manifest
