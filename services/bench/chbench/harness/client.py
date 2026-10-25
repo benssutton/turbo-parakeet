@@ -1,7 +1,7 @@
 """Thin wrapper over `clickhouse_connect.Client` for the harness.
 
 This is the only module that talks to the client library directly, so the
-two clickhouse-connect 1.8.0 gotchas measured in `spikes/FINDINGS.md` §5 are
+two clickhouse-connect 1.8.0 gotchas measured in FINDINGS §5 are
 encoded here once and no later module can trip on them:
 
 1. `query_id` is delivered **inside the `settings` mapping** (`query_rows`).

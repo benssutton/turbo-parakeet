@@ -139,7 +139,7 @@ def test_list_of_integer_draws_an_integer_support():
     ],
 )
 def test_temporal_and_bool_draw_from_the_integer_lattice(arrow_type, lo, hi):
-    """Design 4.2: dates and times are integers in the unit's resolution, then
+    """Dates and times are integers in the unit's resolution, then
     cast; bool is the lattice {0, 1}. None of them has decimal_places."""
     s = DatasetSpec(
         rows=10_000,
@@ -185,7 +185,7 @@ def test_string_length_draws_distinct_strings_of_that_length():
 
 
 def test_uncapped_multiset_draws_rows_values_directly():
-    """Design 4.2 step 1: without cardinality_ratio, draw rows values and skip
+    """Without cardinality_ratio, draw rows values and skip
     the profile; the multiset is their unique values with counts."""
     s = spec(cardinality_ratio=None)
     m = build_multiset(s, np.random.default_rng(0))
@@ -203,7 +203,7 @@ def test_is_deterministic_for_a_given_seed():
 
 def test_sigma_override_is_used_when_supplied():
     """The dispersion solver calls draw_support repeatedly with trial sigmas, so the
-    override must bypass the spec's own value."""
+    override must bypass the DatasetSpec's own value."""
     s = spec(
         distribution=Distribution(kind="lognormal", mean=4.0, sigma=0.25, shift=-1.0)
     )
@@ -285,7 +285,7 @@ def test_two_sided_clip_does_not_overstate_clip_collapse():
 
 
 def test_entropy_floor_matches_the_measured_values():
-    """FINDINGS section 1 measured these floors directly."""
+    """FINDINGS §1 measured these floors directly."""
     assert entropy_floor(100_000, 1_000) == pytest.approx(0.18027, abs=1e-4)
     assert entropy_floor(100_000, 10_000) == pytest.approx(1.79759, abs=1e-4)
 
@@ -332,7 +332,7 @@ def test_solve_entropy_clamps_above_the_ceiling():
 
 
 def test_use_case_2_entropy_target_is_reachable_at_10m_rows():
-    """1000 distinct values at 10M rows, entropy 4 bits (spec section 5.1)."""
+    """1000 distinct values at 10M rows, entropy 4 bits (int_encodings)."""
     r = solve_entropy(10_000_000, 1_000, 4.0)
     assert r.status is SolveStatus.OK
     assert r.achieved == pytest.approx(4.0, abs=0.01)
@@ -366,7 +366,7 @@ def test_density_profile_is_used_when_no_entropy_target_is_set():
 
 @pytest.mark.parametrize("arrow_type", ["int32", "date32", "timestamp[ms]"])
 def test_uncapped_lattice_draws_honour_the_distribution(arrow_type):
-    """Design 4.2 step 1: without cardinality_ratio the rows are drawn from the
+    """Without cardinality_ratio the rows are drawn from the
     distribution itself. A narrow normal centred in a wide range must give a
     column concentrated near the mean, not uniform over the lattice."""
     s = DatasetSpec(
@@ -456,7 +456,7 @@ def test_density_counts_still_floors_underflowed_zero_densities():
 
 
 def test_density_allocation_pulls_the_mean_below_the_support_mean():
-    """FINDINGS section 4: replication weight follows the density, which for a
+    """FINDINGS §4: replication weight follows the density, which for a
     right-skewed distribution concentrates below the mean. This is the dominant
     mean-drift mechanism, not clipping."""
     s = spec(
@@ -587,7 +587,7 @@ def test_dispersion_achieved_is_remeasured_on_the_returned_multiset():
 
 
 def test_capped_lattice_support_draw_honours_the_distribution():
-    """Design 4.2 step 1 draws the support *from the distribution*. When k is far
+    """The capped draw takes the support *from the distribution*. When k is far
     below the lattice span, a uniform `rng.choice` support leaves the density
     profile nowhere to put its mass: int32 over [1e6, 1e7] with normal(5e6, 1e5)
     spanned the whole range (sd 192 572) while float64 on the same spec gave

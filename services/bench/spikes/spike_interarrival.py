@@ -1,7 +1,7 @@
 """Spike 3: hit a target coefficient of variation of the gaps between runs of
 identical values, alone and combined with a runs z-score target.
 
-Method (spec 4.3 step 2): values with count >= 2 form one run each; singles
+Method: values with count >= 2 form one run each; singles
 fill the space between runs. Free-gap lengths are drawn from a gamma with
 shape 1/CV^2 and rescaled to sum to the number of singles.
 

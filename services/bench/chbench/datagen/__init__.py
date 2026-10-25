@@ -1,4 +1,4 @@
-"""Synthetic single-column dataset generator (spec section 4).
+"""Synthetic single-column dataset generator.
 
 Public API: `generate(spec)` runs the pipeline and returns a `Dataset` (an
 Arrow array plus its `Manifest`); `save` and `load_or_generate` are the Arrow

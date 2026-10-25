@@ -1,6 +1,6 @@
 """The `chbench` console script: `run`, `report`, `datasets`, `clean`.
 
-Spec section 6.3 fixes the surface:
+The surface:
 
     chbench run  suites/x.yaml [--force] [--samples-add N] [--dry-run]
                  [--explain] [--ignore-unfinished]
@@ -8,7 +8,7 @@ Spec section 6.3 fixes the surface:
     chbench datasets [--metrics]
     chbench clean --suite x
 
-Two options the spec does not list are added to every command that needs
+Two options beyond these are added to every command that needs
 them: `--store` (default `results.db`) and `--cache-dir` (default
 `datasets/`), which are the two paths `CLAUDE.md` fixes at the project root.
 They exist because `datasets` has to be told which cache to list and because
@@ -54,8 +54,8 @@ from chbench.harness.suite import SuiteError, load_suite, parse_suite
 DEFAULT_STORE = "results.db"
 DEFAULT_CACHE_DIR = "datasets"
 
-# Used only when a suite's own stored YAML cannot supply them; the spec's
-# own example suites (section 5.1) both ask for exactly these.
+# Used only when a suite's own stored YAML cannot supply them; the two
+# example suites both ask for exactly these.
 _DEFAULT_PERCENTILES = (50, 90, 99)
 
 # The metrics a manifest can carry, in the order `datasets --metrics` shows
@@ -384,7 +384,7 @@ def _metric_cell(manifest: Manifest, metric: str) -> str:
     visible without reading the warnings. `within_tolerance` is `None` for
     `interarrival_cv` when `runs_z` was also targeted -- the settled
     combined-target behaviour records the achieved CV without applying its
-    tolerance (spec sections 4.3 and 4.4) -- and renders as `?`."""
+    tolerance -- and renders as `?`."""
     if metric not in manifest.achieved:
         return "-"
     achieved = f"{manifest.achieved[metric]:.4g}"
@@ -458,7 +458,7 @@ def _present_tables(client: CHClient, suite_name: str) -> set[str]:
 
     An orphan -- a table matching the suite's prefix that the store does not
     know about -- is named by `clean` but never dropped. The store records a
-    table the moment its load finishes (ruling R18), so an orphan means a
+    table the moment its load finishes, so an orphan means a
     process died between `CREATE TABLE` and that write. Dropping a table this
     store never claimed would be guessing at ownership from a name prefix,
     and the project's rule is to record what it measured, never to coerce --

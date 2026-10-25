@@ -215,7 +215,7 @@ def test_zstd_level_compression_is_accepted():
     assert s.clickhouse.compression == ["ZSTD(3)"]
 
 
-# --- Final fix wave, ruling R31(c): cross-block checks that used to crash
+# --- Final fix wave: cross-block checks that used to crash
 # later, in `validate` or the renderer, instead of failing at parse time.
 
 

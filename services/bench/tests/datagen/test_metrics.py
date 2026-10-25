@@ -120,7 +120,7 @@ def test_largest_remainder_negative_weights_raises():
 
 
 def test_interarrival_cv_rounds_to_decimal_places():
-    """Spec 2 defines the run comparison as being after rounding to decimal_places.
+    """Runs compare floats after rounding to decimal_places.
     Sub-tolerance noise must not destroy the runs."""
     x = np.repeat(np.arange(30.0), 2)
     jittered = x + np.random.default_rng(0).normal(0, 1e-12, x.size)

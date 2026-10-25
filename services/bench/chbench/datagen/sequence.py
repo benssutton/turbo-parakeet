@@ -7,17 +7,17 @@ order metrics -- the Wald-Wolfowitz runs z-score (2a) and the coefficient of
 variation of the gaps between repeat-runs (2b) -- and the dispatcher
 `layout_sequence` that picks a layout from whichever targets a spec sets.
 
-Runs method (spec 4.3 step 1): dichotomise the multiset, invert the runs-test
+Runs method: dichotomise the multiset, invert the runs-test
 mean/sd for the group sizes to get a target run count R, then lay out R
 alternating blocks whose lengths are random compositions of n1 and n2.
 
-Inter-arrival method (spec 4.3 step 2): every value with count >= 2 forms one
+Inter-arrival method: every value with count >= 2 forms one
 run; singles fill the segments between runs. Start-to-start gaps are drawn from
 a gamma of shape 1/CV^2, the preceding run's own length is subtracted and the
 remainder clipped at zero, and the singles are allocated across the segments
 by largest remainder. See `layout_interarrival` for the two structural floors.
 
-Combined targets (settled by the project owner, spec 4.3/4.4): lay out once,
+Combined targets (settled by the project owner): lay out once,
 runs pattern first, and record the achieved CV without its tolerance. See
 `layout_sequence`.
 
@@ -29,7 +29,7 @@ multiset exactly. Do not simplify that swap.
 
 `layout_runs` never inspects which dichotomy produced its boolean mask -- it
 only permutes and reslices `x[b]` and `x[~b]` -- so it is dichotomy-agnostic
-(spikes/FINDINGS.md section 7). What differs by dichotomy is the *reachable
+(FINDINGS §7). What differs by dichotomy is the *reachable
 band*: a skewed categorical's `topfreq` split can have a far lower positive
 ceiling than a balanced numeric split, so `runs_plan` reports the band from
 the measured `n1, n2` of the actual column rather than assuming a 50/50 split.
@@ -52,8 +52,8 @@ from chbench.datagen.solve import SolveStatus
 from chbench.datagen.spec import DatasetSpec
 
 # interarrival_cv is the CV of the gaps between repeat-run starts; two gaps need
-# three runs, so below this the metric is undefined (design 4.3 step 2: "if
-# there are not enough duplicates to form runs, warn").
+# three runs, so below this the metric is undefined (too few duplicates to
+# form runs: a warning).
 MIN_REPEAT_RUNS = 3
 
 
@@ -314,13 +314,13 @@ def layout_sequence(
     *,
     cv_override: float | None = None,
 ) -> SequenceResult:
-    """Dispatch on which ordering targets the spec sets.
+    """Dispatch on which ordering targets the DatasetSpec sets.
 
     Neither: a uniform shuffle. `runs_z` only: `layout_runs`. `interarrival_cv`
     only: `layout_interarrival`. Both: the combined path -- the runs block
     pattern decides which positions hold each dichotomy group, and each group
     is then laid out with the inter-arrival method inside its positions, once,
-    with no retry. `cv_override` replaces the spec's CV target so Task 10's
+    with no retry. `cv_override` replaces the DatasetSpec's CV target so the
     refine pass can re-lay with a trial value.
 
     A single-group dichotomy (a constant column, or any multiset whose split
@@ -330,8 +330,8 @@ def layout_sequence(
     so this must not raise.
 
     A `runs_z` outside the band reachable from the measured split is clamped
-    by `layout_runs` (design 4.3); this is the package's first runs-z clamp
-    report (spikes/FINDINGS.md section 7), so the clamp is recorded here as
+    by `layout_runs`; this is the package's first runs-z clamp
+    report (FINDINGS §7), so the clamp is recorded here as
     a warning naming the requested z and the band, never silently, and the
     plan is returned so the caller can record the clamp under its solves.
     """

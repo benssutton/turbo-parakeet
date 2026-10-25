@@ -75,7 +75,7 @@ def test_rerun_skips_queries_that_already_hold_enough_samples(ch, tmp_path):
 def test_rerun_does_not_reload_a_table_whose_queries_are_all_held(
     ch, tmp_path, monkeypatch
 ):
-    """Ruling R30: the query variants depend only on the variant and the
+    """The query variants depend only on the variant and the
     seeded rng, so they can be expanded before the load; when every one of
     them already holds its target, the load (drop, create, insert, optimise)
     is skipped and the cell still counts as ok. `--force` or `--samples-add`
@@ -146,7 +146,7 @@ def test_samples_to_run_gives_a_never_run_query_the_full_sample_count():
 
 @pytest.mark.clickhouse
 def test_query_error_is_recorded_on_the_query_row(ch, tmp_path, monkeypatch):
-    """Spec 6.4: the message lands on the query, and the run continues."""
+    """The message lands on the query, and the run continues."""
     from chbench.harness import orchestrate
 
     def failing_run_query(client, name, variant, qv, samples, *, on_sample=None):
@@ -193,7 +193,7 @@ def test_finish_run_is_called_when_something_other_than_ctrl_c_escapes(
 
 
 def test_achieved_bounds_of_a_decimal64_array():
-    """Ruling R31(b): `pc.min_max` has no kernel for decimal32/decimal64 on
+    """`pc.min_max` has no kernel for decimal32/decimal64 on
     pyarrow 24 and raised `ArrowNotImplementedError` before the grid was
     even printed, so a decimal dataset could not be dry-run."""
     import decimal
@@ -225,7 +225,7 @@ def test_achieved_bounds_of_a_decimal64_array():
 
 @pytest.mark.clickhouse
 def test_refuses_to_start_while_an_unfinished_run_of_the_suite_exists(ch, tmp_path):
-    """Ruling R33: `finish_run` sits in a `finally`, so a `runs` row with
+    """`finish_run` sits in a `finally`, so a `runs` row with
     `finished_at` NULL means a process died mid-run (or is still running
     against this store); a second run must say so and stop, unless told
     that the first is gone."""
@@ -252,7 +252,7 @@ def test_refuses_to_start_while_an_unfinished_run_of_the_suite_exists(ch, tmp_pa
 def test_ctrl_c_mid_query_records_the_interrupted_query_and_finishes_the_run(
     ch, tmp_path, monkeypatch
 ):
-    """Ruling R34, driven through the real `CHClient` and the real `Store`:
+    """Driven through the real `CHClient` and the real `Store`:
     a `KeyboardInterrupt` raised inside the second timed sample query (the
     `_InterruptOnTimedCall` proxy from the runner tests) must propagate,
     leave the first sample committed, mark the query row `interrupted`

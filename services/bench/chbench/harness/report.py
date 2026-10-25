@@ -1,4 +1,4 @@
-"""Turn `Store.query_rows` output into the report spec section 6.2 describes:
+"""Turn `Store.query_rows` output into the report:
 one summary row per query with sample count, mean, max and requested
 percentiles of `client_ms`/`server_ms`, table compressed bytes and
 compression ratio, and achieved selectivity -- rendered with `rich`, sorted
@@ -54,7 +54,7 @@ def _sort_key(s: dict):
 
     `target_fraction` is `None` for `full_scan` queries and a `float` for
     `filter` queries, and nothing stops a suite from having two `full_scan`
-    query blocks that agree on every other axis (ruling R20: this is fixed
+    query blocks that agree on every other axis (this is fixed
     here, generically, rather than by having `suite.py` forbid the
     combination -- the report reads back from SQLite, where any column can
     be `NULL` for reasons unrelated to suite validation, e.g. a skipped

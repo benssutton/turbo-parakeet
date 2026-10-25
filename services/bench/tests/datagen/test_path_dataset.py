@@ -1,4 +1,4 @@
-"""Real-data datasets (spec section 4.6, ruling R35): a `DatasetSpec` with
+"""Real-data datasets (`dataset: {path, column}`): a `DatasetSpec` with
 `path` / `column` is measured from an existing Arrow IPC file, never generated."""
 
 import datetime as dt
@@ -196,7 +196,7 @@ def test_missing_file_column_and_unexpressible_type(tmp_path):
         path_spec(s, "v")
 
 
-# Ruling R36: the arrow_type vocabulary gains time zones and fixed_size_binary,
+# The arrow_type vocabulary gains time zones and fixed_size_binary,
 # which the recommended ClickHouse types (DateTime('tz'), FixedString(n)) need.
 @pytest.mark.parametrize(
     "dtype,text",

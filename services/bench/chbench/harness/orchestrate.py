@@ -1,6 +1,6 @@
 """Wire every harness module into one command: `run_suite`.
 
-This is the data flow of spec section 3, and the only module that knows the
+This is the benchmark's data flow, and the only module that knows the
 order of it: dataset -> connection -> grid -> tables -> queries -> samples ->
 report. Nothing above it exists; everything below it is already tested in
 isolation, so this module contains no numerics and no SQL of its own, only
@@ -17,7 +17,7 @@ positional parameters each.
 Five decisions here are load-bearing and are not free to change:
 
 1. **`expand_grid` is given explicit achieved values, not the manifest**
-   (ruling R1). `null_count` comes from the spec, where it is exact -- the
+   `null_count` comes from the DatasetSpec, where it is exact -- the
    generator injects precisely that many -- and `value_min`/`value_max` from
    `pyarrow.compute.min_max` of the *final* array, which is already rounded
    and cast, so its bounds are the values ClickHouse will really store. The
@@ -41,18 +41,18 @@ Five decisions here are load-bearing and are not free to change:
    stored the same way and the loop carries on to the next query. Only a
    `KeyboardInterrupt` stops the run, and even then the samples the runner
    already delivered through `on_sample` are committed, the interrupted
-   query's row is marked `interrupted` (ruling R34) and the run is
-   finished before it is re-raised (spec section 6.4).
+   query's row is marked `interrupted` and the run is
+   finished before it is re-raised.
 
 4. **UTF-8 is forced on the console before anything is printed.** The
    `EXPLAIN indexes = 1` output contains box-drawing characters, which raise
    `UnicodeEncodeError` on the default Windows console encoding. Measured in
-   the spikes (FINDINGS section 5), not a precaution. `force_utf8()` stays
+   the spikes (FINDINGS §5), not a precaution. `force_utf8()` stays
    ahead of the print path whether or not the plan is printed, because a
    skip reason or an error message can carry non-ASCII too.
 
 5. **The EXPLAIN plan is always stored and never printed by default**
-   (ruling R21). It is evidence, so every run records it on the query row;
+   It is evidence, so every run records it on the query row;
    it is also ten lines per query, which on a full `int_encodings` grid
    (36 valid cells x 12 query variants) is thousands of lines of console.
    `explain=True` (`chbench run --explain`) prints it.
@@ -102,8 +102,8 @@ _PIPED_WIDTH = 320
 
 
 class UnfinishedRunError(RuntimeError):
-    """A run of this suite has a `runs` row with no `finished_at` (ruling
-    R33). The message names the run and says how to get past it."""
+    """A run of this suite has a `runs` row with no `finished_at`. The
+    message names the run and says how to get past it."""
 
 
 @dataclass
@@ -114,7 +114,7 @@ class RunSummary:
     table counters partition the grid: `tables_skipped` counts cells
     `expand_grid` marked invalid, `tables_error` cells whose load failed,
     `tables_ok` cells that loaded or, on a rerun, were reused without a
-    reload because every query already held its samples (ruling R30; in a
+    reload because every query already held its samples (in a
     dry run, cells that *would* be loaded). `queries_run` counts query
     variants `run_query` was called for,
     `queries_skipped_existing` those already holding enough samples, and
@@ -132,7 +132,7 @@ class RunSummary:
 
 @dataclass(frozen=True)
 class RunContext:
-    """Everything one run's steps share, gathered once (ruling R24).
+    """Everything one run's steps share, gathered once.
 
     Frozen because none of it changes during a run -- `summary` is a mutable
     dataclass held by reference, and is the only thing the steps write to.
@@ -158,8 +158,8 @@ def force_utf8() -> None:
     """Reconfigure stdout and stderr to UTF-8 with replacement.
 
     `EXPLAIN indexes = 1` returns box-drawing characters, and printing them
-    to a cp1252 console raises `UnicodeEncodeError` mid-run (FINDINGS
-    section 5). `errors="replace"` is the second line of defence for a
+    to a cp1252 console raises `UnicodeEncodeError` mid-run
+    (FINDINGS §5). `errors="replace"` is the second line of defence for a
     stream that cannot re-encode a character at all. A stream with no
     `reconfigure` (a `StringIO` in a test) or one whose buffer is detached
     is left alone.
@@ -239,7 +239,7 @@ def _print_grid(console: Console, variants: list[TableVariant]) -> None:
 def _achieved_bounds(array: pa.Array) -> tuple:
     """`(min, max)` of `array` as Python values, nulls ignored.
 
-    A `decimal32`/`decimal64` array (a decimal dataset, spec section 4.1) is
+    A `decimal32`/`decimal64` array (a decimal dataset) is
     cast to `decimal128` at the same precision and scale first: on pyarrow
     24 `pc.min_max` has kernels for `decimal128` and `decimal256` only, and
     raised `ArrowNotImplementedError` on the narrower widths before the
@@ -259,8 +259,7 @@ def _samples_to_run(held: int, samples: int, force: bool, samples_add: int) -> i
     `force` ignores what is banked and takes a full `samples` again.
     Otherwise the target is `max(samples, held + samples_add)` and the query
     takes the shortfall; a query already at or above the target is skipped
-    (spec section 6.1: "re-running a suite skips queries already holding
-    >= N samples").
+    (re-running a suite skips queries already holding >= N samples).
 
     The target is a `max`, not `held + samples_add`, so that a query which
     has never run still gets the suite's full `samples`. Under the plain sum,
@@ -313,7 +312,7 @@ def run_suite(
 ) -> RunSummary:
     """Run one suite end to end and return what it did.
 
-    The order is fixed by spec section 3 and by three constraints on it.
+    The order is fixed by three constraints.
 
     The **connection comes first**, before the dataset: it is the cheapest
     thing that can fail and the likeliest to be misconfigured, and generating
@@ -328,8 +327,8 @@ def run_suite(
     `--dry-run` leaves no `results.db` behind.
 
     Once the store is open and before `begin_run`, a `runs` row for this
-    suite with `finished_at` NULL stops the run with `UnfinishedRunError`
-    (ruling R33): `finish_run` is in a `finally`, so the row means either
+    suite with `finished_at` NULL stops the run with `UnfinishedRunError`:
+    `finish_run` is in a `finally`, so the row means either
     a process that died mid-run or one still running against this store,
     and two live runs would interleave samples and contend for the file.
     `ignore_unfinished` (`--ignore-unfinished`) is the user's statement
@@ -352,7 +351,7 @@ def run_suite(
     manifest = dataset.manifest
     # `cache.save` writes `<cache_dir>/<dataset_id>.arrow`; the store records
     # that path so a result can be traced back to the exact bytes loaded.
-    # A path dataset (ruling R35) is read in place: the store records its file.
+    # A path dataset is read in place: the store records its file.
     arrow_path = (
         Path(suite.dataset.path)
         if suite.dataset.path is not None
@@ -366,7 +365,7 @@ def run_suite(
     )
     _warn(console, "dataset", manifest.warnings)
 
-    # R1: the achieved bounds of the final, rounded, cast array -- the values
+    # The achieved bounds of the final, rounded, cast array -- the values
     # the server will actually hold.
     value_min, value_max = _achieved_bounds(dataset.array)
     variants = expand_grid(
@@ -420,7 +419,7 @@ def run_suite(
             # `run_query` already delivered every completed sample through
             # `on_sample`, and `insert_sample` commits each one as it lands,
             # so there is nothing left to flush here: say what survived and
-            # let the interrupt through (spec section 6.4). `finish_run` is
+            # let the interrupt through. `finish_run` is
             # the `finally`'s job, below.
             _say(
                 console,
@@ -449,7 +448,7 @@ def _run_variant(
 ) -> None:
     """Load one table variant and run every query against it.
 
-    `suite_name` goes to `upsert_table` (ruling R18) so `clean` can drop this
+    `suite_name` goes to `upsert_table` so `clean` can drop this
     table even if the run is interrupted before its first sample lands: the
     table exists in ClickHouse from the moment the load succeeds, and the
     store has to know about it from that same moment.
@@ -473,7 +472,7 @@ def _run_variant(
     rng = np.random.default_rng(suite.dataset.seed)
     query_variants = expand_queries(suite.queries, values, variant, rng)
 
-    # Ruling R30: the query variants depend on the variant and the seeded
+    # The query variants depend on the variant and the seeded
     # rng, not on the table, so they are expanded before the load, and a
     # table none of whose queries wants a sample is not dropped and reloaded
     # for nothing. The first runs measured the reload at a few seconds per
@@ -570,7 +569,7 @@ def _run_query_variant(
     except KeyboardInterrupt as e:
         # `run_query` attaches the partial `RunResult` (status
         # "interrupted", the samples that completed, the EXPLAIN if it got
-        # that far) to the exception (ruling R34). Without this write the
+        # that far) to the exception. Without this write the
         # pre-run upsert above leaves the query's status NULL, and after
         # the fact the interrupted query looks like one the run never
         # reached. The samples are already committed by `on_sample`.
@@ -584,7 +583,7 @@ def _run_query_variant(
             error=partial.error,
         )
         raise
-    # The run's own outcome goes on the query row (spec section 6.4): without
+    # The run's own outcome goes on the query row: without
     # it, a query whose run failed is indistinguishable, after an unattended
     # run, from one the run never reached.
     store.upsert_query(
@@ -608,7 +607,7 @@ def _run_query_variant(
         f"client mean {np.mean(client_ms):.1f} ms",
     )
     if ctx.explain and result.explain:
-        # R21: stored always, printed only on request. UTF-8 was forced at
+        # The plan is stored always, printed only on request. UTF-8 was forced at
         # the top of `run_suite`, which is what makes this box-drawing text
         # printable at all.
         _say(console, result.explain, style="dim")

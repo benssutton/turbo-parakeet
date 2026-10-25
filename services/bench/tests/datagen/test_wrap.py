@@ -73,7 +73,7 @@ def test_decimal32_accepts_the_use_case_1_range():
 
 def test_decimal32_overflow_is_reported_against_rounded_values():
     """A draw in [9.999999995, 10) rounds to exactly 10.00000000 and overflows. The
-    check must run on the rounded data, not on the spec's bound. Validation
+    check must run on the rounded data, not on the DatasetSpec's bound. Validation
     rejects any value_range whose rounded bounds overflow, so reaching this
     check is a generator bug, not a spec error: it is an AssertionError."""
     v = np.array([9.999999995, 1.0])

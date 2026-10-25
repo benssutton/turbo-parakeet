@@ -355,7 +355,7 @@ def _one(**axes):
 
 @pytest.mark.parametrize("ch_type", ["Int32", "UInt32"])
 def test_low_cardinality_on_integers_is_a_measured_skip(ch_type):
-    # Measured on 26.8.2.7 (first runs, 2026-09-17; ruling R27): the server
+    # Measured on 26.8.2.7 (first runs, 2026-09-17): the server
     # refuses the DDL with code 455 SUSPICIOUS_TYPE_FOR_LOW_CARDINALITY. The
     # harness records the skip; it does not enable the setting.
     v = _one(type=[ch_type], codec=["LowCardinality"])

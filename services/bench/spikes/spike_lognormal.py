@@ -44,7 +44,7 @@ def lognormal_multiset(
     # final multiset mean (x.mean()) into the deduplication step (collapsing
     # repeated clipped values onto one support point) and the density-weighted
     # count allocation step below, rather than attributing the whole gap to
-    # clipping alone (see FINDINGS.md section 4).
+    # clipping alone (see FINDINGS §4).
     info = {
         "clipped_frac": clipped_frac,
         "support_shortfall": k - len(support),

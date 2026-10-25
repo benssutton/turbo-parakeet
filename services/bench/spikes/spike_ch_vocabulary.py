@@ -6,7 +6,7 @@ For every type the recommender may emit, the script runs chbench's DDL form
 type wrapper) and a small INSERT ... SELECT of representative values, and
 records accepted / rejected with the server's own message and the stage
 (`create` or `insert`) that rejected it. The matrices are factored like
-spec 5.2's:
+FINDINGS §5's:
 
 - codec x compression, skip index `none`;
 - skip index x compression `LZ4`, codec `none`;
@@ -66,7 +66,7 @@ TYPES = [
     ("Time64(3)", "CAST(number * 1000 AS Time64(3))"),
     ("FixedString(3)", "toFixedString(toString(number % 1000), 3)"),
     ("FixedString(16)", "toFixedString(toString(number), 16)"),
-    # the vocabulary measured earlier (spec 5.2), for comparison and for the
+    # the vocabulary measured earlier (FINDINGS §5), for comparison and for the
     # GCD column the earlier spike predates
     ("Float64", "number / 8"),
     ("Decimal32(8)", "toDecimal32(number / 1000, 8)"),

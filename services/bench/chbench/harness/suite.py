@@ -3,9 +3,7 @@
 This is the harness's entry point: everything a run needs (the dataset spec,
 the ClickHouse table axes, the query axes, the results config) is parsed and
 validated up front, so a malformed suite fails before anything touches the
-generator or the database. See spec section 5.1 for the suite YAML shape and
-`docs/superpowers/specs/2026-09-13-clickhouse-benchmark-framework-design.md`
-for the design.
+generator or the database. `suites/` holds example suite files.
 """
 
 from __future__ import annotations
@@ -136,9 +134,8 @@ def parse_suite(text: str, base_dir: str | Path | None = None) -> Suite:
 
 
 def _parse_path_dataset(block: dict, base_dir: str | Path | None) -> DatasetSpec:
-    """`dataset: {path, column[, seed, decimal_places]}` (spec section 5.1,
-    ruling R35): every other field is measured from the file, so any other key
-    is an error naming it."""
+    """`dataset: {path, column[, seed, decimal_places]}`: every other field is
+    measured from the file, so any other key is an error naming it."""
     if "path" not in block or "column" not in block:
         raise SuiteError(
             "dataset needs path and column together; got "
@@ -301,8 +298,8 @@ def _is_integer_date_or_timestamp(dtype) -> bool:
 
 
 # Axis types (outside `_NUMERIC_AXIS_TYPES`) that only some dataset types can
-# feed: (predicate on the Arrow type, what the dataset must be). Ruling R36;
-# the loader's casts (`loader.cast_column`) and `validate.resolve_type` rely on
+# feed: (predicate on the Arrow type, what the dataset must be). The
+# loader's casts (`loader.cast_column`) and `validate.resolve_type` rely on
 # these.
 _TYPED_AXIS_TYPES = {
     "Bool": (pa.types.is_boolean, "a boolean dataset"),
@@ -332,7 +329,7 @@ def _check_dataset_against_type_axis(
 ) -> None:
     """Reject at parse time the dataset/`type`-axis pairs that no grid cell
     can run, rather than crash in `validate` or the query renderer after
-    the dataset has been generated (ruling R31c).
+    the dataset has been generated.
 
     Each block validates on its own; these are the checks that need both.
     `DatasetSpec.validate` already requires `decimal_places` for a float or
@@ -341,7 +338,7 @@ def _check_dataset_against_type_axis(
     axis stays legal: that is the int suite, cast to `String` by the loader.
     The axis types whose parameters or cast need a particular dataset type
     (`Bool`, `Enum*`, `FixedString`, `Time64`, `Date32`, `DateTime`) are
-    checked against `_TYPED_AXIS_TYPES` (ruling R36).
+    checked against `_TYPED_AXIS_TYPES`.
     """
     dtype = dataset.arrow_dtype
     if pa.types.is_list(dtype):

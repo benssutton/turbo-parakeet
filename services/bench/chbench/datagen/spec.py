@@ -1,7 +1,8 @@
 """The generator's input: a validated, hashable description of one dataset.
 
 This is the only module that raises on bad input. Everything downstream is
-best-effort per spec section 2, so every malformed combination must be caught
+best-effort (a missed target warns, never fails), so every malformed
+combination must be caught
 here, with a message naming the fields involved.
 """
 
@@ -55,7 +56,8 @@ _LIST_RE = re.compile(r"^list<(.+)>$")
 
 
 def parse_arrow_type(s: str) -> pa.DataType:
-    """Parse one of the spec section 4.1 type strings. Raises SpecError otherwise.
+    """Parse one of the supported `arrow_type` strings. Raises SpecError
+    otherwise.
 
     Decimal precision limits are per width: 9, 18 and 38. list<T> nests exactly one
     scalar; list of list is not supported.
@@ -186,7 +188,7 @@ class Tolerances:
     interarrival_cv_relative: float = 0.10
 
 
-# DatasetSpec fields that are generation recipes, not measurements (spec 4.6).
+# DatasetSpec fields that are generation recipes, not measurements.
 _GENERATOR_FIELDS = (
     "categories",
     "string_length",
@@ -221,7 +223,7 @@ class DatasetSpec:
     array_len_range: tuple[int, int] | None = None
     array_null_count: int = 0
     tolerances: Tolerances = field(default_factory=Tolerances)
-    # Real-data source (spec section 4.6, ruling R35): when `path` is set the
+    # Real-data source: when `path` is set the
     # other fields are measured from the file (`realdata.path_spec`), not
     # generation recipes; `content_hash` pins the file's bytes and column.
     path: str | None = None
@@ -547,7 +549,7 @@ class DatasetSpec:
             )
 
     def _validate_path_dataset(self, dtype: pa.DataType) -> None:
-        """Spec section 4.6 (ruling R35): a path dataset carries only measured
+        """A path dataset carries only measured
         fields plus seed and decimal_places; any generation field is an error."""
         if self.path is None or self.column is None:
             raise SpecError(
@@ -623,6 +625,6 @@ class DatasetSpec:
         """Stable 16-hex-character hash of every field, including seed. For a
         path dataset the file's location is left out and `content_hash` (the
         bytes and column name) stands in: a changed file is a new dataset, a
-        moved one is the same (ruling R35)."""
+        moved one is the same."""
         spec = replace(self, path=None) if self.path is not None else self
         return hashlib.sha256(spec.to_json().encode()).hexdigest()[:16]

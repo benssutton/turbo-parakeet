@@ -22,7 +22,7 @@ from chbench.datagen.metrics import (
 from chbench.datagen.solve import SolveResult, solve_monotone
 from chbench.datagen.spec import DatasetSpec
 
-CLIP_WARN_FRACTION = 0.01  # spikes/FINDINGS.md section 4
+CLIP_WARN_FRACTION = 0.01  # FINDINGS §4
 REDRAW_CAP = 20
 STRING_ALPHABET = np.array(list(string.digits + string.ascii_letters))  # 62 symbols
 
@@ -35,7 +35,7 @@ def element_dtype(spec: DatasetSpec) -> pa.DataType:
 
 def is_lattice(dtype: pa.DataType) -> bool:
     """Types whose values are drawn as int64 on an integer lattice and cast later:
-    integers, dates and times (integers in the unit's resolution, design 4.2)
+    integers, dates and times (integers in the unit's resolution)
     and bool (the lattice {0, 1})."""
     return (
         pa.types.is_integer(dtype)
@@ -61,7 +61,7 @@ class SupportDraw:
 
 
 def _raw_draw(spec, rng, size, sigma):
-    """Unclipped, unrounded variates for the spec's distribution."""
+    """Unclipped, unrounded variates for the DatasetSpec's distribution."""
     d = spec.distribution
     lo, hi = spec.value_range
     if d.kind == "uniform":
@@ -97,8 +97,8 @@ def draw_support(
 ) -> SupportDraw:
     """Draw k distinct support values, counting the two collapse mechanisms apart.
 
-    Every value_range support is drawn *from the distribution* (design 4.2 step
-    1): lattice types (integers, dates, times, bool) draw through `_raw_draw`
+    Every value_range support is drawn *from the distribution*:
+    lattice types (integers, dates, times, bool) draw through `_raw_draw`
     like floats and are rounded to the lattice instead of to decimal_places.
     The one exception is the uniform kind on a lattice, which is a sample
     without replacement from the lattice itself. A uniform support under a
@@ -119,7 +119,7 @@ def draw_support(
     Capacity: a request beyond the number of representable points (the lattice
     span, or `(hi - lo) * 10**decimal_places + 1` for floats and decimals) is
     unsatisfiable by construction, not by chance. The draw is clamped to the
-    capacity and reported as a `clamp: cardinality_ratio` warning (spec 2);
+    capacity and reported as a `clamp: cardinality_ratio` warning;
     `clip_collapsed + round_collapsed` then account for the shortfall against
     the clamped count, not against `requested_k`. A clipped fraction above
     CLIP_WARN_FRACTION is a `miss: cardinality_ratio at risk` warning.
@@ -246,7 +246,7 @@ def _uniform_lattice(lo: int, hi: int, n: int, rng: np.random.Generator) -> np.n
 
 
 def _draw_strings(spec: DatasetSpec, rng: np.random.Generator, k: int) -> SupportDraw:
-    """k distinct random strings of spec.string_length (design 4.2). Collisions
+    """k distinct random strings of spec.string_length. Collisions
     are the strings' rounding collapse: redraw the shortfall up to REDRAW_CAP.
     A request beyond the alphabet's capacity is clamped with a warning."""
     length = spec.string_length
@@ -277,7 +277,7 @@ def _draw_strings(spec: DatasetSpec, rng: np.random.Generator, k: int) -> Suppor
 def draw_uncapped(
     spec: DatasetSpec, rng: np.random.Generator, sigma: float | None = None
 ) -> np.ndarray:
-    """The uncapped case (design 4.2 step 1): no cardinality_ratio and no
+    """The uncapped case: no cardinality_ratio and no
     categories, so draw `rows` values straight from the distribution, clipped
     and rounded, and let their multiplicities be the frequency profile.
 
@@ -300,7 +300,7 @@ def draw_uncapped(
 
 def entropy_floor(rows: int, k: int) -> float:
     """Minimum reachable entropy when every one of k support values appears at least
-    once. Strictly positive, and rises with k (spikes/FINDINGS.md section 1)."""
+    once. Strictly positive, and rises with k (FINDINGS §1)."""
     if k <= 1:
         return 0.0
     p_heavy = (rows - k + 1) / rows
@@ -321,8 +321,8 @@ def solve_entropy(
     rows: int, k: int, target: float, iters: int = 60, tol: float | None = None
 ) -> SolveResult:
     """Bisect the power-law exponent. Entropy is monotone DECREASING in s, and the
-    reachable range is [entropy_floor, entropy_ceiling]. `tol` is the spec's
-    entropy tolerance: a landing outside it is NOT_CONVERGED, not ok."""
+    reachable range is [entropy_floor, entropy_ceiling]. `tol` is the
+    DatasetSpec's entropy tolerance: a landing outside it is NOT_CONVERGED, not ok."""
     return solve_monotone(
         lambda s: entropy_of_counts(powerlaw_counts(rows, k, s)),
         target=target,
@@ -339,7 +339,7 @@ def density_counts(
 ) -> np.ndarray:
     """Weight each support value by the distribution's own density, allocate
     rows - k by largest remainder, then add one per value so every value appears
-    (spec 4.2 step 4).
+    (largest-remainder rounding, so the counts sum exactly to `rows`).
 
     The lognormal's shift is applied after drawing (see _raw_draw), so its density
     must be evaluated on support - shift, not on support itself. Any density that
@@ -406,8 +406,8 @@ class Multiset:
     counts: np.ndarray
     warnings: list[str] = field(default_factory=list)
     solves: dict[str, SolveResult] = field(default_factory=dict)
-    # Support shortfall by mechanism (design 4.2 step 1: "record the shortfall
-    # and which mechanism caused it"). Zero on the uncapped and categories paths.
+    # Support shortfall by mechanism (the shortfall and which mechanism
+    # caused it are both recorded). Zero on the uncapped and categories paths.
     clip_collapsed: int = 0
     round_collapsed: int = 0
 
@@ -419,7 +419,7 @@ def build_multiset(
 
     An entropy target picks a power-law exponent by bisection against the ACTUAL
     support size (which may be below spec.support_size after collapse); otherwise
-    counts follow the distribution's own density (spec 4.2 steps 2, 4).
+    counts follow the distribution's own density.
 
     sigma: an explicit spread for the distribution, threaded through to
     draw_support and density_counts. When it is None, spec.distribution.sigma is
@@ -451,7 +451,7 @@ def build_multiset(
 
     if spec.support_size is None:
         # Uncapped: the drawn values' own multiplicities are the profile, and
-        # steps 2 to 4 are skipped (design 4.2 step 1). entropy_bits cannot be
+        # the frequency profile and expansion are skipped. entropy_bits cannot be
         # set here; validate() requires a finite support for it.
         support, counts = np.unique(draw_uncapped(spec, rng, sigma), return_counts=True)
         return _finish(support, counts, spec, warnings, solves)

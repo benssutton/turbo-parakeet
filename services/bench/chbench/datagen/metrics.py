@@ -4,7 +4,7 @@ Every function takes a 1-D numpy array and returns a Python float. These are the
 single arbiter of what a metric means: the solvers, the refinement pass, the
 manifest and the tests all call these and never reimplement a formula.
 
-Definitions are fixed by the design spec, section 2:
+Definitions:
   - runs test: dichotomy is `x > median` for numeric, or membership of the
     most-frequent set covering half the rows for categorical.
   - inter-arrival: a run is a maximal stretch of identical values of length >= 2;
@@ -13,7 +13,7 @@ Definitions are fixed by the design spec, section 2:
 
 Degenerate inputs return nan rather than raising: a constant column and an empty
 column are both legal DatasetSpecs, and the manifest measures every metric for
-every dataset (spec section 2, best-effort).
+every dataset (best-effort: a missed target warns, never fails).
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ import numpy as np
 
 
 def _round(x: np.ndarray, decimal_places: int | None) -> np.ndarray:
-    """Apply the spec's float comparison rule. Integers pass through unchanged."""
+    """Floats compare after rounding to `decimal_places`. Integers pass through
+    unchanged."""
     if decimal_places is None or not np.issubdtype(np.asarray(x).dtype, np.floating):
         return np.asarray(x)
     return np.round(x, decimal_places)
@@ -134,7 +135,7 @@ def repeat_runs(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Start index and length of every maximal run of identical values, length >= 2.
 
-    Pass decimal_places for float columns: the spec compares floats after rounding,
+    Pass decimal_places for float columns: floats compare after rounding,
     and sub-tolerance noise otherwise destroys every run.
     """
     x = _round(x, decimal_places)

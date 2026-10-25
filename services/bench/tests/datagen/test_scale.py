@@ -32,7 +32,7 @@ def test_use_case_1_generates_at_full_scale():
 
 
 def test_use_case_2_generates_at_full_scale():
-    """Spec section 5.1: 1000 distinct values, entropy 4 bits, runs z -0.25."""
+    """int_encodings: 1000 distinct values, entropy 4 bits, runs z -0.25."""
     s = DatasetSpec(
         rows=ROWS,
         arrow_type="int32",

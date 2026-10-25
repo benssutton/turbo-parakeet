@@ -1,4 +1,4 @@
-"""The recommended-type vocabulary (ruling R36, spec section 5.2, FINDINGS 9):
+"""The recommended-type vocabulary (FINDINGS §9):
 narrow integers, Float32, Bool, Decimal128, Date32, DateTime, DateTime64
 precision and zone, FixedString, Enum8 / Enum16, Time64, and the GCD codec.
 

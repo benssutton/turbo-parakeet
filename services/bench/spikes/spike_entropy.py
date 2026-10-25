@@ -1,6 +1,6 @@
 """Spike 1: can we hit a target Shannon entropy (bits) for a given cardinality?
 
-Method (spec 4.2 step 2): every one of the k support values gets 1 row, the
+Method: every one of the k support values gets 1 row, the
 remaining n-k rows are allocated by a power-law profile f_i ~ rank_i^-s using
 largest-remainder rounding. Entropy is monotone decreasing in s, so bisect.
 """

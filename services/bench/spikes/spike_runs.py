@@ -1,6 +1,6 @@
 """Spike 2: hit a target Wald-Wolfowitz runs z-score by block layout.
 
-Method (spec 4.3 step 1): dichotomise the multiset, invert the runs-test
+Method: dichotomise the multiset, invert the runs-test
 mean/sd for the group sizes to get a target run count R, then lay out R
 alternating blocks whose lengths are random compositions of n1 and n2.
 """

@@ -1,4 +1,4 @@
-"""The bounded CV refinement pass (spec 4.4).
+"""The bounded CV refinement pass.
 
 Stage 2's inter-arrival layout (`sequence.layout_interarrival`) draws its
 start-to-start gaps from a gamma parameterised by the *target* CV, but the

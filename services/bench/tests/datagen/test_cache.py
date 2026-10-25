@@ -44,7 +44,7 @@ def test_manifest_flags_tolerance_per_metric():
 
 
 def test_a_missed_tolerance_warns_and_does_not_raise():
-    """Best effort, never fails (spec section 2)."""
+    """Best effort, never fails."""
     d = generate(uc1(interarrival_cv=0.01))  # unreachable by construction
     assert d.manifest.within_tolerance["interarrival_cv"] is False
     assert d.manifest.warnings
@@ -101,7 +101,8 @@ def test_manifest_is_written_as_readable_json(tmp_path):
 
 
 def test_use_case_2_shape_generates(tmp_path):
-    """Spec section 5.1's corrected suite, at a row count fast enough for a test."""
+    """The int_encodings example suite's dataset, at a row count fast enough for
+    a test."""
     s = DatasetSpec(
         rows=100_000,
         arrow_type="int32",
@@ -135,7 +136,7 @@ def test_list_of_integer_generates_end_to_end():
 
 
 def test_a_spread_distribution_with_no_sigma_is_a_spec_error_not_a_value_error():
-    """The generator raises only from validation (spec section 2)."""
+    """The generator raises only from validation."""
     s = uc1(distribution=Distribution(kind="lognormal", mean=4.0, shift=-1.0))
     with pytest.raises(SpecError, match="sigma"):
         generate(s)
@@ -216,7 +217,7 @@ REPRESENTATIVE_SPECS = [
     ids=[f"{t}:{'/'.join(k)}" for t, k in REPRESENTATIVE_SPECS],
 )
 def test_every_type_family_generates_without_raising(arrow_type, kw):
-    """One representative spec per type family the design lists (section 4.1).
+    """One representative spec per supported `arrow_type` family.
     Validation is the only place the generator may raise."""
     d = dict(
         rows=2_000,

@@ -128,8 +128,8 @@ def test_samples_accumulate_and_are_counted(tmp_path):
 
 def test_query_rows_joins_for_the_report(tmp_path):
     # `suite_name` is what puts the table in `suite_tables`, which is the
-    # join `query_rows` filters through (ruling R32); the orchestrator
-    # always passes it (ruling R18).
+    # join `query_rows` filters through; the orchestrator
+    # always passes it.
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
         s.upsert_dataset(manifest(), "p")
@@ -240,7 +240,7 @@ def test_dataset_json_survives_numpy_scalars_and_solve_records(tmp_path):
 
 
 def test_tables_for_suite_finds_table_with_no_samples_yet(tmp_path):
-    """R18: a table whose run was interrupted before any query produced a
+    """A table whose run was interrupted before any query produced a
     sample still needs to be dropped by `clean` -- it was already created in
     ClickHouse. Deriving `tables_for_suite` through queries/samples/runs
     would miss it; the `suite_tables` join table (populated by
@@ -270,7 +270,7 @@ def test_json_fallback_survives_a_multi_element_array():
 
 
 def test_errored_query_stores_its_status_and_message(tmp_path):
-    """Spec 6.4: a query failure is recorded with its message and the run
+    """A query failure is recorded with its message and the run
     continues. Without this the row is indistinguishable from a query the
     run never reached."""
     with Store(tmp_path / "r.db") as s:
@@ -346,7 +346,7 @@ def test_init_schema_adds_columns_missing_from_an_older_store(tmp_path):
 
 
 def test_query_rows_follows_suite_tables_not_the_run_that_sampled(tmp_path):
-    """Ruling R32: a sample belongs to the table (and so, through
+    """A sample belongs to the table (and so, through
     `suite_tables`, to every suite that owns that table), not to the suite
     whose run happened to take it. Two suites sharing a cell share its
     `table_id` and `query_id`; suite B would otherwise skip every query as

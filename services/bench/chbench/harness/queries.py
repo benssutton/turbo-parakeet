@@ -1,7 +1,6 @@
 """Build query variants and the SQL predicates that target a selectivity.
 
-Spec section 5.3 and the design's brainstorming decision (recorded in the
-task brief) govern the two predicate kinds:
+The two predicate kinds:
 
 - `range`: a contiguous interval of the *sorted* values covering the target
   fraction, starting at a random offset so it is not always the tail of the
@@ -307,7 +306,7 @@ def in_predicate(
     (for full determinism, e.g. when two values are exactly equally
     frequent). Repeat until K values are chosen. This is a greedy
     approximation, not an exhaustive search over all size-K subsets, but
-    for K = 1 it is exact: the ruling for this module's K=1 test case
+    for K = 1 it is exact: this module's K=1 test case
     (frequencies 50/30/10/5/2/1/1/1 out of 100, target 0.20) has 30/100 and
     10/100 tied at distance 0.10 from the target; the tie-break picks the
     more frequent value (30/100).

@@ -1,4 +1,4 @@
-"""The generator's last stage: nulls, list wrapping, and the Arrow cast (spec 4.5).
+"""The generator's last stage: nulls, list wrapping, and the Arrow cast.
 
 This is the only module that touches pyarrow types. It takes the flat numpy
 array of values produced by the two-stage generator and produces the
@@ -21,7 +21,7 @@ Order of operations, fixed by the task brief:
      inner level for lists -- at uniformly random positions drawn from rng.
   5. Cast with pyarrow.
 
-Ruling on list types (task 11 brief): the number of inner values is decided by
+List types: the number of inner values is decided by
 the caller (rows * round(mean(array_len_range))); wrap treats len(values) as
 authoritative and draws `rows` lengths uniformly from array_len_range, then
 adjusts them so they sum to exactly len(values), staying within the range
@@ -81,7 +81,7 @@ def _range_check(values: np.ndarray, arrow_type: str, elem_dtype: pa.DataType) -
         raise AssertionError(
             f"value {offender!r} does not fit in {arrow_type!r} (representable "
             f"range is [{lo}, {hi}]); validation should have caught this, so "
-            "the generator produced a value outside the spec's bounds"
+            "the generator produced a value outside the DatasetSpec's bounds"
         )
 
 

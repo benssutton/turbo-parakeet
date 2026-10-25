@@ -4,9 +4,9 @@ Plan 1 produced three hand-rolled searches with three different status
 vocabularies, and the findings require a clamp and an invalid bracket to be
 distinguished. This defines that vocabulary once.
 
-Callers: the entropy solve on the power-law exponent (spec 4.2 step 2), the
-index-of-dispersion solve on the distribution's spread (4.2 step 3), and the
-inter-arrival CV refinement on the gamma's input CV (4.4).
+Callers: the entropy solve on the power-law exponent, the
+index-of-dispersion solve on the distribution's spread, and the
+inter-arrival CV refinement on the gamma's input CV.
 
 The warning vocabulary lives here too. Every warning any generator module
 emits is `"<prefix> <metric> ..."` with the prefix one of `WARNING_PREFIXES`

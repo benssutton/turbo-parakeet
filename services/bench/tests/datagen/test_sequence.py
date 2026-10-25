@@ -292,7 +292,7 @@ def test_cv_only_dispatches_to_the_interarrival_layout():
 
 
 def test_cv_override_replaces_the_spec_target():
-    """Task 10's refinement re-lays with a trial CV without rebuilding the spec."""
+    """The refine pass re-lays with a trial CV without rebuilding the DatasetSpec."""
     support, counts = float_mset()
     s = DatasetSpec(
         rows=int(counts.sum()),
@@ -338,7 +338,7 @@ def test_constant_column_with_runs_target_does_not_crash():
 
 
 def test_out_of_band_runs_target_is_clamped_with_a_warning_naming_the_band():
-    """Design 4.3: a target outside the reachable band is clamped and recorded as
+    """A runs target outside the reachable band is clamped and recorded as
     a reachable-bound violation, never silently. The band comes from the measured
     split, so the warning must carry those numbers."""
     support, counts = float_mset()
@@ -418,9 +418,9 @@ def test_runs_plan_tolerates_a_single_group_split():
 
 
 def test_cv_target_with_too_few_repeat_runs_warns_that_the_metric_is_undefined():
-    """Design 4.3 step 2: "if there are not enough duplicates to form runs,
-    warn". interarrival_cv needs three run starts to have two gaps, so a
-    multiset with fewer than three repeated values cannot define it."""
+    """Too few duplicates to form runs is a warning. interarrival_cv needs three
+    run starts to have two gaps, so a multiset with fewer than three repeated
+    values cannot define it."""
     support = np.arange(100, dtype=np.float64)
     counts = np.ones(100, dtype=np.int64)
     counts[:2] = 3  # two repeat-runs: one gap, no CV
@@ -474,7 +474,7 @@ def test_layout_sequence_returns_its_runs_plan_so_the_clamp_can_be_recorded():
 
 
 def test_layout_interarrival_matches_the_retained_spike_reference():
-    """spikes/FINDINGS.md section 8: the vectorised layout must reproduce the loop
+    """FINDINGS §8: the vectorised layout must reproduce the loop
     version byte for byte. This pins the reference output so the swap cannot
     silently change generated data."""
     support, counts = float_mset(n=40_000, ratio=0.75, seed=3)

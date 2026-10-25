@@ -207,7 +207,7 @@ def test_in_predicate_raises_on_an_all_null_array():
         in_predicate(vals, 0.5, 1)
 
 
-# --- Final fix wave, ruling R31(a): a `Date` column crashed the renderer.
+# --- Final fix wave: a `Date` column crashed the renderer.
 
 
 def _loader_stored(arr, ch_type):

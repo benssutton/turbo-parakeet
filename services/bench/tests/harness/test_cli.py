@@ -4,7 +4,7 @@ The CLI is tested as a process, not by calling `main` in-process, because
 two of its responsibilities only exist there: the exit code, and the UTF-8
 reconfiguration of a real (non-tty) stdout that would otherwise raise
 `UnicodeEncodeError` on the box-drawing characters in an EXPLAIN plan
-(FINDINGS section 5).
+(FINDINGS §5).
 
 `run --dry-run` is exercised against a small temporary suite rather than
 `suites/float_codecs.yaml`: the grid assertion the task brief names is the
@@ -205,7 +205,7 @@ def test_unreachable_server_fails_before_generating_the_dataset(tmp_path):
 
 @pytest.mark.clickhouse
 def test_explain_is_stored_always_and_printed_only_on_request(ch, tmp_path):
-    """Ruling R21: the plan is evidence, so it is always recorded; it is also
+    """The plan is evidence, so it is always recorded; it is also
     ten lines per query, so it is printed only under --explain."""
     suite_path = tmp_path / "small.yaml"
     suite_path.write_text(SMALL, encoding="utf-8")
@@ -248,7 +248,7 @@ def test_explain_is_stored_always_and_printed_only_on_request(ch, tmp_path):
 
 @pytest.mark.clickhouse
 def test_run_refuses_an_unfinished_run_unless_told_to_ignore_it(ch, tmp_path):
-    """Ruling R33: exit 2 naming the stale run, and `--ignore-unfinished`
+    """Exit 2 naming the stale run, and `--ignore-unfinished`
     is the way past it."""
     from types import SimpleNamespace
 

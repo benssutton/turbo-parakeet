@@ -1,12 +1,13 @@
-"""The public entry point, the manifest, and the Arrow IPC cache (spec 4.5).
+"""The public entry point, the manifest, and the Arrow IPC cache.
 
 `generate(spec)` runs the whole pipeline: validate, build the multiset (stage
 1), lay out the sequence (stage 2), refine the inter-arrival CV when it is
 the only ordering target, measure every metric on the final values, wrap to
 Arrow, and assemble the manifest.
 
-The manifest is where the design's best-effort contract (spec section 2)
-becomes visible. For every metric the spec targeted it records the target,
+The manifest is where the best-effort contract (a missed target warns, never
+fails) becomes visible. For every metric the DatasetSpec targeted it records
+the target,
 the value achieved on the final array, whether that landed inside tolerance,
 and the status and message of any solve. A missed tolerance is a warning,
 never an exception; a clamp is recorded distinctly from a near miss because
@@ -19,8 +20,8 @@ metric's name.
 After `spec.validate()` nothing here raises deliberately: validation rejects
 every value_range or category whose rounded bounds overflow the declared
 type, so `wrap`'s own range check is defence in depth and raises
-`AssertionError` if the generator ever produces a value outside the spec's
-bounds.
+`AssertionError` if the generator ever produces a value outside the
+DatasetSpec's bounds.
 
 The cache is Arrow IPC in the file format (Feather v2) uncompressed, at
 `<cache_dir>/<dataset_id>.arrow`, with the manifest as JSON beside it. IPC
@@ -115,14 +116,17 @@ class Manifest:
 
     achieved:          metric name -> value measured on the final values, before
                        wrapping. Always holds cardinality_ratio and entropy_bits,
-                       plus every metric the spec targeted. `nan` when the metric
+                       plus every metric the DatasetSpec targeted. `nan` when the
+                       metric
                        is undefined for the column (e.g. runs_z on a constant).
-    targets:           metric name -> the spec's target, for targeted metrics only.
+    targets:           metric name -> the DatasetSpec's target, for targeted
+                       metrics only.
     within_tolerance:  metric name -> whether |achieved - target| is inside the
-                       spec's tolerance (relative for interarrival_cv, absolute
+                       DatasetSpec's tolerance (relative for interarrival_cv,
+                       absolute
                        otherwise). `None` for interarrival_cv when runs_z is also
                        targeted: the settled combined-target behaviour records the
-                       achieved CV without applying its tolerance (spec 4.3/4.4).
+                       achieved CV without applying its tolerance.
     solves:            metric name -> `SolveRecord` for the solve that chose the
                        parameter for it (entropy_bits, index_of_dispersion,
                        interarrival_cv), or for the runs layout (runs_z: a
@@ -133,7 +137,7 @@ class Manifest:
                        followed by the tolerance misses. See the vocabulary
                        above.
     clip_collapsed:    support values lost to clip collapse (draws past a
-                       value_range bound merging onto it), per design 4.2 step 1.
+                       value_range bound merging onto it).
     round_collapsed:   support values lost to rounding collisions that the
                        bounded redraw could not recover. Both are 0 when no
                        cardinality_ratio was set.
@@ -190,8 +194,8 @@ def _is_nan(v) -> bool:
 def _inner_row_count(spec: DatasetSpec) -> int:
     """How many values the multiset and sequence stages produce.
 
-    For list<T> the spec's `rows` counts arrays, and the flat value count is
-    rows * round(mean(array_len_range)) (task 11 ruling); `wrap` then chunks
+    For list<T> the DatasetSpec's `rows` counts arrays, and the flat value count
+    is rows * round(mean(array_len_range)); `wrap` then chunks
     that many values into `rows` arrays. Every other type generates `rows`.
     """
     if pa.types.is_list(spec.arrow_dtype) and spec.array_len_range is not None:
@@ -289,7 +293,7 @@ def generate(spec: DatasetSpec) -> Dataset:
     if laid.plan is not None:
         solves["runs_z"] = SolveRecord.from_status(laid.plan.status, laid.plan.message)
 
-    # Bounded refinement of the inter-arrival CV (spec 4.4). When it is
+    # Bounded refinement of the inter-arrival CV. When it is
     # skipped -- runs_z is also targeted -- its `values` is None and the
     # combined layout from layout_sequence is the correct one to keep.
     if spec.interarrival_cv is not None:
@@ -367,7 +371,7 @@ def _load(array_path: Path, manifest_path: Path) -> Dataset:
 
 
 def load_path(spec: DatasetSpec) -> Dataset:
-    """A real-data dataset (spec section 4.6, ruling R35): the column of
+    """A real-data dataset (`dataset: {path, column}`): the column of
     `spec.path`, unchanged, with its metrics measured by `chbench.datagen.metrics`
     on the non-null values (value ids, so every Arrow type is measured alike).
     Nothing was targeted: `targets`, `within_tolerance`, `solves` and `warnings`

@@ -1,6 +1,6 @@
 """Run one query variant against one table and collect its samples.
 
-Spec section 5.4, step by step:
+The run, step by step:
 
 1. One untimed warm-up run, skipped in `cold` mode.
 2. `samples` timed runs. Each has a fresh `uuid4` query id (delivered only
@@ -25,7 +25,7 @@ exception as `run_result`, and the exception is re-raised.
 
 Nothing here prints: the plan text contains box-drawing characters that
 raise `UnicodeEncodeError` on a cp1252 console, and printing is the
-orchestrator's job under a UTF-8 reconfiguration (FINDINGS section 5).
+orchestrator's job under a UTF-8 reconfiguration (FINDINGS §5).
 """
 
 from __future__ import annotations

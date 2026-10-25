@@ -1,28 +1,27 @@
-"""The SQLite results store (spec section 6.1).
+"""The SQLite results store.
 
-The five tables there, verbatim, with one correction from the task brief:
+Five tables (`datasets`, `tables`, `queries`, `samples`, `runs`), where
 the storage-marks column is `marks_bytes`, not `marks` (matching
 `StorageStats.marks_bytes` and `column_marks_bytes` in `system.parts_columns`,
 never the part-level `marks`, which `loader.py`'s docstring explains is a
 different, unrelated figure).
 
-Two additions go beyond the spec's literal list of five tables:
+Three additions go beyond those five tables as first designed:
 
-- `tables.warnings` (ruling R19: approved, to be recorded as a spec 6.1
-  addendum later): the `TableVariant`'s applicability warnings (e.g.
+- `tables.warnings`: the `TableVariant`'s applicability warnings (e.g.
   "projection is redundant with primary_key"). Every other JSON-ish input
   (the manifest's achieved/targets/within_tolerance/solves, the sample's
-  profile_events) is folded into the columns the spec already lists
+  profile_events) is folded into the columns the five tables already have
   (`datasets.achieved_json`, `samples.profile_events_json`) rather than
   given a column of its own; only this one had nowhere to go.
 - `queries.status` and `queries.error`: the `RunResult`'s own outcome and
-  message. Spec 6.4 requires an insert or query failure to be recorded with
-  its message and the run to continue; recording it only on `tables` leaves
+  message. An insert or query failure is recorded with its message and the
+  run continues; recording it only on `tables` leaves
   a query whose *run* failed indistinguishable from one the run never
   reached, which is exactly the distinction an unattended overnight run
   needs the next morning.
 - `suite_tables(suite_name, table_id)`: a join table, not a `suite_name`
-  column on `tables` (ruling R18), because `table_id` is derived from the
+  column on `tables`, because `table_id` is derived from the
   dataset and variant alone, so two suites can legitimately share one table
   id and a column would attribute it to whichever suite ran last.
   `upsert_table`'s optional `suite_name` keyword populates it, so
@@ -287,7 +286,7 @@ class Store:
     def upsert_dataset(self, manifest, arrow_path: str) -> None:
         """`manifest.achieved`, `.targets`, `.within_tolerance`, `.solves`,
         `.clip_collapsed` and `.round_collapsed` are bundled into one JSON
-        object in `achieved_json`, since spec 6.1 gives `datasets` no column
+        object in `achieved_json`, since `datasets` has no column
         for each separately; `.warnings` keeps its own listed column."""
         achieved_json = json.dumps(
             {
@@ -344,8 +343,8 @@ class Store:
 
         `suite_name` is optional (keyword-only, default `None`) so existing
         callers that only need the table row are unaffected; when given, the
-        `(suite_name, table_id)` pair is also upserted into `suite_tables`
-        (ruling R18), which is how `tables_for_suite` finds this table even
+        `(suite_name, table_id)` pair is also upserted into `suite_tables`,
+        which is how `tables_for_suite` finds this table even
         before any query against it has produced a sample."""
         if variant.status == "skipped":
             status, reason, stats, insert_ms = (
@@ -447,7 +446,7 @@ class Store:
         """`status` and `error` carry the `RunResult`'s own outcome ("ok",
         "error" or "interrupted", with the runner's message).
 
-        Spec section 6.4 asks for a failure to be recorded on the *query*,
+        A failure is recorded on the *query*,
         not only on the table: without these two columns a query whose run
         failed is indistinguishable, after an unattended run, from one the
         run never reached. Both are keyword-only and default to `None`, so a
@@ -541,7 +540,7 @@ class Store:
 
         `finish_run` is called from a `finally`, so such a row means a
         process died without reaching it -- or is still running against
-        this store (ruling R33). The orchestrator refuses to start a second
+        this store. The orchestrator refuses to start a second
         run over it unless told the first is gone.
         """
         rows = self.conn.execute(
@@ -597,7 +596,7 @@ class Store:
         column). `table_id` and `query_id` are each selected once, from
         their owning table; `run_id` is the sample's own.
 
-        Filtered through `suite_tables`, not `runs` (ruling R32): a sample
+        Filtered through `suite_tables`, not `runs`: a sample
         is owned by the table, and `samples_held` counts by `query_id`
         regardless of which run took it. Two suites sharing a cell share
         its `table_id` and `query_id`; the second one to run skips every
@@ -612,7 +611,7 @@ class Store:
         """The rendered ClickHouse table names (`ddl.table_name(suite_name,
         table_id)` -- the exact string `create_table_sql`/`drop_table_sql`
         used, so `clean` can `DROP TABLE` it directly) of every table
-        `upsert_table` recorded against this suite (ruling R18: from the
+        `upsert_table` recorded against this suite (from the
         `suite_tables` join table, not derived through `queries`/`samples`/
         `runs` -- that join missed a table whose run was interrupted before
         its first query produced a sample, even though the table was already

@@ -74,7 +74,7 @@ _SCALAR_ARROW = {
     "DateTime": pa.timestamp("s"),
 }
 
-# Precision each Decimal width is reported at (spec §5.2): 9, 18, 38 digits.
+# Precision each Decimal width is reported at: 9, 18, 38 digits.
 _DECIMAL_ARROW = {
     "32": (pa.decimal32, 9),
     "64": (pa.decimal64, 18),
@@ -104,14 +104,14 @@ def arrow_type_for(ch_type: str) -> pa.DataType | None:
     `None` when the ClickHouse type has no mapping here (the column is then
     inserted uncast and the server decides).
 
-    Decimals follow spec §5.2: `Decimal32(S)` -> `pa.decimal32(9, S)`,
+    Decimals: `Decimal32(S)` -> `pa.decimal32(9, S)`,
     `Decimal64(S)` -> `pa.decimal64(18, S)`, `Decimal128(S)` ->
     `pa.decimal128(38, S)`. `String` and `LowCardinality(String)` ->
     `pa.string()`. Integer targets -> the matching Arrow integer type.
     `DateTime('tz')` and `DateTime64(p[, 'tz'])` -> a timestamp of the unit
     and zone; `Time64(p)` -> time32 (p 0, 3) or time64 (p 6, 9). `FixedString`
     and `Enum*` have no target: the dataset (`fixed_size_binary(n)` or string)
-    is inserted as it is and the server converts it (FINDINGS 9). Wrappers are
+    is inserted as it is and the server converts it (FINDINGS §9). Wrappers are
     stripped first; nulls survive the cast.
     """
     t = base_type(ch_type)

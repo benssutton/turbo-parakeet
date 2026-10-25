@@ -1,10 +1,10 @@
-"""Real-data datasets (spec section 4.6, ruling R35).
+"""Real-data datasets (`dataset: {path, column}`).
 
 A `DatasetSpec` with `path` / `column` describes an existing Arrow IPC file
 column instead of a generator recipe. Its `rows`, `arrow_type`, `null_count`,
 `decimal_places`, `value_range` and `content_hash` are measured from the file
 by `path_spec`; the generation targets do not apply. Raises `SpecError` only,
-like the rest of the spec layer.
+like the rest of the DatasetSpec layer.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ __all__ = ["arrow_type_string", "file_digest", "read_column", "path_spec"]
 
 
 def arrow_type_string(dtype: pa.DataType) -> str:
-    """The spec section 4.1 spelling of `dtype`; SpecError naming the type when
+    """The supported `arrow_type` spelling of `dtype`; SpecError naming the
+    type when
     chbench's vocabulary cannot express it (large_string, decimal256, list,
     ...)."""
     for name, ctor in _SCALARS.items():

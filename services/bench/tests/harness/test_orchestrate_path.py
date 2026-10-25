@@ -1,4 +1,4 @@
-"""`run_suite` over a real-data dataset (`dataset: {path, column}`, ruling R35).
+"""`run_suite` over a real-data dataset (`dataset: {path, column}`).
 
 Tables are named `bench.t_orchpath_<hex>`; the module fixture drops them.
 """

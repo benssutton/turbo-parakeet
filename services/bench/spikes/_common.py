@@ -1,7 +1,7 @@
 """Metric functions shared by the feasibility spikes.
 
-These are the definitions from the design spec (section 2, "Run definitions")
-and are the seed of chbench/datagen/metrics.py.
+These are the run definitions (runs test, inter-arrival CV, floats compared
+after rounding) and are the seed of chbench/datagen/metrics.py.
 """
 
 from __future__ import annotations

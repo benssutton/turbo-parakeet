@@ -2,9 +2,8 @@
 variants, and validate each cell against the measured applicability rules.
 
 The rules and skip reasons are the matrices measured against a live
-ClickHouse server, recorded in spec section 5.2
-(`docs/superpowers/specs/2026-09-13-clickhouse-benchmark-framework-design.md`).
-The design's rule is skip and record, never coerce: an invalid cell is never
+ClickHouse server, recorded in FINDINGS §5 and FINDINGS §9.
+The rule is skip and record, never coerce: an invalid cell is never
 silently adjusted into something ClickHouse would accept, it is marked
 `skipped` with the server's own rejection message so the report can show why.
 
@@ -37,8 +36,8 @@ if TYPE_CHECKING:
     from chbench.harness.suite import Suite
 
 # The type axis vocabulary: the base types measured against a live server
-# (spec 5.2; `spikes/spike_ch_roundtrip.py` for the first eight,
-# `spikes/spike_ch_vocabulary.py` for the rest, ruling R36). Anything else is
+# (`spikes/spike_ch_roundtrip.py` for the first eight,
+# `spikes/spike_ch_vocabulary.py` for the rest). Anything else is
 # unmeasured, not merely "probably fine by analogy" -- the project's rule is to
 # record only what it measured, so an out-of-vocabulary type is a hard error,
 # not a guess. `suite.py` imports this to reject it at parse time;
@@ -74,8 +73,8 @@ KNOWN_TYPES = frozenset(
     }
 )
 
-# The codec axis vocabulary (spec 5.2's measured codecs plus `none` and the
-# `LowCardinality` type wrapper; `GCD` from FINDINGS 9). `suite.py` imports
+# The codec axis vocabulary (the codecs measured in FINDINGS §5 plus `none` and
+# the `LowCardinality` type wrapper; `GCD` from FINDINGS §9). `suite.py` imports
 # this too.
 KNOWN_CODECS = frozenset(
     {
@@ -100,7 +99,7 @@ _BLOOM_FPR_RE = re.compile(r"^bloom_filter\((\d+\.\d+)\)$")
 
 
 def split_skip_index(value: str) -> tuple[str, int]:
-    """`<index>[:<G>]` -> (index, G); no suffix means GRANULARITY 1 (R38)."""
+    """`<index>[:<G>]` -> (index, G); no suffix means GRANULARITY 1."""
     index, sep, g = value.partition(":")
     if not sep:
         return value, 1
@@ -110,7 +109,7 @@ def split_skip_index(value: str) -> tuple[str, int]:
 def is_known_skip_index(value: str) -> bool:
     """`none`, `minmax`, `bloom_filter`, `bloom_filter(F)` for F in the measured
     false-positive rates, or `set(N)` for a positive integer N; any but `none`
-    optionally followed by `:G`, G in {1, 2, 4, 8} (R38)."""
+    optionally followed by `:G`, G in {1, 2, 4, 8}."""
     index, g = split_skip_index(value)
     if index == "none":
         return value == "none"
@@ -136,7 +135,7 @@ def is_known_compression(value: str) -> bool:
 # Storage width in bytes: the `N` of the Gorilla rejection message
 # `Gorilla(N), <compression>` and the size test of Delta / DoubleDelta /
 # Gorilla (the server accepts widths 1, 2, 4 and 8 only). Measured values from
-# spec 5.2 and FINDINGS 9; `FixedString(n)` is n bytes (`_width`).
+# FINDINGS §5 and FINDINGS §9; `FixedString(n)` is n bytes (`_width`).
 _STORAGE_WIDTH = {
     "Int8": 1,
     "UInt8": 1,
@@ -183,7 +182,7 @@ _INTEGER_BOUNDS = {
     "UInt64": (0, 2**64 - 1),
 }
 
-# Types the GCD codec accepts (FINDINGS 9): Int*, UInt*, Decimal*, Date*,
+# Types the GCD codec accepts (FINDINGS §9): Int*, UInt*, Decimal*, Date*,
 # DateTime* -- and Bool.
 _GCD_TYPES = (
     frozenset(_INTEGER_BOUNDS)
@@ -191,7 +190,7 @@ _GCD_TYPES = (
     | {"Bool", "Date", "Date32", "DateTime", "DateTime64"}
 )
 
-# Types T64 accepts (spec 5.2, FINDINGS 9).
+# Types T64 accepts (FINDINGS §5, FINDINGS §9).
 _T64_TYPES = frozenset(_INTEGER_BOUNDS) | {
     "Decimal32",
     "Decimal64",
@@ -205,7 +204,7 @@ _T64_TYPES = frozenset(_INTEGER_BOUNDS) | {
     "Time64",
 }
 
-# Types the `bloom_filter` index rejects (spec 5.2, FINDINGS 9).
+# Types the `bloom_filter` index rejects (FINDINGS §5, FINDINGS §9).
 _NO_BLOOM = frozenset(_DECIMAL_PRECISION) | {"Date32", "Time64"}
 
 # Types the LowCardinality wrapper rejects with code 43 rather than 455.
@@ -250,7 +249,7 @@ def resolve_type(
     axis_type: str, spec: DatasetSpec, array: pa.Array | None = None
 ) -> str:
     """Map a `type` axis value to its DDL spelling, taking the parameters from
-    the dataset (ruling R36).
+    the dataset.
 
     - `Decimal32` / `Decimal64` / `Decimal128` take `decimal_places` as scale.
     - `DateTime64(p[, 'tz'])`: p from a timestamp dataset's unit (s / ms / us /
@@ -355,7 +354,7 @@ def _low_cardinality_skip_reason(
     """None for String and FixedString: ClickHouse 26.8 accepts
     `LowCardinality` on those (and their `Nullable` forms) and rejects it on
     every other type, with one of two messages measured by executing the DDL
-    (FINDINGS 5, 9):
+    (FINDINGS §5, FINDINGS §9):
 
     - numbers, Bool, Date, Date32, DateTime: code 455
       `SUSPICIOUS_TYPE_FOR_LOW_CARDINALITY`, naming the full column type
@@ -391,15 +390,15 @@ def _codec_skip_reason(
     axis_type: str, codec: str, resolved: str, compression: str, nullable: bool = False
 ) -> str | None:
     """None if `codec` is accepted on `axis_type`; else ClickHouse's own
-    rejection message, verbatim, from spec 5.2's and FINDINGS 9's measured
-    codec matrices. `resolved` is the DDL type (`resolve_type`); `nullable`
-    only matters to the LowCardinality rule, whose message names the wrapped
-    type."""
+    rejection message, verbatim, from the codec matrices measured in
+    FINDINGS §5 and FINDINGS §9. `resolved` is the DDL type (`resolve_type`);
+    `nullable` only matters to the LowCardinality rule, whose message names the
+    wrapped type."""
     if codec == "none":
         return None
 
     if codec == "LowCardinality":
-        # A type wrapper, not a CODEC clause (ruling R27).
+        # A type wrapper, not a CODEC clause.
         return _low_cardinality_skip_reason(axis_type, resolved, nullable)
 
     label = _label(axis_type, resolved)
@@ -497,13 +496,14 @@ def _range_skip_reason(
 ) -> str | None:
     """None if the achieved range fits `axis_type`'s representable range (at
     the dataset's scale for decimals); else a reason naming the type, its
-    bound and the offending value (spec 5.2: "value range must fit the target
-    type given scale", checked against the achieved/rounded data, not the
+    bound and the offending value (the value range must fit the target type
+    given scale, checked against the achieved/rounded data, not the
     requested `value_range`).
 
     `Decimal32` has 9 total digits, `Decimal64` 18, `Decimal128` 38; at scale
     S the representable magnitude is `10**(precision - S) - 10**(-S)` (e.g.
-    Decimal32(8) -> 9.99999999, matching the measured bound in spec 5.2). The
+    Decimal32(8) -> 9.99999999, matching the bound measured in FINDINGS §5).
+    The
     integer types are checked against their two's-complement bounds. Other
     types have no width-dependent range check here.
     """

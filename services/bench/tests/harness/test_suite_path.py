@@ -1,4 +1,4 @@
-"""A suite's `dataset: {path, column}` (spec section 5.1, ruling R35)."""
+"""A suite's `dataset: {path, column}`."""
 
 import decimal
 
