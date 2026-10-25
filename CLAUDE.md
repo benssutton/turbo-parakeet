@@ -5,9 +5,9 @@ determining patterns and relationships between columns, within and between dataf
 empirically. As the engines improve, the techniques and recommendations are re-measured and refined.
 
 ## Components
-1. **Synthetic data** — seeded generators with targeted statistics (cardinality, entropy, runs, inter-arrival,
-   real-data columns). Today in two places: `services/datagen` (`synthdata`, the column pipeline: target-driven, one column) and
-   `tests/datagen.py` (the analytics fixtures); consolidated by ToDo 1.
+1. **Synthetic data** — `services/datagen/` (`synthdata`): the column pipeline, the frame layer (relations, row order,
+   measured manifests), the pairwise covering tiers `cover_small()` / `cover_windows()` and the named scenarios. Every
+   dataset the tests, benchmarks and bench use comes from it.
 2. **Analytics** — `services/analytics/`: techniques (metrics), recommenders and detectors (decisions); Rust core,
    Python API `turbo_parakeet`, Java binding. Details: `services/analytics/CLAUDE.md`.
 3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of table variants and runs query
@@ -54,7 +54,7 @@ turbo-parakeet/
 │   ├── datagen/       # component 1: synthdata — synthetic data (its tests: check.py test-datagen)
 │   ├── analytics/     # component 2: Rust crate, Python package turbo_parakeet, Java binding (its CLAUDE.md)
 │   └── bench/         # component 3: chbench — datagen, harness, CLI, suites, spikes (its CLAUDE.md)
-├── tests/             # turbo_parakeet's tests; datagen.py (analytics fixtures); performance/ (benchmarks, calibration)
+├── tests/             # turbo_parakeet's tests; performance/ (benchmarks, calibration)
 ├── docs/engines/      # engine knowledge notes (clickhouse.md)
 ├── scripts/           # check.py (local = CI), check_layering.py
 ├── notebooks/, sonar/

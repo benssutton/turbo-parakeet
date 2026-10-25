@@ -11,39 +11,27 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
 
 ## Track 1 — synthetic data (`services/datagen`)
 
-1. **Consolidate the generators.** chbench's target-driven generator (`services/bench/chbench/datagen`: a multiset
-   solved for cardinality, entropy or dispersion, a sequence laid out for `runs_z` or inter-arrival CV, a bounded refine
-   pass, wrap and cache as Arrow IPC, real-data columns) becomes the shared package `services/datagen/`. Add multi-column
-   frames with planted relationships between columns — joint entropy, FK → PK containment, correlated sort keys — since
-   chbench generates one column at a time. Rebuild the `tests/datagen.py` scenarios (`large_dataset`, `top_k_streams`,
-   `population_samples`, the runs / GCD / multiset / describe frames) as targeted specs; the analytics tests and
-   benchmarks and the bench all import the package. Merging the two test trees (two `tests` packages today) is part of
-   this item.
-   - **Efficiency objective:** the datasets must let both the analytics self-benchmarks and the empirical tests run
-     reasonably quickly — the smallest dataset that still exercises each statistic and decision (targeted, not
-     combinatorial brute force), fast to generate (vectorised, cached as Arrow IPC). Generation time and the wall time
-     of the test suites and benchmarks are recorded before and after.
-   - Carried from chbench, validation: `bool` with `categories=[True, False]` is rejected (`[0, 1]` works); `uint64`
-     above 2⁶³ − 1 on the non-uniform or uncapped draw wraps negative and trips `wrap`'s assertion; the dispersion
-     solve's sigma bracket `[0.01, 3.0]` is absolute, so wide integer ranges clamp (scale it with the range, or state
-     that dispersion targets suit narrow ranges); `array_null_count` and the categories-versus-rows rule ignore
-     `null_count` (decide whether achieved metrics describe the sequence or the visible column — today the sequence,
-     before nulls).
-   - Carried from chbench, manifest: warning tokens are not uniformly delimited (classify with
-     `re.match(r"^(\w+): (\w+)", w)`, or normalise; the `Manifest` docstring in `datagen/cache.py` still says
-     `split()[:2]`); `runs_z` shares the bisection status vocabulary without ever taking
-     `invalid_bracket` / `not_converged`; `NOT_CONVERGED`'s message claims non-monotonicity it has not established; the
-     manifest lacks null count, min, max and observed decimal places (the harness supplies them itself); `dataset_id`
-     hashes `tolerances`, so changing one regenerates an identical array; the numpy version is not recorded, so a cached
-     `dataset_id` may not regenerate identically after an upgrade.
-   - Carried from chbench, structure and speed: split `cache.py` (it holds the whole pipeline) into `generate.py` and
-     `cache.py`; one `np.unique(return_counts=True)` for both `cardinality_ratio` and `entropy_bits`; the dispersion solve
-     builds the multiset twice per step (≈ 105 builds, ≈ 1.5–2.5 min at 10M rows) — return `(mean, id)` from one build;
-     `powerlaw_counts` is recomputed after `solve_entropy`; the uniform lattice draw on the uncapped path gives the two
-     endpoints half weight; `wrap`'s spill fallback is dead (make it an assertion) and its decimal bound loses precision
-     as a float; when `runs_z` is dropped for a single-group dichotomy the CV tolerance is recorded as `None`
-     indistinguishably; re-time the inter-arrival figures on a quiet machine. Do not add an early exit to
-     `solve_monotone`: it defeats `NOT_CONVERGED` detection (tried and rejected).
+1. **Synthetic data.** Done: `synthdata` (`services/datagen`) — column pipeline, frame layer (relations, row order,
+   measured manifests), pairwise covering tiers `cover_small` / `cover_windows`, scenarios; every dataset the tests,
+   benchmarks and bench use comes from it. Still open:
+   - Carried, validation: the dispersion solve's sigma bracket `[0.01, 3.0]` is absolute, so wide integer ranges clamp
+     (scale it with the range, or state that dispersion targets suit narrow ranges); `array_null_count` and the
+     categories-versus-rows rule ignore `null_count` (decide whether achieved metrics describe the sequence or the
+     visible column — today the sequence, before nulls).
+   - Carried, manifest: `runs_z` shares the bisection status vocabulary without ever taking `invalid_bracket` /
+     `not_converged`; `NOT_CONVERGED`'s message claims non-monotonicity it has not established.
+   - Carried, structure and speed: `powerlaw_counts` is recomputed after `solve_entropy`; the uniform lattice draw on
+     the uncapped path gives the two endpoints half weight; `wrap`'s spill fallback is dead (make it an assertion) and
+     its decimal bound loses precision as a float; when `runs_z` is dropped for a single-group dichotomy the CV
+     tolerance is recorded as `None` indistinguishably; re-time the inter-arrival figures on a quiet machine. Do not
+     add an early exit to `solve_monotone`: it defeats `NOT_CONVERGED` detection (tried and rejected).
+   - The dispersion solve's guard and objective share a build only at the bracket ends (≈ 2 of ≈ 105 builds saved,
+     ≈ 1.5–2.5 min at 10M rows); a real speed-up needs a change to `solve_monotone`.
+   - The full-range uncapped `int64` draw likely overflows as `uint64` did (float 2⁶³ cast to int64).
+   - `cover(rows)` below ≈ 1 000 rows is seed-fragile in strict mode: the runs-order |rho| noise reaches 0.35–0.43 at
+     500 rows (2 of 10 seeds fail). A better order statistic (e.g. a longest-run share; needs a `FRAME_VERSION` bump)
+     would fix it.
+   - Relations on an all-null parent (`ForeignKey` / `Subset`) fail in `rng.choice(0)`; validation does not catch it.
 
 ## Track 2 — evaluation loop
 
@@ -140,10 +128,11 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
     - `BloomRust` loses to `MembershipExact` (plain `frozenset` intersection) on every benchmarked shape (0.16× total on
       the wide 100-column shape): one binding call per column filter. Batch filter construction across columns in one
       Rust call, or use Bloom only above a distinct-count threshold and make `MembershipExact` the default.
-    - MinHash recall on `datagen.large_dataset()` is 0.65 (below `MIN_RECALL` 0.85): every miss is a containment pair
-      (overlap 1.0) whose Jaccard is below the ≈ 0.43 LSH candidate threshold (min(j·0.9, o·0.45)) — exactly the
-      FK → PK case. Add a containment-heavy recall fixture to `tests/test_similarity.py` (`datagen.containment_pairs`);
-      derive the candidate threshold from the overlap threshold and the cardinality ratio.
+    - MinHash recall on the former 50K × 101 benchmark frame was 0.65 (below `MIN_RECALL` 0.85): every miss is a
+      containment pair (overlap 1.0) whose Jaccard is below the ≈ 0.43 LSH candidate threshold (min(j·0.9, o·0.45)) —
+      exactly the FK → PK case. `tests/test_similarity.py` documents it as a strict xfail on
+      `synthdata.scenarios.containment_pairs`; derive the candidate threshold from the overlap threshold and the
+      cardinality ratio.
     - `minhash.rs` `bucket_pairs` is O(|bucket|²) per band: document it as a scaling concern for dense buckets.
     - Tiny Bloom filters overshoot `fp_rate` (0.01): at n = 1 distinct value the geometry is (m = 16, k = 12) and ≈ 25% of
       disjoint queries are false positives (BloomRust 0.247, Fastbloom 0.252; theory ≈ 0.06%); still 2–5× `fp_rate` up to

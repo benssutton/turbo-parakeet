@@ -1,0 +1,457 @@
+{
+ "mixed_dtypes": {
+  "args": [
+   300
+  ],
+  "frames": {
+   "": {
+    "height": 300,
+    "width": 18,
+    "schema": {
+     "float64_skewed": "Float64",
+     "float64_high_unique": "Float64",
+     "float64_sparse": "Float64",
+     "uint32_skewed": "UInt32",
+     "uint32_high_unique": "UInt32",
+     "uint32_sparse": "UInt32",
+     "boolean_skewed": "Boolean",
+     "boolean_high_unique": "Boolean",
+     "boolean_sparse": "Boolean",
+     "categorical_skewed": "Categorical",
+     "categorical_high_unique": "Categorical",
+     "categorical_sparse": "Categorical",
+     "list_skewed": "List(Int32)",
+     "list_high_unique": "List(Int32)",
+     "list_sparse": "List(Int32)",
+     "arr_skewed": "Array(Int32, shape=(3,))",
+     "arr_high_unique": "Array(Int32, shape=(3,))",
+     "arr_sparse": "Array(Int32, shape=(3,))"
+    },
+    "hash": 12182836367743138601
+   }
+  }
+ },
+ "low_cardinality": {
+  "args": [
+   2000,
+   6
+  ],
+  "frames": {
+   "": {
+    "height": 2000,
+    "width": 6,
+    "schema": {
+     "c000": "Int64",
+     "c001": "Int64",
+     "c002": "Int64",
+     "c003": "Int64",
+     "c004": "Int64",
+     "c005": "Int64"
+    },
+    "hash": 16259668908678515937
+   }
+  }
+ },
+ "describe_mixed": {
+  "args": [
+   500
+  ],
+  "frames": {
+   "": {
+    "height": 500,
+    "width": 36,
+    "schema": {
+     "i8": "Int8",
+     "i16": "Int16",
+     "i32": "Int32",
+     "i64": "Int64",
+     "d38": "Decimal(precision=38, scale=0)",
+     "u8": "UInt8",
+     "u16": "UInt16",
+     "u32": "UInt32",
+     "u64": "UInt64",
+     "codes": "Int64",
+     "f32": "Float32",
+     "f64": "Float64",
+     "f64_price": "Float64",
+     "f64_whole": "Float64",
+     "dec": "Decimal(precision=10, scale=2)",
+     "bool": "Boolean",
+     "date": "Date",
+     "dt_naive": "Datetime(time_unit='us', time_zone=None)",
+     "dt_tz": "Datetime(time_unit='us', time_zone='Europe/London')",
+     "dur": "Duration(time_unit='us')",
+     "time": "Time",
+     "str_free": "String",
+     "str_int": "String",
+     "str_lead": "String",
+     "str_dec": "String",
+     "str_date": "String",
+     "str_dt": "String",
+     "str_dt_tz": "String",
+     "cat": "Categorical",
+     "enum": "Enum(categories=['alpha', 'beta', 'gamma', 'delta', 'epsilon'])",
+     "bin": "Binary",
+     "list_i64": "List(Int64)",
+     "list_str": "List(String)",
+     "arr_i32": "Array(Int32, shape=(3,))",
+     "struct": "Struct({'a': Int64, 'b': String})",
+     "all_null": "String"
+    },
+    "hash": 11292021297823629754
+   }
+  }
+ },
+ "related_frames": {
+  "args": [
+   200
+  ],
+  "frames": {
+   "customers": {
+    "height": 200,
+    "width": 4,
+    "schema": {
+     "id": "Int64",
+     "name": "String",
+     "region": "String",
+     "score": "Int64"
+    },
+    "hash": 10244798571341534826
+   },
+   "orders": {
+    "height": 200,
+    "width": 5,
+    "schema": {
+     "order_id": "Int64",
+     "customer_id": "Int64",
+     "customer_name": "String",
+     "region": "String",
+     "amount": "Int64"
+    },
+    "hash": 5551072126918191561
+   },
+   "archive": {
+    "height": 200,
+    "width": 2,
+    "schema": {
+     "id": "Int64",
+     "name": "String"
+    },
+    "hash": 212886650047385976
+   }
+  }
+ },
+ "containment_pairs": {
+  "args": [],
+  "frames": {
+   "small": {
+    "height": 5,
+    "width": 20,
+    "schema": {
+     "small_00": "Int64",
+     "small_01": "Int64",
+     "small_02": "Int64",
+     "small_03": "Int64",
+     "small_04": "Int64",
+     "small_05": "Int64",
+     "small_06": "Int64",
+     "small_07": "Int64",
+     "small_08": "Int64",
+     "small_09": "Int64",
+     "small_10": "Int64",
+     "small_11": "Int64",
+     "small_12": "Int64",
+     "small_13": "Int64",
+     "small_14": "Int64",
+     "small_15": "Int64",
+     "small_16": "Int64",
+     "small_17": "Int64",
+     "small_18": "Int64",
+     "small_19": "Int64"
+    },
+    "hash": 16066826987894930405
+   },
+   "large": {
+    "height": 200,
+    "width": 20,
+    "schema": {
+     "large_00": "Int64",
+     "large_01": "Int64",
+     "large_02": "Int64",
+     "large_03": "Int64",
+     "large_04": "Int64",
+     "large_05": "Int64",
+     "large_06": "Int64",
+     "large_07": "Int64",
+     "large_08": "Int64",
+     "large_09": "Int64",
+     "large_10": "Int64",
+     "large_11": "Int64",
+     "large_12": "Int64",
+     "large_13": "Int64",
+     "large_14": "Int64",
+     "large_15": "Int64",
+     "large_16": "Int64",
+     "large_17": "Int64",
+     "large_18": "Int64",
+     "large_19": "Int64"
+    },
+    "hash": 15140876889794666674
+   }
+  }
+ },
+ "similar_frames": {
+  "args": [],
+  "frames": {
+   "df0": {
+    "height": 200,
+    "width": 20,
+    "schema": {
+     "sim_00": "Int64",
+     "sim_01": "Int64",
+     "sim_02": "Int64",
+     "sim_03": "Int64",
+     "sim_04": "Int64",
+     "sim_05": "Int64",
+     "sim_06": "Int64",
+     "sim_07": "Int64",
+     "ind0_00": "Int64",
+     "ind0_01": "Int64",
+     "ind0_02": "Int64",
+     "ind0_03": "Int64",
+     "ind0_04": "Int64",
+     "ind0_05": "Int64",
+     "ind0_06": "Int64",
+     "ind0_07": "Int64",
+     "ind0_08": "Int64",
+     "ind0_09": "Int64",
+     "ind0_10": "Int64",
+     "ind0_11": "Int64"
+    },
+    "hash": 4604379407351947646
+   },
+   "df1": {
+    "height": 200,
+    "width": 20,
+    "schema": {
+     "sim_00": "Int64",
+     "sim_01": "Int64",
+     "sim_02": "Int64",
+     "sim_03": "Int64",
+     "sim_04": "Int64",
+     "sim_05": "Int64",
+     "sim_06": "Int64",
+     "sim_07": "Int64",
+     "ind1_00": "Int64",
+     "ind1_01": "Int64",
+     "ind1_02": "Int64",
+     "ind1_03": "Int64",
+     "ind1_04": "Int64",
+     "ind1_05": "Int64",
+     "ind1_06": "Int64",
+     "ind1_07": "Int64",
+     "ind1_08": "Int64",
+     "ind1_09": "Int64",
+     "ind1_10": "Int64",
+     "ind1_11": "Int64"
+    },
+    "hash": 7250452628029165885
+   }
+  }
+ },
+ "near_unique": {
+  "args": [
+   2000
+  ],
+  "frames": {
+   "": {
+    "height": 2000,
+    "width": 9,
+    "schema": {
+     "u0": "Int64",
+     "u1": "Int64",
+     "u2": "Int64",
+     "key_hi": "Int64",
+     "key_lo": "Int64",
+     "skewed": "Int64",
+     "mid": "Int64",
+     "low": "Int64",
+     "flag": "Int64"
+    },
+    "hash": 14075550945542041579
+   }
+  }
+ },
+ "near_constant": {
+  "args": [
+   10000
+  ],
+  "frames": {
+   "": {
+    "height": 10000,
+    "width": 3,
+    "schema": {
+     "f0": "Int64",
+     "f1": "Int64",
+     "f2": "Int64"
+    },
+    "hash": 16200857888201185595
+   }
+  }
+ },
+ "top_k_streams": {
+  "args": [
+   5000
+  ],
+  "frames": {
+   "": {
+    "height": 5000,
+    "width": 6,
+    "schema": {
+     "zipf_15": "Int64",
+     "zipf_11": "Int64",
+     "zipf_08": "Int64",
+     "flat": "Int64",
+     "skewed": "Int64",
+     "zipf_str": "String"
+    },
+    "hash": 18266123456919181188
+   }
+  }
+ },
+ "integer_multiples": {
+  "args": [
+   1000,
+   3,
+   7
+  ],
+  "frames": {
+   "": {
+    "height": 1000,
+    "width": 3,
+    "schema": {
+     "c0": "Int64",
+     "c1": "Int64",
+     "c2": "Int64"
+    },
+    "hash": 5220736735663932271
+   }
+  }
+ },
+ "integer_random": {
+  "args": [
+   1000,
+   2
+  ],
+  "frames": {
+   "": {
+    "height": 1000,
+    "width": 2,
+    "schema": {
+     "c0": "Int64",
+     "c1": "Int64"
+    },
+    "hash": 14768739910376656848
+   }
+  }
+ },
+ "runs_int": {
+  "args": [
+   1000,
+   2,
+   10,
+   50
+  ],
+  "frames": {
+   "": {
+    "height": 1000,
+    "width": 2,
+    "schema": {
+     "c0": "Int64",
+     "c1": "Int64"
+    },
+    "hash": 9763038782302634827
+   }
+  }
+ },
+ "runs_str": {
+  "args": [
+   1000,
+   1,
+   10,
+   5
+  ],
+  "frames": {
+   "": {
+    "height": 1000,
+    "width": 1,
+    "schema": {
+     "s0": "String"
+    },
+    "hash": 2098328612469628576
+   }
+  }
+ },
+ "describe_narrow": {
+  "args": [
+   1000
+  ],
+  "frames": {
+   "": {
+    "height": 1000,
+    "width": 4,
+    "schema": {
+     "int": "Int64",
+     "float": "Float64",
+     "num_str": "String",
+     "iso_str": "String"
+    },
+    "hash": 191595217578899579
+   }
+  }
+ },
+ "describe_wide": {
+  "args": [
+   500,
+   12
+  ],
+  "frames": {
+   "": {
+    "height": 500,
+    "width": 12,
+    "schema": {
+     "c000": "Int64",
+     "c001": "Float64",
+     "c002": "String",
+     "c003": "Date",
+     "c004": "Int64",
+     "c005": "Float64",
+     "c006": "String",
+     "c007": "Date",
+     "c008": "Int64",
+     "c009": "Float64",
+     "c010": "String",
+     "c011": "Date"
+    },
+    "hash": 17850331999094511128
+   }
+  }
+ },
+ "describe_nested": {
+  "args": [
+   500
+  ],
+  "frames": {
+   "": {
+    "height": 500,
+    "width": 3,
+    "schema": {
+     "list_i64": "List(Int64)",
+     "list_str": "List(String)",
+     "struct": "Struct({'a': Int64, 'b': String})"
+    },
+    "hash": 9593815387712640804
+   }
+  }
+ }
+}

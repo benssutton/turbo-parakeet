@@ -152,7 +152,7 @@ def test_entropy_estimator_is_validated():
 
 
 @pytest.mark.slow
-def test_ams_streaming_entropy_on_the_large_dataset():
+def test_ams_streaming_entropy_on_cover_windows():
     frame = cover_windows()
     exact = {
         r["column"]: r

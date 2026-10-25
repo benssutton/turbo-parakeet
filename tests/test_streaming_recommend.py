@@ -540,7 +540,7 @@ def test_parity_with_list_columns(batch_rows):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_rows", [7_919, 50_000])
-def test_parity_on_the_large_dataset(batch_rows):
+def test_parity_on_cover_windows(batch_rows):
     frame = cover_windows()
     # One block (9 x 8 192 rows): batches cross, the sample is the whole column.
     streamed = stream(frame, batch_rows, block_rows=frame.height)
