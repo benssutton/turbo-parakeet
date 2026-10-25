@@ -22,14 +22,14 @@ import java.util.OptionalLong;
  * @param zstdLevelTolerance a higher level wins only if it is smaller by more than this fraction (default 0.01)
  * @param zstdMinSaving ZSTD replaces LZ4 only if it saves at least this fraction (default 0.10)
  * @param transformMinSaving  a transform codec (GCD, Delta, DoubleDelta) is chosen only if it saves at least this fraction over no transform (default 0.01)
- * (spec 2026-10-19-clickhouse-recommendations-design.md §4.3; each fraction in [0, 1))
+ * (each fraction in [0, 1))
  * @param skipGranularities GRANULARITY values tried for the skip indexes (non-empty; default 1, 2, 4, 8)
  * @param setMaxSizes   {@code set(max_size)} values tried (non-empty; default 125, 250)
  * @param bloomFprs     {@code bloom_filter} false-positive rates tried (non-empty, each in (0, 1); default 0.025)
  * @param minSkip       a skip index must let at least this fraction of point queries skip (default 0.3)
  * @param minGain       and gain at least this much over a random row order (default 0.1)
  * @param maxOverflow   a set index may overflow its max_size in at most this fraction of windows (default 0.1)
- * (spec 2026-10-20-skip-index-recommendations-design.md §4; fractions in [0, 1])
+ * (fractions in [0, 1])
  */
 public record StreamingParams(long reservoirRows, long blockRows, long categoricalThreshold,
                               int zstdLevel, long seed, List<BooleanPair> booleanPairs, OptionalLong topK,

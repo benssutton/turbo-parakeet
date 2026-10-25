@@ -14,7 +14,6 @@ import java.lang.invoke.MethodHandle;
 /**
  * Recommend's dtype recommendations from batches added over time; all state stays in Rust
  * (services/analytics/src/recommenders/streaming/, through the C ABI's {@code analytics_streaming_recommender_*}).
- * Spec: docs/superpowers/specs/2026-09-29-streaming-recommender-design.md.
  *
  * <p>{@link #add} any number of times — columns may appear, disappear (their rows count as
  * null) or start as the Null type; any other type change is an {@link IllegalArgumentException}.
