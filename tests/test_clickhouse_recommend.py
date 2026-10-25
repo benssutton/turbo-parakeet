@@ -1,4 +1,4 @@
-"""ClickHouse recommendations, Arrow IPC compression choice and the chbench handoff (spec 2026-10-19)."""
+"""ClickHouse recommendations, Arrow IPC compression choice and the chbench handoff."""
 
 from decimal import Decimal
 
@@ -250,7 +250,7 @@ def test_streaming_without_sample():
             assert not r[k], (r["column"], k)
 
 
-# ---- to_chbench (spec 2026-10-19 §7) ----------------------------------------------------
+# ---- to_chbench -------------------------------------------------------------------------
 
 
 def chbench_frame(n: int = 50_000) -> pl.DataFrame:

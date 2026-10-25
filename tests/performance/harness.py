@@ -1,6 +1,6 @@
 """
 Shared benchmark harness: speed, peak memory and accuracy of every implementation of one
-technique (spec docs/superpowers/specs/2026-10-24-benchmark-uniformity-design.md). Every
+technique. Every
 tests/performance/benchmark_<technique>.py is:
 
     from harness import Dataset, large_dataset, run

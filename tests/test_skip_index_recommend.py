@@ -1,4 +1,4 @@
-"""Skip-index recommendations (spec 2026-10-20): keyword validation and one-shot known answers."""
+"""Skip-index recommendations: keyword validation and one-shot known answers."""
 
 import numpy as np
 import polars as pl
@@ -174,7 +174,7 @@ def test_streaming_granularity_capped_by_block_rows():
     assert {4, 8} <= {r["granularity"] for r in rows if r["outcome"] == "pruned"}
 
 
-# ---- to_chbench: the skip-index axis and point queries (spec §8.2) ------------------------
+# ---- to_chbench: the skip-index axis and point queries ------------------------------------
 
 
 def chbench_suites(tmp_path, frames, **kw):

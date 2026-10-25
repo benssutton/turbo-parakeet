@@ -1,6 +1,5 @@
 """
-Delta / DoubleDelta / GCD on-disk layout: emulator vs the live ClickHouse server (spec
-docs/superpowers/specs/2026-10-23-delta-codecs-design.md §3, §7).
+Delta / DoubleDelta / GCD on-disk layout: emulator vs the live ClickHouse server.
 
 For each column and codec chain: create a one-column Wide MergeTree table (as chbench does:
 min_bytes_for_wide_part = 0), insert the column as Arrow IPC over HTTP, OPTIMIZE FINAL, read

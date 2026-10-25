@@ -1,6 +1,7 @@
 """
 Streaming entropy past the exact phase: the bottom-k sample estimate vs the AMS sketch
-(spec docs/superpowers/specs/2026-10-18-recommender-schema-entropy-exemplars-design.md §3.4).
+(the default rule: `sample` unless its error exceeds 5% on a shape where `ams` stays within
+5%).
 
 Per shape and estimator, in a child process (peak memory is per process): one column of
 10^6 rows streamed in 100 000-row batches through StreamingRecommender; reported: estimate,

@@ -90,7 +90,7 @@ def delta_frames() -> dict[str, pl.DataFrame]:
 def widen(yaml_path: Path) -> None:
     """Measure every transform on a delta-frame suite, not only the recommended one: the codec
     axis becomes none / GCD / Delta / DoubleDelta and the compression axis LZ4 / ZSTD(1) / ZSTD(3),
-    predictions from the emulator on the suite's own dataset (spec 2026-10-23 §6)."""
+    predictions from the emulator on the suite's own dataset."""
     from turbo_parakeet import _plugin
 
     suite = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))

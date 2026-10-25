@@ -3,7 +3,7 @@ MinMax skip-index accuracy tests — every implementation in turbo_parakeet.tech
 
 Oracles: hand-worked known answers, a brute-force window-by-window oracle
 (skip_index_helpers.oracle), MinMaxIndexPolars (the reference) and a Monte Carlo of the
-random-order baseline. Semantics: spec 2026-10-16-skip-index-techniques §2.
+random-order baseline.
 
 Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 """
@@ -37,7 +37,7 @@ PKG = "turbo_parakeet.techniques.minmax_index"
 ALL = implementation_params(PKG)
 OTHERS = implementation_params(PKG, include_reference=False)
 
-TOY = [0, 0, 0, 1, 0, 0, 0, 2]  # A A A B A A A C (spec §7)
+TOY = [0, 0, 0, 1, 0, 0, 0, 2]  # A A A B A A A C
 
 
 def stats(impl: str, s: pl.Series, **params) -> dict:

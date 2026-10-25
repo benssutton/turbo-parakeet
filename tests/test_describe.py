@@ -1021,7 +1021,7 @@ def test_categorical_and_enum_sizes_agree(impl):
 def test_nested_ordering_with_null_elements(impl):
     s = pl.Series("x", [[2], [None], [1, None], [], [1]], dtype=pl.List(pl.Int64))
     r = profile(impl, s)
-    # Nested extremes are dropped (spec 2026-10-01 §13.3); the inner values keep theirs.
+    # Nested extremes are dropped; the inner values keep theirs.
     assert (r["min"], r["max"], r["n_unique"]) == (None, None, 5)
     assert (r["inner_min"], r["inner_max"]) == ("1", "2")
 

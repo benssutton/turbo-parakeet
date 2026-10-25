@@ -5,8 +5,7 @@
 A file may import (`crate::<layer>::…`) its own layer and the layers below it, never above:
 `common` imports only `common`; `techniques` only `common` / `techniques`; `recommenders` those and
 `recommenders`; `bindings` anything. Every `crate::<name>` must name a layer (no flat modules
-at the top of `src/`). Comments are ignored. Spec: docs/superpowers/specs/
-2026-10-04-rust-module-structure-design.md.
+at the top of `src/`). Comments are ignored.
 """
 
 from __future__ import annotations
