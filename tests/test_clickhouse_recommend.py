@@ -398,17 +398,11 @@ def test_to_chbench_normalises_categorical_and_columns(tmp_path):
 
 
 def test_to_chbench_suites_parse_in_chbench(chbench_out, monkeypatch):
-    import os
     from pathlib import Path
 
-    root = Path(
-        os.environ.get("CHBENCH_DIR")
-        or Path(__file__).resolve().parents[1].parent / "clickhouse_benchmark"
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "services" / "bench")
     )
-    if not root.exists():
-        pytest.skip("clickhouse_benchmark not found")
-    monkeypatch.syspath_prepend(str(root))
-    pytest.importorskip("chbench")
     from chbench.harness.suite import load_suite
 
     out, _, suites = chbench_out

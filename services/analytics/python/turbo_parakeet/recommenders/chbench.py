@@ -1,5 +1,5 @@
-"""`to_chbench`: a recommender result as runnable suites for the sibling benchmark project
-`clickhouse_benchmark` (`chbench`) — spec 2026-10-19 §7, skip indexes 2026-10-20 §8.2. A helper,
+"""`to_chbench`: a recommender result as runnable suites for the bench
+(`services/bench`, package `chbench`) — spec 2026-10-19 §7, skip indexes 2026-10-20 §8.2. A helper,
 not a recommender.
 
 Skip index: when the result chose one (`clickhouse_skip_index`, e.g. `"set(125) GRANULARITY 4"`),
