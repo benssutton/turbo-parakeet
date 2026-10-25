@@ -300,7 +300,7 @@ def containment_pairs(
     ~disjoint and contribute no accidental truth positives.
 
     Exercises the documented containment-recall gap on MinHashRust/MinHashDatasketch
-    (CLAUDE.md Next Steps / I2): the LSH candidate threshold is Jaccard-calibrated, so
+    (ToDo 12): the LSH candidate threshold is Jaccard-calibrated, so
     a small-in-large containment pair with low Jaccard is pruned before verification
     ever runs, even though its Overlap Coefficient is 1.0.
     """

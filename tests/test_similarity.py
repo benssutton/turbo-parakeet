@@ -86,11 +86,11 @@ def test_recall_medium_scale(impl):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "I2 / known limitation (CLAUDE.md Next Steps): the LSH candidate threshold is "
+        "Known limitation (ToDo 12): the LSH candidate threshold is "
         "calibrated against Jaccard, so a containment pair (overlap == 1.0) with low "
         "Jaccard — small set fully inside a much larger one — is pruned before "
-        "verification ever runs. The threshold heuristic is intentionally unchanged "
-        "(controller ruling: behaviour-preserving refactor); this test documents the "
+        "verification ever runs. The threshold heuristic is unchanged until ToDo 12 "
+        "fixes it; this test documents the "
         "gap so a future recall fix makes it start passing (and stops being xfail)."
     ),
 )
