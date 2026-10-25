@@ -122,12 +122,16 @@ def draw_support(
     capacity and reported as a `clamp: cardinality_ratio` warning;
     `clip_collapsed + round_collapsed` then account for the shortfall against
     the clamped count, not against `requested_k`. A clipped fraction above
-    CLIP_WARN_FRACTION is a `miss: cardinality_ratio at risk` warning.
+    CLIP_WARN_FRACTION is a `miss: cardinality_ratio: at risk` warning.
     """
     k = spec.support_size
 
     if spec.categories is not None:
-        values = np.array(sorted(spec.categories))
+        if pa.types.is_boolean(element_dtype(spec)):
+            # bool categories draw on the lattice {0, 1} like a bool value_range.
+            values = np.array(sorted(int(c) for c in spec.categories), dtype=np.int64)
+        else:
+            values = np.array(sorted(spec.categories))
         return SupportDraw(
             values=values,
             requested_k=k,
@@ -208,7 +212,7 @@ def draw_support(
 
     if clipped_frac > CLIP_WARN_FRACTION:
         warnings.append(
-            f"miss: cardinality_ratio at risk: {clipped_frac * 100:.1f}% of "
+            f"miss: cardinality_ratio: at risk: {clipped_frac * 100:.1f}% of "
             "the support draw clipped"
         )
 
@@ -464,13 +468,13 @@ def build_multiset(
     # grid points) leaves the achieved cardinality short with no record.
     if draw.clip_collapsed > 0:
         warnings.append(
-            f"miss: cardinality_ratio short by clip collapse: "
+            f"miss: cardinality_ratio: short by clip collapse: "
             f"{draw.clip_collapsed} of {draw.requested_k} requested support "
             "values merged onto a value_range bound"
         )
     if draw.round_collapsed > 0:
         warnings.append(
-            f"miss: cardinality_ratio short by rounding collapse: "
+            f"miss: cardinality_ratio: short by rounding collapse: "
             f"{draw.round_collapsed} of {draw.requested_k} requested support "
             f"values collided after rounding and could not be redrawn within "
             f"{REDRAW_CAP} attempts"
@@ -522,7 +526,7 @@ def _finish(
         measured = index_of_dispersion(np.repeat(support, counts))
         if abs(measured - solved.achieved) > spec.tolerances.index_of_dispersion:
             warnings.append(
-                f"miss: index_of_dispersion re-measured on the returned "
+                f"miss: index_of_dispersion: re-measured on the returned "
                 f"multiset as {measured:.6g}, not the solve's "
                 f"{solved.achieved:.6g}: the caller's generator was not at its "
                 "initial state, so the final draw differs from the one the "
@@ -571,12 +575,22 @@ def solve_dispersion(
     that consumed rng would make f(sigma) depend on call order.
     """
     seed = spec.seed
+    # The guard and the objective probe the same sigmas (the bracket ends):
+    # build each trial multiset once and keep its (mean, index of dispersion).
+    built: dict[float, tuple[float, float]] = {}
+
+    def trial(s: float) -> tuple[float, float]:
+        if s not in built:
+            x = _generated(spec, seed, s)
+            built[s] = (float(x.mean()), index_of_dispersion(x))
+        return built[s]
+
     return solve_monotone(
-        lambda s: index_of_dispersion(_generated(spec, seed, s)),
+        lambda s: trial(s)[1],
         target=target,
         lo=lo,
         hi=hi,
         increasing=True,
-        guard=lambda s: _generated(spec, seed, s).mean() > 0,
+        guard=lambda s: trial(s)[0] > 0,
         tol=spec.tolerances.index_of_dispersion,
     )

@@ -475,7 +475,11 @@ def test_value_range_must_fit_the_element_type(arrow_type, value_range):
     ],
 )
 def test_value_range_at_the_type_limit_is_accepted(arrow_type, value_range):
-    base(arrow_type=arrow_type, value_range=value_range, decimal_places=None).validate()
+    # uint64 above 2**63 - 1 is drawn only on the capped uniform lattice path.
+    extra = {"cardinality_ratio": 0.5} if arrow_type == "uint64" else {}
+    base(
+        arrow_type=arrow_type, value_range=value_range, decimal_places=None, **extra
+    ).validate()
 
 
 def test_array_len_range_must_be_ordered_positive_and_average_at_least_one():

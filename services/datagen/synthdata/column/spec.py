@@ -15,6 +15,7 @@ import re
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Sequence
 
+import numpy as np
 import pyarrow as pa
 
 
@@ -161,6 +162,14 @@ def representable_range(dtype: pa.DataType) -> tuple[float, float] | None:
     return None
 
 
+def _is_number(c: Any, elem_dtype: pa.DataType) -> bool:
+    """A numeric category for `elem_dtype`. bool counts as a number only for the
+    boolean type, which draws its categories as 0 / 1."""
+    if isinstance(c, bool):
+        return pa.types.is_boolean(elem_dtype)
+    return isinstance(c, numbers.Real)
+
+
 def _jsonable(o):
     """json.dumps fallback: numpy scalars (a category list built from an array)
     become Python scalars, other sequences become lists."""
@@ -277,10 +286,7 @@ class DatasetSpec:
             )
 
         if self.categories is not None:
-            is_num = [
-                isinstance(c, numbers.Real) and not isinstance(c, bool)
-                for c in self.categories
-            ]
+            is_num = [_is_number(c, elem_dtype) for c in self.categories]
             is_str = [isinstance(c, str) for c in self.categories]
             if pa.types.is_string(elem_dtype) and not all(is_str):
                 raise SpecError(
@@ -290,7 +296,7 @@ class DatasetSpec:
             if not pa.types.is_string(elem_dtype) and not all(is_num):
                 raise SpecError(
                     f"categories for the numeric arrow_type {self.arrow_type!r} "
-                    "must all be numeric (bool is not accepted as a number)"
+                    "must all be numeric (bool is accepted only for the bool type)"
                 )
             bounds = representable_range(elem_dtype)
             if bounds is not None and all(is_num):
@@ -438,10 +444,7 @@ class DatasetSpec:
                 )
         numeric_support = self.string_length is None and (
             self.categories is None
-            or all(
-                isinstance(c, numbers.Real) and not isinstance(c, bool)
-                for c in self.categories
-            )
+            or all(_is_number(c, elem_dtype) for c in self.categories)
         )
         if self.index_of_dispersion is not None and not numeric_support:
             raise SpecError(
@@ -493,6 +496,21 @@ class DatasetSpec:
                     "normal distribution with no mean is centred on value_range, "
                     "which is not set: set distribution.mean or value_range"
                 )
+
+        if (
+            pa.types.is_uint64(elem_dtype)
+            and self.value_range is not None
+            and self.value_range[1] > 2**63 - 1
+            and (self.cardinality_ratio is None or self.distribution.kind != "uniform")
+        ):
+            raise SpecError(
+                f"uint64 values above 2**63 - 1 (value_range {self.value_range}) "
+                "are drawn only on the uniform lattice path, which needs "
+                "cardinality_ratio and the uniform distribution; the uncapped and "
+                "the non-uniform draws pass through float64 and int64, which "
+                "cannot hold them. Set cardinality_ratio with the uniform "
+                "distribution, or lower value_range's high bound to 2**63 - 1"
+            )
 
         if self.interarrival_cv is not None and self.interarrival_cv <= 0:
             raise SpecError(
@@ -620,11 +638,18 @@ class DatasetSpec:
             d["tolerances"] = Tolerances(**d["tolerances"])
         return cls(**d)
 
+    def id_payload(self) -> str:
+        """The JSON `dataset_id` hashes: every field but `tolerances` (they judge
+        the result, they do not change it), plus the numpy version, whose
+        generators define the draws. For a path dataset the file's location is
+        left out and `content_hash` (the bytes and column name) stands in: a
+        changed file is a new dataset, a moved one is the same."""
+        d = asdict(replace(self, path=None) if self.path is not None else self)
+        del d["tolerances"]
+        d["numpy"] = np.__version__
+        return json.dumps(d, sort_keys=True, default=_jsonable)
+
     @property
     def dataset_id(self) -> str:
-        """Stable 16-hex-character hash of every field, including seed. For a
-        path dataset the file's location is left out and `content_hash` (the
-        bytes and column name) stands in: a changed file is a new dataset, a
-        moved one is the same."""
-        spec = replace(self, path=None) if self.path is not None else self
-        return hashlib.sha256(spec.to_json().encode()).hexdigest()[:16]
+        """Stable 16-hex-character hash of `id_payload()`."""
+        return hashlib.sha256(self.id_payload().encode()).hexdigest()[:16]

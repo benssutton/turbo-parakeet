@@ -18,7 +18,7 @@ import pyarrow.compute as pc
 
 from synthdata.column import metrics, realdata
 from synthdata.column.spec import DatasetSpec, SpecError
-from synthdata.generate import COLUMN_NAME, Dataset, Manifest, generate
+from synthdata.generate import COLUMN_NAME, Dataset, Manifest, generate, observed
 
 __all__ = ["save", "load_path", "load_or_generate"]
 
@@ -84,6 +84,7 @@ def load_path(spec: DatasetSpec) -> Dataset:
         within_tolerance={},
         solves={},
         warnings=[],
+        **observed(array),
         generated_at=datetime.now(timezone.utc).isoformat(),
         generation_seconds=time.perf_counter() - started,
     )

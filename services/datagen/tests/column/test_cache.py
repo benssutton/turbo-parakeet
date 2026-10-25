@@ -1,5 +1,6 @@
 import json
 import math
+import re
 
 import pyarrow as pa
 import pytest
@@ -369,8 +370,8 @@ MISS_INDUCING = [
     "kw", MISS_INDUCING, ids=[str(i) for i in range(len(MISS_INDUCING))]
 )
 def test_every_warning_starts_with_one_of_the_four_prefixes_and_a_metric_name(kw):
-    """The vocabulary a harness author depends on: `clamp:`, `miss:`,
-    `skipped:` or `undefined:`, then the metric name."""
+    """The vocabulary a harness author depends on: "<kind>: <metric>: <text>"
+    with the kind clamp, miss, skipped or undefined."""
     metrics = (
         "cardinality_ratio",
         "entropy_bits",
@@ -381,9 +382,10 @@ def test_every_warning_starts_with_one_of_the_four_prefixes_and_a_metric_name(kw
     m = generate(uc1(**kw)).manifest
     assert m.warnings, "this spec was chosen to warn"
     for w in m.warnings:
-        prefix, _, rest = w.partition(" ")
-        assert prefix in WARNING_PREFIXES, w
-        assert rest.split(":")[0].split("=")[0].split(" ")[0] in metrics, w
+        match = re.match(r"^(\w+): (\w+): ", w)
+        assert match, w
+        assert match.group(1) + ":" in WARNING_PREFIXES, w
+        assert match.group(2) in metrics, w
 
 
 def test_dispersion_solve_warnings_use_the_vocabulary():

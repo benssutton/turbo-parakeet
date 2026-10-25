@@ -63,7 +63,7 @@ def test_clip_collapse_is_counted_separately_and_not_redrawn():
     assert d.clip_collapsed > 0
     assert d.values.size < d.requested_k
     assert (d.values == 10.0).sum() <= 1  # all merged onto the one bound
-    assert any(w.startswith("miss: cardinality_ratio at risk") for w in d.warnings)
+    assert any(w.startswith("miss: cardinality_ratio: at risk") for w in d.warnings)
 
 
 def test_rounding_collapse_is_redrawn_away():

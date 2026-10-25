@@ -288,7 +288,7 @@ def _combined_warnings(plan: RunsPlan, counts: np.ndarray) -> list[str]:
     block = n / plan.target_R
     gap = n / runs if runs else float("inf")
     out = [
-        "skipped: interarrival_cv tolerance, because runs_z and "
+        "skipped: interarrival_cv: tolerance not applied, because runs_z and "
         "interarrival_cv trade off: the layout honours runs_z and records "
         "the achieved interarrival_cv without applying its tolerance (mean "
         f"block length {block:.2f} rows against a mean run gap of {gap:.2f} "
@@ -296,7 +296,7 @@ def _combined_warnings(plan: RunsPlan, counts: np.ndarray) -> list[str]:
     ]
     if block < gap:
         out.append(
-            f"miss: interarrival_cv is pulled strongly toward 1, because the "
+            f"miss: interarrival_cv: pulled strongly toward 1, because the "
             f"mean block length {block:.2f} rows (rows / {plan.target_R} "
             f"runs-test runs) is below the mean run gap {gap:.2f} rows (rows "
             f"/ {runs} repeat-runs), so block boundaries split most "
@@ -347,7 +347,7 @@ def layout_sequence(
         plan = runs_plan(x, z, kind)
         if plan.n1 == 0 or plan.n2 == 0:
             warnings.append(
-                "undefined: runs_z has no standard deviation for a single-group "
+                "undefined: runs_z: no standard deviation for a single-group "
                 f"dichotomy (kind={kind!r}, all {x.size} rows fall on one "
                 "side), so the metric is undefined for this data; ignoring "
                 "the target"
@@ -355,7 +355,7 @@ def layout_sequence(
             z, plan = None, None
         elif plan.clamped:
             warnings.append(
-                f"clamp: runs_z={z:g} is outside the reachable band "
+                f"clamp: runs_z: target {z:g} is outside the reachable band "
                 f"[{plan.z_lo:.2f}, {plan.z_hi:.2f}] for the measured split "
                 f"n1={plan.n1}, n2={plan.n2}; the target has been clamped to "
                 f"{plan.target_R} runs"
@@ -365,7 +365,7 @@ def layout_sequence(
         repeat_runs = int(np.count_nonzero(counts >= 2))
         if repeat_runs < MIN_REPEAT_RUNS:
             warnings.append(
-                f"undefined: interarrival_cv needs at least {MIN_REPEAT_RUNS} "
+                f"undefined: interarrival_cv: needs at least {MIN_REPEAT_RUNS} "
                 f"repeat-runs to have two gaps, and this multiset forms only "
                 f"{repeat_runs} repeat-runs (values with count >= 2), so the "
                 "metric is undefined for this data; laying out anyway"

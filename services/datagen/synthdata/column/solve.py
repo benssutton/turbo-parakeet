@@ -1,4 +1,4 @@
-"""One monotone bisection, shared by every search in the generator.
+r"""One monotone bisection, shared by every search in the generator.
 
 The generator once had three hand-rolled searches with three different
 status vocabularies, and the findings require a clamp and an invalid bracket to be
@@ -9,9 +9,9 @@ index-of-dispersion solve on the distribution's spread, and the
 inter-arrival CV refinement on the gamma's input CV.
 
 The warning vocabulary lives here too. Every warning any generator module
-emits is `"<prefix> <metric> ..."` with the prefix one of `WARNING_PREFIXES`
-and the metric one of the five targetable names, so a harness can classify a
-warning by its first two words without parsing the prose:
+emits is `"<kind>: <metric>: <text>"` with `<kind>:` one of `WARNING_PREFIXES`
+and the metric one of the five targetable names, so a harness classifies a
+warning with `re.match(r"^(\w+): (\w+): ", w)` without parsing the prose:
 
   clamp:      the target lies outside the reachable band and the generator
               honoured the nearest bound (a solve clamp, a runs-z band clamp,
@@ -64,10 +64,10 @@ class SolveResult:
         return self.status is SolveStatus.OK
 
     def warning(self, metric: str, target: float) -> str:
-        """The vocabulary warning for a solve that did not land: prefix by
+        """The vocabulary warning for a solve that did not land: kind by
         status, then the metric name, then the target and this message."""
         return (
-            f"{self.status.warning_prefix} {metric} target {target:g} could "
+            f"{self.status.warning_prefix} {metric}: target {target:g} could "
             f"not be reached: {self.message}"
         )
 

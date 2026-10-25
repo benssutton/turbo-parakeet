@@ -12,9 +12,9 @@ and the status and message of any solve. A missed tolerance is a warning,
 never an exception; a clamp is recorded distinctly from a near miss because
 the solve's `status` says so (`clamped_low` or `clamped_high`) and its
 message names the reachable bound. Warnings follow the fixed vocabulary in
-`WARNING_PREFIXES` (defined in `solve.py`, re-exported here): every one
-starts with `clamp:`, `miss:`, `skipped:` or `undefined:` and then the
-metric's name.
+`WARNING_PREFIXES` (defined in `solve.py`, re-exported here): every one is
+"<kind>: <metric>: <text>" with the kind one of clamp, miss, skipped or
+undefined.
 
 After `spec.validate()` nothing here raises deliberately: validation rejects
 every value_range or category whose rounded bounds overflow the declared
@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from synthdata.column import metrics
 from synthdata.column.multiset import build_multiset
@@ -88,18 +89,18 @@ class SolveRecord:
 
 @dataclass
 class Manifest:
-    """What one dataset was asked for and what it got.
+    r"""What one dataset was asked for and what it got.
 
     Vocabulary. Two fields are machine-readable and a harness must branch on
     them rather than on prose. `solves[name].status` is one of the
     `SolveStatus` value strings: "ok", "clamped_low", "clamped_high",
     "invalid_bracket", "not_converged". Every entry of `warnings` is
-    "<prefix> <metric> ..." with the prefix one of `WARNING_PREFIXES`
-    ("clamp:", "miss:", "skipped:", "undefined:") and the metric one of
-    cardinality_ratio, entropy_bits, index_of_dispersion, runs_z,
-    interarrival_cv, so `warning.split()[:2]` classifies it. A clamp means
-    the target lay outside the reachable band and the nearest bound was
-    honoured; a miss means a reachable target was not hit (a tolerance miss,
+    "<kind>: <metric>: <text>" with the kind one of clamp, miss, skipped,
+    undefined (`WARNING_PREFIXES` holds them with their colon) and the metric
+    one of cardinality_ratio, entropy_bits, index_of_dispersion, runs_z,
+    interarrival_cv, so `re.match(r"^(\w+): (\w+): ", w)` classifies it.
+    A clamp means the target lay outside the reachable band and the nearest
+    bound was honoured; a miss means a reachable target was not hit (a tolerance miss,
     a solve that did not converge, a support shortfall); skipped means a
     step was not run so a target was not pursued; undefined means the metric
     has no value for this data.
@@ -130,6 +131,15 @@ class Manifest:
     round_collapsed:   support values lost to rounding collisions that the
                        bounded redraw could not recover. Both are 0 when no
                        cardinality_ratio was set.
+    null_count:        nulls in the final array (the outer level for list<T>).
+    value_min, value_max:
+                       the non-null extremes of the final array (the inner values
+                       for list<T>), temporals as their integer value; None for
+                       strings and an all-null array.
+    decimal_places_observed:
+                       for float and decimal types, the largest number of
+                       non-zero fractional digits among the non-null values;
+                       None for every other type.
     """
 
     dataset_id: str
@@ -141,6 +151,10 @@ class Manifest:
     warnings: list[str] = field(default_factory=list)
     clip_collapsed: int = 0
     round_collapsed: int = 0
+    null_count: int = 0
+    value_min: float | None = None
+    value_max: float | None = None
+    decimal_places_observed: int | None = None
     generated_at: str = ""
     generation_seconds: float = 0.0
 
@@ -195,10 +209,16 @@ def _inner_row_count(spec: DatasetSpec) -> int:
 
 def _measure(values: np.ndarray, spec: DatasetSpec) -> dict[str, float]:
     kind = dichotomy_kind_for(spec)
-    achieved = {
-        "cardinality_ratio": metrics.cardinality_ratio(values),
-        "entropy_bits": metrics.entropy_bits(values),
-    }
+    values = np.asarray(values)
+    if values.size == 0:
+        achieved = {"cardinality_ratio": math.nan, "entropy_bits": math.nan}
+    else:
+        # One unique pass for both order-free metrics.
+        _, counts = np.unique(values, return_counts=True)
+        achieved = {
+            "cardinality_ratio": counts.size / values.size,
+            "entropy_bits": metrics.entropy_of_counts(counts),
+        }
     if spec.index_of_dispersion is not None:
         achieved["index_of_dispersion"] = metrics.index_of_dispersion(values)
     if spec.runs_z is not None:
@@ -235,7 +255,7 @@ def _check_tolerances(
             # tolerance, it is the metric having no value for this data.
             within[name] = False
             warnings.append(
-                f"undefined: {name} is undefined for this data (achieved nan "
+                f"undefined: {name}: undefined for this data (achieved nan "
                 f"against target {target:g}), so the tolerance cannot apply"
             )
             continue
@@ -247,6 +267,56 @@ def _check_tolerances(
                 f"tolerance of target {target:g}"
             )
     return within, warnings
+
+
+def _decimal_places(array: pa.Array) -> int | None:
+    """The largest number of non-zero fractional digits among the non-null
+    values of a flat float or decimal array; None for any other type or an
+    all-null array."""
+    dtype = array.type
+    if not (pa.types.is_floating(dtype) or pa.types.is_decimal(dtype)):
+        return None
+    if pa.types.is_decimal(dtype):
+        valid, top = array.drop_null(), dtype.scale
+    else:
+        valid, top = array.filter(pc.is_finite(array)), 17
+    if len(valid) == 0:
+        return None
+    # The fewest places that round every value onto itself.
+    for places in range(top + 1):
+        if pc.all(pc.equal(pc.round(valid, ndigits=places), valid)).as_py():
+            return places
+    return top
+
+
+def observed(array: pa.Array) -> dict:
+    """The Manifest's null_count, value_min, value_max and
+    decimal_places_observed, measured on the final array."""
+    values = array.flatten() if pa.types.is_list(array.type) else array
+    lo = hi = None
+    dtype = values.type
+    if pa.types.is_decimal(dtype):
+        # min_max and round have no decimal32 / decimal64 kernels, and rounding
+        # a value at the type's limit up needs one more digit of precision.
+        values = values.cast(pa.decimal256(76, dtype.scale))
+    if (
+        pa.types.is_integer(dtype)
+        or pa.types.is_floating(dtype)
+        or pa.types.is_decimal(dtype)
+        or pa.types.is_temporal(dtype)
+        or pa.types.is_boolean(dtype)
+    ):
+        if pa.types.is_temporal(dtype):
+            values = values.cast(pa.int32() if dtype.bit_width == 32 else pa.int64())
+        mm = pc.min_max(values)
+        if mm["min"].is_valid:
+            lo, hi = float(mm["min"].as_py()), float(mm["max"].as_py())
+    return {
+        "null_count": array.null_count,
+        "value_min": lo,
+        "value_max": hi,
+        "decimal_places_observed": _decimal_places(values),
+    }
 
 
 def generate(spec: DatasetSpec) -> Dataset:
@@ -290,7 +360,9 @@ def generate(spec: DatasetSpec) -> Dataset:
             multiset.support, multiset.counts, stage_spec, rng
         )
         if refined.skipped:
-            warnings.append(f"skipped: interarrival_cv refinement: {refined.reason}")
+            warnings.append(
+                f"skipped: interarrival_cv: refinement not run: {refined.reason}"
+            )
         else:
             values = refined.values
             solves["interarrival_cv"] = SolveRecord.from_result(refined.solve)
@@ -321,6 +393,7 @@ def generate(spec: DatasetSpec) -> Dataset:
         warnings=warnings,
         clip_collapsed=multiset.clip_collapsed,
         round_collapsed=multiset.round_collapsed,
+        **observed(array),
         generated_at=generated_at,
         generation_seconds=time.perf_counter() - started,
     )
