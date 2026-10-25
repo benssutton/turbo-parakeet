@@ -126,6 +126,16 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
       not) and align them.
     - Polars' process-global categorical mapping: a user's Categorical columns share it, so other Categorical data alive
       in the same process can inflate a column's measured dictionary size.
+    - Block-sampled ZSTD estimates (streaming, a reservoir of 4 096-row blocks) miss ordered (sorted / clustered)
+      columns by up to ±18% at 16 384 of 73 728 rows; random-order columns stay within 10%
+      (`test_sampled_zstd_estimate_on_ordered_columns`, xfail).
+    - Streaming's original `size_bytes` for a Categorical / dictionary column beside other dictionary columns counts
+      every category of the shared mapping (`recommenders/streaming/sizing.rs` `cats_of`), e.g. 1 429 368 vs
+      one-shot's 304 168 bytes; reproduces with plain pyarrow dictionary columns in one batch. The parity test
+      excuses it per column (`shares_categories`).
+    - Parity across a streaming block boundary is untested: at 73 728 rows with `block_rows` 65 536, LZ4 / IPC sizes
+      differ by up to 2.6% on dictionary columns (ZSTD by design); the parity test streams with `block_rows` = the
+      frame's height. Decide the multi-block bound and add a test.
 12. **Bloom speed and MinHash containment recall** (prerequisite of 21).
     - `BloomRust` loses to `MembershipExact` (plain `frozenset` intersection) on every benchmarked shape (0.16× total on
       the wide 100-column shape): one binding call per column filter. Batch filter construction across columns in one

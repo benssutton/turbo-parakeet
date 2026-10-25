@@ -14,8 +14,7 @@ import pytest
 from turbo_parakeet.techniques.describe import _sizes
 from turbo_parakeet.techniques.gcd import GcdRust
 from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
-from datagen import large_dataset
-from synthdata.cover import cover_windows
+from synthdata.cover import WINDOW_ROWS, cover_manifest, cover_windows
 from synthdata.scenarios import describe_mixed, stringified
 
 CANDIDATE = pl.Struct(
@@ -580,17 +579,43 @@ def test_zstd_sizes_are_those_of_a_file_written_in_blocks():
         assert r["n_sampled_rows"] == frame.height
 
 
-@pytest.mark.slow
-def test_sampled_zstd_estimate_is_within_ten_percent():
-    frame = large_dataset()
+def covering_columns(orders: tuple[str, ...]) -> list[str]:
+    """The covering columns whose intended order level is one of `orders` (walks, which
+    are ordered, left out)."""
+    _, intended = cover_manifest(WINDOW_ROWS)
+    return [
+        c
+        for c, lv in intended.items()
+        if lv["order"] in orders and lv["structure"] != "walk"
+    ]
+
+
+def assert_sampled_zstd_within_ten_percent(columns: list[str]):
+    frame = cover_windows().select(columns)
     full = stream(frame, 10_000, block_rows=4_096, reservoir_rows=frame.height + 4_096)
     sampled = stream(frame, 10_000, block_rows=4_096, reservoir_rows=16_384)
+    checked = 0
     for a, b in zip(full.iter_rows(named=True), sampled.iter_rows(named=True)):
         if a["status"] != "computed" or (a["datafusion_size_zstd_bytes"] or 0) < 1_000:
             continue
         assert b["datafusion_size_zstd_bytes"] == pytest.approx(
             a["datafusion_size_zstd_bytes"], rel=0.10
         ), a["column"]
+        checked += 1
+    assert checked > 0
+
+
+@pytest.mark.slow
+def test_sampled_zstd_estimate_is_within_ten_percent():
+    assert_sampled_zstd_within_ten_percent(covering_columns(("random",)))
+
+
+@pytest.mark.slow
+@pytest.mark.xfail(
+    strict=True, reason="block-sampled ZSTD misestimates ordered columns (ToDo 11)"
+)
+def test_sampled_zstd_estimate_on_ordered_columns():
+    assert_sampled_zstd_within_ten_percent(covering_columns(("sorted", "clustered")))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

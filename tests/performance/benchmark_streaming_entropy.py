@@ -96,6 +96,7 @@ def child(shape: str, estimator: str) -> None:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
     rows = []
     for shape, make in SHAPES.items():
         frame = make()
