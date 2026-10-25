@@ -1,6 +1,6 @@
 //! HyperLogLog distinct count of every column (the `distinct_count` technique's Rust
-//! implementation, spec 2026-10-24-cardinality-entropy-techniques §2): one sketch per
-//! 64K-row chunk, merged by register max, columns and chunks in parallel.
+//! implementation): one sketch per 64K-row chunk, merged by register max, columns and chunks
+//! in parallel.
 
 use polars::prelude::*;
 use rayon::prelude::*;

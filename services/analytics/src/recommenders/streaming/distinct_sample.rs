@@ -1,4 +1,4 @@
-//! Bottom-k sample of distinct values (spec 2026-10-01 §3.2): the k values with the
+//! Bottom-k sample of distinct values: the k values with the
 //! smallest `hll::hash_key`, each with its count, first row, capture mask and length. A
 //! value is admitted on its first occurrence when its hash is below the largest kept one;
 //! that bound only falls, so every value still held has been counted since its first row
@@ -6,7 +6,7 @@
 //!
 //! Until the first eviction the sample holds every distinct value (the exact phase) and
 //! also keeps what the dictionary rules need: `few`, `views`, `sum_len_unique` and, for text
-//! levels, each value's text (`ranking`, spec 2026-10-07 §4).
+//! levels, each value's text (`ranking`).
 
 use std::collections::{BinaryHeap, HashMap};
 

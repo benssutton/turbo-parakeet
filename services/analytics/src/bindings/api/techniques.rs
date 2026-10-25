@@ -191,8 +191,7 @@ use crate::techniques::heavy_keeper::HeavyKeeper;
 use crate::techniques::space_saving::SpaceSaving;
 
 /// `col_name, rank, row, count, error, n_non_null, sketch_bytes`: each column's top `k` by
-/// SpaceSaving in `memory_bytes` (spec 2026-10-12). k = 0 or a budget below k counters ->
-/// InvalidInput.
+/// SpaceSaving in `memory_bytes`. k = 0 or a budget below k counters -> InvalidInput.
 pub fn space_saving_top_k(
     batch: &RecordBatch,
     k: usize,

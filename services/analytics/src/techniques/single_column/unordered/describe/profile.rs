@@ -13,7 +13,7 @@ use rayon::prelude::*;
 
 pub(crate) type Row = Vec<AnyValue<'static>>;
 
-/// Metrics and conclusions of any value series, in output order (spec 2026-10-01 §7).
+/// Metrics and conclusions of any value series, in output order.
 pub(crate) fn value_fields() -> Vec<(&'static str, DataType)> {
     use DataType::{Boolean, Float64 as F64, String as Str, UInt32 as U32, UInt64 as U64};
     // Arrow has no plain 128-bit integer; parse_i128 caps values at 38 digits.
@@ -78,7 +78,7 @@ pub(crate) fn fields() -> Vec<(String, DataType)> {
 }
 
 /// Private estimator inputs, appended by `describe_columns` only (Python's reference
-/// conclusions read them; spec 2026-10-01 §13.8).
+/// conclusions read them).
 pub(crate) fn input_fields() -> Vec<(String, DataType)> {
     let level = [
         ("argmin", DataType::UInt64),
@@ -161,7 +161,7 @@ pub(crate) struct Profile {
     /// Numeric extremes as f64 (integer, decimal and float dtypes), for `ordinal`.
     pub numeric: Option<(f64, f64)>,
     /// Text levels (String, Categorical, Enum) within `profile`'s `rank_up_to`: every distinct
-    /// value by frequency (spec 2026-10-07 §4); None otherwise.
+    /// value by frequency; None otherwise.
     pub ranking: Option<Ranking>,
 }
 
@@ -221,7 +221,7 @@ fn ranked_values(s: &Series, ranked: &[(u64, u64)]) -> PolarsResult<Ranking> {
         .collect())
 }
 
-/// Row `i` rendered as arrow-rs text (spec 2026-10-01 §13.1).
+/// Row `i` rendered as arrow-rs text.
 pub(crate) fn render_at(s: &Series, i: Option<u64>) -> PolarsResult<Option<String>> {
     let Some(i) = i else { return Ok(None) };
     let one = crate::common::ipc_sizes::classic_layout(&s.slice(i as i64, 1))?;

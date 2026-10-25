@@ -1,4 +1,4 @@
-//! Trying candidates smallest first and choosing one (spec 2026-09-26 §4.1, §4.4, §5.4).
+//! Trying candidates smallest first and choosing one.
 
 use super::*;
 use arrow_array::cast::AsArray;
@@ -8,7 +8,7 @@ use arrow_schema::{DataType as AT, Field as AField};
 use polars::prelude::DataType as PT;
 use std::sync::Arc;
 
-// ── choosing (Spec B §4.1, §4.4, §5.4) ──────────────────────────────────────
+// ── choosing ────────────────────────────────────────────────────────────────
 
 pub(crate) struct Chosen {
     pub target: Target,

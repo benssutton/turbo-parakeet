@@ -1,9 +1,7 @@
-//! Streaming recommender (spec
-//! docs/superpowers/specs/2026-09-29-streaming-recommender-design.md): record batches
-//! are added over time; per-column statistics (streaming/partial.rs) and a block reservoir
-//! (streaming/reservoir.rs) are kept; `result` recommends from them at any point. Its output
-//! shares Describe's value columns and conclusions (parity spec
-//! docs/superpowers/specs/2026-10-01-recommender-parity-design.md, §7).
+//! Streaming recommender: record batches are added over time; per-column statistics
+//! (streaming/partial.rs) and a block reservoir (streaming/reservoir.rs) are kept; `result`
+//! recommends from them at any point. Its output shares Describe's value columns and
+//! conclusions.
 
 mod sizing;
 #[cfg(test)]
@@ -60,8 +58,8 @@ pub(crate) struct Column {
     pub views_input: (bool, bool),
     /// First non-null row (and its text) and first null row.
     pub exemplars: Exemplars,
-    /// The id columns' values at the exemplar row and the null exemplar row (one-row copies;
-    /// spec 2026-10-18 §4.2); None while the row is, and always without `id_columns`.
+    /// The id columns' values at the exemplar row and the null exemplar row (one-row
+    /// copies); None while the row is, and always without `id_columns`.
     pub ids: IdCell,
 }
 
@@ -315,7 +313,7 @@ impl Streaming {
             .map(|(s, _)| self.batch_stats(s))
             .collect::<PolarsResult<_>>()
             .map_err(|e| Error::Compute(e.to_string()))?;
-        // Exemplars (spec 2026-10-18 §4): per series, the first non-null row (and its text)
+        // Exemplars: per series, the first non-null row (and its text)
         // and first null row this batch adds, for columns still missing them.
         let start = self.n_rows;
         let firsts: Vec<Firsts> = series
@@ -353,7 +351,7 @@ impl Streaming {
             .collect::<PolarsResult<_>>()
             .map_err(|e| Error::Compute(e.to_string()))?;
         let rows = batch.num_rows() as u64;
-        // Id values (spec §4.2): one-row copies at the exemplar rows found above, and at
+        // Id values: one-row copies at the exemplar rows found above, and at
         // this batch's row 0 for columns absent from it. Fallible, so before the commit.
         let ids_schema = if self.params.id_columns.is_empty() {
             None
@@ -479,7 +477,7 @@ impl Streaming {
         Ok(())
     }
 
-    /// One row per column, first-seen order (spec §6). The state is kept.
+    /// One row per column, first-seen order. The state is kept.
     pub(crate) fn result(&self) -> Result<RecordBatch> {
         let blocks = self.reservoir.blocks();
         let sampled: u64 = blocks.iter().map(|b| b.rows).sum();

@@ -1,7 +1,6 @@
-//! Population cardinality of every column (spec 2026-10-24-cardinality-entropy-techniques
-//! §3): Describe's frequency pass (counts, f1, f2, the 3-way split capture history), then
-//! the Chao1 and Schnabel estimators. Both are always reported; Schnabel is NaN when
-//! undefined (d/n ≥ 0.5 or no recapture).
+//! Population cardinality of every column: Describe's frequency pass (counts, f1, f2, the
+//! 3-way split capture history), then the Chao1 and Schnabel estimators. Both are always
+//! reported; Schnabel is NaN when undefined (d/n ≥ 0.5 or no recapture).
 
 use polars::prelude::*;
 use rayon::prelude::*;

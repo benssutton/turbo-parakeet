@@ -1,5 +1,4 @@
-//! Mergeable per-level statistics for the streaming recommender (spec
-//! docs/superpowers/specs/2026-09-29-streaming-recommender-design.md §4). Each batch
+//! Mergeable per-level statistics for the streaming recommender. Each batch
 //! is profiled per level (a column, or a list's inner values) into a `BatchStats` with
 //! the describe kernels; batches are absorbed in stream order into a `LevelStats`,
 //! which finishes into the `Profile` the recommenders/engine rules read.
@@ -296,7 +295,7 @@ pub(crate) struct KeyStat {
 }
 
 /// A text level's values in one batch, read at a value's first row when the distinct sample
-/// admits it (exact phase only; spec 2026-10-07 §4).
+/// admits it (exact phase only).
 pub(crate) struct TextSource {
     values: Series,
     /// The level's global index of `values`' first row.
@@ -606,7 +605,7 @@ impl LevelStats {
 
     /// The Profile the rules read: exact counts while the sample holds every distinct
     /// value; past it, the HyperLogLog count with the sample's f1 / f2 / capture history
-    /// scaled to it (spec 2026-10-01 §3.2).
+    /// scaled to it.
     pub(crate) fn profile(&self, dtype: &DataType) -> Profile {
         let text_len = self.sum_len.is_some();
         let (n_unique, hll, f1, f2, history, all_once, sum_len_unique) = match &self.sample {

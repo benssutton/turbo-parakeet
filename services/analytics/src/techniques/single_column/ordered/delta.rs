@@ -1,5 +1,4 @@
-//! Consecutive differences of an integer-backed column, in row order (spec
-//! docs/superpowers/specs/2026-10-23-delta-codecs-design.md §2): ranges, mean significant
+//! Consecutive differences of an integer-backed column, in row order: ranges, mean significant
 //! bytes, zero shares and entropies of the deltas and double-deltas, and the mean significant
 //! bytes of deltas under a random row order. Nulls are skipped: deltas are taken between
 //! consecutive non-null values.
@@ -12,7 +11,7 @@ use rayon::prelude::*;
 
 use crate::common::entropy_math::entropy_from_counts_iter;
 
-/// Bytes of the smallest signed integer holding `v`; 0 for 0 (spec §2).
+/// Bytes of the smallest signed integer holding `v`; 0 for 0.
 pub(crate) fn sig(v: i128) -> u32 {
     if v == 0 {
         return 0;
@@ -159,7 +158,7 @@ fn entropy(keys: impl ParallelIterator<Item = i128>) -> f64 {
     entropy_from_counts_iter(counts.into_values(), (r as f64).log2(), r as f64).max(0.0)
 }
 
-/// Mean sig(Δ) of Δ = x_j − x_i over ordered pairs of distinct positions (spec §2):
+/// Mean sig(Δ) of Δ = x_j − x_i over ordered pairs of distinct positions:
 /// Σ_{k=1..9} P(sig ≥ k); sig ≥ 1 iff Δ ≠ 0, sig ≥ k (k ≥ 2) iff Δ ∉ [−B, B), B = 2^(8(k−1)−1).
 pub(crate) fn expected_delta_bytes(values: &[i128]) -> f64 {
     let n = values.len();

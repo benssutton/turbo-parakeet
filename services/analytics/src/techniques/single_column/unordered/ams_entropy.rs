@@ -1,6 +1,6 @@
 //! Shannon entropy of a stream in O(`num_samples`) memory: the Chakrabarti–Cormode–McGregor
 //! estimator (TALG 6(3), 2010). AMS sampling plus a backup sample, so a dominant item cannot
-//! swamp the estimate. Spec: docs/superpowers/specs/2026-10-11-ams-entropy-design.md.
+//! swamp the estimate.
 
 use foldhash::fast::FixedState;
 use polars::prelude::*;
@@ -408,7 +408,7 @@ impl AmsEntropy {
     }
 
     /// The estimate and its standard error (sample standard deviation of the per-estimator
-    /// terms over √estimators; the recommenders' interval, spec 2026-10-18 §3.3).
+    /// terms over √estimators; the recommenders' interval).
     pub(crate) fn estimate_with_se(&self) -> (f64, f64) {
         let r = |s: &Sample| self.tracked[&s.key].count - s.offset;
         ccm_estimate(

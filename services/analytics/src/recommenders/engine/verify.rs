@@ -1,4 +1,4 @@
-//! Row-by-row verification that a cast preserved every value (spec 2026-09-26 §5.4).
+//! Row-by-row verification that a cast preserved every value.
 
 use super::*;
 use crate::techniques::describe::{parse_iso, IsoValue};
@@ -266,7 +266,7 @@ pub(crate) fn logical_is_null(nulls: Option<&NullBuffer>, i: usize) -> bool {
     nulls.is_some_and(|n| n.is_null(i))
 }
 
-/// Row-by-row check that `recast` holds the original values (Spec B §5.4 step 3).
+/// Row-by-row check that `recast` holds the original values.
 /// Text sources: returns the recast values' LargeUtf8 rendering when verification made one.
 pub(crate) fn verify(
     t: &Target,
@@ -318,7 +318,7 @@ pub(crate) fn verify(
     }
 }
 
-/// Some value's text changed although its value did not (Spec B §5.4). `rendered`:
+/// Some value's text changed although its value did not. `rendered`:
 /// `recast` as LargeUtf8 if `verify` already made it.
 pub(crate) fn lossy(
     t: &Target,
@@ -351,7 +351,7 @@ pub(crate) fn lossy(
     }
 }
 
-/// Proof by statistics (streaming spec §5.1 step 4): Ok when the statistics show that
+/// Proof by statistics (streaming): Ok when the statistics show that
 /// `t` holds every value of the level. Every rule's own condition already proves its
 /// candidate except:
 /// - Timestamp → Date32: arrow-cast converts through chrono, which errors on dates

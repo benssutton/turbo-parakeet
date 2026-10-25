@@ -90,7 +90,7 @@ pub(crate) struct Estimate {
     pub method: Method,
 }
 
-/// The estimate picked by rule (spec 2026-10-01 s4), with `estimates_agree`.
+/// The estimate picked by rule, with `estimates_agree`.
 /// n = non-null values; d = the count. d/n >= 0.5 -> the count itself (observed, or
 /// HLL +- 3 sigma, the high end capped at n). Below: Schnabel when valid, else Chao1, floored at d (the estimate) and
 /// at max(d - 3 sigma, seen) for HLL (the low end): observed values bound the population

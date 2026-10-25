@@ -1,9 +1,8 @@
-//! One-shot recommender (spec
-//! docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md): one frame. `add`
-//! collects each column's exact statistics and sizes (recommenders/engine `prepare`); `result`
-//! recommends from them — every candidate cast, verified on the actual rows and
-//! measured — once, and caches the table. Same output as the streaming recommender,
-//! without its `first_row` and sample columns (recommenders/schema.rs `recommender_fields`).
+//! One-shot recommender: one frame. `add` collects each column's exact statistics and sizes
+//! (recommenders/engine `prepare`); `result` recommends from them — every candidate cast,
+//! verified on the actual rows and measured — once, and caches the table. Same output as the
+//! streaming recommender, without its `first_row` and sample columns (recommenders/schema.rs
+//! `recommender_fields`).
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -41,7 +40,7 @@ pub(crate) struct OneShot {
     marked: Vec<(String, String)>,
     /// None until a frame is added.
     entries: Option<Vec<Entry>>,
-    /// The id columns' schema and values (spec 2026-10-18 §4.2); None without `id_columns`.
+    /// The id columns' schema and values; None without `id_columns`.
     ids: Option<(SchemaRef, RecordBatch)>,
     result: OnceLock<RecordBatch>,
 }

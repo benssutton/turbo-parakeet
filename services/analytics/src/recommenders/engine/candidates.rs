@@ -1,4 +1,4 @@
-//! Candidate types for a column and the rules that propose them (spec 2026-09-26 §4, §5.2).
+//! Candidate types for a column and the rules that propose them.
 
 use super::*;
 use crate::techniques::cardinality_estimators::{pick_estimate, Count, Estimate};
@@ -10,7 +10,7 @@ use arrow_schema::DataType as AT;
 use polars::prelude::DataType as PT;
 use std::cell::OnceCell;
 
-// ── candidates (Spec B §4, §5.2) ────────────────────────────────────────────
+// ── candidates ──────────────────────────────────────────────────────────────
 
 /// Recommend's constructor keywords.
 #[derive(Clone, Debug)]
@@ -21,14 +21,14 @@ pub(crate) struct Params {
     pub boolean_pairs: Vec<(String, String)>,
     /// Entries per `top_k` / `inner_top_k` cell: 0 none, u64::MAX every ranked value.
     pub top_k: u64,
-    /// Streaming: the entropy estimator past the exact phase (spec 2026-10-18 §3.3).
+    /// Streaming: the entropy estimator past the exact phase.
     pub entropy_estimator: EntropyEstimator,
-    /// Columns whose values at the exemplar rows fill `exemplar_id` / `null_exemplar_id`
-    /// (spec 2026-10-18 §4.2); empty: those columns stay Null-typed.
+    /// Columns whose values at the exemplar rows fill `exemplar_id` / `null_exemplar_id`;
+    /// empty: those columns stay Null-typed.
     pub id_columns: Vec<String>,
-    /// The compression keywords (spec 2026-10-19 §4.3).
+    /// The compression keywords.
     pub compression: CompressionParams,
-    /// The skip-index keywords (spec 2026-10-20 §4).
+    /// The skip-index keywords.
     pub skip: SkipParams,
 }
 
@@ -574,7 +574,8 @@ impl Rules<'_, '_> {
         }
     }
 
-    /// Step 2 for text (Spec B §4.3 "always", §5.2): Utf8 with 32-bit offsets, and the dictionary.
+    /// Step 2 for text: Utf8 with 32-bit offsets (always, when sum_len < 2³¹), and the
+    /// dictionary.
     fn plain_and_dictionary(&mut self, params: &Params) {
         let sum_len = self.lvl.p.sum_len.unwrap_or(0);
         if sum_len < 1 << 31 {
@@ -646,11 +647,10 @@ impl Rules<'_, '_> {
     }
 }
 
-/// Every candidate for one level, in rule order (Spec B §4.2–4.3, §5.2); the
-/// original type last.
+/// Every candidate for one level, in rule order; the original type last.
 ///
 /// No run-end-encoded (REE) candidate exists: DataFusion 54 rejects MIN / MAX over REE columns,
-/// so REE is not recommended (spec 2026-10-21; re-check with tests/performance/spike_datafusion_ree.py).
+/// so REE is not recommended (re-check with tests/performance/spike_datafusion_ree.py).
 pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>, String> {
     let mut r = Rules {
         lvl,

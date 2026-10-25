@@ -1,9 +1,9 @@
-//! Analytic IPC body sizes of a candidate type (spec 2026-09-26 §5.1, §5.3).
+//! Analytic IPC body sizes of a candidate type.
 
 use super::*;
 use arrow_schema::DataType as AT;
 
-// ── analytic sizes (Spec B §5.1, §5.3) ──────────────────────────────────────
+// ── analytic sizes ──────────────────────────────────────────────────────────
 
 /// What a predicted size depends on: rows, nulls, value bytes, distinct values and their bytes.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

@@ -1,4 +1,4 @@
-//! Describe's conclusions (spec 2026-10-01 §4, §5), shared by one-shot and streaming:
+//! Describe's conclusions, shared by one-shot and streaming:
 //! the whole-number range behind `ordinal` and the class rule. turbo_parakeet/techniques/describe/base.py
 //! keeps the reference implementation.
 

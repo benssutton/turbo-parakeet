@@ -11,8 +11,8 @@ use polars_arrow::array::Array;
 // Ordering matches Polars `sort()`: integers, Decimal and temporals by physical
 // value; floats numerically with NaN excluded (-0.0 ties 0.0); strings and
 // binary by bytes; Categorical by string value; Enum by category order (its
-// physical code). List, Array and Struct have no extremes (spec 2026-10-01
-// §13.3). Ties keep the lowest row index.
+// physical code). List, Array and Struct have no extremes. Ties keep the lowest
+// row index.
 
 pub(crate) struct Range {
     pub argmin: Option<u64>,

@@ -173,13 +173,13 @@ unsafe fn free_handle<R>(h: *mut c_void) {
 ///
 /// `zstd_levels` points to `n_zstd_levels` ZSTD levels to try (non-empty, distinct, each in
 /// 1..=22; 0 or an invalid list returns 1); `zstd_level_tolerance`, `zstd_min_saving`
-/// and `transform_min_saving` are fractions in [0, 1) (defaults 0.01, 0.10, 0.01; spec
-/// 2026-10-19 §4.3). A null `zstd_levels` with `n_zstd_levels > 0` returns 1.
+/// and `transform_min_saving` are fractions in [0, 1) (defaults 0.01, 0.10, 0.01).
+/// A null `zstd_levels` with `n_zstd_levels > 0` returns 1.
 ///
 /// `skip_granularities` / `set_max_sizes` / `bloom_fprs` point to `n_*` values each (non-empty;
 /// defaults (1, 2, 4, 8), (125, 250), (0.025); a null pointer with n > 0, or an empty or
 /// invalid list, returns 1) and `min_skip`, `min_gain`, `max_overflow` are fractions
-/// (defaults 0.3, 0.1, 0.1; spec 2026-10-20 §4).
+/// (defaults 0.3, 0.1, 0.1).
 ///
 /// `entropy_estimator`: 0 the bottom-k distinct sample, 1 the AMS sketch (past the exact
 /// phase; the Java default is 1); any other value returns 1 (invalid input).

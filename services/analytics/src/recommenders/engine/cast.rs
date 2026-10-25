@@ -1,4 +1,4 @@
-//! Casting a column to a candidate type (spec 2026-09-26 §5.4).
+//! Casting a column to a candidate type.
 
 use super::*;
 use crate::techniques::describe::{parse_decimal, parse_iso};
@@ -13,7 +13,7 @@ use arrow_array::{
 use arrow_schema::{DataType as AT, TimeUnit};
 use std::sync::Arc;
 
-// ── cast and verify (Spec B §5.4) ───────────────────────────────────────────
+// ── cast and verify ─────────────────────────────────────────────────────────
 
 pub(crate) fn exact_div(ns: i128, u: &TimeUnit) -> Option<i64> {
     let f = unit_ns(u);

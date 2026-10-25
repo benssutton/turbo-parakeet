@@ -97,7 +97,7 @@ pub(crate) fn scan(pop: &Population, w: usize, max_size: u64, starts: Range<usiz
     sums
 }
 
-/// The set baseline under a uniformly random row order (spec §2.5).
+/// The set baseline under a uniformly random row order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Baseline {
     pub skip_rows: f64,
@@ -280,7 +280,7 @@ mod tests {
         scan(p, w, max_size, 0..p.ids.len() - w + 1)
     }
 
-    /// A A A B A A A C (spec §7).
+    /// A A A B A A A C.
     const TOY: [Option<i64>; 8] = [
         Some(0),
         Some(0),

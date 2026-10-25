@@ -1,4 +1,4 @@
-//! Arrow → ClickHouse column types (spec 2026-10-19 §2).
+//! Arrow → ClickHouse column types.
 
 use super::*;
 use crate::common::clickhouse_sizes::ChLayout;
@@ -67,7 +67,7 @@ fn precision_digits(unit: &TimeUnit) -> u8 {
     }
 }
 
-/// The ClickHouse type for a recommended Arrow type (spec 2026-10-19 §2), with its layout;
+/// The ClickHouse type for a recommended Arrow type, with its layout;
 /// Err(reason) when there is none. `range`: the physical min / max (Date32 days, timestamp
 /// values in their unit) when known; `nullable`: the recommended array holds nulls;
 /// `enum_values`: a kept Polars Enum's categories.

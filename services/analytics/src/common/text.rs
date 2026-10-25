@@ -122,8 +122,8 @@ pub(crate) fn arrow_cast(a: &dyn Array, to: &AT) -> Result<ArrayRef, String> {
 }
 
 /// Row 0 of `a` as text: arrow-rs's cast to Utf8, the one rendering of `min` / `max`
-/// in every recommender (spec 2026-10-01 §6, §13.1). None for a null, or a value with
-/// no text form (e.g. non-UTF-8 binary).
+/// in every recommender. None for a null, or a value with no text form (e.g. non-UTF-8
+/// binary).
 pub(crate) fn render_value(a: &dyn Array) -> Option<String> {
     let s = arrow_cast(a.slice(0, 1).as_ref(), &AT::Utf8).ok()?;
     let s = s.as_string::<i32>();

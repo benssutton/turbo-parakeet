@@ -1,6 +1,5 @@
-//! Shared parts of the top-k sketches (spec docs/superpowers/specs/2026-10-12-heavy-hitters-
-//! top-k-design.md): `Counters`, an indexed min-heap of tracked keys with an open-addressing
-//! key index and exact byte accounting; the kernels' key extraction and output.
+//! Shared parts of the top-k sketches: `Counters`, an indexed min-heap of tracked keys with an
+//! open-addressing key index and exact byte accounting; the kernels' key extraction and output.
 
 use polars::prelude::*;
 use std::cmp::Ordering;

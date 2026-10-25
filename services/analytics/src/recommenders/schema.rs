@@ -1,4 +1,4 @@
-//! The recommenders' output columns (spec 2026-10-04 §4).
+//! The recommenders' output columns.
 
 use crate::common::ipc_sizes::SIZE_FIELDS;
 use crate::techniques::describe::value_fields;
@@ -86,7 +86,7 @@ pub(crate) fn rec_fields() -> Vec<(String, PT)> {
     .collect()
 }
 
-/// Entropy and exemplar columns (spec 2026-10-18 §3, §4), after `n_midnight`. The two
+/// Entropy and exemplar columns, after `n_midnight`. The two
 /// `*_id` columns are Null-typed here; `with_ids` replaces them when there are id columns.
 pub(crate) fn profile_fields() -> Vec<(String, PT)> {
     [
@@ -105,7 +105,7 @@ pub(crate) fn profile_fields() -> Vec<(String, PT)> {
     .collect()
 }
 
-/// The recommenders' output columns (spec 2026-10-04 §4), one definition for both:
+/// The recommenders' output columns, one definition for both:
 /// `streaming` adds `first_row` after `dtype` and the sample counts at the end.
 pub(crate) fn recommender_fields(streaming: bool) -> Vec<(String, PT)> {
     let mut f: Vec<(String, PT)> = vec![
@@ -138,7 +138,7 @@ pub(crate) fn recommender_fields(streaming: bool) -> Vec<(String, PT)> {
     f
 }
 
-/// The map columns (spec 2026-10-07 §3), in output order.
+/// The map columns, in output order.
 pub(crate) const TOP_K_FIELDS: [&str; 2] = ["top_k", "inner_top_k"];
 
 /// `top_k` / `inner_top_k` as assembled through Polars, which has no map type: lists of
@@ -214,7 +214,7 @@ fn to_map(c: &ArrayRef) -> Result<ArrayRef, ArrowError> {
 pub(crate) type IdCell = (Option<RecordBatch>, Option<RecordBatch>);
 
 /// Replaces the Null-typed `exemplar_id` / `null_exemplar_id` columns by Structs of the id
-/// columns (spec 2026-10-18 §4.2). `ids[i]` = (exemplar, null exemplar) one-row batches of
+/// columns. `ids[i]` = (exemplar, null exemplar) one-row batches of
 /// output row i, all with `schema`; None gives a null struct.
 pub(crate) fn with_ids(
     b: RecordBatch,
@@ -265,7 +265,7 @@ pub(crate) fn with_ids(
     RecordBatch::try_new_with_options(Arc::new(Schema::new(out_fields)), out_columns, &options)
 }
 
-/// The id columns' sub-schema of `schema` (fields made nullable), checked (spec §4.2):
+/// The id columns' sub-schema of `schema` (fields made nullable), checked:
 /// duplicates and missing names are an Err message the caller maps to InvalidInput.
 pub(crate) fn id_schema(schema: &Schema, id_columns: &[String]) -> Result<SchemaRef, String> {
     let mut seen = std::collections::HashSet::new();

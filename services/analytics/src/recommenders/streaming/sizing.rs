@@ -84,7 +84,7 @@ pub(crate) fn dictionary_keys(key: &AT, s: &Shape) -> std::result::Result<f64, S
     Ok(validity(s.n, s.nulls) + pad(s.n * w as f64))
 }
 
-/// The classic layout's IPC body (spec §5.3): `body_size`; a Categorical / Enum
+/// The classic layout's IPC body: `body_size`; a Categorical / Enum
 /// dictionary (keys + every category, `Cats`); LargeList and FixedSizeList over an
 /// analytic inner level (whose shape excludes a null row's slots). Structs have no
 /// analytic form.
@@ -223,7 +223,7 @@ pub(crate) fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> Vie
     }
 }
 
-/// Uncompressed IPC body of `t` in Polars' layout (Spec B §5.5), from statistics:
+/// Uncompressed IPC body of `t` in Polars' layout, from statistics:
 /// what `to_polars_layout` + `ipc_body_bytes` measure in one-shot.
 pub(crate) fn polars_body(
     t: &Target,
@@ -324,8 +324,8 @@ pub(crate) fn block_series(
     }
 }
 
-/// The block cast to the pick and verified against itself: the cross-check (spec §5.1
-/// step 6). A failure means a statistic was wrong — never a silent fallback.
+/// The block cast to the pick and verified against itself: the cross-check. A failure means a
+/// statistic was wrong — never a silent fallback.
 pub(crate) fn recast(
     pick: &Pick,
     dtype: &PT,

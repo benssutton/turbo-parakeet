@@ -1,4 +1,4 @@
-//! The Polars layout of a recommended array (spec 2026-09-26 §5.5).
+//! The Polars layout of a recommended array.
 
 use super::*;
 use arrow_array::builder::make_view;
@@ -11,7 +11,7 @@ use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_schema::{DataType as AT, Field as AField, Fields};
 use std::sync::Arc;
 
-// ── Polars layout of the result (Spec B §5.5) ───────────────────────────────
+// ── Polars layout of the result ─────────────────────────────────────────────
 
 /// `a` converted to the Arrow layout Polars exports for it (`polars_layout`),
 /// recursing through lists and structs; `key` is a dictionary's Polars key.
