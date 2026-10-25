@@ -4,6 +4,7 @@ This is the only module that raises on bad input. Everything downstream is
 best-effort per spec section 2, so every malformed combination must be caught
 here, with a message naming the fields involved.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -22,13 +23,25 @@ class SpecError(ValueError):
 
 
 _SCALARS = {
-    "int8": pa.int8, "int16": pa.int16, "int32": pa.int32, "int64": pa.int64,
-    "uint8": pa.uint8, "uint16": pa.uint16, "uint32": pa.uint32, "uint64": pa.uint64,
-    "float32": pa.float32, "float64": pa.float64, "bool": pa.bool_,
-    "string": pa.string, "date32": pa.date32,
+    "int8": pa.int8,
+    "int16": pa.int16,
+    "int32": pa.int32,
+    "int64": pa.int64,
+    "uint8": pa.uint8,
+    "uint16": pa.uint16,
+    "uint32": pa.uint32,
+    "uint64": pa.uint64,
+    "float32": pa.float32,
+    "float64": pa.float64,
+    "bool": pa.bool_,
+    "string": pa.string,
+    "date32": pa.date32,
 }
-_DECIMALS = {"decimal32": (pa.decimal32, 9), "decimal64": (pa.decimal64, 18),
-             "decimal128": (pa.decimal128, 38)}
+_DECIMALS = {
+    "decimal32": (pa.decimal32, 9),
+    "decimal64": (pa.decimal64, 18),
+    "decimal128": (pa.decimal128, 38),
+}
 _TIME_UNITS = {"s", "ms", "us", "ns"}
 _TIME32_UNITS = {"s", "ms"}
 _TIME64_UNITS = {"us", "ns"}
@@ -156,15 +169,16 @@ def _jsonable(o):
 
 @dataclass(frozen=True)
 class Distribution:
-    kind: str = "uniform"          # uniform | normal | lognormal
-    mean: float | None = None      # lognormal: mean of the variate BEFORE shift
-    sigma: float | None = None     # None means "solve for index_of_dispersion"
+    kind: str = "uniform"  # uniform | normal | lognormal
+    mean: float | None = None  # lognormal: mean of the variate BEFORE shift
+    sigma: float | None = None  # None means "solve for index_of_dispersion"
     shift: float = 0.0
 
 
 @dataclass(frozen=True)
 class Tolerances:
     """Defaults are the measured table in spec section 4.1. Do not invent new ones."""
+
     entropy_bits: float = 0.01
     cardinality_ratio: float = 0.001
     index_of_dispersion: float = 0.01
@@ -173,10 +187,19 @@ class Tolerances:
 
 
 # DatasetSpec fields that are generation recipes, not measurements (spec 4.6).
-_GENERATOR_FIELDS = ("categories", "string_length", "distribution",
-                     "cardinality_ratio", "entropy_bits", "index_of_dispersion",
-                     "runs_z", "interarrival_cv", "array_len_range",
-                     "array_null_count", "tolerances")
+_GENERATOR_FIELDS = (
+    "categories",
+    "string_length",
+    "distribution",
+    "cardinality_ratio",
+    "entropy_bits",
+    "index_of_dispersion",
+    "runs_z",
+    "interarrival_cv",
+    "array_len_range",
+    "array_null_count",
+    "tolerances",
+)
 
 
 @dataclass(frozen=True)
@@ -219,14 +242,18 @@ class DatasetSpec:
         if self.path is not None or self.column is not None:
             self._validate_path_dataset(dtype)
             return
-        if (pa.types.is_fixed_size_binary(dtype)
-                or (pa.types.is_timestamp(dtype) and dtype.tz is not None)):
+        if pa.types.is_fixed_size_binary(dtype) or (
+            pa.types.is_timestamp(dtype) and dtype.tz is not None
+        ):
             raise SpecError(
                 f"arrow_type {self.arrow_type!r} (a time zone or fixed_size_binary) "
                 "is only available to a path dataset (spec section 4.6); the "
-                "generator draws no such values")
+                "generator draws no such values"
+            )
         if self.content_hash is not None:
-            raise SpecError("content_hash belongs to a path dataset; set path and column")
+            raise SpecError(
+                "content_hash belongs to a path dataset; set path and column"
+            )
         is_list = pa.types.is_list(dtype)
         elem_dtype = dtype.value_type if is_list else dtype
 
@@ -248,8 +275,10 @@ class DatasetSpec:
             )
 
         if self.categories is not None:
-            is_num = [isinstance(c, numbers.Real) and not isinstance(c, bool)
-                      for c in self.categories]
+            is_num = [
+                isinstance(c, numbers.Real) and not isinstance(c, bool)
+                for c in self.categories
+            ]
             is_str = [isinstance(c, str) for c in self.categories]
             if pa.types.is_string(elem_dtype) and not all(is_str):
                 raise SpecError(
@@ -263,15 +292,16 @@ class DatasetSpec:
                 )
             bounds = representable_range(elem_dtype)
             if bounds is not None and all(is_num):
-                outside = [c for c in self.categories
-                           if c < bounds[0] or c > bounds[1]]
+                outside = [c for c in self.categories if c < bounds[0] or c > bounds[1]]
                 if outside:
                     raise SpecError(
                         f"categories value {outside[0]!r} does not fit "
                         f"arrow_type {self.arrow_type!r}, whose representable "
                         f"range is [{bounds[0]}, {bounds[1]}]"
                     )
-            fractional = pa.types.is_floating(elem_dtype) or pa.types.is_decimal(elem_dtype)
+            fractional = pa.types.is_floating(elem_dtype) or pa.types.is_decimal(
+                elem_dtype
+            )
             if all(is_num) and not (fractional and self.decimal_places is None):
                 # The metrics are measured on the categories as given and
                 # `wrap` rounds afterwards, so a category off the grid would
@@ -294,13 +324,9 @@ class DatasetSpec:
         if self.value_range is not None:
             lo, hi = self.value_range
             if not (math.isfinite(lo) and math.isfinite(hi)):
-                raise SpecError(
-                    f"value_range {self.value_range} bounds must be finite"
-                )
+                raise SpecError(f"value_range {self.value_range} bounds must be finite")
             if lo > hi:
-                raise SpecError(
-                    f"value_range {self.value_range} must have low <= high"
-                )
+                raise SpecError(f"value_range {self.value_range} must have low <= high")
             if pa.types.is_unsigned_integer(elem_dtype) and lo < 0:
                 raise SpecError(
                     f"unsigned arrow_type {self.arrow_type!r} cannot hold a "
@@ -318,8 +344,11 @@ class DatasetSpec:
                 places = self.decimal_places if self.decimal_places is not None else 0
                 r_lo, r_hi = round(lo, places), round(hi, places)
                 if r_lo < bounds[0] or r_hi > bounds[1]:
-                    unit_note = (" (integers in the unit's resolution)"
-                                 if pa.types.is_temporal(elem_dtype) else "")
+                    unit_note = (
+                        " (integers in the unit's resolution)"
+                        if pa.types.is_temporal(elem_dtype)
+                        else ""
+                    )
                     raise SpecError(
                         f"value_range {self.value_range} does not fit arrow_type "
                         f"{self.arrow_type!r}, whose representable range is "
@@ -327,9 +356,7 @@ class DatasetSpec:
                     )
 
         if self.string_length is not None and self.string_length <= 0:
-            raise SpecError(
-                f"string_length must be positive, got {self.string_length}"
-            )
+            raise SpecError(f"string_length must be positive, got {self.string_length}")
 
         if pa.types.is_floating(elem_dtype) or pa.types.is_decimal(elem_dtype):
             if self.decimal_places is None or self.decimal_places < 0:
@@ -337,15 +364,18 @@ class DatasetSpec:
                     f"decimal_places must be set and non-negative for "
                     f"arrow_type {self.arrow_type!r}, got {self.decimal_places}"
                 )
-            if pa.types.is_decimal(elem_dtype) and self.decimal_places != elem_dtype.scale:
+            if (
+                pa.types.is_decimal(elem_dtype)
+                and self.decimal_places != elem_dtype.scale
+            ):
                 raise SpecError(
                     f"decimal_places ({self.decimal_places}) must equal the "
                     f"scale of arrow_type {self.arrow_type!r} "
                     f"({elem_dtype.scale})"
                 )
-            if (pa.types.is_float32(elem_dtype) and self.value_range is not None):
+            if pa.types.is_float32(elem_dtype) and self.value_range is not None:
                 lo, hi = self.value_range
-                grid_points = max(abs(lo), abs(hi)) * 10 ** self.decimal_places
+                grid_points = max(abs(lo), abs(hi)) * 10**self.decimal_places
                 if grid_points > 2**24:
                     raise SpecError(
                         f"float32 cannot represent {self.decimal_places} "
@@ -358,8 +388,13 @@ class DatasetSpec:
                         "range, or use float64"
                     )
 
-        for name in ("cardinality_ratio", "entropy_bits", "index_of_dispersion",
-                     "runs_z", "interarrival_cv"):
+        for name in (
+            "cardinality_ratio",
+            "entropy_bits",
+            "index_of_dispersion",
+            "runs_z",
+            "interarrival_cv",
+        ):
             target = getattr(self, name)
             if target is not None and not math.isfinite(target):
                 raise SpecError(f"{name} must be finite, got {target}")
@@ -401,8 +436,10 @@ class DatasetSpec:
                 )
         numeric_support = self.string_length is None and (
             self.categories is None
-            or all(isinstance(c, numbers.Real) and not isinstance(c, bool)
-                   for c in self.categories)
+            or all(
+                isinstance(c, numbers.Real) and not isinstance(c, bool)
+                for c in self.categories
+            )
         )
         if self.index_of_dispersion is not None and not numeric_support:
             raise SpecError(
@@ -445,8 +482,11 @@ class DatasetSpec:
                     "and string categories take the uniform distribution (set "
                     "entropy_bits to shape their frequencies)"
                 )
-            if (self.distribution.kind == "normal" and self.distribution.mean is None
-                    and self.value_range is None):
+            if (
+                self.distribution.kind == "normal"
+                and self.distribution.mean is None
+                and self.value_range is None
+            ):
                 raise SpecError(
                     "normal distribution with no mean is centred on value_range, "
                     "which is not set: set distribution.mean or value_range"
@@ -481,8 +521,7 @@ class DatasetSpec:
                 )
             if lo_len <= 0:
                 raise SpecError(
-                    f"array_len_range {self.array_len_range} bounds must be "
-                    "positive"
+                    f"array_len_range {self.array_len_range} bounds must be " "positive"
                 )
             mean_len = int(round((lo_len + hi_len) / 2))
             if mean_len < 1:
@@ -498,9 +537,11 @@ class DatasetSpec:
                     f"array_len_range)) ({mean_len}) = {inner}"
                 )
 
-        if (pa.types.is_string(dtype)
-                and self.string_length is None
-                and self.categories is None):
+        if (
+            pa.types.is_string(dtype)
+            and self.string_length is None
+            and self.categories is None
+        ):
             raise SpecError(
                 "string arrow_type requires string_length or categories to be set"
             )
@@ -509,27 +550,42 @@ class DatasetSpec:
         """Spec section 4.6 (ruling R35): a path dataset carries only measured
         fields plus seed and decimal_places; any generation field is an error."""
         if self.path is None or self.column is None:
-            raise SpecError("path and column must be set together: "
-                            f"path={self.path!r}, column={self.column!r}")
+            raise SpecError(
+                "path and column must be set together: "
+                f"path={self.path!r}, column={self.column!r}"
+            )
         if self.content_hash is None:
-            raise SpecError("a path dataset needs its content_hash (build it "
-                            "with realdata.path_spec)")
+            raise SpecError(
+                "a path dataset needs its content_hash (build it "
+                "with realdata.path_spec)"
+            )
         defaults = DatasetSpec(rows=1, arrow_type="int8", null_count=0, seed=0)
-        generator = [name for name in _GENERATOR_FIELDS
-                     if getattr(self, name) != getattr(defaults, name)]
+        generator = [
+            name
+            for name in _GENERATOR_FIELDS
+            if getattr(self, name) != getattr(defaults, name)
+        ]
         if generator:
-            raise SpecError(f"generator field(s) {sorted(generator)!r} do not apply "
-                            f"to a dataset read from path {self.path!r}")
+            raise SpecError(
+                f"generator field(s) {sorted(generator)!r} do not apply "
+                f"to a dataset read from path {self.path!r}"
+            )
         if pa.types.is_list(dtype):
-            raise SpecError(f"list arrow_type {self.arrow_type!r} is not supported "
-                            f"for a dataset read from path {self.path!r}")
+            raise SpecError(
+                f"list arrow_type {self.arrow_type!r} is not supported "
+                f"for a dataset read from path {self.path!r}"
+            )
         if self.value_range is not None and self.value_range[0] > self.value_range[1]:
             raise SpecError(f"value_range {self.value_range} must have low <= high")
         if pa.types.is_decimal(dtype) and self.decimal_places != dtype.scale:
-            raise SpecError(f"decimal_places ({self.decimal_places}) must equal the "
-                            f"scale of arrow_type {self.arrow_type!r} ({dtype.scale})")
+            raise SpecError(
+                f"decimal_places ({self.decimal_places}) must equal the "
+                f"scale of arrow_type {self.arrow_type!r} ({dtype.scale})"
+            )
         if self.decimal_places is not None and self.decimal_places < 0:
-            raise SpecError(f"decimal_places must be non-negative, got {self.decimal_places}")
+            raise SpecError(
+                f"decimal_places must be non-negative, got {self.decimal_places}"
+            )
 
     @property
     def arrow_dtype(self) -> pa.DataType:

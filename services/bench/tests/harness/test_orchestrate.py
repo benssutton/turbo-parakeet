@@ -4,6 +4,7 @@ Every table these create is named `bench.t_orch_<8 hex>` (`ddl.table_name`
 of the suite name below), so the autouse fixture can drop the lot by prefix
 after the module finishes, whatever the tests did to the store.
 """
+
 import pytest
 
 from chbench.harness.orchestrate import _samples_to_run, run_suite
@@ -12,8 +13,11 @@ from chbench.harness.store import Store
 from chbench.harness.suite import parse_suite
 from tests.harness.test_suite import MINIMAL
 
-SMALL = MINIMAL.replace("rows: 1000", "rows: 20000").replace("name: t", "name: t_orch") \
-               .replace("codec: [none]", "codec: [none, T64]")   # T64 on Float64 is skipped
+SMALL = (
+    MINIMAL.replace("rows: 1000", "rows: 20000")
+    .replace("name: t", "name: t_orch")
+    .replace("codec: [none]", "codec: [none, T64]")
+)  # T64 on Float64 is skipped
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -30,7 +34,8 @@ def drop_orch_tables(request):
         return
     names = client.query_rows(
         "SELECT name FROM system.tables WHERE database = 'bench' "
-        "AND name LIKE 't\\_orch\\_%'")
+        "AND name LIKE 't\\_orch\\_%'"
+    )
     for (name,) in names:
         client.command(f"DROP TABLE IF EXISTS bench.{name}")
 
@@ -43,7 +48,9 @@ def test_run_suite_end_to_end(ch, tmp_path):
     assert r.queries_run == 1 and r.samples_written == 3
     with Store(tmp_path / "r.db") as s:
         rows = s.query_rows("t_orch")
-        skipped = s.conn.execute("SELECT skip_reason FROM tables WHERE status='skipped'").fetchone()
+        skipped = s.conn.execute(
+            "SELECT skip_reason FROM tables WHERE status='skipped'"
+        ).fetchone()
     assert len(rows) == 3
     assert skipped[0].startswith("T64 codec is not supported")
 
@@ -54,14 +61,20 @@ def test_rerun_skips_queries_that_already_hold_enough_samples(ch, tmp_path):
     run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     r2 = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     assert r2.queries_skipped_existing == 1 and r2.samples_written == 0
-    r3 = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", samples_add=2)
+    r3 = run_suite(
+        suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", samples_add=2
+    )
     assert r3.samples_written == 2
-    r4 = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", force=True)
+    r4 = run_suite(
+        suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", force=True
+    )
     assert r4.samples_written == 3
 
 
 @pytest.mark.clickhouse
-def test_rerun_does_not_reload_a_table_whose_queries_are_all_held(ch, tmp_path, monkeypatch):
+def test_rerun_does_not_reload_a_table_whose_queries_are_all_held(
+    ch, tmp_path, monkeypatch
+):
     """Ruling R30: the query variants depend only on the variant and the
     seeded rng, so they can be expanded before the load; when every one of
     them already holds its target, the load (drop, create, insert, optimise)
@@ -73,7 +86,8 @@ def test_rerun_does_not_reload_a_table_whose_queries_are_all_held(ch, tmp_path, 
     run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     with Store(tmp_path / "r.db") as s:
         before = s.conn.execute(
-            "SELECT table_id, insert_ms, created_at FROM tables WHERE status='ok'").fetchall()
+            "SELECT table_id, insert_ms, created_at FROM tables WHERE status='ok'"
+        ).fetchall()
     assert len(before) == 1
 
     real_load = orchestrate.load_table
@@ -91,16 +105,24 @@ def test_rerun_does_not_reload_a_table_whose_queries_are_all_held(ch, tmp_path, 
     assert r2.queries_skipped_existing == 1 and r2.samples_written == 0
     with Store(tmp_path / "r.db") as s:
         after = s.conn.execute(
-            "SELECT table_id, insert_ms, created_at FROM tables WHERE status='ok'").fetchall()
+            "SELECT table_id, insert_ms, created_at FROM tables WHERE status='ok'"
+        ).fetchall()
     assert after == before
 
-    r3 = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", samples_add=1)
+    r3 = run_suite(
+        suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", samples_add=1
+    )
     assert len(calls) == 1 and r3.samples_written == 1
 
 
 @pytest.mark.clickhouse
 def test_dry_run_touches_nothing(ch, tmp_path):
-    r = run_suite(parse_suite(SMALL), store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", dry_run=True)
+    r = run_suite(
+        parse_suite(SMALL),
+        store_path=tmp_path / "r.db",
+        cache_dir=tmp_path / "ds",
+        dry_run=True,
+    )
     assert r.tables_ok == 1 and r.tables_skipped == 1 and r.samples_written == 0
     assert not (tmp_path / "r.db").exists()
 
@@ -129,17 +151,20 @@ def test_query_error_is_recorded_on_the_query_row(ch, tmp_path, monkeypatch):
 
     def failing_run_query(client, name, variant, qv, samples, *, on_sample=None):
         return RunResult(
-            status="error", error="DatabaseError: Code: 241. Memory limit exceeded",
-            samples=[], explain="")
+            status="error",
+            error="DatabaseError: Code: 241. Memory limit exceeded",
+            samples=[],
+            explain="",
+        )
 
     monkeypatch.setattr(orchestrate, "run_query", failing_run_query)
-    r = run_suite(parse_suite(SMALL), store_path=tmp_path / "r.db",
-                  cache_dir=tmp_path / "ds")
+    r = run_suite(
+        parse_suite(SMALL), store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds"
+    )
     # The run carried on to the end rather than aborting.
     assert r.tables_ok == 1 and r.queries_run == 1 and r.samples_written == 0
     with Store(tmp_path / "r.db") as s:
-        status, error = s.conn.execute(
-            "SELECT status, error FROM queries").fetchone()
+        status, error = s.conn.execute("SELECT status, error FROM queries").fetchone()
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
     assert status == "error"
     assert error.startswith("DatabaseError: Code: 241")
@@ -148,7 +173,8 @@ def test_query_error_is_recorded_on_the_query_row(ch, tmp_path, monkeypatch):
 
 @pytest.mark.clickhouse
 def test_finish_run_is_called_when_something_other_than_ctrl_c_escapes(
-        ch, tmp_path, monkeypatch):
+    ch, tmp_path, monkeypatch
+):
     """Important 2: `finished_at` must not stay NULL because a
     `database is locked` or an `expand_queries` ValueError escaped the loop."""
     from chbench.harness import orchestrate
@@ -158,8 +184,9 @@ def test_finish_run_is_called_when_something_other_than_ctrl_c_escapes(
 
     monkeypatch.setattr(orchestrate, "expand_queries", exploding)
     with pytest.raises(ValueError):
-        run_suite(parse_suite(SMALL), store_path=tmp_path / "r.db",
-                  cache_dir=tmp_path / "ds")
+        run_suite(
+            parse_suite(SMALL), store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds"
+        )
     with Store(tmp_path / "r.db") as s:
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
     assert finished is not None
@@ -174,12 +201,24 @@ def test_achieved_bounds_of_a_decimal64_array():
 
     from chbench.harness.orchestrate import _achieved_bounds
 
-    arr = pa.array([decimal.Decimal("-1.50000000"), decimal.Decimal("9.99999999"),
-                    None, decimal.Decimal("0.00000001")], type=pa.decimal64(18, 8))
+    arr = pa.array(
+        [
+            decimal.Decimal("-1.50000000"),
+            decimal.Decimal("9.99999999"),
+            None,
+            decimal.Decimal("0.00000001"),
+        ],
+        type=pa.decimal64(18, 8),
+    )
     lo, hi = _achieved_bounds(arr)
     assert (lo, hi) == (decimal.Decimal("-1.50000000"), decimal.Decimal("9.99999999"))
-    arr32 = pa.array([decimal.Decimal("3.25"), decimal.Decimal("-0.75")], type=pa.decimal32(9, 2))
-    assert _achieved_bounds(arr32) == (decimal.Decimal("-0.75"), decimal.Decimal("3.25"))
+    arr32 = pa.array(
+        [decimal.Decimal("3.25"), decimal.Decimal("-0.75")], type=pa.decimal32(9, 2)
+    )
+    assert _achieved_bounds(arr32) == (
+        decimal.Decimal("-0.75"),
+        decimal.Decimal("3.25"),
+    )
     # The common case is unchanged.
     assert _achieved_bounds(pa.array([3.0, -1.0, 2.0])) == (-1.0, 3.0)
 
@@ -200,14 +239,19 @@ def test_refuses_to_start_while_an_unfinished_run_of_the_suite_exists(ch, tmp_pa
         run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     with Store(tmp_path / "r.db") as s:
         assert s.conn.execute("SELECT count() FROM runs").fetchone()[0] == 1
-    r = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds",
-                  ignore_unfinished=True)
+    r = run_suite(
+        suite,
+        store_path=tmp_path / "r.db",
+        cache_dir=tmp_path / "ds",
+        ignore_unfinished=True,
+    )
     assert r.run_id is not None and r.samples_written == 3
 
 
 @pytest.mark.clickhouse
 def test_ctrl_c_mid_query_records_the_interrupted_query_and_finishes_the_run(
-        ch, tmp_path, monkeypatch):
+    ch, tmp_path, monkeypatch
+):
     """Ruling R34, driven through the real `CHClient` and the real `Store`:
     a `KeyboardInterrupt` raised inside the second timed sample query (the
     `_InterruptOnTimedCall` proxy from the runner tests) must propagate,
@@ -217,14 +261,19 @@ def test_ctrl_c_mid_query_records_the_interrupted_query_and_finishes_the_run(
     from chbench.harness.client import CHClient
     from tests.harness.test_runner import _InterruptOnTimedCall
 
-    monkeypatch.setattr(orchestrate, "CHClient",
-                        lambda conn: _InterruptOnTimedCall(CHClient(conn), at=2))
+    monkeypatch.setattr(
+        orchestrate,
+        "CHClient",
+        lambda conn: _InterruptOnTimedCall(CHClient(conn), at=2),
+    )
     suite = parse_suite(SMALL)
     with pytest.raises(KeyboardInterrupt):
         run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     with Store(tmp_path / "r.db") as s:
         samples = s.conn.execute("SELECT sample_no FROM samples").fetchall()
-        queries = s.conn.execute("SELECT status, error, explain_plan FROM queries").fetchall()
+        queries = s.conn.execute(
+            "SELECT status, error, explain_plan FROM queries"
+        ).fetchall()
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
     assert samples == [(0,)]
     assert len(queries) == 1

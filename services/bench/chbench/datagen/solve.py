@@ -25,12 +25,12 @@ warning by its first two words without parsing the prose:
   undefined:  the metric has no value for this data (runs_z on a single-group
               dichotomy, interarrival_cv with fewer than three repeat-runs).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
-
 
 WARNING_PREFIXES = ("clamp:", "miss:", "skipped:", "undefined:")
 
@@ -66,8 +66,10 @@ class SolveResult:
     def warning(self, metric: str, target: float) -> str:
         """The vocabulary warning for a solve that did not land: prefix by
         status, then the metric name, then the target and this message."""
-        return (f"{self.status.warning_prefix} {metric} target {target:g} could "
-                f"not be reached: {self.message}")
+        return (
+            f"{self.status.warning_prefix} {metric} target {target:g} could "
+            f"not be reached: {self.message}"
+        )
 
 
 def solve_monotone(
@@ -108,8 +110,13 @@ def solve_monotone(
     approximate = False
     if guard is not None:
         if not guard(lo):
-            return SolveResult(lo, f(lo), SolveStatus.INVALID_BRACKET, None,
-                               f"invalid bracket: guard fails at lo={lo:.6g}")
+            return SolveResult(
+                lo,
+                f(lo),
+                SolveStatus.INVALID_BRACKET,
+                None,
+                f"invalid bracket: guard fails at lo={lo:.6g}",
+            )
         if not guard(hi):
             g_lo, g_hi = lo, hi
             for _ in range(40):
@@ -127,11 +134,21 @@ def solve_monotone(
     suffix = " (approximate, set by the bracket narrowing)" if approximate else ""
 
     if target <= low_val:
-        return SolveResult(low_x, low_val, SolveStatus.CLAMPED_LOW, low_val,
-                           f"clamped: min reachable {low_val:.6g}{suffix}")
+        return SolveResult(
+            low_x,
+            low_val,
+            SolveStatus.CLAMPED_LOW,
+            low_val,
+            f"clamped: min reachable {low_val:.6g}{suffix}",
+        )
     if target >= high_val:
-        return SolveResult(high_x, high_val, SolveStatus.CLAMPED_HIGH, high_val,
-                           f"clamped: max reachable {high_val:.6g}{suffix}")
+        return SolveResult(
+            high_x,
+            high_val,
+            SolveStatus.CLAMPED_HIGH,
+            high_val,
+            f"clamped: max reachable {high_val:.6g}{suffix}",
+        )
 
     for _ in range(iters):
         mid = (lo + hi) / 2
@@ -143,7 +160,10 @@ def solve_monotone(
     achieved = f(x)
     if tol is not None and not abs(achieved - target) <= tol:
         return SolveResult(
-            x, achieved, SolveStatus.NOT_CONVERGED, None,
+            x,
+            achieved,
+            SolveStatus.NOT_CONVERGED,
+            None,
             f"not converged: achieved {achieved:.6g} against target {target:.6g} "
             f"is outside tolerance {tol:.6g} after {iters} iterations; the "
             "objective is not monotone on the bracket",

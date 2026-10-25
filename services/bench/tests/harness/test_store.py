@@ -3,45 +3,93 @@ import sqlite3
 from types import SimpleNamespace as NS
 
 import numpy as np
-import pytest
 
 from chbench.datagen.cache import SolveRecord
 from chbench.harness.store import Store
 
 
 def manifest(dataset_id="d1"):
-    return NS(dataset_id=dataset_id, spec=NS(to_json=lambda: '{"rows": 1}'),
-              achieved={"cardinality_ratio": 0.5}, warnings=["miss: x"], targets={},
-              within_tolerance={}, solves={}, clip_collapsed=0, round_collapsed=0)
+    return NS(
+        dataset_id=dataset_id,
+        spec=NS(to_json=lambda: '{"rows": 1}'),
+        achieved={"cardinality_ratio": 0.5},
+        warnings=["miss: x"],
+        targets={},
+        within_tolerance={},
+        solves={},
+        clip_collapsed=0,
+        round_collapsed=0,
+    )
 
 
 def variant():
-    return NS(ch_type="Float64", nullable=False, primary_key=False, projection=False,
-              codec="none", skip_index="none", compression="LZ4", status="ok",
-              skip_reason=None, warnings=())
+    return NS(
+        ch_type="Float64",
+        nullable=False,
+        primary_key=False,
+        projection=False,
+        codec="none",
+        skip_index="none",
+        compression="LZ4",
+        status="ok",
+        skip_reason=None,
+        warnings=(),
+    )
 
 
 def load_result():
-    return NS(status="ok", error=None, insert_ms=12.5,
-              stats=NS(compressed_bytes=100, uncompressed_bytes=400, marks_bytes=8, rows=50, parts=1,
-                        index_compressed_bytes=30, index_uncompressed_bytes=60, index_marks_bytes=4))
+    return NS(
+        status="ok",
+        error=None,
+        insert_ms=12.5,
+        stats=NS(
+            compressed_bytes=100,
+            uncompressed_bytes=400,
+            marks_bytes=8,
+            rows=50,
+            parts=1,
+            index_compressed_bytes=30,
+            index_uncompressed_bytes=60,
+            index_marks_bytes=4,
+        ),
+    )
 
 
 def qv():
-    return NS(kind="filter", predicate_kind="range", target_fraction=0.1, values_n=None,
-              qcc=False, cache_mode="warm", predicate_sql="v BETWEEN 1 AND 2", actual_fraction=0.11)
+    return NS(
+        kind="filter",
+        predicate_kind="range",
+        target_fraction=0.1,
+        values_n=None,
+        qcc=False,
+        cache_mode="warm",
+        predicate_sql="v BETWEEN 1 AND 2",
+        actual_fraction=0.11,
+    )
 
 
 def sample(n):
-    return NS(sample_no=n, client_ms=1.5, server_ms=1.0, read_rows=10, read_bytes=80,
-              memory_bytes=1000, selected_marks=2, selected_granules=2,
-              profile_events={"SelectedParts": 1}, ran_at="2026-09-15T00:00:00")
+    return NS(
+        sample_no=n,
+        client_ms=1.5,
+        server_ms=1.0,
+        read_rows=10,
+        read_bytes=80,
+        memory_bytes=1000,
+        selected_marks=2,
+        selected_granules=2,
+        profile_events={"SelectedParts": 1},
+        ran_at="2026-09-15T00:00:00",
+    )
 
 
 def test_schema_has_the_five_tables(tmp_path):
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
-        names = {r[0] for r in s.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        names = {
+            r[0]
+            for r in s.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
     assert names >= {"datasets", "tables", "queries", "samples", "runs"}
 
 
@@ -67,7 +115,8 @@ def test_upserts_are_idempotent(tmp_path):
 def test_samples_accumulate_and_are_counted(tmp_path):
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
-        s.upsert_dataset(manifest(), "p"); s.upsert_table("t1", "d1", variant(), load_result(), "v")
+        s.upsert_dataset(manifest(), "p")
+        s.upsert_table("t1", "d1", variant(), load_result(), "v")
         s.upsert_query("q1", "t1", qv(), "")
         run = s.begin_run(NS(name="suite", source_yaml="name: suite"))
         for n in range(3):
@@ -93,31 +142,50 @@ def test_query_rows_joins_for_the_report(tmp_path):
     r = rows[0]
     assert r["codec"] == "none" and r["kind"] == "filter" and r["client_ms"] == 1.5
     assert r["compressed_bytes"] == 100 and r["actual_fraction"] == 0.11
-    assert (r["index_compressed_bytes"], r["index_uncompressed_bytes"],
-            r["index_marks_bytes"]) == (30, 60, 4)
+    assert (
+        r["index_compressed_bytes"],
+        r["index_uncompressed_bytes"],
+        r["index_marks_bytes"],
+    ) == (30, 60, 4)
 
 
 def test_older_store_gains_the_index_size_columns(tmp_path):
     path = tmp_path / "old.db"
     with Store(path) as s:
         s.init_schema()
-        for c in ("index_compressed_bytes", "index_uncompressed_bytes", "index_marks_bytes"):
+        for c in (
+            "index_compressed_bytes",
+            "index_uncompressed_bytes",
+            "index_marks_bytes",
+        ):
             s.conn.execute(f"ALTER TABLE tables DROP COLUMN {c}")
         s.conn.commit()
     with Store(path) as s:
         s.init_schema()
         cols = {r[1] for r in s.conn.execute("PRAGMA table_info(tables)")}
-    assert {"index_compressed_bytes", "index_uncompressed_bytes", "index_marks_bytes"} <= cols
+    assert {
+        "index_compressed_bytes",
+        "index_uncompressed_bytes",
+        "index_marks_bytes",
+    } <= cols
 
 
 def test_skipped_table_is_stored_with_its_reason(tmp_path):
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
         s.upsert_dataset(manifest(), "p")
-        v = variant(); v.status = "skipped"; v.skip_reason = "T64 codec is not supported for specified type Float64."
+        v = variant()
+        v.status = "skipped"
+        v.skip_reason = "T64 codec is not supported for specified type Float64."
         s.upsert_table("t2", "d1", v, None, "v")
-        row = s.conn.execute("SELECT status, skip_reason, compressed_bytes FROM tables WHERE table_id='t2'").fetchone()
-    assert row == ("skipped", "T64 codec is not supported for specified type Float64.", None)
+        row = s.conn.execute(
+            "SELECT status, skip_reason, compressed_bytes FROM tables WHERE table_id='t2'"
+        ).fetchone()
+    assert row == (
+        "skipped",
+        "T64 codec is not supported for specified type Float64.",
+        None,
+    )
 
 
 def test_each_sample_is_committed_immediately(tmp_path):
@@ -125,7 +193,8 @@ def test_each_sample_is_committed_immediately(tmp_path):
     p = tmp_path / "r.db"
     with Store(p) as s:
         s.init_schema()
-        s.upsert_dataset(manifest(), "p"); s.upsert_table("t1", "d1", variant(), load_result(), "v")
+        s.upsert_dataset(manifest(), "p")
+        s.upsert_table("t1", "d1", variant(), load_result(), "v")
         s.upsert_query("q1", "t1", qv(), "")
         run = s.begin_run(NS(name="suite", source_yaml=""))
         s.insert_sample("q1", run, sample(0))
@@ -136,6 +205,7 @@ def test_each_sample_is_committed_immediately(tmp_path):
 
 def test_tables_for_suite_uses_ddl_table_name(tmp_path):
     from chbench.harness.ddl import table_name
+
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
         s.upsert_dataset(manifest(), "p")
@@ -160,7 +230,8 @@ def test_dataset_json_survives_numpy_scalars_and_solve_records(tmp_path):
         s.init_schema()
         s.upsert_dataset(m, "p")
         row = s.conn.execute(
-            "SELECT achieved_json FROM datasets WHERE dataset_id = 'd1'").fetchone()
+            "SELECT achieved_json FROM datasets WHERE dataset_id = 'd1'"
+        ).fetchone()
     payload = json.loads(row[0])
     assert payload["achieved"]["cardinality_ratio"] == 0.5
     entropy = payload["achieved"]["entropy_bits"]
@@ -175,6 +246,7 @@ def test_tables_for_suite_finds_table_with_no_samples_yet(tmp_path):
     would miss it; the `suite_tables` join table (populated by
     `upsert_table`'s `suite_name` keyword) must not."""
     from chbench.harness.ddl import table_name
+
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
         s.upsert_dataset(manifest(), "p")
@@ -203,13 +275,21 @@ def test_errored_query_stores_its_status_and_message(tmp_path):
     run never reached."""
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
-        s.upsert_dataset(manifest(), "p"); s.upsert_table("t1", "d1", variant(), load_result(), "v")
+        s.upsert_dataset(manifest(), "p")
+        s.upsert_table("t1", "d1", variant(), load_result(), "v")
         # The orchestrator's pre-run write, then the post-run rewrite.
         s.upsert_query("q1", "t1", qv(), "")
-        s.upsert_query("q1", "t1", qv(), "", status="error",
-                       error="DatabaseError: Code: 241. Memory limit exceeded")
+        s.upsert_query(
+            "q1",
+            "t1",
+            qv(),
+            "",
+            status="error",
+            error="DatabaseError: Code: 241. Memory limit exceeded",
+        )
         row = s.conn.execute(
-            "SELECT status, error FROM queries WHERE query_id='q1'").fetchone()
+            "SELECT status, error FROM queries WHERE query_id='q1'"
+        ).fetchone()
     assert row[0] == "error"
     assert row[1].startswith("DatabaseError: Code: 241")
 
@@ -217,7 +297,8 @@ def test_errored_query_stores_its_status_and_message(tmp_path):
 def test_explain_for_returns_the_stored_plan_and_empty_when_unknown(tmp_path):
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
-        s.upsert_dataset(manifest(), "p"); s.upsert_table("t1", "d1", variant(), load_result(), "v")
+        s.upsert_dataset(manifest(), "p")
+        s.upsert_table("t1", "d1", variant(), load_result(), "v")
         s.upsert_query("q1", "t1", qv(), "ReadFromMergeTree")
         assert s.explain_for("q1") == "ReadFromMergeTree"
         assert s.explain_for("never-stored") == ""
@@ -249,12 +330,19 @@ def test_init_schema_adds_columns_missing_from_an_older_store(tmp_path):
         s.conn.commit()
     with Store(path) as s:
         s.init_schema()
-        columns = {r[1] for r in s.conn.execute("PRAGMA table_info(queries)").fetchall()}
+        columns = {
+            r[1] for r in s.conn.execute("PRAGMA table_info(queries)").fetchall()
+        }
         assert {"status", "error"} <= columns
-        s.upsert_dataset(manifest(), "p"); s.upsert_table("t1", "d1", variant(), load_result(), "v")
+        s.upsert_dataset(manifest(), "p")
+        s.upsert_table("t1", "d1", variant(), load_result(), "v")
         s.upsert_query("q1", "t1", qv(), "", status="error", error="boom")
-        assert s.conn.execute(
-            "SELECT error FROM queries WHERE query_id='q1'").fetchone()[0] == "boom"
+        assert (
+            s.conn.execute("SELECT error FROM queries WHERE query_id='q1'").fetchone()[
+                0
+            ]
+            == "boom"
+        )
 
 
 def test_query_rows_follows_suite_tables_not_the_run_that_sampled(tmp_path):
@@ -286,6 +374,7 @@ def test_unfinished_runs_lists_only_runs_without_finished_at(tmp_path):
         stale = s.begin_run(NS(name="A", source_yaml=""))
         s.begin_run(NS(name="B", source_yaml=""))
         started = s.conn.execute(
-            "SELECT started_at FROM runs WHERE run_id = ?", (stale,)).fetchone()[0]
+            "SELECT started_at FROM runs WHERE run_id = ?", (stale,)
+        ).fetchone()[0]
         assert s.unfinished_runs("A") == [(stale, started)]
         assert s.unfinished_runs("C") == []

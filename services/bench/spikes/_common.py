@@ -3,6 +3,7 @@
 These are the definitions from the design spec (section 2, "Run definitions")
 and are the seed of chbench/datagen/metrics.py.
 """
+
 from __future__ import annotations
 
 import numpy as np

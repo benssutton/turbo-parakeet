@@ -16,8 +16,8 @@ from chbench.datagen.metrics import (
     runs_z_bounds,
 )
 
-
 # --- ported from spikes/test_common.py: these must keep passing unchanged ---
+
 
 def test_entropy_two_equiprobable_values_is_one_bit():
     assert entropy_bits(np.array([0, 0, 1, 1])) == pytest.approx(1.0)
@@ -93,6 +93,7 @@ def test_largest_remainder_sums_exactly():
 
 # --- new: the three defects the Plan 1 final review found ---
 
+
 def test_runs_z_constant_column_returns_nan_not_raises():
     """A constant column is a legal DatasetSpec, and the manifest computes every
     metric for every dataset, so this must not abort generation."""
@@ -124,7 +125,7 @@ def test_interarrival_cv_rounds_to_decimal_places():
     x = np.repeat(np.arange(30.0), 2)
     jittered = x + np.random.default_rng(0).normal(0, 1e-12, x.size)
     assert interarrival_cv(x) == pytest.approx(0.0)
-    assert np.isnan(interarrival_cv(jittered))          # unrounded: runs destroyed
+    assert np.isnan(interarrival_cv(jittered))  # unrounded: runs destroyed
     assert interarrival_cv(jittered, decimal_places=8) == pytest.approx(0.0)
 
 

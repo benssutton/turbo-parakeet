@@ -7,8 +7,15 @@ in (spec section 3) and is what `chbench run` calls. The individual modules
 useful and separately tested; only the names a caller of the harness as a
 whole needs are re-exported here.
 """
+
 from chbench.harness.orchestrate import RunSummary, run_suite
 from chbench.harness.suite import Suite, SuiteError, load_suite, parse_suite
 
-__all__ = ["RunSummary", "Suite", "SuiteError", "load_suite", "parse_suite",
-           "run_suite"]
+__all__ = [
+    "RunSummary",
+    "Suite",
+    "SuiteError",
+    "load_suite",
+    "parse_suite",
+    "run_suite",
+]

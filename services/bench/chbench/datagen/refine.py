@@ -29,6 +29,7 @@ silently overwrite a correct layout with one that violates the runs target.
 `None` instead fails loudly -- an `AttributeError` or a `TypeError` -- at
 the first downstream use.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -54,9 +55,14 @@ class RefineResult:
     reason: str
 
 
-def refine_interarrival(support: np.ndarray, counts: np.ndarray, spec: DatasetSpec,
-                        rng: np.random.Generator, cap: int = 50,
-                        _on_evaluate=None) -> RefineResult:
+def refine_interarrival(
+    support: np.ndarray,
+    counts: np.ndarray,
+    spec: DatasetSpec,
+    rng: np.random.Generator,
+    cap: int = 50,
+    _on_evaluate=None,
+) -> RefineResult:
     """Bisect the gamma's input CV so the regenerated sequence's achieved CV
     lands on `spec.interarrival_cv`.
 
@@ -85,10 +91,20 @@ def refine_interarrival(support: np.ndarray, counts: np.ndarray, spec: DatasetSp
             "after the gaps are laid out, so bisecting the input CV against "
             "the combined output cannot recover the target"
         )
-        return RefineResult(values=None, input_cv=target, achieved=float("nan"),
-                            solve=SolveResult(target, float("nan"), SolveStatus.OK,
-                                              None, "skipped: runs_z also targeted"),
-                            skipped=True, reason=reason)
+        return RefineResult(
+            values=None,
+            input_cv=target,
+            achieved=float("nan"),
+            solve=SolveResult(
+                target,
+                float("nan"),
+                SolveStatus.OK,
+                None,
+                "skipped: runs_z also targeted",
+            ),
+            skipped=True,
+            reason=reason,
+        )
 
     repeat_runs = int(np.count_nonzero(counts >= 2))
     if repeat_runs < MIN_REPEAT_RUNS:
@@ -98,27 +114,46 @@ def refine_interarrival(support: np.ndarray, counts: np.ndarray, spec: DatasetSp
             f"forms only {repeat_runs} (values with count >= 2), so every "
             "trial layout would measure nan"
         )
-        return RefineResult(values=None, input_cv=target, achieved=float("nan"),
-                            solve=SolveResult(target, float("nan"), SolveStatus.OK,
-                                              None, "skipped: metric undefined"),
-                            skipped=True, reason=reason)
+        return RefineResult(
+            values=None,
+            input_cv=target,
+            achieved=float("nan"),
+            solve=SolveResult(
+                target, float("nan"), SolveStatus.OK, None, "skipped: metric undefined"
+            ),
+            skipped=True,
+            reason=reason,
+        )
 
     trial_seed = int(rng.integers(0, 2**63 - 1))
 
     def layout_at(input_cv: float) -> np.ndarray:
-        return layout_interarrival(support, counts, input_cv,
-                                   np.random.default_rng(trial_seed))
+        return layout_interarrival(
+            support, counts, input_cv, np.random.default_rng(trial_seed)
+        )
 
     def objective(input_cv: float) -> float:
         if _on_evaluate is not None:
             _on_evaluate(input_cv)
         return interarrival_cv(layout_at(input_cv), decimal_places=spec.decimal_places)
 
-    solve = solve_monotone(objective, target, INPUT_CV_LO, INPUT_CV_HI,
-                           increasing=True, iters=cap,
-                           tol=spec.tolerances.interarrival_cv_relative * abs(target))
+    solve = solve_monotone(
+        objective,
+        target,
+        INPUT_CV_LO,
+        INPUT_CV_HI,
+        increasing=True,
+        iters=cap,
+        tol=spec.tolerances.interarrival_cv_relative * abs(target),
+    )
     values = layout_at(solve.x)
     achieved = interarrival_cv(values, decimal_places=spec.decimal_places)
 
-    return RefineResult(values=values, input_cv=solve.x, achieved=achieved,
-                        solve=solve, skipped=False, reason="")
+    return RefineResult(
+        values=values,
+        input_cv=solve.x,
+        achieved=achieved,
+        solve=solve,
+        skipped=False,
+        reason="",
+    )

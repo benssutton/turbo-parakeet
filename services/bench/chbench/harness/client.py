@@ -12,6 +12,7 @@ encoded here once and no later module can trip on them:
 2. Server-side parameter binding (`{name:Type}`) goes through the library's
    own `parameters=` argument, never through settings.
 """
+
 from __future__ import annotations
 
 import os
@@ -54,15 +55,24 @@ class CHClient:
         conn = conn or Connection.from_env()
         self.connection = conn
         self._client = clickhouse_connect.get_client(
-            host=conn.host, port=conn.port, username=conn.user,
-            password=conn.password, database=conn.database)
+            host=conn.host,
+            port=conn.port,
+            username=conn.user,
+            password=conn.password,
+            database=conn.database,
+        )
 
     def command(self, sql: str) -> Any:
         return self._client.command(sql)
 
-    def query_rows(self, sql: str, *, query_id: str | None = None,
-                   settings: Mapping[str, Any] | None = None,
-                   parameters: Mapping[str, Any] | None = None) -> list[tuple]:
+    def query_rows(
+        self,
+        sql: str,
+        *,
+        query_id: str | None = None,
+        settings: Mapping[str, Any] | None = None,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> list[tuple]:
         """Run `sql` and return its rows as tuples.
 
         `query_id` is merged into `settings` and passed no other way. From
@@ -82,8 +92,10 @@ class CHClient:
         if query_id is not None:
             merged["query_id"] = query_id
         result = self._client.query(
-            sql, parameters=dict(parameters) if parameters else None,
-            settings=merged or None)
+            sql,
+            parameters=dict(parameters) if parameters else None,
+            settings=merged or None,
+        )
         return [tuple(r) for r in result.result_rows]
 
     def insert_arrow(self, table: str, arrow_table: pa.Table) -> None:

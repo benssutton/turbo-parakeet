@@ -2,6 +2,7 @@
 
 Tables are named `bench.t_orchpath_<hex>`; the module fixture drops them.
 """
+
 import numpy as np
 import pyarrow as pa
 import pytest
@@ -41,8 +42,9 @@ def drop_tables(request):
     except Exception:  # noqa: BLE001
         return
     for (name,) in client.query_rows(
-            "SELECT name FROM system.tables WHERE database = 'bench' "
-            "AND name LIKE 't\\_orchpath\\_%'"):
+        "SELECT name FROM system.tables WHERE database = 'bench' "
+        "AND name LIKE 't\\_orchpath\\_%'"
+    ):
         client.command(f"DROP TABLE IF EXISTS bench.{name}")
 
 
@@ -61,10 +63,12 @@ def test_a_path_suite_runs_end_to_end_and_the_store_records_the_dataset(ch, tmp_
     r = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=cache)
     assert r.tables_ok == 2 and r.tables_error == 0
     assert r.queries_run == 4 and r.samples_written == 8
-    assert not cache.exists()                       # a path dataset is not copied
+    assert not cache.exists()  # a path dataset is not copied
 
     with Store(tmp_path / "r.db") as s:
-        ds = s.conn.execute("SELECT dataset_id, spec_json, arrow_path FROM datasets").fetchall()
+        ds = s.conn.execute(
+            "SELECT dataset_id, spec_json, arrow_path FROM datasets"
+        ).fetchall()
         n = s.conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
     assert len(ds) == 1 and ds[0][0] == suite.dataset.dataset_id
     assert '"path"' in ds[0][1] and ds[0][2] == suite.dataset.path

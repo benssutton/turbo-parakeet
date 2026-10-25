@@ -27,6 +27,7 @@ The cache is Arrow IPC in the file format (Feather v2) uncompressed, at
 keeps the exact Arrow type and buffers, so the cached column is bit-identical
 to what the loader inserts, with no encode or decode step.
 """
+
 from __future__ import annotations
 
 import json
@@ -48,15 +49,28 @@ from chbench.datagen.solve import WARNING_PREFIXES, SolveResult, SolveStatus
 from chbench.datagen.spec import DatasetSpec, SpecError
 from chbench.datagen.wrap import wrap
 
-__all__ = ["COLUMN_NAME", "WARNING_PREFIXES", "SolveRecord", "Manifest",
-           "Dataset", "generate", "save", "load_or_generate"]
+__all__ = [
+    "COLUMN_NAME",
+    "WARNING_PREFIXES",
+    "SolveRecord",
+    "Manifest",
+    "Dataset",
+    "generate",
+    "save",
+    "load_or_generate",
+]
 
 COLUMN_NAME = "value"
 
 # The metrics a spec can target, in manifest order. `cardinality_ratio` and
 # `entropy_bits` are always measured, whether or not they were targeted.
-_TARGETABLE = ("cardinality_ratio", "entropy_bits", "index_of_dispersion",
-               "runs_z", "interarrival_cv")
+_TARGETABLE = (
+    "cardinality_ratio",
+    "entropy_bits",
+    "index_of_dispersion",
+    "runs_z",
+    "interarrival_cv",
+)
 
 
 @dataclass(frozen=True)
@@ -68,6 +82,7 @@ class SolveRecord:
              reads this; it never parses `message`.
     message: the solve's own account of the outcome, for a human reader.
     """
+
     status: str
     message: str
 
@@ -123,6 +138,7 @@ class Manifest:
                        bounded redraw could not recover. Both are 0 when no
                        cardinality_ratio was set.
     """
+
     dataset_id: str
     spec: DatasetSpec
     achieved: dict[str, float]
@@ -139,7 +155,9 @@ class Manifest:
         d = asdict(self)
         d["spec"] = json.loads(self.spec.to_json())
         # nan is not JSON; write null so other readers can parse the file.
-        d["achieved"] = {k: (None if _is_nan(v) else v) for k, v in self.achieved.items()}
+        d["achieved"] = {
+            k: (None if _is_nan(v) else v) for k, v in self.achieved.items()
+        }
         return d
 
     def to_json(self) -> str:
@@ -149,10 +167,13 @@ class Manifest:
     def from_dict(cls, d: dict) -> "Manifest":
         d = dict(d)
         d["spec"] = DatasetSpec.from_dict(d["spec"])
-        d["achieved"] = {k: (float("nan") if v is None else v)
-                         for k, v in d["achieved"].items()}
-        d["solves"] = {k: (v if isinstance(v, SolveRecord) else SolveRecord(**v))
-                       for k, v in d["solves"].items()}
+        d["achieved"] = {
+            k: (float("nan") if v is None else v) for k, v in d["achieved"].items()
+        }
+        d["solves"] = {
+            k: (v if isinstance(v, SolveRecord) else SolveRecord(**v))
+            for k, v in d["solves"].items()
+        }
         return cls(**d)
 
 
@@ -191,13 +212,14 @@ def _measure(values: np.ndarray, spec: DatasetSpec) -> dict[str, float]:
         achieved["runs_z"] = metrics.runs_z(values, kind)
     if spec.interarrival_cv is not None:
         achieved["interarrival_cv"] = metrics.interarrival_cv(
-            values, decimal_places=spec.decimal_places)
+            values, decimal_places=spec.decimal_places
+        )
     return {k: float(v) for k, v in achieved.items()}
 
 
-def _check_tolerances(spec: DatasetSpec, targets: dict[str, float],
-                      achieved: dict[str, float]
-                      ) -> tuple[dict[str, bool | None], list[str]]:
+def _check_tolerances(
+    spec: DatasetSpec, targets: dict[str, float], achieved: dict[str, float]
+) -> tuple[dict[str, bool | None], list[str]]:
     within: dict[str, bool | None] = {}
     warnings: list[str] = []
     tol = spec.tolerances
@@ -271,21 +293,26 @@ def generate(spec: DatasetSpec) -> Dataset:
     # skipped -- runs_z is also targeted -- its `values` is None and the
     # combined layout from layout_sequence is the correct one to keep.
     if spec.interarrival_cv is not None:
-        refined = refine_interarrival(multiset.support, multiset.counts,
-                                      stage_spec, rng)
+        refined = refine_interarrival(
+            multiset.support, multiset.counts, stage_spec, rng
+        )
         if refined.skipped:
             warnings.append(f"skipped: interarrival_cv refinement: {refined.reason}")
         else:
             values = refined.values
             solves["interarrival_cv"] = SolveRecord.from_result(refined.solve)
             if not refined.solve.ok:
-                warnings.append(refined.solve.warning("interarrival_cv",
-                                                      spec.interarrival_cv))
+                warnings.append(
+                    refined.solve.warning("interarrival_cv", spec.interarrival_cv)
+                )
 
     # Measure on the final values, before wrapping.
     achieved = _measure(values, spec)
-    targets = {name: float(getattr(spec, name)) for name in _TARGETABLE
-               if getattr(spec, name) is not None}
+    targets = {
+        name: float(getattr(spec, name))
+        for name in _TARGETABLE
+        if getattr(spec, name) is not None
+    }
     within, tolerance_warnings = _check_tolerances(spec, targets, achieved)
     warnings.extend(tolerance_warnings)
 
@@ -348,17 +375,29 @@ def load_path(spec: DatasetSpec) -> Dataset:
     spec.validate()
     started = time.perf_counter()
     if realdata.file_digest(spec.path, spec.column) != spec.content_hash:
-        raise SpecError(f"dataset file {spec.path!r} has changed since its spec "
-                        "was measured (content_hash differs); rebuild the spec")
+        raise SpecError(
+            f"dataset file {spec.path!r} has changed since its spec "
+            "was measured (content_hash differs); rebuild the spec"
+        )
     array = realdata.read_column(spec.path, spec.column)
-    ids = pc.dictionary_encode(realdata.widen_decimal(array.drop_null())).indices.to_numpy()
-    achieved = {"cardinality_ratio": float(metrics.cardinality_ratio(ids)),
-                "entropy_bits": float(metrics.entropy_bits(ids))}
+    ids = pc.dictionary_encode(
+        realdata.widen_decimal(array.drop_null())
+    ).indices.to_numpy()
+    achieved = {
+        "cardinality_ratio": float(metrics.cardinality_ratio(ids)),
+        "entropy_bits": float(metrics.entropy_bits(ids)),
+    }
     manifest = Manifest(
-        dataset_id=spec.dataset_id, spec=spec, achieved=achieved, targets={},
-        within_tolerance={}, solves={}, warnings=[],
+        dataset_id=spec.dataset_id,
+        spec=spec,
+        achieved=achieved,
+        targets={},
+        within_tolerance={},
+        solves={},
+        warnings=[],
         generated_at=datetime.now(timezone.utc).isoformat(),
-        generation_seconds=time.perf_counter() - started)
+        generation_seconds=time.perf_counter() - started,
+    )
     return Dataset(array=array, manifest=manifest)
 
 

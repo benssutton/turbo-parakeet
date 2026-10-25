@@ -5,6 +5,7 @@ and pytest rejects a broader fixture depending on a narrower one. It skips,
 rather than fails, whenever the container is not reachable so the fast suite
 stays green with ClickHouse stopped.
 """
+
 from __future__ import annotations
 
 import pytest

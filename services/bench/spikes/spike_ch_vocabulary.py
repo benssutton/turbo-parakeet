@@ -18,6 +18,7 @@ and the same values / 1000, `GCD, LZ4` against `LZ4`.
 Runnable standalone: `python spikes/spike_ch_vocabulary.py`; prints the
 matrices and writes every cell to `spikes/spike_ch_vocabulary_results.tsv`.
 """
+
 from __future__ import annotations
 
 import collections
@@ -27,7 +28,12 @@ from pathlib import Path
 
 import clickhouse_connect
 
-CH = dict(host="localhost", port=8123, username="CLICKHOUSE_USER", password="CLICKHOUSE_PASSWORD")
+CH = dict(
+    host="localhost",
+    port=8123,
+    username="CLICKHOUSE_USER",
+    password="CLICKHOUSE_PASSWORD",
+)
 
 ENUM16 = "Enum16(" + ", ".join(f"'v{i:03d}' = {i}" for i in range(1, 201)) + ")"
 
@@ -49,8 +55,14 @@ TYPES = [
     ("DateTime64(6)", "toDateTime64('2020-01-01 00:00:00', 6) + number"),
     ("DateTime64(9, 'UTC')", "toDateTime64('2020-01-01 00:00:00', 9, 'UTC') + number"),
     ("FixedString(4)", "toFixedString(toString(number % 1000), 4)"),
-    ("Enum8('a' = 1, 'b' = 2)", "CAST(if(number % 2 = 0, 'a', 'b') AS Enum8('a' = 1, 'b' = 2))"),
-    (ENUM16, f"CAST(concat('v', leftPad(toString(number % 200 + 1), 3, '0')) AS {ENUM16})"),
+    (
+        "Enum8('a' = 1, 'b' = 2)",
+        "CAST(if(number % 2 = 0, 'a', 'b') AS Enum8('a' = 1, 'b' = 2))",
+    ),
+    (
+        ENUM16,
+        f"CAST(concat('v', leftPad(toString(number % 200 + 1), 3, '0')) AS {ENUM16})",
+    ),
     ("Time64(3)", "CAST(number * 1000 AS Time64(3))"),
     ("FixedString(3)", "toFixedString(toString(number % 1000), 3)"),
     ("FixedString(16)", "toFixedString(toString(number), 16)"),
@@ -67,7 +79,16 @@ TYPES = [
 ]
 SETTINGS_TIME64 = {"enable_time_time64_type": 1}
 
-CODECS = ["none", "GCD", "Delta", "DoubleDelta", "Gorilla", "T64", "FPC", "LowCardinality"]
+CODECS = [
+    "none",
+    "GCD",
+    "Delta",
+    "DoubleDelta",
+    "Gorilla",
+    "T64",
+    "FPC",
+    "LowCardinality",
+]
 COMPRESSIONS = ["LZ4", "ZSTD(3)"]
 SKIPS = ["none", "minmax", "set(100)", "bloom_filter"]
 
@@ -93,8 +114,17 @@ def clean(exc: Exception) -> str:
     return f"code {m.group(1) if m else '?'} {name}: {body}"
 
 
-def run_cell(client, tid: int, ch_type: str, expr: str, nullable: bool, codec: str,
-             compression: str, skip: str, settings: dict) -> tuple[str, str, str]:
+def run_cell(
+    client,
+    tid: int,
+    ch_type: str,
+    expr: str,
+    nullable: bool,
+    codec: str,
+    compression: str,
+    skip: str,
+    settings: dict,
+) -> tuple[str, str, str]:
     """-> (status, stage, message). Status `accepted` / `rejected`."""
     name = f"bench.vocab_{tid}"
     col = ch_type
@@ -102,8 +132,11 @@ def run_cell(client, tid: int, ch_type: str, expr: str, nullable: bool, codec: s
         col = f"Nullable({col})"
     if codec == "LowCardinality":
         col = f"LowCardinality({col})"
-    clause = (f"CODEC({compression})" if codec in ("none", "LowCardinality")
-              else f"CODEC({codec}, {compression})")
+    clause = (
+        f"CODEC({compression})"
+        if codec in ("none", "LowCardinality")
+        else f"CODEC({codec}, {compression})"
+    )
     cols = ["row_id UInt64", f"v {col} {clause}"]
     if skip != "none":
         cols.append(f"INDEX ix v TYPE {skip} GRANULARITY 1")
@@ -115,8 +148,10 @@ def run_cell(client, tid: int, ch_type: str, expr: str, nullable: bool, codec: s
         return "rejected", "create", clean(e)
     try:
         value = f"if(number % 7 = 0, NULL, {expr})" if nullable else expr
-        client.command(f"INSERT INTO {name} SELECT number, {value} FROM numbers({ROWS})",
-                       settings=settings)
+        client.command(
+            f"INSERT INTO {name} SELECT number, {value} FROM numbers({ROWS})",
+            settings=settings,
+        )
         n = client.command(f"SELECT count() FROM {name}")
         assert int(n) == ROWS
     except Exception as e:  # noqa: BLE001
@@ -133,14 +168,29 @@ def matrices(client) -> list[tuple]:
         if ch_type.startswith("Time64"):
             variants = [("default", {}), ("enable_time_time64_type=1", SETTINGS_TIME64)]
         for setting_label, settings in variants:
-            label = ch_type if setting_label == "default" else f"{ch_type} [{setting_label}]"
+            label = (
+                ch_type
+                if setting_label == "default"
+                else f"{ch_type} [{setting_label}]"
+            )
             for nullable in (False, True):
                 cells = [(c, z, "none") for c in CODECS for z in COMPRESSIONS]
                 cells += [("none", "LZ4", s) for s in SKIPS if s != "none"]
                 for codec, compression, skip in cells:
-                    status, stage, msg = run_cell(client, 0, ch_type, expr, nullable, codec,
-                                                  compression, skip, settings)
-                    rows.append((label, nullable, codec, compression, skip, status, stage, msg))
+                    status, stage, msg = run_cell(
+                        client,
+                        0,
+                        ch_type,
+                        expr,
+                        nullable,
+                        codec,
+                        compression,
+                        skip,
+                        settings,
+                    )
+                    rows.append(
+                        (label, nullable, codec, compression, skip, status, stage, msg)
+                    )
     return rows
 
 
@@ -154,10 +204,11 @@ def print_matrix(rows: list[tuple]) -> None:
     for label, group in by_type.items():
         print(f"\n=== {label}")
         seen: dict[tuple, dict] = collections.OrderedDict()
-        for (_, nullable, codec, compression, skip, status, stage, msg) in group:
+        for _, nullable, codec, compression, skip, status, stage, msg in group:
             outcome = (status, f"@{stage}: {msg}" if status == "rejected" else "")
             seen.setdefault((codec, skip), {}).setdefault(outcome, []).append(
-                f"n{int(nullable)}/{compression}")
+                f"n{int(nullable)}/{compression}"
+            )
         for (codec, skip), outcomes in seen.items():
             tag = f"codec={codec:<14} skip={skip:<13}"
             for (status, msg), cells in outcomes.items():
@@ -169,7 +220,9 @@ def storage(client, name: str) -> tuple[int, int]:
     r = client.query(
         "SELECT sum(column_data_compressed_bytes), sum(column_data_uncompressed_bytes) "
         "FROM system.parts_columns WHERE database = 'bench' AND table = {t:String} "
-        "AND column = 'v' AND active", parameters={"t": name.split(".")[1]}).result_rows[0]
+        "AND column = 'v' AND active",
+        parameters={"t": name.split(".")[1]},
+    ).result_rows[0]
     return int(r[0]), int(r[1])
 
 
@@ -177,19 +230,22 @@ def gcd_measure(client) -> list[tuple]:
     out = []
     n = 1_000_000
     inputs = {
-        "x*1000 (multiples of 1000, < 1e12)":
-            f"toInt64(intHash64(number) % 1000000000) * 1000",
-        "x (the same / 1000)": f"toInt64(intHash64(number) % 1000000000)",
-        "x*1000 sorted": f"toInt64(number) * 1000",
-        "x sorted": f"toInt64(number)",
+        "x*1000 (multiples of 1000, < 1e12)": "toInt64(intHash64(number) % 1000000000) * 1000",
+        "x (the same / 1000)": "toInt64(intHash64(number) % 1000000000)",
+        "x*1000 sorted": "toInt64(number) * 1000",
+        "x sorted": "toInt64(number)",
     }
     for label, expr in inputs.items():
         for codec in ("LZ4", "GCD, LZ4", "ZSTD(3)", "GCD, ZSTD(3)"):
             name = "bench.vocab_gcd"
             client.command(f"DROP TABLE IF EXISTS {name}")
-            client.command(f"CREATE TABLE {name} (row_id UInt64, v Int64 CODEC({codec})) "
-                           f"ENGINE = MergeTree ORDER BY tuple() {WIDE}")
-            client.command(f"INSERT INTO {name} SELECT number, {expr} FROM numbers({n})")
+            client.command(
+                f"CREATE TABLE {name} (row_id UInt64, v Int64 CODEC({codec})) "
+                f"ENGINE = MergeTree ORDER BY tuple() {WIDE}"
+            )
+            client.command(
+                f"INSERT INTO {name} SELECT number, {expr} FROM numbers({n})"
+            )
             client.command(f"OPTIMIZE TABLE {name} FINAL")
             comp, uncomp = storage(client, name)
             out.append((label, codec, comp, uncomp))
@@ -210,7 +266,9 @@ def main() -> None:
 
     out = Path(__file__).with_name("spike_ch_vocabulary_results.tsv")
     with open(out, "w", encoding="utf-8") as f:
-        f.write("type\tnullable\tcodec\tcompression\tskip_index\tstatus\tstage\tmessage\n")
+        f.write(
+            "type\tnullable\tcodec\tcompression\tskip_index\tstatus\tstage\tmessage\n"
+        )
         for r in rows:
             f.write("\t".join(str(x).replace("\t", " ") for x in r) + "\n")
     print(f"\nwrote {len(rows)} cells to {out}")

@@ -34,6 +34,7 @@ band*: a skewed categorical's `topfreq` split can have a far lower positive
 ceiling than a balanced numeric split, so `runs_plan` reports the band from
 the measured `n1, n2` of the actual column rather than assuming a 50/50 split.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,7 +43,10 @@ import numpy as np
 import pyarrow as pa
 
 from chbench.datagen.metrics import (
-    dichotomise, largest_remainder, runs_expected, runs_z_bounds,
+    dichotomise,
+    largest_remainder,
+    runs_expected,
+    runs_z_bounds,
 )
 from chbench.datagen.solve import SolveStatus
 from chbench.datagen.spec import DatasetSpec
@@ -67,8 +71,9 @@ def composition(total: int, parts: int, rng: np.random.Generator) -> np.ndarray:
     return np.diff(np.concatenate(([0], cuts, [total])))
 
 
-def layout_runs(x: np.ndarray, z: float, rng: np.random.Generator,
-                kind: str = "median") -> np.ndarray:
+def layout_runs(
+    x: np.ndarray, z: float, rng: np.random.Generator, kind: str = "median"
+) -> np.ndarray:
     x = np.asarray(x)
     if z is None:
         return rng.permutation(x)
@@ -76,18 +81,20 @@ def layout_runs(x: np.ndarray, z: float, rng: np.random.Generator,
     a_vals, b_vals = rng.permutation(x[b]), rng.permutation(x[~b])
     n1, n2 = len(a_vals), len(b_vals)
     R = target_run_count(n1, n2, z)
-    ra, rb = (R + 1) // 2, R // 2         # the starting group gets the extra block
+    ra, rb = (R + 1) // 2, R // 2  # the starting group gets the extra block
     start_with_a = True
-    if ra > n1:                            # A cannot supply that many blocks
+    if ra > n1:  # A cannot supply that many blocks
         ra, rb, start_with_a = rb, ra, False
     la, lb = composition(n1, ra, rng), composition(n2, rb, rng)
-    pools = [(a_vals, la), (b_vals, lb)] if start_with_a else [(b_vals, lb), (a_vals, la)]
+    pools = (
+        [(a_vals, la), (b_vals, lb)] if start_with_a else [(b_vals, lb), (a_vals, la)]
+    )
     out, pos = [], [0, 0]
     for i in range(R):
         g = i % 2
         vals, lens = pools[g]
         length = int(lens[i // 2])
-        out.append(vals[pos[g]:pos[g] + length])
+        out.append(vals[pos[g] : pos[g] + length])
         pos[g] += length
     return np.concatenate(out)
 
@@ -105,6 +112,7 @@ class RunsPlan:
     below the band, CLAMPED_HIGH above it, OK inside. `message` is the
     matching status message.
     """
+
     n1: int
     n2: int
     mu: float
@@ -123,8 +131,10 @@ class RunsPlan:
             return "ok"
         bound = self.z_lo if self.status is SolveStatus.CLAMPED_LOW else self.z_hi
         side = "min" if self.status is SolveStatus.CLAMPED_LOW else "max"
-        return (f"clamped: {side} reachable {bound:.6g} for the measured split "
-                f"n1={self.n1}, n2={self.n2}; laid out {self.target_R} runs")
+        return (
+            f"clamped: {side} reachable {bound:.6g} for the measured split "
+            f"n1={self.n1}, n2={self.n2}; laid out {self.target_R} runs"
+        )
 
 
 def runs_plan(x: np.ndarray, z: float, kind: str) -> RunsPlan:
@@ -147,13 +157,23 @@ def runs_plan(x: np.ndarray, z: float, kind: str) -> RunsPlan:
             status = SolveStatus.CLAMPED_HIGH
         else:
             status = SolveStatus.OK
-    return RunsPlan(n1=n1, n2=n2, mu=mu, sd=sd, r_max=r_max,
-                     z_lo=z_lo, z_hi=z_hi, target_R=target_R,
-                     clamped=status is not SolveStatus.OK, z=z, status=status)
+    return RunsPlan(
+        n1=n1,
+        n2=n2,
+        mu=mu,
+        sd=sd,
+        r_max=r_max,
+        z_lo=z_lo,
+        z_hi=z_hi,
+        target_R=target_R,
+        clamped=status is not SolveStatus.OK,
+        z=z,
+        status=status,
+    )
 
 
 def dichotomy_kind_for(spec: DatasetSpec) -> str:
-    """"topfreq" for string, categorical and boolean specs, "median" otherwise.
+    """ "topfreq" for string, categorical and boolean specs, "median" otherwise.
 
     Categorical is identified by `spec.categories`, not by arrow_type alone:
     a numeric column can also carry a fixed support set. Unwrap list<T> to
@@ -162,13 +182,18 @@ def dichotomy_kind_for(spec: DatasetSpec) -> str:
     dtype = spec.arrow_dtype
     if pa.types.is_list(dtype):
         dtype = dtype.value_type
-    if spec.categories is not None or pa.types.is_string(dtype) or pa.types.is_boolean(dtype):
+    if (
+        spec.categories is not None
+        or pa.types.is_string(dtype)
+        or pa.types.is_boolean(dtype)
+    ):
         return "topfreq"
     return "median"
 
 
-def layout_interarrival(support: np.ndarray, counts: np.ndarray, cv: float,
-                        rng: np.random.Generator) -> np.ndarray:
+def layout_interarrival(
+    support: np.ndarray, counts: np.ndarray, cv: float, rng: np.random.Generator
+) -> np.ndarray:
     """Order the multiset so the gaps between repeat-runs have roughly the CV `cv`.
 
     Lifted from `spikes/spike_interarrival.py` keeping only the start-to-start
@@ -201,7 +226,7 @@ def layout_interarrival(support: np.ndarray, counts: np.ndarray, cv: float,
     run_vals, run_len = support[is_run], counts[is_run]
     singles = rng.permutation(support[~is_run])
     m, S = len(run_vals), len(singles)
-    if m == 0:                             # nothing to gap: a plain shuffle
+    if m == 0:  # nothing to gap: a plain shuffle
         return singles
     order = rng.permutation(m)
     run_vals, run_len = run_vals[order], run_len[order]
@@ -211,7 +236,7 @@ def layout_interarrival(support: np.ndarray, counts: np.ndarray, cv: float,
     # clipping; largest_remainder rescales the weights to exactly S singles.
     mean_gap = S / (m + 1) + (run_len[:-1].mean() if m > 1 else 0.0)
     draws = rng.gamma(shape, mean_gap / shape, size=m + 1)
-    interior = np.maximum(draws[:m - 1] - run_len[:-1], 0.0)
+    interior = np.maximum(draws[: m - 1] - run_len[:-1], 0.0)
     free = np.concatenate(([draws[m - 1]], interior, [draws[m]]))
     free_int = largest_remainder(free, S)
 
@@ -235,6 +260,7 @@ class SequenceResult:
     """`plan` is the runs plan the layout followed, so the caller can record
     its status (a clamp, or ok) under the manifest's solves; None when no
     runs_z was targeted or the target was dropped as undefined."""
+
     values: np.ndarray
     warnings: list[str]
     combined: bool
@@ -280,9 +306,14 @@ def _combined_warnings(plan: RunsPlan, counts: np.ndarray) -> list[str]:
     return out
 
 
-def layout_sequence(support: np.ndarray, counts: np.ndarray, spec: DatasetSpec,
-                    rng: np.random.Generator, *,
-                    cv_override: float | None = None) -> SequenceResult:
+def layout_sequence(
+    support: np.ndarray,
+    counts: np.ndarray,
+    spec: DatasetSpec,
+    rng: np.random.Generator,
+    *,
+    cv_override: float | None = None,
+) -> SequenceResult:
     """Dispatch on which ordering targets the spec sets.
 
     Neither: a uniform shuffle. `runs_z` only: `layout_runs`. `interarrival_cv`
@@ -345,8 +376,9 @@ def layout_sequence(support: np.ndarray, counts: np.ndarray, spec: DatasetSpec,
     if cv is None:
         return SequenceResult(layout_runs(x, z, rng, kind), warnings, False, plan)
     if z is None:
-        return SequenceResult(layout_interarrival(support, counts, cv, rng),
-                              warnings, False)
+        return SequenceResult(
+            layout_interarrival(support, counts, cv, rng), warnings, False
+        )
 
     pattern = dichotomise(layout_runs(x, z, rng, kind), kind)
     b = dichotomise(x, kind)

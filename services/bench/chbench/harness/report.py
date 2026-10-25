@@ -14,6 +14,7 @@ join (see its `_QUERY_ROWS_SQL`), which is wider than what a summary needs --
 view, not this one. `summarise` reads only the keys it needs and otherwise
 ignores a row's shape, so it tolerates that wider row without change.
 """
+
 from __future__ import annotations
 
 import csv
@@ -27,8 +28,15 @@ from rich.table import Table
 # narrowest-scope last (`target_fraction` distinguishes rows that already
 # share every coarser axis). This is also the column order `render_table`
 # and `write_csv` use.
-_TABLE_AXES = ("ch_type", "nullable", "primary_key", "projection", "codec",
-               "skip_index", "compression")
+_TABLE_AXES = (
+    "ch_type",
+    "nullable",
+    "primary_key",
+    "projection",
+    "codec",
+    "skip_index",
+    "compression",
+)
 _QUERY_AXES = ("kind", "cache_mode", "qcc", "target_fraction")
 _AXES = _TABLE_AXES + _QUERY_AXES
 
@@ -95,7 +103,8 @@ def _summarise_group(group: list[dict], percentiles: list[int]) -> dict:
     summary["compressed_bytes"] = first["compressed_bytes"]
     summary["uncompressed_bytes"] = first["uncompressed_bytes"]
     summary["compression_ratio"] = _compression_ratio(
-        first["compressed_bytes"], first["uncompressed_bytes"])
+        first["compressed_bytes"], first["uncompressed_bytes"]
+    )
     summary["index_compressed_bytes"] = first.get("index_compressed_bytes")
     summary["index_uncompressed_bytes"] = first.get("index_uncompressed_bytes")
     summary["actual_fraction"] = first["actual_fraction"]
@@ -120,24 +129,45 @@ def _column_order(percentiles: list[int]) -> list[str]:
     # (e.g. differ only in `predicate_kind` or IN-list size, neither of
     # which is rendered) with nothing else to trace a row back to its
     # source query.
-    return (["query_id"] + list(_AXES) + ["n", "client_mean", "client_max"]
-            + [f"client_p{p}" for p in percentiles]
-            + ["server_mean", "server_max"]
-            + [f"server_p{p}" for p in percentiles]
-            + ["compressed_bytes", "compression_ratio", "index_compressed_bytes",
-               "index_uncompressed_bytes", "actual_fraction"])
+    return (
+        ["query_id"]
+        + list(_AXES)
+        + ["n", "client_mean", "client_max"]
+        + [f"client_p{p}" for p in percentiles]
+        + ["server_mean", "server_max"]
+        + [f"server_p{p}" for p in percentiles]
+        + [
+            "compressed_bytes",
+            "compression_ratio",
+            "index_compressed_bytes",
+            "index_uncompressed_bytes",
+            "actual_fraction",
+        ]
+    )
 
 
 _HEADERS = {
     "query_id": "query id",
-    "ch_type": "type", "nullable": "nullable", "primary_key": "primary key",
-    "projection": "projection", "codec": "codec", "skip_index": "skip index",
-    "compression": "compression", "kind": "kind", "cache_mode": "cache",
-    "qcc": "qcc", "target_fraction": "target fraction",
-    "n": "n", "client_mean": "mean client", "client_max": "max client",
-    "server_mean": "mean server", "server_max": "max server",
-    "compressed_bytes": "compressed bytes", "compression_ratio": "ratio",
-    "index_compressed_bytes": "index compressed", "index_uncompressed_bytes": "index uncompressed",
+    "ch_type": "type",
+    "nullable": "nullable",
+    "primary_key": "primary key",
+    "projection": "projection",
+    "codec": "codec",
+    "skip_index": "skip index",
+    "compression": "compression",
+    "kind": "kind",
+    "cache_mode": "cache",
+    "qcc": "qcc",
+    "target_fraction": "target fraction",
+    "n": "n",
+    "client_mean": "mean client",
+    "client_max": "max client",
+    "server_mean": "mean server",
+    "server_max": "max server",
+    "compressed_bytes": "compressed bytes",
+    "compression_ratio": "ratio",
+    "index_compressed_bytes": "index compressed",
+    "index_uncompressed_bytes": "index uncompressed",
     "actual_fraction": "selectivity",
 }
 
@@ -177,10 +207,14 @@ def render_table(summary: list[dict], percentiles: list[int]) -> Table:
 def write_csv(summary: list[dict], path: str | Path) -> None:
     """One row per summary dict, header line included, column order matching
     `render_table`'s (`_column_order`)."""
-    percentiles = sorted({
-        int(key[len("client_p"):])
-        for row in summary for key in row if key.startswith("client_p")
-    })
+    percentiles = sorted(
+        {
+            int(key[len("client_p") :])
+            for row in summary
+            for key in row
+            if key.startswith("client_p")
+        }
+    )
     columns = _column_order(percentiles)
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
@@ -218,8 +252,10 @@ def filter_where(rows: list[dict], where: str | None) -> list[dict]:
         axis, _, value = clause.partition("=")
         if axis not in valid:
             raise ValueError(
-                f"unknown filter axis {axis!r}; valid axes are {sorted(valid)!r}")
+                f"unknown filter axis {axis!r}; valid axes are {sorted(valid)!r}"
+            )
         pairs.append((axis, value))
 
-    return [row for row in rows
-            if all(str(row[axis]) == value for axis, value in pairs)]
+    return [
+        row for row in rows if all(str(row[axis]) == value for axis, value in pairs)
+    ]

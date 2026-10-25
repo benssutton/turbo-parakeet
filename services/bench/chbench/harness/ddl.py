@@ -13,6 +13,7 @@ Every `CREATE TABLE` forces Wide parts (`SETTINGS min_bytes_for_wide_part = 0,
 min_rows_for_wide_part = 0`): per-column storage statistics exist only for
 Wide parts, and ClickHouse silently chooses Compact below a size threshold.
 """
+
 from __future__ import annotations
 
 from chbench.harness.validate import TableVariant, split_skip_index

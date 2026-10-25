@@ -1,20 +1,25 @@
 import json
 import math
 
-import numpy as np
 import pyarrow as pa
 import pytest
 
-from chbench.datagen import Dataset, generate, load_or_generate, save
+from chbench.datagen import generate, load_or_generate, save
 from chbench.datagen.cache import WARNING_PREFIXES, Manifest, SolveRecord
 from chbench.datagen.spec import DatasetSpec, Distribution, SpecError
 
 
 def uc1(rows=20_000, **kw) -> DatasetSpec:
-    d = dict(rows=rows, arrow_type="float64", value_range=(-1.0, 10.0),
-             decimal_places=8, null_count=0, seed=42, cardinality_ratio=0.75,
-             distribution=Distribution(kind="lognormal", mean=4.0, sigma=0.25,
-                                       shift=-1.0))
+    d = dict(
+        rows=rows,
+        arrow_type="float64",
+        value_range=(-1.0, 10.0),
+        decimal_places=8,
+        null_count=0,
+        seed=42,
+        cardinality_ratio=0.75,
+        distribution=Distribution(kind="lognormal", mean=4.0, sigma=0.25, shift=-1.0),
+    )
     d.update(kw)
     return DatasetSpec(**d)
 
@@ -40,7 +45,7 @@ def test_manifest_flags_tolerance_per_metric():
 
 def test_a_missed_tolerance_warns_and_does_not_raise():
     """Best effort, never fails (spec section 2)."""
-    d = generate(uc1(interarrival_cv=0.01))     # unreachable by construction
+    d = generate(uc1(interarrival_cv=0.01))  # unreachable by construction
     assert d.manifest.within_tolerance["interarrival_cv"] is False
     assert d.manifest.warnings
 
@@ -97,9 +102,16 @@ def test_manifest_is_written_as_readable_json(tmp_path):
 
 def test_use_case_2_shape_generates(tmp_path):
     """Spec section 5.1's corrected suite, at a row count fast enough for a test."""
-    s = DatasetSpec(rows=100_000, arrow_type="int32",
-                    value_range=(1_000_000, 9_999_999), null_count=0, seed=42,
-                    cardinality_ratio=0.01, entropy_bits=4.0, runs_z=-0.25)
+    s = DatasetSpec(
+        rows=100_000,
+        arrow_type="int32",
+        value_range=(1_000_000, 9_999_999),
+        null_count=0,
+        seed=42,
+        cardinality_ratio=0.01,
+        entropy_bits=4.0,
+        runs_z=-0.25,
+    )
     d = generate(s)
     assert len(d.array) == 100_000
     assert d.manifest.achieved["entropy_bits"] == pytest.approx(4.0, abs=0.01)
@@ -107,13 +119,19 @@ def test_use_case_2_shape_generates(tmp_path):
 
 
 def test_list_of_integer_generates_end_to_end():
-    s = DatasetSpec(rows=1_000, arrow_type="list<int32>", value_range=(0, 99_999),
-                    null_count=0, seed=1, cardinality_ratio=0.5,
-                    array_len_range=(2, 6))
+    s = DatasetSpec(
+        rows=1_000,
+        arrow_type="list<int32>",
+        value_range=(0, 99_999),
+        null_count=0,
+        seed=1,
+        cardinality_ratio=0.5,
+        array_len_range=(2, 6),
+    )
     d = generate(s)
     assert d.array.type == pa.list_(pa.int32())
     assert len(d.array) == 1_000
-    assert len(d.array.values) == 1_000 * 4       # rows * round(mean(2, 6))
+    assert len(d.array.values) == 1_000 * 4  # rows * round(mean(2, 6))
 
 
 def test_a_spread_distribution_with_no_sigma_is_a_spec_error_not_a_value_error():
@@ -123,21 +141,38 @@ def test_a_spread_distribution_with_no_sigma_is_a_spec_error_not_a_value_error()
         generate(s)
 
 
-@pytest.mark.parametrize("arrow_type,lo,hi,pt", [
-    ("date32", 0, 20_000, pa.date32()),
-    ("timestamp[ms]", 0, 10**12, pa.timestamp("ms")),
-])
+@pytest.mark.parametrize(
+    "arrow_type,lo,hi,pt",
+    [
+        ("date32", 0, 20_000, pa.date32()),
+        ("timestamp[ms]", 0, 10**12, pa.timestamp("ms")),
+    ],
+)
 def test_dates_and_timestamps_generate_end_to_end(arrow_type, lo, hi, pt):
-    s = DatasetSpec(rows=5_000, arrow_type=arrow_type, value_range=(lo, hi),
-                    null_count=0, seed=1, cardinality_ratio=0.1, runs_z=0.0)
+    s = DatasetSpec(
+        rows=5_000,
+        arrow_type=arrow_type,
+        value_range=(lo, hi),
+        null_count=0,
+        seed=1,
+        cardinality_ratio=0.1,
+        runs_z=0.0,
+    )
     d = generate(s)
     assert d.array.type == pt
     assert len(d.array) == 5_000
 
 
 def test_random_strings_generate_end_to_end():
-    s = DatasetSpec(rows=5_000, arrow_type="string", string_length=8,
-                    null_count=0, seed=1, cardinality_ratio=0.1, entropy_bits=5.0)
+    s = DatasetSpec(
+        rows=5_000,
+        arrow_type="string",
+        string_length=8,
+        null_count=0,
+        seed=1,
+        cardinality_ratio=0.1,
+        entropy_bits=5.0,
+    )
     d = generate(s)
     assert d.array.type == pa.string()
     assert all(len(v) == 8 for v in d.array.to_pylist())
@@ -168,18 +203,29 @@ REPRESENTATIVE_SPECS = [
     ("string", dict(string_length=6)),
     ("string", dict(categories=["red", "green", "blue"])),
     ("list<int32>", dict(value_range=(0, 1_000), array_len_range=(1, 4))),
-    ("list<float64>", dict(value_range=(0.0, 1.0), decimal_places=4,
-                           array_len_range=(1, 4))),
+    (
+        "list<float64>",
+        dict(value_range=(0.0, 1.0), decimal_places=4, array_len_range=(1, 4)),
+    ),
 ]
 
 
-@pytest.mark.parametrize("arrow_type,kw", REPRESENTATIVE_SPECS,
-                         ids=[f"{t}:{'/'.join(k)}" for t, k in REPRESENTATIVE_SPECS])
+@pytest.mark.parametrize(
+    "arrow_type,kw",
+    REPRESENTATIVE_SPECS,
+    ids=[f"{t}:{'/'.join(k)}" for t, k in REPRESENTATIVE_SPECS],
+)
 def test_every_type_family_generates_without_raising(arrow_type, kw):
     """One representative spec per type family the design lists (section 4.1).
     Validation is the only place the generator may raise."""
-    d = dict(rows=2_000, arrow_type=arrow_type, null_count=5, seed=7,
-             cardinality_ratio=0.05, runs_z=0.0)
+    d = dict(
+        rows=2_000,
+        arrow_type=arrow_type,
+        null_count=5,
+        seed=7,
+        cardinality_ratio=0.05,
+        runs_z=0.0,
+    )
     d.update(kw)
     if "categories" in kw:
         d.pop("cardinality_ratio")
@@ -191,21 +237,37 @@ def test_every_type_family_generates_without_raising(arrow_type, kw):
 
 
 def test_a_dispersion_target_on_strings_is_a_spec_error_not_a_type_error():
-    s = DatasetSpec(rows=1_000, arrow_type="string", string_length=4, null_count=0,
-                    seed=1, cardinality_ratio=0.1, index_of_dispersion=1.0)
+    s = DatasetSpec(
+        rows=1_000,
+        arrow_type="string",
+        string_length=4,
+        null_count=0,
+        seed=1,
+        cardinality_ratio=0.1,
+        index_of_dispersion=1.0,
+    )
     with pytest.raises(SpecError, match="index_of_dispersion"):
         generate(s)
 
 
-@pytest.mark.parametrize("arrow_type,value_range", [
-    ("int64", (-2**63, 2**63 - 1)),
-    ("uint64", (0, 2**64 - 1)),
-])
+@pytest.mark.parametrize(
+    "arrow_type,value_range",
+    [
+        ("int64", (-(2**63), 2**63 - 1)),
+        ("uint64", (0, 2**64 - 1)),
+    ],
+)
 def test_int64_and_uint64_generate_over_their_full_range(arrow_type, value_range):
     """A span beyond int64 overflowed `rng.choice(span)`; the range is
     legitimate, so the draw must handle it rather than validation reject it."""
-    s = DatasetSpec(rows=2_000, arrow_type=arrow_type, value_range=value_range,
-                    null_count=0, seed=1, cardinality_ratio=0.5)
+    s = DatasetSpec(
+        rows=2_000,
+        arrow_type=arrow_type,
+        value_range=value_range,
+        null_count=0,
+        seed=1,
+        cardinality_ratio=0.5,
+    )
     d = generate(s)
     assert d.array.type == s.arrow_dtype
     assert len(d.array) == 2_000
@@ -226,8 +288,9 @@ def test_an_undefined_interarrival_cv_is_recorded_as_undefined_not_a_miss():
 
 
 def test_runs_z_on_a_constant_column_is_recorded_as_undefined_not_a_miss():
-    d = generate(uc1(rows=2_000, value_range=(3.0, 3.0), cardinality_ratio=None,
-                     runs_z=-0.25))
+    d = generate(
+        uc1(rows=2_000, value_range=(3.0, 3.0), cardinality_ratio=None, runs_z=-0.25)
+    )
     m = d.manifest
     assert math.isnan(m.achieved["runs_z"])
     assert m.within_tolerance["runs_z"] is False
@@ -236,8 +299,14 @@ def test_runs_z_on_a_constant_column_is_recorded_as_undefined_not_a_miss():
 
 
 def test_manifest_records_the_support_shortfall_by_mechanism():
-    d = generate(uc1(rows=5_000, distribution=Distribution(kind="lognormal", mean=4.0,
-                                                          sigma=1.0, shift=-1.0)))
+    d = generate(
+        uc1(
+            rows=5_000,
+            distribution=Distribution(
+                kind="lognormal", mean=4.0, sigma=1.0, shift=-1.0
+            ),
+        )
+    )
     m = d.manifest
     assert m.clip_collapsed > 0
     assert m.round_collapsed >= 0
@@ -269,29 +338,44 @@ def test_an_out_of_band_runs_target_is_recorded_as_a_clamp_under_solves():
 
 
 MISS_INDUCING = [
-    dict(rows=5_000, cardinality_ratio=0.5, entropy_bits=0.1),            # clamp
-    dict(rows=5_000, distribution=Distribution(kind="lognormal", mean=4.0,
-                                               sigma=1.0, shift=-1.0)),   # clip
-    dict(rows=2_000, cardinality_ratio=1.0, interarrival_cv=0.5),         # undefined
-    dict(rows=2_000, value_range=(3.0, 3.0), cardinality_ratio=None,
-         runs_z=-0.25),                                                   # undefined
-    dict(rows=5_000, runs_z=-10_000.0),                                   # clamp
-    dict(rows=5_000, runs_z=-0.25, interarrival_cv=0.5),                  # combined
-    dict(rows=5_000, interarrival_cv=0.01),                               # clamp
-    dict(rows=1_000, value_range=(0.0, 1.0), decimal_places=2,
-         cardinality_ratio=0.05, distribution=Distribution(kind="normal",
-                                                           mean=0.5, sigma=0.03)),  # rounding
-    dict(rows=20_000, value_range=(0.0, 1.0), decimal_places=2,
-         cardinality_ratio=0.5),                                          # capacity
+    dict(rows=5_000, cardinality_ratio=0.5, entropy_bits=0.1),  # clamp
+    dict(
+        rows=5_000,
+        distribution=Distribution(kind="lognormal", mean=4.0, sigma=1.0, shift=-1.0),
+    ),  # clip
+    dict(rows=2_000, cardinality_ratio=1.0, interarrival_cv=0.5),  # undefined
+    dict(
+        rows=2_000, value_range=(3.0, 3.0), cardinality_ratio=None, runs_z=-0.25
+    ),  # undefined
+    dict(rows=5_000, runs_z=-10_000.0),  # clamp
+    dict(rows=5_000, runs_z=-0.25, interarrival_cv=0.5),  # combined
+    dict(rows=5_000, interarrival_cv=0.01),  # clamp
+    dict(
+        rows=1_000,
+        value_range=(0.0, 1.0),
+        decimal_places=2,
+        cardinality_ratio=0.05,
+        distribution=Distribution(kind="normal", mean=0.5, sigma=0.03),
+    ),  # rounding
+    dict(
+        rows=20_000, value_range=(0.0, 1.0), decimal_places=2, cardinality_ratio=0.5
+    ),  # capacity
 ]
 
 
-@pytest.mark.parametrize("kw", MISS_INDUCING, ids=[str(i) for i in range(len(MISS_INDUCING))])
+@pytest.mark.parametrize(
+    "kw", MISS_INDUCING, ids=[str(i) for i in range(len(MISS_INDUCING))]
+)
 def test_every_warning_starts_with_one_of_the_four_prefixes_and_a_metric_name(kw):
     """The vocabulary a harness author depends on: `clamp:`, `miss:`,
     `skipped:` or `undefined:`, then the metric name."""
-    metrics = ("cardinality_ratio", "entropy_bits", "index_of_dispersion",
-               "runs_z", "interarrival_cv")
+    metrics = (
+        "cardinality_ratio",
+        "entropy_bits",
+        "index_of_dispersion",
+        "runs_z",
+        "interarrival_cv",
+    )
     m = generate(uc1(**kw)).manifest
     assert m.warnings, "this spec was chosen to warn"
     for w in m.warnings:
@@ -301,10 +385,17 @@ def test_every_warning_starts_with_one_of_the_four_prefixes_and_a_metric_name(kw
 
 
 def test_dispersion_solve_warnings_use_the_vocabulary():
-    s = DatasetSpec(rows=5_000, arrow_type="float64", value_range=(-20.0, 20.0),
-                    decimal_places=4, null_count=0, seed=0, cardinality_ratio=0.5,
-                    distribution=Distribution(kind="lognormal", mean=4.0, shift=-10.0),
-                    index_of_dispersion=1.0)
+    s = DatasetSpec(
+        rows=5_000,
+        arrow_type="float64",
+        value_range=(-20.0, 20.0),
+        decimal_places=4,
+        null_count=0,
+        seed=0,
+        cardinality_ratio=0.5,
+        distribution=Distribution(kind="lognormal", mean=4.0, shift=-10.0),
+        index_of_dispersion=1.0,
+    )
     m = generate(s).manifest
     assert m.solves["index_of_dispersion"].status == "invalid_bracket"
     assert any(w.startswith("miss: index_of_dispersion") for w in m.warnings)

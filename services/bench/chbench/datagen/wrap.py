@@ -27,12 +27,14 @@ authoritative and draws `rows` lengths uniformly from array_len_range, then
 adjusts them so they sum to exactly len(values), staying within the range
 where possible.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pyarrow as pa
 
 from chbench.datagen.spec import DatasetSpec, representable_range
+
 
 def wrap(values: np.ndarray, spec: DatasetSpec, rng: np.random.Generator) -> pa.Array:
     """Round, range-check, chunk, null-inject and cast `values` per `spec`.
@@ -53,8 +55,9 @@ def wrap(values: np.ndarray, spec: DatasetSpec, rng: np.random.Generator) -> pa.
     return _wrap_scalar(values, spec, dtype, rng)
 
 
-def _round_to_places(values: np.ndarray, decimal_places: int | None,
-                      elem_dtype: pa.DataType) -> np.ndarray:
+def _round_to_places(
+    values: np.ndarray, decimal_places: int | None, elem_dtype: pa.DataType
+) -> np.ndarray:
     values = np.asarray(values)
     if decimal_places is None:
         return values
@@ -82,14 +85,19 @@ def _range_check(values: np.ndarray, arrow_type: str, elem_dtype: pa.DataType) -
         )
 
 
-def _wrap_scalar(values: np.ndarray, spec: DatasetSpec, dtype: pa.DataType,
-                  rng: np.random.Generator) -> pa.Array:
+def _wrap_scalar(
+    values: np.ndarray, spec: DatasetSpec, dtype: pa.DataType, rng: np.random.Generator
+) -> pa.Array:
     mask = _null_mask(len(values), spec.null_count, rng)
     return _cast(values, dtype, mask)
 
 
-def _wrap_list(values: np.ndarray, spec: DatasetSpec, elem_dtype: pa.DataType,
-               rng: np.random.Generator) -> pa.Array:
+def _wrap_list(
+    values: np.ndarray,
+    spec: DatasetSpec,
+    elem_dtype: pa.DataType,
+    rng: np.random.Generator,
+) -> pa.Array:
     low, high = spec.array_len_range
     lengths = _chunk_lengths(len(values), spec.rows, low, high, rng)
 
@@ -111,8 +119,9 @@ def _wrap_list(values: np.ndarray, spec: DatasetSpec, elem_dtype: pa.DataType,
     )
 
 
-def _chunk_lengths(total: int, rows: int, low: int, high: int,
-                    rng: np.random.Generator) -> np.ndarray:
+def _chunk_lengths(
+    total: int, rows: int, low: int, high: int, rng: np.random.Generator
+) -> np.ndarray:
     """Draw `rows` lengths uniformly from [low, high], then nudge them so they
     sum to exactly `total`, staying within [low, high] where capacity allows.
     """
@@ -163,7 +172,11 @@ def _cast(values: np.ndarray, dtype: pa.DataType, mask: np.ndarray) -> pa.Array:
         # pyarrow version; go through pyarrow's own cast rather than
         # constructing decimal scalars by hand.
         src = pa.array(values, type=pa.float64(), mask=mask)
-    elif pa.types.is_timestamp(dtype) or pa.types.is_date(dtype) or pa.types.is_time(dtype):
+    elif (
+        pa.types.is_timestamp(dtype)
+        or pa.types.is_date(dtype)
+        or pa.types.is_time(dtype)
+    ):
         # Values are integers in the unit's resolution. The source integer
         # width must match the target's bit width: on this pyarrow version an
         # int64 -> date32/time32 cast raises ArrowNotImplementedError, while

@@ -7,17 +7,35 @@ from chbench.harness.validate import TableVariant
 
 
 def variant(**kw):
-    d = dict(ch_type="Float64", nullable=False, primary_key=False, projection=False,
-             codec="none", skip_index="none", compression="LZ4", status="ok",
-             skip_reason=None, warnings=())
+    d = dict(
+        ch_type="Float64",
+        nullable=False,
+        primary_key=False,
+        projection=False,
+        codec="none",
+        skip_index="none",
+        compression="LZ4",
+        status="ok",
+        skip_reason=None,
+        warnings=(),
+    )
     d.update(kw)
     return TableVariant(**d)
 
 
 @pytest.fixture(scope="module")
 def small_dataset():
-    return generate(DatasetSpec(rows=50_000, arrow_type="float64", value_range=(-1.0, 10.0),
-                                decimal_places=8, null_count=0, seed=1, cardinality_ratio=0.5))
+    return generate(
+        DatasetSpec(
+            rows=50_000,
+            arrow_type="float64",
+            value_range=(-1.0, 10.0),
+            decimal_places=8,
+            null_count=0,
+            seed=1,
+            cardinality_ratio=0.5,
+        )
+    )
 
 
 @pytest.fixture
@@ -43,7 +61,7 @@ def test_load_produces_one_wide_part_with_per_column_stats(ch, table, small_data
     assert r.error is None and r.insert_ms > 0
     s = r.stats
     assert s.rows == 50_000 and s.parts == 1
-    assert s.uncompressed_bytes == 50_000 * 8          # v alone: Float64 is 8 bytes
+    assert s.uncompressed_bytes == 50_000 * 8  # v alone: Float64 is 8 bytes
     assert 0 < s.compressed_bytes and s.marks_bytes > 0
     assert storage_stats(ch, name) == s
 
@@ -51,23 +69,29 @@ def test_load_produces_one_wide_part_with_per_column_stats(ch, table, small_data
 @pytest.mark.clickhouse
 def test_decimal32_inserts_through_the_arrow_path(ch, table, small_dataset):
     name = table("bbbbbbbb00000000")
-    r = load_table(ch, name, variant(ch_type="Decimal32(8)", codec="Delta"), small_dataset)
+    r = load_table(
+        ch, name, variant(ch_type="Decimal32(8)", codec="Delta"), small_dataset
+    )
     assert r.status == "ok", r.error
-    assert r.stats.uncompressed_bytes == 50_000 * 4     # Decimal32 is 4 bytes
+    assert r.stats.uncompressed_bytes == 50_000 * 4  # Decimal32 is 4 bytes
 
 
 @pytest.mark.clickhouse
 def test_decimal64_inserts_through_the_arrow_path(ch, table, small_dataset):
     name = table("bbbbbbbb00000001")
-    r = load_table(ch, name, variant(ch_type="Decimal64(8)", codec="Delta"), small_dataset)
+    r = load_table(
+        ch, name, variant(ch_type="Decimal64(8)", codec="Delta"), small_dataset
+    )
     assert r.status == "ok", r.error
-    assert r.stats.uncompressed_bytes == 50_000 * 8     # Decimal64 is 8 bytes
+    assert r.stats.uncompressed_bytes == 50_000 * 8  # Decimal64 is 8 bytes
 
 
 @pytest.mark.clickhouse
 def test_string_and_low_cardinality_string_load(ch, table, small_dataset):
-    for ch_type, codec, suffix in (("String", "none", "cccccccc00000000"),
-                                   ("LowCardinality(String)", "LowCardinality", "cccccccc00000001")):
+    for ch_type, codec, suffix in (
+        ("String", "none", "cccccccc00000000"),
+        ("LowCardinality(String)", "LowCardinality", "cccccccc00000001"),
+    ):
         name = table(suffix)
         r = load_table(ch, name, variant(ch_type=ch_type, codec=codec), small_dataset)
         assert r.status == "ok", r.error
@@ -78,7 +102,8 @@ def table_exists(ch, name: str) -> bool:
     db, _, t = name.rpartition(".")
     rows = ch.query_rows(
         "SELECT count() FROM system.tables WHERE database = {db:String} AND name = {t:String}",
-        parameters={"db": db, "t": t})
+        parameters={"db": db, "t": t},
+    )
     return rows[0][0] == 1
 
 
@@ -129,39 +154,65 @@ def test_storage_stats_use_the_per_column_fields(ch, table, small_dataset):
     rows = ch.query_rows(
         "SELECT column, sum(column_data_uncompressed_bytes) FROM system.parts_columns "
         "WHERE database = 'bench' AND table = {t:String} AND active GROUP BY column ORDER BY column",
-        parameters={"t": name.split(".")[1]})
+        parameters={"t": name.split(".")[1]},
+    )
     by_col = dict(rows)
     assert by_col["row_id"] == 50_000 * 8 and by_col["v"] == 50_000 * 4
     assert storage_stats(ch, name).uncompressed_bytes == by_col["v"]
 
 
 @pytest.mark.clickhouse
-@pytest.mark.parametrize("skip_index,nonzero", [("minmax", True), ("set(100)", True),
-                                                ("bloom_filter", True), ("none", False)])
+@pytest.mark.parametrize(
+    "skip_index,nonzero",
+    [("minmax", True), ("set(100)", True), ("bloom_filter", True), ("none", False)],
+)
 def test_index_bytes_recorded(ch, table, small_dataset, skip_index, nonzero):
-    name = table("c" + skip_index.replace("(", "").replace(")", "")[:6].ljust(7, "0") + "00000000")
+    name = table(
+        "c"
+        + skip_index.replace("(", "").replace(")", "")[:6].ljust(7, "0")
+        + "00000000"
+    )
     r = load_table(ch, name, variant(skip_index=skip_index), small_dataset)
     assert r.status == "ok", r.error
     s = r.stats
     if nonzero:
         assert s.index_compressed_bytes > 0 and s.index_uncompressed_bytes > 0
     else:
-        assert (s.index_compressed_bytes, s.index_uncompressed_bytes, s.index_marks_bytes) == (0, 0, 0)
+        assert (
+            s.index_compressed_bytes,
+            s.index_uncompressed_bytes,
+            s.index_marks_bytes,
+        ) == (0, 0, 0)
 
 
 @pytest.mark.clickhouse
-@pytest.mark.parametrize("skip_index", [
-    "minmax:1", "minmax:2", "minmax:4", "minmax:8", "set(125):2", "set(125):8",
-    "bloom_filter(0.001):1", "bloom_filter(0.01):4", "bloom_filter(0.025):2", "bloom_filter(0.05):8",
-])
-def test_granularity_and_fpr_tables_create_and_fill(ch, table, small_dataset, skip_index):
+@pytest.mark.parametrize(
+    "skip_index",
+    [
+        "minmax:1",
+        "minmax:2",
+        "minmax:4",
+        "minmax:8",
+        "set(125):2",
+        "set(125):8",
+        "bloom_filter(0.001):1",
+        "bloom_filter(0.01):4",
+        "bloom_filter(0.025):2",
+        "bloom_filter(0.05):8",
+    ],
+)
+def test_granularity_and_fpr_tables_create_and_fill(
+    ch, table, small_dataset, skip_index
+):
     digits = "".join(c for c in skip_index if c.isalnum())[:7].ljust(7, "0")
     name = table("g" + digits + "00000000")
     r = load_table(ch, name, variant(skip_index=skip_index), small_dataset)
     assert r.status == "ok", r.error
     assert r.stats.index_compressed_bytes > 0
     gran = int(skip_index.rsplit(":", 1)[1])
-    got = ch.query_rows("SELECT granularity FROM system.data_skipping_indices "
-                        "WHERE database = 'bench' AND table = {t:String}",
-                        parameters={"t": name.split(".")[1]})
+    got = ch.query_rows(
+        "SELECT granularity FROM system.data_skipping_indices "
+        "WHERE database = 'bench' AND table = {t:String}",
+        parameters={"t": name.split(".")[1]},
+    )
     assert [tuple(r) for r in got] == [(gran,)]

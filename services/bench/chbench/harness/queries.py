@@ -56,6 +56,7 @@ relative to.
 `full_scan_sql`, which is handed a `TableVariant` directly, decides its
 numeric-vs-string branch from `ch_type` the same way.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -69,7 +70,7 @@ import numpy as np
 import pyarrow as pa
 
 from chbench.harness.loader import arrow_type_for, base_type
-from chbench.harness.suite import QueryAxes, QueryKind
+from chbench.harness.suite import QueryAxes
 from chbench.harness.validate import TableVariant
 
 _DECIMAL_SCALE_RE = re.compile(r"^Decimal\d+\((\d+)\)$")
@@ -166,7 +167,7 @@ def _render_literal_typed(value, ch_type: str) -> str:
         # `value` is the integer ticks since midnight in the dataset's unit,
         # which is the column's own precision (`resolve_type`).
         places = int(m.group(1))
-        seconds, ticks = divmod(int(value), 10 ** places)
+        seconds, ticks = divmod(int(value), 10**places)
         hours, rest = divmod(seconds, 3600)
         minutes, secs = divmod(rest, 60)
         text = f"{hours:02d}:{minutes:02d}:{secs:02d}"
@@ -197,8 +198,11 @@ def _render_literal_typed(value, ch_type: str) -> str:
         # precision through numpy, and for a zoned column name the zone the
         # string is in -- a bare string would be read in the column's own zone.
         naive = casted.cast(pa.timestamp(target.unit)) if target.tz else casted
-        text = _quote(np.datetime_as_string(naive.to_numpy(zero_copy_only=False)[0],
-                                            unit=target.unit).replace("T", " "))
+        text = _quote(
+            np.datetime_as_string(
+                naive.to_numpy(zero_copy_only=False)[0], unit=target.unit
+            ).replace("T", " ")
+        )
         if not target.tz:
             return text
         if t.startswith("DateTime64"):
@@ -228,15 +232,21 @@ def _non_null_mask(v: np.ndarray) -> np.ndarray:
     if kind == "M":
         return ~np.isnat(v)
     if kind == "O":
+
         def _is_null(x):
             return x is None or (isinstance(x, float) and math.isnan(x))
+
         return np.array([not _is_null(x) for x in v], dtype=bool)
     return np.ones(len(v), dtype=bool)
 
 
-def range_predicate(values: np.ndarray, target_fraction: float,
-                     rng: np.random.Generator, *,
-                     ch_type: str | None = None) -> tuple[str, float]:
+def range_predicate(
+    values: np.ndarray,
+    target_fraction: float,
+    rng: np.random.Generator,
+    *,
+    ch_type: str | None = None,
+) -> tuple[str, float]:
     """A `v BETWEEN a AND b` predicate covering `target_fraction` of `values`.
 
     Null representations (see `_non_null_mask`) are stripped before sorting:
@@ -260,8 +270,10 @@ def range_predicate(values: np.ndarray, target_fraction: float,
     clean = v[_non_null_mask(v)]
     n_clean = len(clean)
     if n_clean == 0:
-        raise ValueError("range_predicate: values are all null; there is no "
-                          "non-null value to build a range from")
+        raise ValueError(
+            "range_predicate: values are all null; there is no "
+            "non-null value to build a range from"
+        )
     sorted_v = np.sort(clean)
     window = min(n_clean, max(1, round(target_fraction * n)))
     max_start = n_clean - window
@@ -274,9 +286,13 @@ def range_predicate(values: np.ndarray, target_fraction: float,
     return sql, actual
 
 
-def in_predicate(values: np.ndarray, target_fraction: float,
-                  n_values: int, *,
-                  ch_type: str | None = None) -> tuple[str, float]:
+def in_predicate(
+    values: np.ndarray,
+    target_fraction: float,
+    n_values: int,
+    *,
+    ch_type: str | None = None,
+) -> tuple[str, float]:
     """A `v IN (...)` predicate whose combined frequency is closest to
     `target_fraction` among sets of `n_values` distinct values.
 
@@ -305,8 +321,10 @@ def in_predicate(values: np.ndarray, target_fraction: float,
     clean = v[_non_null_mask(v)]
     uniq, counts = np.unique(clean, return_counts=True)
     if len(uniq) == 0:
-        raise ValueError("in_predicate: values are all null; there is no "
-                          "non-null value to build an IN list from")
+        raise ValueError(
+            "in_predicate: values are all null; there is no "
+            "non-null value to build an IN list from"
+        )
     k = min(n_values, len(uniq))
     remaining = list(range(len(uniq)))
     chosen: list[int] = []
@@ -314,8 +332,11 @@ def in_predicate(values: np.ndarray, target_fraction: float,
     for _ in range(k):
         best = min(
             remaining,
-            key=lambda idx: (abs((running + counts[idx]) / n - target_fraction),
-                              -counts[idx], idx),
+            key=lambda idx: (
+                abs((running + counts[idx]) / n - target_fraction),
+                -counts[idx],
+                idx,
+            ),
         )
         chosen.append(best)
         running += counts[best]
@@ -365,8 +386,9 @@ def filter_sql(name: str, variant: TableVariant, predicate_sql: str) -> str:
     return f"SELECT {_aggregate_select(variant)} FROM {name} WHERE {predicate_sql}"
 
 
-def expand_queries(axes: QueryAxes, values: np.ndarray, variant: TableVariant,
-                    rng: np.random.Generator) -> list[QueryVariant]:
+def expand_queries(
+    axes: QueryAxes, values: np.ndarray, variant: TableVariant, rng: np.random.Generator
+) -> list[QueryVariant]:
     """The cartesian product of `axes.kinds`, `axes.query_condition_cache`
     and `axes.cache_mode` (not `axes.samples`, which is the runner's repeat
     count for a single `QueryVariant`, not an axis of distinct queries).
@@ -389,25 +411,29 @@ def expand_queries(axes: QueryAxes, values: np.ndarray, variant: TableVariant,
             values_n = kind.values
             if predicate_kind == "range":
                 predicate_sql, actual_fraction = range_predicate(
-                    values, kind.target_fraction, rng, ch_type=variant.ch_type)
+                    values, kind.target_fraction, rng, ch_type=variant.ch_type
+                )
             elif predicate_kind == "in":
                 predicate_sql, actual_fraction = in_predicate(
-                    values, kind.target_fraction, kind.values, ch_type=variant.ch_type)
+                    values, kind.target_fraction, kind.values, ch_type=variant.ch_type
+                )
             else:
                 raise ValueError(f"unknown predicate kind {predicate_kind!r}")
 
         for qcc in axes.query_condition_cache:
             for cache_mode in axes.cache_mode:
-                variants.append(QueryVariant(
-                    kind=kind.kind,
-                    predicate_kind=predicate_kind,
-                    target_fraction=kind.target_fraction,
-                    values_n=values_n,
-                    qcc=qcc,
-                    cache_mode=cache_mode,
-                    predicate_sql=predicate_sql,
-                    actual_fraction=actual_fraction,
-                ))
+                variants.append(
+                    QueryVariant(
+                        kind=kind.kind,
+                        predicate_kind=predicate_kind,
+                        target_fraction=kind.target_fraction,
+                        values_n=values_n,
+                        qcc=qcc,
+                        cache_mode=cache_mode,
+                        predicate_sql=predicate_sql,
+                        actual_fraction=actual_fraction,
+                    )
+                )
     return variants
 
 
@@ -415,15 +441,17 @@ def query_id(table_id: str, variant: QueryVariant) -> str:
     """A 16-hex hash of `table_id` and every field of `variant` that affects
     the query. Stable across calls with the same inputs; changes if any
     field changes."""
-    key = "\x1f".join([
-        table_id,
-        variant.kind,
-        str(variant.predicate_kind),
-        str(variant.target_fraction),
-        str(variant.values_n),
-        str(variant.qcc),
-        variant.cache_mode,
-        str(variant.predicate_sql),
-        str(variant.actual_fraction),
-    ])
+    key = "\x1f".join(
+        [
+            table_id,
+            variant.kind,
+            str(variant.predicate_kind),
+            str(variant.target_fraction),
+            str(variant.values_n),
+            str(variant.qcc),
+            variant.cache_mode,
+            str(variant.predicate_sql),
+            str(variant.actual_fraction),
+        ]
+    )
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]

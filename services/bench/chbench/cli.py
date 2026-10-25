@@ -26,6 +26,7 @@ halfway is distinguishable from one that failed. Every error message goes to std
 *before* the store is opened: `sqlite3.connect` creates its file, so
 reporting on a suite with no results must not be what creates `results.db`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,7 +42,10 @@ from rich.table import Table
 from chbench.datagen.cache import Manifest
 from chbench.harness.client import CHClient, Connection
 from chbench.harness.orchestrate import (
-    UnfinishedRunError, default_console, force_utf8, run_suite,
+    UnfinishedRunError,
+    default_console,
+    force_utf8,
+    run_suite,
 )
 from chbench.harness.report import filter_where, render_table, summarise, write_csv
 from chbench.harness.store import Store
@@ -58,8 +62,13 @@ _DEFAULT_PERCENTILES = (50, 90, 99)
 # them. Mirrors `chbench.datagen.cache._TARGETABLE`; a metric absent from a
 # manifest's `achieved` renders as a dash rather than an error, so the two
 # lists drifting apart degrades the display instead of breaking it.
-_METRICS = ("cardinality_ratio", "entropy_bits", "index_of_dispersion",
-            "runs_z", "interarrival_cv")
+_METRICS = (
+    "cardinality_ratio",
+    "entropy_bits",
+    "index_of_dispersion",
+    "runs_z",
+    "interarrival_cv",
+)
 
 # What `ddl.table_name` appends to a suite name: an underscore and the first
 # eight hex characters of the table id. `clean` matches on this rather than
@@ -87,29 +96,49 @@ def main(argv: list[str] | None = None) -> int:
         # configured through the environment and the message has to say
         # which host and port were actually tried.
         conn = Connection.from_env()
-        return _fail(f"cannot reach ClickHouse at {conn.host}:{conn.port} "
-                     f"as user {conn.user!r}: {e}")
+        return _fail(
+            f"cannot reach ClickHouse at {conn.host}:{conn.port} "
+            f"as user {conn.user!r}: {e}"
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chbench",
-        description="Benchmark ClickHouse storage and query optimisations.")
+        description="Benchmark ClickHouse storage and query optimisations.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="run a suite: load the grid and take samples")
     run.add_argument("suite", help="path to the suite YAML file")
-    run.add_argument("--force", action="store_true",
-                     help="re-run every query, ignoring the samples already held")
-    run.add_argument("--samples-add", type=_non_negative, default=0, metavar="N",
-                     help="raise each query's target to at least N more than it holds")
-    run.add_argument("--dry-run", action="store_true",
-                     help="print the expanded grid and stop; nothing is created")
-    run.add_argument("--explain", action="store_true",
-                     help="also print each query's EXPLAIN plan (always stored)")
-    run.add_argument("--ignore-unfinished", action="store_true",
-                     help="start even though the store holds an unfinished run of "
-                          "this suite (only if that process is no longer running)")
+    run.add_argument(
+        "--force",
+        action="store_true",
+        help="re-run every query, ignoring the samples already held",
+    )
+    run.add_argument(
+        "--samples-add",
+        type=_non_negative,
+        default=0,
+        metavar="N",
+        help="raise each query's target to at least N more than it holds",
+    )
+    run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the expanded grid and stop; nothing is created",
+    )
+    run.add_argument(
+        "--explain",
+        action="store_true",
+        help="also print each query's EXPLAIN plan (always stored)",
+    )
+    run.add_argument(
+        "--ignore-unfinished",
+        action="store_true",
+        help="start even though the store holds an unfinished run of "
+        "this suite (only if that process is no longer running)",
+    )
     _add_store(run)
     _add_cache_dir(run)
     run.set_defaults(handler=_cmd_run)
@@ -117,16 +146,22 @@ def _build_parser() -> argparse.ArgumentParser:
     report = sub.add_parser("report", help="summarise a suite's stored samples")
     report.add_argument("--suite", required=True, help="suite name")
     report.add_argument("--csv", metavar="PATH", help="also write the summary as CSV")
-    report.add_argument("--where", metavar="EXPR",
-                        help='filter, e.g. "codec=T64,cache_mode=warm"; the boolean '
-                             'axes nullable, primary_key, projection and qcc are '
-                             'written 1/0, not the y/- the table shows')
+    report.add_argument(
+        "--where",
+        metavar="EXPR",
+        help='filter, e.g. "codec=T64,cache_mode=warm"; the boolean '
+        "axes nullable, primary_key, projection and qcc are "
+        "written 1/0, not the y/- the table shows",
+    )
     _add_store(report)
     report.set_defaults(handler=_cmd_report)
 
     datasets = sub.add_parser("datasets", help="list the cached datasets")
-    datasets.add_argument("--metrics", action="store_true",
-                          help="also show each dataset's achieved metrics")
+    datasets.add_argument(
+        "--metrics",
+        action="store_true",
+        help="also show each dataset's achieved metrics",
+    )
     _add_cache_dir(datasets)
     datasets.set_defaults(handler=_cmd_datasets)
 
@@ -139,13 +174,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _add_store(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--store", default=DEFAULT_STORE, metavar="PATH",
-                        help=f"SQLite results database (default {DEFAULT_STORE})")
+    parser.add_argument(
+        "--store",
+        default=DEFAULT_STORE,
+        metavar="PATH",
+        help=f"SQLite results database (default {DEFAULT_STORE})",
+    )
 
 
 def _add_cache_dir(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR, metavar="PATH",
-                        help=f"Arrow dataset cache (default {DEFAULT_CACHE_DIR}/)")
+    parser.add_argument(
+        "--cache-dir",
+        default=DEFAULT_CACHE_DIR,
+        metavar="PATH",
+        help=f"Arrow dataset cache (default {DEFAULT_CACHE_DIR}/)",
+    )
 
 
 def _non_negative(text: str) -> int:
@@ -155,8 +198,7 @@ def _non_negative(text: str) -> int:
     before the run has started."""
     value = int(text)
     if value < 0:
-        raise argparse.ArgumentTypeError(
-            f"must be zero or greater, got {value}")
+        raise argparse.ArgumentTypeError(f"must be zero or greater, got {value}")
     return value
 
 
@@ -175,6 +217,7 @@ def _existing_store(path: str) -> Path | None:
 
 # -- run ---------------------------------------------------------------------
 
+
 def _cmd_run(args: argparse.Namespace, console: Console) -> int:
     suite_path = Path(args.suite)
     if not suite_path.is_file():
@@ -185,11 +228,17 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
         return _fail(f"{suite_path}: {e}")
 
     try:
-        summary = run_suite(suite, store_path=args.store, cache_dir=args.cache_dir,
-                            force=args.force, samples_add=args.samples_add,
-                            dry_run=args.dry_run, explain=args.explain,
-                            ignore_unfinished=args.ignore_unfinished,
-                            console=console)
+        summary = run_suite(
+            suite,
+            store_path=args.store,
+            cache_dir=args.cache_dir,
+            force=args.force,
+            samples_add=args.samples_add,
+            dry_run=args.dry_run,
+            explain=args.explain,
+            ignore_unfinished=args.ignore_unfinished,
+            console=console,
+        )
     except UnfinishedRunError as e:
         return _fail(str(e))
 
@@ -198,17 +247,23 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
         f"{summary.tables_error} error | queries: {summary.queries_run} run, "
         f"{summary.queries_skipped_existing} already held | "
         f"samples written: {summary.samples_written}",
-        style="bold", markup=False, highlight=False)
+        style="bold",
+        markup=False,
+        highlight=False,
+    )
     return 0
 
 
 # -- report ------------------------------------------------------------------
 
+
 def _cmd_report(args: argparse.Namespace, console: Console) -> int:
     store_path = _existing_store(args.store)
     if store_path is None:
-        return _fail(f"no results database at {args.store}; "
-                     f"nothing to report for suite {args.suite!r}")
+        return _fail(
+            f"no results database at {args.store}; "
+            f"nothing to report for suite {args.suite!r}"
+        )
 
     with Store(store_path) as store:
         rows = store.query_rows(args.suite)
@@ -225,8 +280,12 @@ def _cmd_report(args: argparse.Namespace, console: Console) -> int:
         return _fail(f"no rows for suite {args.suite!r} match {args.where!r}")
 
     summary = summarise(rows, percentiles)
-    console.print(f"report: {args.suite} ({len(summary)} queries, {len(rows)} samples)",
-                  style="bold", markup=False, highlight=False)
+    console.print(
+        f"report: {args.suite} ({len(summary)} queries, {len(rows)} samples)",
+        style="bold",
+        markup=False,
+        highlight=False,
+    )
     console.print(render_table(summary, percentiles))
 
     if args.csv:
@@ -256,20 +315,33 @@ def _percentiles_for(store: Store, suite_name: str) -> list[int]:
 
 # -- datasets ----------------------------------------------------------------
 
+
 def _cmd_datasets(args: argparse.Namespace, console: Console) -> int:
     cache_dir = Path(args.cache_dir)
     paths = sorted(cache_dir.glob("*.json")) if cache_dir.is_dir() else []
     if not paths:
-        console.print(f"no cached datasets in {cache_dir}", markup=False, highlight=False)
+        console.print(
+            f"no cached datasets in {cache_dir}", markup=False, highlight=False
+        )
         return 0
 
     # Read and parse each manifest once: the warnings printed under the table
     # come from the same objects the rows were built from.
-    manifests = [(path, Manifest.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-                 for path in paths]
+    manifests = [
+        (path, Manifest.from_dict(json.loads(path.read_text(encoding="utf-8"))))
+        for path in paths
+    ]
 
     table = Table(title=f"cached datasets in {cache_dir}")
-    for column in ("dataset id", "rows", "arrow type", "nulls", "seed", "MB", "warnings"):
+    for column in (
+        "dataset id",
+        "rows",
+        "arrow type",
+        "nulls",
+        "seed",
+        "MB",
+        "warnings",
+    ):
         table.add_column(column)
     if args.metrics:
         for metric in _METRICS:
@@ -279,9 +351,15 @@ def _cmd_datasets(args: argparse.Namespace, console: Console) -> int:
         spec = manifest.spec
         arrow = path.with_suffix(".arrow")
         megabytes = f"{arrow.stat().st_size / 1e6:.1f}" if arrow.is_file() else "-"
-        row = [manifest.dataset_id, str(spec.rows), spec.arrow_type,
-               str(spec.null_count), str(spec.seed), megabytes,
-               str(len(manifest.warnings))]
+        row = [
+            manifest.dataset_id,
+            str(spec.rows),
+            spec.arrow_type,
+            str(spec.null_count),
+            str(spec.seed),
+            megabytes,
+            str(len(manifest.warnings)),
+        ]
         if args.metrics:
             row += [_metric_cell(manifest, metric) for metric in _METRICS]
         table.add_row(*row)
@@ -290,9 +368,13 @@ def _cmd_datasets(args: argparse.Namespace, console: Console) -> int:
     if args.metrics:
         for _, manifest in manifests:
             for warning in manifest.warnings:
-                console.print(f"warning {manifest.dataset_id}: {warning}",
-                              style="yellow", markup=False, highlight=False,
-                              soft_wrap=True)
+                console.print(
+                    f"warning {manifest.dataset_id}: {warning}",
+                    style="yellow",
+                    markup=False,
+                    highlight=False,
+                    soft_wrap=True,
+                )
     return 0
 
 
@@ -315,11 +397,14 @@ def _metric_cell(manifest: Manifest, metric: str) -> str:
 
 # -- clean -------------------------------------------------------------------
 
+
 def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
     store_path = _existing_store(args.store)
     if store_path is None:
-        return _fail(f"no results database at {args.store}; "
-                     f"nothing to clean for suite {args.suite!r}")
+        return _fail(
+            f"no results database at {args.store}; "
+            f"nothing to clean for suite {args.suite!r}"
+        )
 
     with Store(store_path) as store:
         known = store.tables_for_suite(args.suite)
@@ -346,13 +431,21 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
     for name in sorted(present - set(known)):
         console.print(
             f"warning: {name} matches suite {args.suite} but is not in the store; "
-            f"left in place", style="yellow", markup=False, highlight=False,
-            soft_wrap=True)
+            f"left in place",
+            style="yellow",
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+        )
 
     never_created = len(known) - dropped
     tail = f" ({never_created} recorded but never created)" if never_created else ""
-    console.print(f"dropped {dropped} table(s) for suite {args.suite}{tail}",
-                  style="bold", markup=False, highlight=False)
+    console.print(
+        f"dropped {dropped} table(s) for suite {args.suite}{tail}",
+        style="bold",
+        markup=False,
+        highlight=False,
+    )
     return 0
 
 
@@ -376,14 +469,18 @@ def _present_tables(client: CHClient, suite_name: str) -> set[str]:
     rows = client.query_rows(
         "SELECT name FROM system.tables WHERE database = {db:String} "
         "AND startsWith(name, {prefix:String})",
-        parameters={"db": database, "prefix": prefix})
+        parameters={"db": database, "prefix": prefix},
+    )
     # `startsWith` alone is not enough: suite `t_a` would match suite
     # `t_a_b`'s tables and report every one of them as an orphan, since they
     # are in the store under a different suite name. Only a remainder that is
     # exactly the eight hex characters `ddl.table_name` appends belongs to
     # this suite.
-    return {f"{database}.{name}" for (name,) in rows
-            if _TABLE_SUFFIX_RE.match(name[len(prefix):])}
+    return {
+        f"{database}.{name}"
+        for (name,) in rows
+        if _TABLE_SUFFIX_RE.match(name[len(prefix) :])
+    }
 
 
 if __name__ == "__main__":

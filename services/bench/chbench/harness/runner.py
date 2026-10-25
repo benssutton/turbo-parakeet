@@ -27,6 +27,7 @@ Nothing here prints: the plan text contains box-drawing characters that
 raise `UnicodeEncodeError` on a cp1252 console, and printing is the
 orchestrator's job under a UTF-8 reconfiguration (FINDINGS section 5).
 """
+
 from __future__ import annotations
 
 import datetime
@@ -68,6 +69,7 @@ class Sample:
     the server does not expose a per-query granule count separately from the
     mark count, and no conversion is invented here.
     """
+
     sample_no: int
     client_ms: float
     server_ms: float
@@ -82,7 +84,7 @@ class Sample:
 
 @dataclass
 class RunResult:
-    status: str                 # "ok" | "error" | "interrupted"
+    status: str  # "ok" | "error" | "interrupted"
     error: str | None
     samples: list[Sample]
     explain: str
@@ -134,9 +136,15 @@ def _fill_from_log(sample: Sample, row: tuple) -> None:
     sample.profile_events = profile
 
 
-def run_query(client: CHClient, name: str, variant: TableVariant, qv: QueryVariant,
-              samples: int, *,
-              on_sample: Callable[[Sample], None] | None = None) -> RunResult:
+def run_query(
+    client: CHClient,
+    name: str,
+    variant: TableVariant,
+    qv: QueryVariant,
+    samples: int,
+    *,
+    on_sample: Callable[[Sample], None] | None = None,
+) -> RunResult:
     """Run `qv` against table `name` `samples` times and collect the results.
 
     The caller is responsible for building `qv` with a deterministically
@@ -213,7 +221,8 @@ def run_query(client: CHClient, name: str, variant: TableVariant, qv: QueryVaria
             for qid, sample in pending.items():
                 result.warnings.append(
                     f"sample {sample.sample_no}: no QueryFinish row in system.query_log "
-                    f"for query_id {qid} after {_LOG_READ_ATTEMPTS} reads")
+                    f"for query_id {qid} after {_LOG_READ_ATTEMPTS} reads"
+                )
 
     def deliver() -> None:
         nonlocal delivering, delivered
@@ -238,18 +247,28 @@ def run_query(client: CHClient, name: str, variant: TableVariant, qv: QueryVaria
                     if missing:
                         result.warnings.append(
                             f"sample {i}: cold mode but these caches were not dropped: "
-                            + ", ".join(missing))
+                            + ", ".join(missing)
+                        )
                 qid = str(uuid.uuid4())
                 ran_at = datetime.datetime.now(datetime.timezone.utc)
                 t0 = time.perf_counter()
                 client.query_rows(sql, query_id=qid, settings=settings)
                 client_ms = (time.perf_counter() - t0) * 1000.0
                 ids.append(qid)
-                result.samples.append(Sample(
-                    sample_no=i, client_ms=client_ms, server_ms=_NAN,
-                    read_rows=_NAN, read_bytes=_NAN, memory_bytes=_NAN,
-                    selected_marks=_NAN, selected_granules=_NAN,
-                    profile_events={}, ran_at=ran_at))
+                result.samples.append(
+                    Sample(
+                        sample_no=i,
+                        client_ms=client_ms,
+                        server_ms=_NAN,
+                        read_rows=_NAN,
+                        read_bytes=_NAN,
+                        memory_bytes=_NAN,
+                        selected_marks=_NAN,
+                        selected_granules=_NAN,
+                        profile_events={},
+                        ran_at=ran_at,
+                    )
+                )
         except Exception as e:  # noqa: BLE001
             fail(e)
 

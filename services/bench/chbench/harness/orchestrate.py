@@ -69,6 +69,7 @@ cell is degraded, e.g. a projection redundant with the primary key) and each
 `RunResult`'s (a cache drop failed, or a `system.query_log` row never
 appeared). None of them is allowed to vanish into the store unread.
 """
+
 from __future__ import annotations
 
 import sys
@@ -119,6 +120,7 @@ class RunSummary:
     `queries_skipped_existing` those already holding enough samples, and
     `samples_written` rows `insert_sample` committed.
     """
+
     run_id: str | None = None
     tables_ok: int = 0
     tables_skipped: int = 0
@@ -138,6 +140,7 @@ class RunContext:
     helper, made adding a single flag a change to every signature and every
     call site between here and the flag's one use.
     """
+
     console: Console
     store: Store
     client: CHClient
@@ -191,9 +194,11 @@ def _say(console: Console, text: str, style: str | None = None) -> None:
 
 
 def _variant_label(variant: TableVariant) -> str:
-    return (f"{variant.ch_type} codec={variant.codec} pk={variant.primary_key} "
-            f"proj={variant.projection} idx={variant.skip_index} "
-            f"comp={variant.compression}")
+    return (
+        f"{variant.ch_type} codec={variant.codec} pk={variant.primary_key} "
+        f"proj={variant.projection} idx={variant.skip_index} "
+        f"comp={variant.compression}"
+    )
 
 
 def _query_label(qv: QueryVariant) -> str:
@@ -217,8 +222,11 @@ def _print_grid(console: Console, variants: list[TableVariant]) -> None:
     cell would truncate exactly the part the user needs to read.
     """
     ok = sum(1 for v in variants if v.status == "ok")
-    _say(console, f"\ngrid: {len(variants)} cells, {ok} valid, "
-                  f"{len(variants) - ok} skipped", style="bold")
+    _say(
+        console,
+        f"\ngrid: {len(variants)} cells, {ok} valid, " f"{len(variants) - ok} skipped",
+        style="bold",
+    )
     for variant in variants:
         if variant.status == "ok":
             _say(console, f"  ok      {_variant_label(variant)}", style="green")
@@ -283,15 +291,26 @@ def _print_report(console: Console, store: Store, suite: Suite) -> None:
         _say(console, "\nno samples recorded for this suite", style="yellow")
         return
     summary = summarise(rows, suite.results.percentiles)
-    _say(console, f"\nreport: {suite.name} "
-                  f"({len(summary)} queries, {len(rows)} samples)", style="bold")
+    _say(
+        console,
+        f"\nreport: {suite.name} " f"({len(summary)} queries, {len(rows)} samples)",
+        style="bold",
+    )
     console.print(render_table(summary, suite.results.percentiles))
 
 
-def run_suite(suite: Suite, *, store_path: str | Path, cache_dir: str | Path,
-              force: bool = False, samples_add: int = 0, dry_run: bool = False,
-              explain: bool = False, ignore_unfinished: bool = False,
-              console: Console | None = None) -> RunSummary:
+def run_suite(
+    suite: Suite,
+    *,
+    store_path: str | Path,
+    cache_dir: str | Path,
+    force: bool = False,
+    samples_add: int = 0,
+    dry_run: bool = False,
+    explain: bool = False,
+    ignore_unfinished: bool = False,
+    console: Console | None = None,
+) -> RunSummary:
     """Run one suite end to end and return what it did.
 
     The order is fixed by spec section 3 and by three constraints on it.
@@ -322,27 +341,42 @@ def run_suite(suite: Suite, *, store_path: str | Path, cache_dir: str | Path,
 
     client = CHClient(Connection.from_env())
     version = client.version()
-    _say(console, f"clickhouse {version} at "
-                  f"{client.connection.host}:{client.connection.port}", style="bold")
+    _say(
+        console,
+        f"clickhouse {version} at "
+        f"{client.connection.host}:{client.connection.port}",
+        style="bold",
+    )
 
     dataset = load_or_generate(suite.dataset, Path(cache_dir))
     manifest = dataset.manifest
     # `cache.save` writes `<cache_dir>/<dataset_id>.arrow`; the store records
     # that path so a result can be traced back to the exact bytes loaded.
     # A path dataset (ruling R35) is read in place: the store records its file.
-    arrow_path = (Path(suite.dataset.path) if suite.dataset.path is not None
-                  else Path(cache_dir) / f"{manifest.dataset_id}.arrow")
-    _say(console, f"dataset {manifest.dataset_id}: {suite.dataset.rows} rows of "
-                  f"{suite.dataset.arrow_type}, {arrow_path}", style="bold")
+    arrow_path = (
+        Path(suite.dataset.path)
+        if suite.dataset.path is not None
+        else Path(cache_dir) / f"{manifest.dataset_id}.arrow"
+    )
+    _say(
+        console,
+        f"dataset {manifest.dataset_id}: {suite.dataset.rows} rows of "
+        f"{suite.dataset.arrow_type}, {arrow_path}",
+        style="bold",
+    )
     _warn(console, "dataset", manifest.warnings)
 
     # R1: the achieved bounds of the final, rounded, cast array -- the values
     # the server will actually hold.
     value_min, value_max = _achieved_bounds(dataset.array)
     variants = expand_grid(
-        suite, null_count=suite.dataset.null_count,
-        value_min=value_min, value_max=value_max, clickhouse_version=version,
-        array=dataset.array)
+        suite,
+        null_count=suite.dataset.null_count,
+        value_min=value_min,
+        value_max=value_max,
+        clickhouse_version=version,
+        array=dataset.array,
+    )
     _print_grid(console, variants)
 
     if dry_run:
@@ -361,15 +395,24 @@ def run_suite(suite: Suite, *, store_path: str | Path, cache_dir: str | Path,
             raise UnfinishedRunError(
                 f"suite {suite.name!r} has an unfinished run {run_id} started "
                 f"at {started_at} in {store.path}. If that process is no longer "
-                f"running, rerun with --ignore-unfinished.")
+                f"running, rerun with --ignore-unfinished."
+            )
         store.upsert_dataset(manifest, str(arrow_path))
         run_id = store.begin_run(suite)
         summary.run_id = run_id
         context = RunContext(
-            console=console, store=store, client=client, suite=suite,
-            version=version, run_id=run_id, summary=summary, force=force,
-            samples_add=samples_add, explain=explain,
-            ignore_unfinished=ignore_unfinished)
+            console=console,
+            store=store,
+            client=client,
+            suite=suite,
+            version=version,
+            run_id=run_id,
+            summary=summary,
+            force=force,
+            samples_add=samples_add,
+            explain=explain,
+            ignore_unfinished=ignore_unfinished,
+        )
         try:
             for variant in variants:
                 _run_variant(context, dataset, values, variant)
@@ -379,8 +422,12 @@ def run_suite(suite: Suite, *, store_path: str | Path, cache_dir: str | Path,
             # so there is nothing left to flush here: say what survived and
             # let the interrupt through (spec section 6.4). `finish_run` is
             # the `finally`'s job, below.
-            _say(console, f"\ninterrupted: {summary.samples_written} sample(s) "
-                          f"written and committed", style="yellow")
+            _say(
+                console,
+                f"\ninterrupted: {summary.samples_written} sample(s) "
+                f"written and committed",
+                style="yellow",
+            )
             raise
         finally:
             # The only call: a run row must never keep `finished_at` NULL
@@ -397,8 +444,9 @@ def run_suite(suite: Suite, *, store_path: str | Path, cache_dir: str | Path,
     return summary
 
 
-def _run_variant(ctx: RunContext, dataset, values: np.ndarray,
-                 variant: TableVariant) -> None:
+def _run_variant(
+    ctx: RunContext, dataset, values: np.ndarray, variant: TableVariant
+) -> None:
     """Load one table variant and run every query against it.
 
     `suite_name` goes to `upsert_table` (ruling R18) so `clean` can drop this
@@ -412,8 +460,9 @@ def _run_variant(ctx: RunContext, dataset, values: np.ndarray,
     name = table_name(suite.name, tid)
 
     if variant.status == "skipped":
-        store.upsert_table(tid, dataset_id, variant, None, ctx.version,
-                           suite_name=suite.name)
+        store.upsert_table(
+            tid, dataset_id, variant, None, ctx.version, suite_name=suite.name
+        )
         ctx.summary.tables_skipped += 1
         return
 
@@ -432,20 +481,30 @@ def _run_variant(ctx: RunContext, dataset, values: np.ndarray,
     # every query. The `tables` row is left as the run that loaded it wrote
     # it, so its `insert_ms` and `created_at` stay that run's evidence.
     if not ctx.force and all(
-            _samples_to_run(store.samples_held(query_id(tid, qv)),
-                            suite.queries.samples, ctx.force, ctx.samples_add) == 0
-            for qv in query_variants):
+        _samples_to_run(
+            store.samples_held(query_id(tid, qv)),
+            suite.queries.samples,
+            ctx.force,
+            ctx.samples_add,
+        )
+        == 0
+        for qv in query_variants
+    ):
         ctx.summary.tables_ok += 1
         _say(console, f"\n{name} {_variant_label(variant)}", style="bold")
-        _say(console, f"  reused: every query already holds its samples; not reloaded",
-             style="dim")
+        _say(
+            console,
+            "  reused: every query already holds its samples; not reloaded",
+            style="dim",
+        )
         for qv in query_variants:
             _run_query_variant(ctx, name, variant, qv, tid)
         return
 
     load = load_table(ctx.client, name, variant, dataset)
-    store.upsert_table(tid, dataset_id, variant, load, ctx.version,
-                       suite_name=suite.name)
+    store.upsert_table(
+        tid, dataset_id, variant, load, ctx.version, suite_name=suite.name
+    )
 
     if load.status == "error":
         ctx.summary.tables_error += 1
@@ -455,18 +514,25 @@ def _run_variant(ctx: RunContext, dataset, values: np.ndarray,
 
     ctx.summary.tables_ok += 1
     stats = load.stats
-    ratio = (stats.uncompressed_bytes / stats.compressed_bytes
-             if stats.compressed_bytes else float("nan"))
+    ratio = (
+        stats.uncompressed_bytes / stats.compressed_bytes
+        if stats.compressed_bytes
+        else float("nan")
+    )
     _say(console, f"\n{name} {_variant_label(variant)}", style="bold")
-    _say(console, f"  loaded {stats.rows} rows in {load.insert_ms:.0f} ms, "
-                  f"{stats.compressed_bytes} compressed bytes, ratio {ratio:.2f}")
+    _say(
+        console,
+        f"  loaded {stats.rows} rows in {load.insert_ms:.0f} ms, "
+        f"{stats.compressed_bytes} compressed bytes, ratio {ratio:.2f}",
+    )
 
     for qv in query_variants:
         _run_query_variant(ctx, name, variant, qv, tid)
 
 
-def _run_query_variant(ctx: RunContext, name: str, variant: TableVariant,
-                       qv: QueryVariant, tid: str) -> None:
+def _run_query_variant(
+    ctx: RunContext, name: str, variant: TableVariant, qv: QueryVariant, tid: str
+) -> None:
     store, console, summary = ctx.store, ctx.console, ctx.summary
     qid = query_id(tid, qv)
     held = store.samples_held(qid)
@@ -474,8 +540,11 @@ def _run_query_variant(ctx: RunContext, name: str, variant: TableVariant,
 
     if want == 0:
         summary.queries_skipped_existing += 1
-        _say(console, f"  skip {_query_label(qv)} ({held} sample(s) already held)",
-             style="dim")
+        _say(
+            console,
+            f"  skip {_query_label(qv)} ({held} sample(s) already held)",
+            style="dim",
+        )
         return
 
     # The query row is written before the samples, carrying whatever EXPLAIN
@@ -506,14 +575,26 @@ def _run_query_variant(ctx: RunContext, name: str, variant: TableVariant,
         # the fact the interrupted query looks like one the run never
         # reached. The samples are already committed by `on_sample`.
         partial = e.run_result
-        store.upsert_query(qid, tid, qv, partial.explain or prior_explain,
-                           status=partial.status, error=partial.error)
+        store.upsert_query(
+            qid,
+            tid,
+            qv,
+            partial.explain or prior_explain,
+            status=partial.status,
+            error=partial.error,
+        )
         raise
     # The run's own outcome goes on the query row (spec section 6.4): without
     # it, a query whose run failed is indistinguishable, after an unattended
     # run, from one the run never reached.
-    store.upsert_query(qid, tid, qv, result.explain or prior_explain,
-                       status=result.status, error=result.error)
+    store.upsert_query(
+        qid,
+        tid,
+        qv,
+        result.explain or prior_explain,
+        status=result.status,
+        error=result.error,
+    )
     _warn(console, _query_label(qv), result.warnings)
 
     if result.status == "error":
@@ -521,8 +602,11 @@ def _run_query_variant(ctx: RunContext, name: str, variant: TableVariant,
         return
 
     client_ms = [s.client_ms for s in result.samples]
-    _say(console, f"       {len(client_ms)} sample(s), "
-                  f"client mean {np.mean(client_ms):.1f} ms")
+    _say(
+        console,
+        f"       {len(client_ms)} sample(s), "
+        f"client mean {np.mean(client_ms):.1f} ms",
+    )
     if ctx.explain and result.explain:
         # R21: stored always, printed only on request. UTF-8 was forced at
         # the top of `run_suite`, which is what makes this box-drawing text

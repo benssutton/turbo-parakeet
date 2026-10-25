@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from chbench.harness.client import CHClient, Connection
+from chbench.harness.client import Connection
 
 
 def test_connection_defaults_match_the_container(monkeypatch):
@@ -10,7 +10,12 @@ def test_connection_defaults_match_the_container(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     c = Connection.from_env()
     assert (c.host, c.port, c.user, c.password, c.database) == (
-        "localhost", 8123, "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "bench")
+        "localhost",
+        8123,
+        "CLICKHOUSE_USER",
+        "CLICKHOUSE_PASSWORD",
+        "bench",
+    )
 
 
 def test_connection_reads_env(monkeypatch):
@@ -34,7 +39,8 @@ def test_query_id_reaches_the_query_log(ch):
     ch.flush_logs()
     rows = ch.query_rows(
         "SELECT count() FROM system.query_log WHERE query_id = {q:String} AND type = 'QueryFinish'",
-        parameters={"q": qid})
+        parameters={"q": qid},
+    )
     assert rows[0][0] == 1
 
 
@@ -46,7 +52,8 @@ def test_query_id_survives_caller_settings(ch):
     ch.flush_logs()
     rows = ch.query_rows(
         "SELECT count() FROM system.query_log WHERE query_id = {q:String} AND type = 'QueryFinish'",
-        parameters={"q": qid})
+        parameters={"q": qid},
+    )
     assert rows[0][0] == 1
 
 

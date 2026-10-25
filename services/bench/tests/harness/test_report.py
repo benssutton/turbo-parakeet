@@ -6,13 +6,31 @@ from chbench.harness.report import filter_where, render_table, summarise, write_
 
 
 def rows():
-    base = dict(table_id="t", ch_type="Float64", nullable=0, primary_key=0, projection=0,
-                codec="Delta", skip_index="none", compression="LZ4", kind="filter",
-                predicate_kind="range", target_fraction=0.1, actual_fraction=0.101,
-                cache_mode="warm", qcc=0, compressed_bytes=500, uncompressed_bytes=1000,
-                index_compressed_bytes=30, index_uncompressed_bytes=60, query_id="q")
-    return [dict(base, sample_no=i, client_ms=float(v), server_ms=float(v) - 0.5)
-            for i, v in enumerate((10, 20, 30, 40, 50))]
+    base = dict(
+        table_id="t",
+        ch_type="Float64",
+        nullable=0,
+        primary_key=0,
+        projection=0,
+        codec="Delta",
+        skip_index="none",
+        compression="LZ4",
+        kind="filter",
+        predicate_kind="range",
+        target_fraction=0.1,
+        actual_fraction=0.101,
+        cache_mode="warm",
+        qcc=0,
+        compressed_bytes=500,
+        uncompressed_bytes=1000,
+        index_compressed_bytes=30,
+        index_uncompressed_bytes=60,
+        query_id="q",
+    )
+    return [
+        dict(base, sample_no=i, client_ms=float(v), server_ms=float(v) - 0.5)
+        for i, v in enumerate((10, 20, 30, 40, 50))
+    ]
 
 
 def test_summary_stats():
@@ -29,12 +47,17 @@ def test_csv_has_the_index_size_columns(tmp_path):
     write_csv(summarise(rows(), [50]), path)
     with open(path, newline="") as f:
         [row] = list(csv.DictReader(f))
-    assert row["index_compressed_bytes"] == "30" and row["index_uncompressed_bytes"] == "60"
+    assert (
+        row["index_compressed_bytes"] == "30"
+        and row["index_uncompressed_bytes"] == "60"
+    )
 
 
 def test_groups_by_query_and_sorts_by_axes():
     r = rows()
-    other = [dict(x, query_id="q2", codec="none", client_ms=1.0, server_ms=0.5) for x in r]
+    other = [
+        dict(x, query_id="q2", codec="none", client_ms=1.0, server_ms=0.5) for x in r
+    ]
     summary = summarise(other + r, [50])
     assert [s["codec"] for s in summary] == ["Delta", "none"]
 
@@ -42,7 +65,11 @@ def test_groups_by_query_and_sorts_by_axes():
 def test_render_table_has_a_column_per_requested_percentile():
     t = render_table(summarise(rows(), [50, 99]), [50, 99])
     headers = [c.header for c in t.columns]
-    assert "p50 client" in headers and "p99 client" in headers and "p90 client" not in headers
+    assert (
+        "p50 client" in headers
+        and "p99 client" in headers
+        and "p90 client" not in headers
+    )
 
 
 def test_write_csv_round_trips(tmp_path):
@@ -69,11 +96,25 @@ def test_skipped_table_has_none_compression_ratio():
     `test_skipped_table_is_stored_with_its_reason`): `compressed_bytes` and
     `uncompressed_bytes` come back as `None` from SQLite, and the ratio must
     stay `None` rather than raising `ZeroDivisionError` or `TypeError`."""
-    base = dict(table_id="t", ch_type="Float64", nullable=0, primary_key=0, projection=0,
-                codec="Delta", skip_index="none", compression="LZ4", kind="full_scan",
-                predicate_kind=None, target_fraction=None, actual_fraction=None,
-                cache_mode="warm", qcc=0, compressed_bytes=None, uncompressed_bytes=None,
-                query_id="q")
+    base = dict(
+        table_id="t",
+        ch_type="Float64",
+        nullable=0,
+        primary_key=0,
+        projection=0,
+        codec="Delta",
+        skip_index="none",
+        compression="LZ4",
+        kind="full_scan",
+        predicate_kind=None,
+        target_fraction=None,
+        actual_fraction=None,
+        cache_mode="warm",
+        qcc=0,
+        compressed_bytes=None,
+        uncompressed_bytes=None,
+        query_id="q",
+    )
     r = [dict(base, sample_no=0, client_ms=1.0, server_ms=1.0)]
     [s] = summarise(r, [50])
     assert s["compression_ratio"] is None
@@ -96,11 +137,25 @@ def test_filter_where_numeric_value_matches_string_form():
 
 
 def test_summarise_single_sample_group():
-    base = dict(table_id="t", ch_type="Float64", nullable=0, primary_key=0, projection=0,
-                codec="Delta", skip_index="none", compression="LZ4", kind="full_scan",
-                predicate_kind=None, target_fraction=None, actual_fraction=None,
-                cache_mode="warm", qcc=0, compressed_bytes=500, uncompressed_bytes=1000,
-                query_id="q")
+    base = dict(
+        table_id="t",
+        ch_type="Float64",
+        nullable=0,
+        primary_key=0,
+        projection=0,
+        codec="Delta",
+        skip_index="none",
+        compression="LZ4",
+        kind="full_scan",
+        predicate_kind=None,
+        target_fraction=None,
+        actual_fraction=None,
+        cache_mode="warm",
+        qcc=0,
+        compressed_bytes=500,
+        uncompressed_bytes=1000,
+        query_id="q",
+    )
     r = [dict(base, sample_no=0, client_ms=7.0, server_ms=6.5)]
     [s] = summarise(r, [50])
     assert s["n"] == 1 and s["client_mean"] == 7.0 and s["client_p50"] == 7.0
@@ -114,11 +169,26 @@ def test_sort_tolerates_none_vs_float_on_the_same_axis():
     `_sort_key`'s bare `tuple(s[a] for a in _AXES)` would compare `None` to
     `0.5` at that position and raise `TypeError`; `summarise` must instead
     return both in a deterministic order."""
-    base = dict(table_id="t", ch_type="Float64", nullable=0, primary_key=0, projection=0,
-                codec="Delta", skip_index="none", compression="LZ4", kind="full_scan",
-                predicate_kind=None, actual_fraction=None, cache_mode="warm", qcc=0,
-                compressed_bytes=500, uncompressed_bytes=1000, sample_no=0, client_ms=1.0,
-                server_ms=1.0)
+    base = dict(
+        table_id="t",
+        ch_type="Float64",
+        nullable=0,
+        primary_key=0,
+        projection=0,
+        codec="Delta",
+        skip_index="none",
+        compression="LZ4",
+        kind="full_scan",
+        predicate_kind=None,
+        actual_fraction=None,
+        cache_mode="warm",
+        qcc=0,
+        compressed_bytes=500,
+        uncompressed_bytes=1000,
+        sample_no=0,
+        client_ms=1.0,
+        server_ms=1.0,
+    )
     rows = [
         dict(base, query_id="q_none", target_fraction=None),
         dict(base, query_id="q_half", target_fraction=0.5),

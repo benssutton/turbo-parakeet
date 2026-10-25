@@ -4,6 +4,7 @@ Order-free. Everything here is a property of the multiset, so stage 2 cannot
 change any of it. Split across three tasks: the support draw (this), the
 frequency profile and entropy solve, and the dispersion solve.
 """
+
 from __future__ import annotations
 
 import string
@@ -21,9 +22,9 @@ from chbench.datagen.metrics import (
 from chbench.datagen.solve import SolveResult, solve_monotone
 from chbench.datagen.spec import DatasetSpec
 
-CLIP_WARN_FRACTION = 0.01   # spikes/FINDINGS.md section 4
+CLIP_WARN_FRACTION = 0.01  # spikes/FINDINGS.md section 4
 REDRAW_CAP = 20
-STRING_ALPHABET = np.array(list(string.digits + string.ascii_letters))   # 62 symbols
+STRING_ALPHABET = np.array(list(string.digits + string.ascii_letters))  # 62 symbols
 
 
 def element_dtype(spec: DatasetSpec) -> pa.DataType:
@@ -36,8 +37,11 @@ def is_lattice(dtype: pa.DataType) -> bool:
     """Types whose values are drawn as int64 on an integer lattice and cast later:
     integers, dates and times (integers in the unit's resolution, design 4.2)
     and bool (the lattice {0, 1})."""
-    return (pa.types.is_integer(dtype) or pa.types.is_temporal(dtype)
-            or pa.types.is_boolean(dtype))
+    return (
+        pa.types.is_integer(dtype)
+        or pa.types.is_temporal(dtype)
+        or pa.types.is_boolean(dtype)
+    )
 
 
 def random_strings(length: int, n: int, rng: np.random.Generator) -> np.ndarray:
@@ -83,13 +87,14 @@ def _raw_draw(spec, rng, size, sigma):
                 "distribution.mean is None; a lognormal distribution "
                 "requires a positive mean"
             )
-        mu_log = np.log(d.mean) - sigma**2 / 2      # mean is BEFORE the shift
+        mu_log = np.log(d.mean) - sigma**2 / 2  # mean is BEFORE the shift
         return rng.lognormal(mu_log, sigma, size=size) + d.shift
     raise ValueError(f"unknown distribution kind {d.kind!r}")
 
 
-def draw_support(spec: DatasetSpec, rng: np.random.Generator,
-                 sigma: float | None = None) -> SupportDraw:
+def draw_support(
+    spec: DatasetSpec, rng: np.random.Generator, sigma: float | None = None
+) -> SupportDraw:
     """Draw k distinct support values, counting the two collapse mechanisms apart.
 
     Every value_range support is drawn *from the distribution* (design 4.2 step
@@ -123,8 +128,14 @@ def draw_support(spec: DatasetSpec, rng: np.random.Generator,
 
     if spec.categories is not None:
         values = np.array(sorted(spec.categories))
-        return SupportDraw(values=values, requested_k=k, clipped_frac=0.0,
-                            clip_collapsed=0, round_collapsed=0, warnings=[])
+        return SupportDraw(
+            values=values,
+            requested_k=k,
+            clipped_frac=0.0,
+            clip_collapsed=0,
+            round_collapsed=0,
+            warnings=[],
+        )
 
     if spec.string_length is not None:
         return _draw_strings(spec, rng, k)
@@ -138,9 +149,8 @@ def draw_support(spec: DatasetSpec, rng: np.random.Generator,
         capacity = hi - lo + 1
         where = f"the integer lattice [{lo}, {hi}]"
     else:
-        capacity = int(round((hi - lo) * 10 ** spec.decimal_places)) + 1
-        where = (f"the range [{lo}, {hi}] at {spec.decimal_places} decimal "
-                 "places")
+        capacity = int(round((hi - lo) * 10**spec.decimal_places)) + 1
+        where = f"the range [{lo}, {hi}] at {spec.decimal_places} decimal " "places"
     if k > capacity:
         warnings.append(
             f"clamp: cardinality_ratio: {k} distinct values requested "
@@ -151,8 +161,14 @@ def draw_support(spec: DatasetSpec, rng: np.random.Generator,
 
     if lattice and spec.distribution.kind == "uniform":
         values = _uniform_lattice(lo, hi, n, rng)
-        return SupportDraw(values=values, requested_k=k, clipped_frac=0.0,
-                            clip_collapsed=0, round_collapsed=0, warnings=warnings)
+        return SupportDraw(
+            values=values,
+            requested_k=k,
+            clipped_frac=0.0,
+            clip_collapsed=0,
+            round_collapsed=0,
+            warnings=warnings,
+        )
 
     def to_grid(x: np.ndarray) -> np.ndarray:
         if lattice:
@@ -198,13 +214,17 @@ def draw_support(spec: DatasetSpec, rng: np.random.Generator,
 
     values = np.sort(np.unique(values))
 
-    return SupportDraw(values=values, requested_k=k, clipped_frac=clipped_frac,
-                        clip_collapsed=clip_collapsed, round_collapsed=round_collapsed,
-                        warnings=warnings)
+    return SupportDraw(
+        values=values,
+        requested_k=k,
+        clipped_frac=clipped_frac,
+        clip_collapsed=clip_collapsed,
+        round_collapsed=round_collapsed,
+        warnings=warnings,
+    )
 
 
-def _uniform_lattice(lo: int, hi: int, n: int,
-                     rng: np.random.Generator) -> np.ndarray:
+def _uniform_lattice(lo: int, hi: int, n: int, rng: np.random.Generator) -> np.ndarray:
     """n distinct integers uniform on [lo, hi], sorted.
 
     `rng.choice(span)` overflows once the span exceeds int64, which int64 and
@@ -230,7 +250,7 @@ def _draw_strings(spec: DatasetSpec, rng: np.random.Generator, k: int) -> Suppor
     are the strings' rounding collapse: redraw the shortfall up to REDRAW_CAP.
     A request beyond the alphabet's capacity is clamped with a warning."""
     length = spec.string_length
-    capacity = STRING_ALPHABET.size ** length
+    capacity = STRING_ALPHABET.size**length
     warnings: list[str] = []
     if k > capacity:
         warnings.append(
@@ -244,13 +264,19 @@ def _draw_strings(spec: DatasetSpec, rng: np.random.Generator, k: int) -> Suppor
     while values.size < n and attempts < REDRAW_CAP:
         values = np.union1d(values, random_strings(length, n - values.size, rng))
         attempts += 1
-    return SupportDraw(values=values, requested_k=k, clipped_frac=0.0,
-                        clip_collapsed=0, round_collapsed=n - values.size,
-                        warnings=warnings)
+    return SupportDraw(
+        values=values,
+        requested_k=k,
+        clipped_frac=0.0,
+        clip_collapsed=0,
+        round_collapsed=n - values.size,
+        warnings=warnings,
+    )
 
 
-def draw_uncapped(spec: DatasetSpec, rng: np.random.Generator,
-                  sigma: float | None = None) -> np.ndarray:
+def draw_uncapped(
+    spec: DatasetSpec, rng: np.random.Generator, sigma: float | None = None
+) -> np.ndarray:
     """The uncapped case (design 4.2 step 1): no cardinality_ratio and no
     categories, so draw `rows` values straight from the distribution, clipped
     and rounded, and let their multiplicities be the frequency profile.
@@ -291,19 +317,26 @@ def powerlaw_counts(rows: int, k: int, s: float) -> np.ndarray:
     return largest_remainder(w, rows - k) + 1
 
 
-def solve_entropy(rows: int, k: int, target: float, iters: int = 60,
-                  tol: float | None = None) -> SolveResult:
+def solve_entropy(
+    rows: int, k: int, target: float, iters: int = 60, tol: float | None = None
+) -> SolveResult:
     """Bisect the power-law exponent. Entropy is monotone DECREASING in s, and the
     reachable range is [entropy_floor, entropy_ceiling]. `tol` is the spec's
     entropy tolerance: a landing outside it is NOT_CONVERGED, not ok."""
     return solve_monotone(
         lambda s: entropy_of_counts(powerlaw_counts(rows, k, s)),
-        target=target, lo=0.0, hi=30.0, increasing=False, iters=iters, tol=tol,
+        target=target,
+        lo=0.0,
+        hi=30.0,
+        increasing=False,
+        iters=iters,
+        tol=tol,
     )
 
 
-def density_counts(support: np.ndarray, spec: DatasetSpec, rows: int,
-                    sigma: float | None) -> np.ndarray:
+def density_counts(
+    support: np.ndarray, spec: DatasetSpec, rows: int, sigma: float | None
+) -> np.ndarray:
     """Weight each support value by the distribution's own density, allocate
     rows - k by largest remainder, then add one per value so every value appears
     (spec 4.2 step 4).
@@ -329,7 +362,7 @@ def density_counts(support: np.ndarray, spec: DatasetSpec, rows: int,
             )
         if d.mean is not None:
             mean = d.mean
-        else:                       # validate() guarantees value_range here
+        else:  # validate() guarantees value_range here
             lo, hi = spec.value_range
             mean = (lo + hi) / 2
         weights = norm.pdf(support - d.shift, loc=mean, scale=sig)
@@ -346,7 +379,7 @@ def density_counts(support: np.ndarray, spec: DatasetSpec, rows: int,
                 "distribution.mean is None; a lognormal distribution "
                 "requires a positive mean"
             )
-        mu_log = np.log(d.mean) - sig**2 / 2      # mean is BEFORE the shift
+        mu_log = np.log(d.mean) - sig**2 / 2  # mean is BEFORE the shift
         weights = lognorm.pdf(support - d.shift, s=sig, scale=np.exp(mu_log))
     else:
         raise ValueError(f"unknown distribution kind {d.kind!r}")
@@ -379,8 +412,9 @@ class Multiset:
     round_collapsed: int = 0
 
 
-def build_multiset(spec: DatasetSpec, rng: np.random.Generator,
-                   sigma: float | None = None) -> Multiset:
+def build_multiset(
+    spec: DatasetSpec, rng: np.random.Generator, sigma: float | None = None
+) -> Multiset:
     """Stage 1: the support (Task 5) and how many times each value appears.
 
     An entropy target picks a power-law exponent by bisection against the ACTUAL
@@ -402,21 +436,24 @@ def build_multiset(spec: DatasetSpec, rng: np.random.Generator,
     warnings: list[str] = []
     solves: dict[str, SolveResult] = {}
 
-    if (sigma is None and spec.distribution.sigma is None
-            and spec.index_of_dispersion is not None):
+    if (
+        sigma is None
+        and spec.distribution.sigma is None
+        and spec.index_of_dispersion is not None
+    ):
         result = solve_dispersion(spec, rng, spec.index_of_dispersion)
         solves["index_of_dispersion"] = result
         if not result.ok:
-            warnings.append(result.warning("index_of_dispersion",
-                                           spec.index_of_dispersion))
+            warnings.append(
+                result.warning("index_of_dispersion", spec.index_of_dispersion)
+            )
         sigma = result.x
 
     if spec.support_size is None:
         # Uncapped: the drawn values' own multiplicities are the profile, and
         # steps 2 to 4 are skipped (design 4.2 step 1). entropy_bits cannot be
         # set here; validate() requires a finite support for it.
-        support, counts = np.unique(draw_uncapped(spec, rng, sigma),
-                                    return_counts=True)
+        support, counts = np.unique(draw_uncapped(spec, rng, sigma), return_counts=True)
         return _finish(support, counts, spec, warnings, solves)
 
     draw = draw_support(spec, rng, sigma=sigma)
@@ -443,8 +480,9 @@ def build_multiset(spec: DatasetSpec, rng: np.random.Generator,
     rows = spec.rows
 
     if spec.entropy_bits is not None:
-        result = solve_entropy(rows, k, spec.entropy_bits,
-                               tol=spec.tolerances.entropy_bits)
+        result = solve_entropy(
+            rows, k, spec.entropy_bits, tol=spec.tolerances.entropy_bits
+        )
         solves["entropy_bits"] = result
         if not result.ok:
             warnings.append(result.warning("entropy_bits", spec.entropy_bits))
@@ -456,14 +494,27 @@ def build_multiset(spec: DatasetSpec, rng: np.random.Generator,
     else:
         counts = density_counts(draw.values, spec, rows, sigma)
 
-    return _finish(draw.values, counts, spec, warnings, solves,
-                   clip_collapsed=draw.clip_collapsed,
-                   round_collapsed=draw.round_collapsed)
+    return _finish(
+        draw.values,
+        counts,
+        spec,
+        warnings,
+        solves,
+        clip_collapsed=draw.clip_collapsed,
+        round_collapsed=draw.round_collapsed,
+    )
 
 
-def _finish(support: np.ndarray, counts: np.ndarray, spec: DatasetSpec,
-            warnings: list[str], solves: dict[str, SolveResult], *,
-            clip_collapsed: int = 0, round_collapsed: int = 0) -> Multiset:
+def _finish(
+    support: np.ndarray,
+    counts: np.ndarray,
+    spec: DatasetSpec,
+    warnings: list[str],
+    solves: dict[str, SolveResult],
+    *,
+    clip_collapsed: int = 0,
+    round_collapsed: int = 0,
+) -> Multiset:
     """Re-measure a recorded dispersion solve on the multiset actually returned
     (see build_multiset) and assemble the result."""
     if "index_of_dispersion" in solves:
@@ -479,9 +530,14 @@ def _finish(support: np.ndarray, counts: np.ndarray, spec: DatasetSpec,
             )
         solves["index_of_dispersion"] = replace(solved, achieved=measured)
 
-    return Multiset(support=support, counts=counts, warnings=warnings,
-                    solves=solves, clip_collapsed=clip_collapsed,
-                    round_collapsed=round_collapsed)
+    return Multiset(
+        support=support,
+        counts=counts,
+        warnings=warnings,
+        solves=solves,
+        clip_collapsed=clip_collapsed,
+        round_collapsed=round_collapsed,
+    )
 
 
 def _generated(spec: DatasetSpec, seed: int, sigma: float) -> np.ndarray:
@@ -492,8 +548,13 @@ def _generated(spec: DatasetSpec, seed: int, sigma: float) -> np.ndarray:
     return np.repeat(m.support, m.counts)
 
 
-def solve_dispersion(spec: DatasetSpec, rng: np.random.Generator, target: float,
-                     lo: float = 0.01, hi: float = 3.0) -> SolveResult:
+def solve_dispersion(
+    spec: DatasetSpec,
+    rng: np.random.Generator,
+    target: float,
+    lo: float = 0.01,
+    hi: float = 3.0,
+) -> SolveResult:
     """Bisect the distribution's spread against the MEASURED index of dispersion.
 
     index_of_dispersion(sigma) is not monotone across a wide bracket: the generated
@@ -512,7 +573,10 @@ def solve_dispersion(spec: DatasetSpec, rng: np.random.Generator, target: float,
     seed = spec.seed
     return solve_monotone(
         lambda s: index_of_dispersion(_generated(spec, seed, s)),
-        target=target, lo=lo, hi=hi, increasing=True,
+        target=target,
+        lo=lo,
+        hi=hi,
+        increasing=True,
         guard=lambda s: _generated(spec, seed, s).mean() > 0,
         tol=spec.tolerances.index_of_dispersion,
     )

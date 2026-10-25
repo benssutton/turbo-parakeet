@@ -1,6 +1,5 @@
 import time
 
-import numpy as np
 import pytest
 
 from chbench.datagen import generate
@@ -14,10 +13,16 @@ ROWS = 10_000_000
 
 
 def test_use_case_1_generates_at_full_scale():
-    s = DatasetSpec(rows=ROWS, arrow_type="float64", value_range=(-1.0, 10.0),
-                    decimal_places=8, null_count=0, seed=42, cardinality_ratio=0.75,
-                    distribution=Distribution(kind="lognormal", mean=4.0, sigma=0.25,
-                                              shift=-1.0))
+    s = DatasetSpec(
+        rows=ROWS,
+        arrow_type="float64",
+        value_range=(-1.0, 10.0),
+        decimal_places=8,
+        null_count=0,
+        seed=42,
+        cardinality_ratio=0.75,
+        distribution=Distribution(kind="lognormal", mean=4.0, sigma=0.25, shift=-1.0),
+    )
     t0 = time.perf_counter()
     d = generate(s)
     elapsed = time.perf_counter() - t0
@@ -28,9 +33,16 @@ def test_use_case_1_generates_at_full_scale():
 
 def test_use_case_2_generates_at_full_scale():
     """Spec section 5.1: 1000 distinct values, entropy 4 bits, runs z -0.25."""
-    s = DatasetSpec(rows=ROWS, arrow_type="int32",
-                    value_range=(1_000_000, 9_999_999), null_count=0, seed=42,
-                    cardinality_ratio=0.0001, entropy_bits=4.0, runs_z=-0.25)
+    s = DatasetSpec(
+        rows=ROWS,
+        arrow_type="int32",
+        value_range=(1_000_000, 9_999_999),
+        null_count=0,
+        seed=42,
+        cardinality_ratio=0.0001,
+        entropy_bits=4.0,
+        runs_z=-0.25,
+    )
     t0 = time.perf_counter()
     d = generate(s)
     elapsed = time.perf_counter() - t0
@@ -53,9 +65,16 @@ def test_runs_z_band_scales_with_the_square_root_of_rows():
 
 def test_interarrival_at_full_scale_is_the_slow_path():
     """Profiling marker: about 2.1 million Python-level iterations at this scale."""
-    s = DatasetSpec(rows=ROWS, arrow_type="float64", value_range=(-1.0, 10.0),
-                    decimal_places=8, null_count=0, seed=42, cardinality_ratio=0.75,
-                    interarrival_cv=1.0)
+    s = DatasetSpec(
+        rows=ROWS,
+        arrow_type="float64",
+        value_range=(-1.0, 10.0),
+        decimal_places=8,
+        null_count=0,
+        seed=42,
+        cardinality_ratio=0.75,
+        interarrival_cv=1.0,
+    )
     t0 = time.perf_counter()
     d = generate(s)
     elapsed = time.perf_counter() - t0

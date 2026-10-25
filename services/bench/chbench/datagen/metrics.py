@@ -15,6 +15,7 @@ Degenerate inputs return nan rather than raising: a constant column and an empty
 column are both legal DatasetSpecs, and the manifest measures every metric for
 every dataset (spec section 2, best-effort).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -128,8 +129,9 @@ def runs_z_bounds(n1: int, n2: int) -> tuple[float, float]:
     return float((2 - mu) / sd), float((r_max - mu) / sd)
 
 
-def repeat_runs(x: np.ndarray, decimal_places: int | None = None
-                ) -> tuple[np.ndarray, np.ndarray]:
+def repeat_runs(
+    x: np.ndarray, decimal_places: int | None = None
+) -> tuple[np.ndarray, np.ndarray]:
     """Start index and length of every maximal run of identical values, length >= 2.
 
     Pass decimal_places for float columns: the spec compares floats after rounding,

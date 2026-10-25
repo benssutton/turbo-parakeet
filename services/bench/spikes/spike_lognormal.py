@@ -4,6 +4,7 @@ solving the log-sigma for a target index of dispersion (var/mean).
 Interpretation: `mean` is the mean of the lognormal variate before `shift`;
 mu_log = ln(mean) - sigma^2 / 2. Values are clipped to [lo, hi] then rounded.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -18,8 +19,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from spikes._common import cardinality_ratio, index_of_dispersion, largest_remainder
 
 
-def lognormal_multiset(n: int, k: int, mean: float, sigma_log: float, shift: float,
-                       lo: float, hi: float, dp: int, seed: int):
+def lognormal_multiset(
+    n: int,
+    k: int,
+    mean: float,
+    sigma_log: float,
+    shift: float,
+    lo: float,
+    hi: float,
+    dp: int,
+    seed: int,
+):
     rng = np.random.default_rng(seed)
     mu_log = np.log(mean) - sigma_log**2 / 2
     raw = rng.lognormal(mu_log, sigma_log, size=k) + shift
@@ -43,8 +53,9 @@ def lognormal_multiset(n: int, k: int, mean: float, sigma_log: float, shift: flo
     return support, counts, info
 
 
-def solve_sigma(n, k, mean, shift, lo, hi, dp, target_id, seed,
-                s_lo=0.01, s_hi=3.0, iters=40):
+def solve_sigma(
+    n, k, mean, shift, lo, hi, dp, target_id, seed, s_lo=0.01, s_hi=3.0, iters=40
+):
     """Bisect sigma_log against the multiset's index of dispersion.
 
     Assumes the final multiset mean (clipped, rounded, and density-weighted
@@ -57,6 +68,7 @@ def solve_sigma(n, k, mean, shift, lo, hi, dp, target_id, seed,
     giving more than one sign change. Callers with such a configuration
     should not rely on the narrowing below finding a single valid crossing.
     """
+
     def stats_at(s):
         support, counts, _ = lognormal_multiset(n, k, mean, s, shift, lo, hi, dp, seed)
         x = np.repeat(support, counts)
@@ -64,7 +76,11 @@ def solve_sigma(n, k, mean, shift, lo, hi, dp, target_id, seed,
 
     mean_lo, id_lo = stats_at(s_lo)
     if mean_lo <= 0:
-        return s_lo, id_lo, f"invalid bracket: mean already <= 0 at s_lo={s_lo} (mean={mean_lo:.4g})"
+        return (
+            s_lo,
+            id_lo,
+            f"invalid bracket: mean already <= 0 at s_lo={s_lo} (mean={mean_lo:.4g})",
+        )
 
     mean_hi, id_hi = stats_at(s_hi)
     if mean_hi <= 0:
@@ -89,12 +105,20 @@ def solve_sigma(n, k, mean, shift, lo, hi, dp, target_id, seed,
         s_hi = pos
         mean_hi, id_hi = stats_at(s_hi)
         if mean_hi <= 0:
-            return s_lo, id_lo, "invalid bracket: no positive-mean sigma found below s_hi"
+            return (
+                s_lo,
+                id_lo,
+                "invalid bracket: no positive-mean sigma found below s_hi",
+            )
 
     if target_id <= id_lo:
         return s_lo, id_lo, f"clamped: min reachable {id_lo:.3f}"
     if target_id >= id_hi:
-        return s_hi, id_hi, f"clamped: max reachable {id_hi:.3f} at sigma={s_hi:.4f} (edge of mean-positive bracket)"
+        return (
+            s_hi,
+            id_hi,
+            f"clamped: max reachable {id_hi:.3f} at sigma={s_hi:.4f} (edge of mean-positive bracket)",
+        )
 
     for _ in range(iters):
         mid = (s_lo + s_hi) / 2
@@ -110,15 +134,21 @@ def main() -> None:
     n, k = 100_000, 75_000
     args = dict(mean=4.0, shift=-1.0, lo=-1.0, hi=10.0, dp=8)
     print("--- shape scan ---")
-    print(f"{'sigma':>6} {'seed':>4} {'mean':>7} {'clipmean':>8} {'ID':>7} {'card':>7} "
-          f"{'clipped%':>9} {'shortfall':>9}")
+    print(
+        f"{'sigma':>6} {'seed':>4} {'mean':>7} {'clipmean':>8} {'ID':>7} {'card':>7} "
+        f"{'clipped%':>9} {'shortfall':>9}"
+    )
     for sigma in (0.25, 0.5, 1.0):
         for seed in (0, 1, 2):
-            support, counts, info = lognormal_multiset(n, k, sigma_log=sigma, seed=seed, **args)
+            support, counts, info = lognormal_multiset(
+                n, k, sigma_log=sigma, seed=seed, **args
+            )
             x = np.repeat(support, counts)
-            print(f"{sigma:>6.2f} {seed:>4} {x.mean():>7.3f} {info['clipped_draw_mean']:>8.4f} "
-                  f"{index_of_dispersion(x):>7.3f} {cardinality_ratio(x):>7.4f} "
-                  f"{100*info['clipped_frac']:>9.2f} {info['support_shortfall']:>9}")
+            print(
+                f"{sigma:>6.2f} {seed:>4} {x.mean():>7.3f} {info['clipped_draw_mean']:>8.4f} "
+                f"{index_of_dispersion(x):>7.3f} {cardinality_ratio(x):>7.4f} "
+                f"{100*info['clipped_frac']:>9.2f} {info['support_shortfall']:>9}"
+            )
 
     print("--- solve sigma for target index of dispersion ---")
     print(f"{'target ID':>9} {'seed':>4} {'sigma':>7} {'achieved':>9}  status")

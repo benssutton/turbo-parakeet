@@ -20,6 +20,7 @@ Corrections applied to the original brief (see task-6 brief + corrections):
    a Float64 staging table and doing `INSERT INTO ... SELECT toDecimalN(v,
    8)`. Which path actually worked is recorded per decimal width.
 """
+
 from __future__ import annotations
 
 import sys
@@ -31,7 +32,12 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
-CH = dict(host="localhost", port=8123, username="CLICKHOUSE_USER", password="CLICKHOUSE_PASSWORD")
+CH = dict(
+    host="localhost",
+    port=8123,
+    username="CLICKHOUSE_USER",
+    password="CLICKHOUSE_PASSWORD",
+)
 
 
 def report_storage(client, name: str) -> None:
@@ -46,9 +52,12 @@ def report_storage(client, name: str) -> None:
         "SELECT column, sum(column_data_compressed_bytes), sum(column_data_uncompressed_bytes), "
         "sum(column_marks_bytes), sum(rows), count() AS parts FROM system.parts_columns "
         "WHERE database = 'bench' AND table = {t:String} AND active GROUP BY column",
-        parameters={"t": name}).result_rows
+        parameters={"t": name},
+    ).result_rows
     for r in rows:
-        print(f"  {name}.{r[0]}: compressed={r[1]} uncompressed={r[2]} marks_bytes={r[3]} rows={r[4]} parts={r[5]}")
+        print(
+            f"  {name}.{r[0]}: compressed={r[1]} uncompressed={r[2]} marks_bytes={r[3]} rows={r[4]} parts={r[5]}"
+        )
 
 
 def insert_float(client, name: str, col_ddl: str, row_id, v) -> None:
@@ -60,18 +69,23 @@ def insert_float(client, name: str, col_ddl: str, row_id, v) -> None:
     # one file and reports 0 for all per-column byte counters. Without this,
     # the per-column storage query added for Critical 1 would silently
     # return all zeros instead of real numbers.
-    client.command(f"CREATE TABLE bench.{name} (row_id UInt64, {col_ddl}) "
-                    f"ENGINE = MergeTree ORDER BY tuple() "
-                    f"SETTINGS min_bytes_for_wide_part=0, min_rows_for_wide_part=0")
+    client.command(
+        f"CREATE TABLE bench.{name} (row_id UInt64, {col_ddl}) "
+        f"ENGINE = MergeTree ORDER BY tuple() "
+        f"SETTINGS min_bytes_for_wide_part=0, min_rows_for_wide_part=0"
+    )
     t0 = time.perf_counter()
-    client.insert_arrow(f"bench.{name}", pa.table({"row_id": row_id, "v": pa.array(v, pa.float64())}))
+    client.insert_arrow(
+        f"bench.{name}", pa.table({"row_id": row_id, "v": pa.array(v, pa.float64())})
+    )
     print(f"{name}: inserted (arrow float64) in {(time.perf_counter()-t0)*1000:.0f} ms")
     client.command(f"OPTIMIZE TABLE bench.{name} FINAL")
     report_storage(client, name)
 
 
-def insert_decimal(client, name: str, col_ddl: str, width: int, precision: int, scale: int,
-                    row_id, v) -> str:
+def insert_decimal(
+    client, name: str, col_ddl: str, width: int, precision: int, scale: int, row_id, v
+) -> str:
     """Try Arrow decimal insert directly; fall back to Float64 staging + toDecimalN.
 
     Returns the path that worked: "arrow_decimal" or "float64_staging_fallback".
@@ -81,11 +95,17 @@ def insert_decimal(client, name: str, col_ddl: str, width: int, precision: int, 
     # See insert_float's comment: force Wide part format so the per-column
     # storage query returns real numbers instead of the 0s a Compact part
     # would give for column_data_compressed_bytes / column_data_uncompressed_bytes.
-    client.command(f"CREATE TABLE bench.{name} (row_id UInt64, {col_ddl}) "
-                    f"ENGINE = MergeTree ORDER BY tuple() "
-                    f"SETTINGS min_bytes_for_wide_part=0, min_rows_for_wide_part=0")
+    client.command(
+        f"CREATE TABLE bench.{name} (row_id UInt64, {col_ddl}) "
+        f"ENGINE = MergeTree ORDER BY tuple() "
+        f"SETTINGS min_bytes_for_wide_part=0, min_rows_for_wide_part=0"
+    )
 
-    arrow_type = pa.decimal64(precision, scale) if width == 64 else pa.decimal32(precision, scale)
+    arrow_type = (
+        pa.decimal64(precision, scale)
+        if width == 64
+        else pa.decimal32(precision, scale)
+    )
     # Only the cast and the insert belong inside the try: this record is what the
     # design's insert-path decision rests on, so an OPTIMIZE or storage-report
     # failure must not be misattributed to the Arrow path.
@@ -94,31 +114,45 @@ def insert_decimal(client, name: str, col_ddl: str, width: int, precision: int, 
         t0 = time.perf_counter()
         arr = pc.cast(pa.array(v), arrow_type)
         client.insert_arrow(f"bench.{name}", pa.table({"row_id": row_id, "v": arr}))
-        print(f"{name}: inserted (arrow decimal{width}({precision},{scale})) in "
-              f"{(time.perf_counter()-t0)*1000:.0f} ms")
+        print(
+            f"{name}: inserted (arrow decimal{width}({precision},{scale})) in "
+            f"{(time.perf_counter()-t0)*1000:.0f} ms"
+        )
         path = "arrow_decimal"
     except Exception as e:  # noqa: BLE001
-        print(f"{name}: arrow decimal{width} cast/insert failed, falling back to Float64 "
-              f"staging: {type(e).__name__}: {e}")
+        print(
+            f"{name}: arrow decimal{width} cast/insert failed, falling back to Float64 "
+            f"staging: {type(e).__name__}: {e}"
+        )
 
     if path is None:
         # Fallback: Float64 staging table -> INSERT ... SELECT toDecimalN(v, scale)
         client.command(f"DROP TABLE IF EXISTS bench.{name}")
-        client.command(f"CREATE TABLE bench.{name} (row_id UInt64, {col_ddl}) "
-                        f"ENGINE = MergeTree ORDER BY tuple() "
-                        f"SETTINGS min_bytes_for_wide_part=0, min_rows_for_wide_part=0")
+        client.command(
+            f"CREATE TABLE bench.{name} (row_id UInt64, {col_ddl}) "
+            f"ENGINE = MergeTree ORDER BY tuple() "
+            f"SETTINGS min_bytes_for_wide_part=0, min_rows_for_wide_part=0"
+        )
         client.command(f"DROP TABLE IF EXISTS bench.{name}_stage")
-        client.command(f"CREATE TABLE bench.{name}_stage (row_id UInt64, v Float64) "
-                        f"ENGINE = MergeTree ORDER BY tuple()")
+        client.command(
+            f"CREATE TABLE bench.{name}_stage (row_id UInt64, v Float64) "
+            f"ENGINE = MergeTree ORDER BY tuple()"
+        )
         func = "toDecimal64" if width == 64 else "toDecimal32"
         t0 = time.perf_counter()
         try:
-            client.insert_arrow(f"bench.{name}_stage",
-                                pa.table({"row_id": row_id, "v": pa.array(v, pa.float64())}))
-            client.command(f"INSERT INTO bench.{name} "
-                           f"SELECT row_id, {func}(v, {scale}) FROM bench.{name}_stage")
-            print(f"{name}: inserted (float64 staging + {func}) in "
-                  f"{(time.perf_counter()-t0)*1000:.0f} ms")
+            client.insert_arrow(
+                f"bench.{name}_stage",
+                pa.table({"row_id": row_id, "v": pa.array(v, pa.float64())}),
+            )
+            client.command(
+                f"INSERT INTO bench.{name} "
+                f"SELECT row_id, {func}(v, {scale}) FROM bench.{name}_stage"
+            )
+            print(
+                f"{name}: inserted (float64 staging + {func}) in "
+                f"{(time.perf_counter()-t0)*1000:.0f} ms"
+            )
         finally:
             # Drop the staging table on the failure path too, so it cannot leak.
             client.command(f"DROP TABLE IF EXISTS bench.{name}_stage")
@@ -150,34 +184,48 @@ def main() -> None:
     insert_float(client, "spike_f64", "v Float64 CODEC(Gorilla, ZSTD)", row_id, v)
 
     print("\n--- arrow insert: spike_d64 (Decimal64(8)) ---")
-    path_d64 = insert_decimal(client, "spike_d64", "v Decimal64(8) CODEC(Delta, LZ4)",
-                               64, 18, 8, row_id, v)
+    path_d64 = insert_decimal(
+        client, "spike_d64", "v Decimal64(8) CODEC(Delta, LZ4)", 64, 18, 8, row_id, v
+    )
 
-    print("\n--- arrow insert: spike_d32 Part A (Decimal32(8), real data -- expected to fit) ---")
-    print("Decimal32(8) representable range: -9.99999999 to +9.99999999 "
-          "(9 significant digits, scale 8). rng.uniform(-1, 10) draws values "
-          "strictly < 10, but rounding to 8 dp sends any draw in "
-          "[9.999999995, 10) to exactly 10.00000000, which overflows: the "
-          "range check must be applied to the rounded values, not the draw "
-          "bounds.")
-    path_d32 = insert_decimal(client, "spike_d32", "v Decimal32(8) CODEC(Delta, LZ4)",
-                               32, 9, 8, row_id, v)
+    print(
+        "\n--- arrow insert: spike_d32 Part A (Decimal32(8), real data -- expected to fit) ---"
+    )
+    print(
+        "Decimal32(8) representable range: -9.99999999 to +9.99999999 "
+        "(9 significant digits, scale 8). rng.uniform(-1, 10) draws values "
+        "strictly < 10, but rounding to 8 dp sends any draw in "
+        "[9.999999995, 10) to exactly 10.00000000, which overflows: the "
+        "range check must be applied to the rounded values, not the draw "
+        "bounds."
+    )
+    path_d32 = insert_decimal(
+        client, "spike_d32", "v Decimal32(8) CODEC(Delta, LZ4)", 32, 9, 8, row_id, v
+    )
 
-    print("\n--- arrow insert: spike_d32 Part B (Decimal32(8), single value 10.0 -- expected overflow) ---")
+    print(
+        "\n--- arrow insert: spike_d32 Part B (Decimal32(8), single value 10.0 -- expected overflow) ---"
+    )
     client.command("DROP TABLE IF EXISTS bench.spike_d32_overflow")
-    client.command("CREATE TABLE bench.spike_d32_overflow (v Decimal32(8)) "
-                    "ENGINE = MergeTree ORDER BY tuple()")
+    client.command(
+        "CREATE TABLE bench.spike_d32_overflow (v Decimal32(8)) "
+        "ENGINE = MergeTree ORDER BY tuple()"
+    )
     try:
         arr10 = pc.cast(pa.array([10.0], pa.float64()), pa.decimal32(9, 8))
         client.insert_arrow("bench.spike_d32_overflow", pa.table({"v": arr10}))
         print("spike_d32_overflow: arrow cast+insert of 10.0 unexpectedly SUCCEEDED")
     except Exception as e:  # noqa: BLE001
-        print(f"spike_d32_overflow: arrow cast/insert of 10.0 failed: {type(e).__name__}: {e}")
+        print(
+            f"spike_d32_overflow: arrow cast/insert of 10.0 failed: {type(e).__name__}: {e}"
+        )
     try:
         client.command("INSERT INTO bench.spike_d32_overflow VALUES (10.0)")
         print("spike_d32_overflow: plain INSERT VALUES (10.0) unexpectedly SUCCEEDED")
     except Exception as e:  # noqa: BLE001
-        print(f"spike_d32_overflow: plain INSERT VALUES (10.0) failed: {type(e).__name__}: {e}")
+        print(
+            f"spike_d32_overflow: plain INSERT VALUES (10.0) failed: {type(e).__name__}: {e}"
+        )
     client.command("DROP TABLE IF EXISTS bench.spike_d32_overflow")
 
     print(f"\ndecimal insert path used: decimal64={path_d64}  decimal32={path_d32}")
@@ -187,8 +235,11 @@ def main() -> None:
     for drop in (True, False):
         if drop:
             print("  cache-drop attempts:")
-            for stmt in ("SYSTEM DROP MARK CACHE", "SYSTEM DROP UNCOMPRESSED CACHE",
-                         "SYSTEM DROP QUERY CONDITION CACHE"):
+            for stmt in (
+                "SYSTEM DROP MARK CACHE",
+                "SYSTEM DROP UNCOMPRESSED CACHE",
+                "SYSTEM DROP QUERY CONDITION CACHE",
+            ):
                 try:
                     client.command(stmt)
                     print(f"    {stmt}: ok")
@@ -208,8 +259,14 @@ def main() -> None:
         # `settings` dict -- "query_id" is one of HttpClient's
         # valid_transport_settings, so `_validate_settings` passes it through
         # unfiltered into the URL params ClickHouse actually reads.
-        client.query(sql, settings={"query_id": qid, "use_query_condition_cache": 0,
-                                     "use_query_cache": 0})
+        client.query(
+            sql,
+            settings={
+                "query_id": qid,
+                "use_query_condition_cache": 0,
+                "use_query_cache": 0,
+            },
+        )
         client_ms = (time.perf_counter() - t0) * 1000
         client.command("SYSTEM FLUSH LOGS")
         log = client.query(
@@ -224,7 +281,8 @@ def main() -> None:
             "mapContains(ProfileEvents, 'QueryConditionCacheHits'), "
             "mapContains(ProfileEvents, 'QueryConditionCacheMisses') "
             "FROM system.query_log WHERE query_id = {q:String} AND type = 'QueryFinish'",
-            parameters={"q": qid}).result_rows
+            parameters={"q": qid},
+        ).result_rows
         print(f"cold={drop} client_ms={client_ms:.1f} query_log={log}")
 
     print("\n--- EXPLAIN indexes = 1 ---")
@@ -232,8 +290,18 @@ def main() -> None:
         print("  " + line[0])
 
     print("\n--- DDL applicability matrix: type x codec ---")
-    types = ["Float64", "Decimal32(8)", "Decimal64(8)", "Int32", "UInt32", "String",
-             "LowCardinality(String)", "Date", "DateTime64(3)", "Nullable(Int32)"]
+    types = [
+        "Float64",
+        "Decimal32(8)",
+        "Decimal64(8)",
+        "Int32",
+        "UInt32",
+        "String",
+        "LowCardinality(String)",
+        "Date",
+        "DateTime64(3)",
+        "Nullable(Int32)",
+    ]
     codecs = ["Delta", "DoubleDelta", "Gorilla", "T64", "FPC"]
     print(f"{'type':<24}" + "".join(f"{c:>12}" for c in codecs))
     for t in types:
@@ -241,8 +309,10 @@ def main() -> None:
         for c in codecs:
             client.command("DROP TABLE IF EXISTS bench.spike_probe")
             try:
-                client.command(f"CREATE TABLE bench.spike_probe (v {t} CODEC({c}, LZ4)) "
-                               f"ENGINE = MergeTree ORDER BY tuple()")
+                client.command(
+                    f"CREATE TABLE bench.spike_probe (v {t} CODEC({c}, LZ4)) "
+                    f"ENGINE = MergeTree ORDER BY tuple()"
+                )
                 row += f"{'ok':>12}"
             except Exception as e:  # noqa: BLE001
                 row += f"{'REJECT':>12}"
@@ -261,8 +331,10 @@ def main() -> None:
         for i in indexes:
             client.command("DROP TABLE IF EXISTS bench.spike_probe")
             try:
-                client.command(f"CREATE TABLE bench.spike_probe (v {t}, INDEX ix v TYPE {i} GRANULARITY 1) "
-                               f"ENGINE = MergeTree ORDER BY tuple()")
+                client.command(
+                    f"CREATE TABLE bench.spike_probe (v {t}, INDEX ix v TYPE {i} GRANULARITY 1) "
+                    f"ENGINE = MergeTree ORDER BY tuple()"
+                )
                 row += f"{'ok':>14}"
             except Exception as e:  # noqa: BLE001
                 row += f"{'REJECT':>14}"
@@ -271,8 +343,15 @@ def main() -> None:
     client.command("DROP TABLE IF EXISTS bench.spike_probe")
 
     print("\n--- cleanup ---")
-    for name in ("spike_f64", "spike_d64", "spike_d32", "spike_d32_overflow", "spike_probe",
-                 "spike_d64_stage", "spike_d32_stage"):
+    for name in (
+        "spike_f64",
+        "spike_d64",
+        "spike_d32",
+        "spike_d32_overflow",
+        "spike_probe",
+        "spike_d64_stage",
+        "spike_d32_stage",
+    ):
         client.command(f"DROP TABLE IF EXISTS bench.{name}")
         print(f"  dropped bench.{name} (if existed)")
 

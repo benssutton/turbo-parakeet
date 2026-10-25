@@ -1,5 +1,6 @@
 """Real-data datasets (spec section 4.6, ruling R35): a `DatasetSpec` with
 `path` / `column` is measured from an existing Arrow IPC file, never generated."""
+
 import datetime as dt
 import decimal
 import json
@@ -14,13 +15,24 @@ from chbench.datagen.spec import DatasetSpec, Distribution, SpecError
 
 COLUMNS = {
     "int32": pa.array([3, None, 3, 7, 9, None, 1, 1], pa.int32()),
-    "dec": pa.array([decimal.Decimal("1.25"), decimal.Decimal("-3.50"), None,
-                     decimal.Decimal("1.25")], pa.decimal128(9, 2)),
+    "dec": pa.array(
+        [
+            decimal.Decimal("1.25"),
+            decimal.Decimal("-3.50"),
+            None,
+            decimal.Decimal("1.25"),
+        ],
+        pa.decimal128(9, 2),
+    ),
     "text": pa.array(["a", "b", "a", None, "c", "a"]),
-    "day": pa.array([dt.date(2020, 1, 1), dt.date(2021, 5, 6), None,
-                     dt.date(2020, 1, 1)], pa.date32()),
-    "ts": pa.array([dt.datetime(2020, 1, 1, 0, 0, 1), None,
-                    dt.datetime(2020, 1, 1, 0, 0, 2)], pa.timestamp("ms")),
+    "day": pa.array(
+        [dt.date(2020, 1, 1), dt.date(2021, 5, 6), None, dt.date(2020, 1, 1)],
+        pa.date32(),
+    ),
+    "ts": pa.array(
+        [dt.datetime(2020, 1, 1, 0, 0, 1), None, dt.datetime(2020, 1, 1, 0, 0, 2)],
+        pa.timestamp("ms"),
+    ),
 }
 
 
@@ -40,12 +52,17 @@ def test_loading_a_path_dataset_returns_the_file_column_unchanged(tmp_path, key)
     ds = load_or_generate(spec, tmp_path / "cache")
     assert ds.array.type == array.type
     assert ds.array.equals(array)
-    assert not (tmp_path / "cache").exists()      # no generation, no cache copy
+    assert not (tmp_path / "cache").exists()  # no generation, no cache copy
 
 
 def test_the_spec_fields_are_measured_from_the_file(tmp_path):
     spec = path_spec(write(tmp_path, COLUMNS["int32"]), "v")
-    assert (spec.rows, spec.arrow_type, spec.null_count, spec.seed) == (8, "int32", 2, 0)
+    assert (spec.rows, spec.arrow_type, spec.null_count, spec.seed) == (
+        8,
+        "int32",
+        2,
+        0,
+    )
     assert spec.value_range == (1.0, 9.0)
     assert spec.decimal_places is None
     assert spec.column == "v" and spec.path.endswith("x.arrow")
@@ -58,7 +75,7 @@ def test_decimal_scale_and_explicit_decimal_places(tmp_path):
     assert spec.arrow_type == "decimal128(9,2)" and spec.decimal_places == 2
     assert spec.value_range == (-3.5, 1.25)
     with pytest.raises(SpecError, match="decimal_places"):
-        path_spec(p, "v", decimal_places=3)           # must equal the scale
+        path_spec(p, "v", decimal_places=3)  # must equal the scale
 
 
 def test_a_float_file_takes_the_explicit_decimal_places(tmp_path):
@@ -75,7 +92,9 @@ def test_string_and_temporal_columns(tmp_path):
 
 
 def test_manifest_has_measured_metrics_and_no_targets(tmp_path):
-    ds = load_or_generate(path_spec(write(tmp_path, COLUMNS["text"]), "v"), tmp_path / "c")
+    ds = load_or_generate(
+        path_spec(write(tmp_path, COLUMNS["text"]), "v"), tmp_path / "c"
+    )
     m = ds.manifest
     # a, b, a, c, a: 3 distinct of 5 non-null values; counts 3, 1, 1
     assert m.achieved["cardinality_ratio"] == pytest.approx(3 / 5)
@@ -115,14 +134,18 @@ def test_a_multi_batch_file_is_combined(tmp_path):
     schema = pa.schema([("v", pa.int64())])
     with pa.OSFile(str(p), "wb") as sink:
         with pa.ipc.new_file(sink, schema) as w:
-            w.write_batch(pa.record_batch([pa.array([1, 2], pa.int64())], schema=schema))
+            w.write_batch(
+                pa.record_batch([pa.array([1, 2], pa.int64())], schema=schema)
+            )
             w.write_batch(pa.record_batch([pa.array([3], pa.int64())], schema=schema))
     ds = load_or_generate(path_spec(p, "v"), tmp_path / "c")
     assert ds.array.to_pylist() == [1, 2, 3]
 
 
 def test_spec_and_manifest_round_trip_through_json(tmp_path):
-    ds = load_or_generate(path_spec(write(tmp_path, COLUMNS["dec"]), "v"), tmp_path / "c")
+    ds = load_or_generate(
+        path_spec(write(tmp_path, COLUMNS["dec"]), "v"), tmp_path / "c"
+    )
     spec = ds.manifest.spec
     assert DatasetSpec.from_dict(json.loads(spec.to_json())) == spec
     again = Manifest.from_dict(json.loads(ds.manifest.to_json()))
@@ -130,11 +153,18 @@ def test_spec_and_manifest_round_trip_through_json(tmp_path):
     assert again.achieved == ds.manifest.achieved
 
 
-@pytest.mark.parametrize("bad", [
-    dict(distribution=Distribution(kind="normal", sigma=1.0)),
-    dict(cardinality_ratio=0.5), dict(entropy_bits=1.0), dict(categories=[1]),
-    dict(string_length=3), dict(runs_z=0.0), dict(array_len_range=(1, 2)),
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        dict(distribution=Distribution(kind="normal", sigma=1.0)),
+        dict(cardinality_ratio=0.5),
+        dict(entropy_bits=1.0),
+        dict(categories=[1]),
+        dict(string_length=3),
+        dict(runs_z=0.0),
+        dict(array_len_range=(1, 2)),
+    ],
+)
 def test_validate_rejects_generator_fields_beside_a_path(tmp_path, bad):
     spec = path_spec(write(tmp_path, COLUMNS["int32"]), "v")
     with pytest.raises(SpecError, match="path"):
@@ -168,15 +198,19 @@ def test_missing_file_column_and_unexpressible_type(tmp_path):
 
 # Ruling R36: the arrow_type vocabulary gains time zones and fixed_size_binary,
 # which the recommended ClickHouse types (DateTime('tz'), FixedString(n)) need.
-@pytest.mark.parametrize("dtype,text", [
-    (pa.timestamp("s", tz="UTC"), "timestamp[s, tz=UTC]"),
-    (pa.timestamp("ns", tz="Europe/Paris"), "timestamp[ns, tz=Europe/Paris]"),
-    (pa.timestamp("us"), "timestamp[us]"),
-    (pa.binary(4), "fixed_size_binary(4)"),
-])
+@pytest.mark.parametrize(
+    "dtype,text",
+    [
+        (pa.timestamp("s", tz="UTC"), "timestamp[s, tz=UTC]"),
+        (pa.timestamp("ns", tz="Europe/Paris"), "timestamp[ns, tz=Europe/Paris]"),
+        (pa.timestamp("us"), "timestamp[us]"),
+        (pa.binary(4), "fixed_size_binary(4)"),
+    ],
+)
 def test_arrow_type_strings_round_trip_zones_and_fixed_size_binary(dtype, text):
     from chbench.datagen.realdata import arrow_type_string
     from chbench.datagen.spec import parse_arrow_type
+
     assert arrow_type_string(dtype) == text
     assert parse_arrow_type(text) == dtype
 
@@ -191,28 +225,42 @@ def test_zoned_timestamp_and_fixed_size_binary_files_are_measured(tmp_path):
     assert load_or_generate(spec, tmp_path / "c").array.equals(fixed)
 
 
-@pytest.mark.parametrize("bad", ["timestamp[s, tz=]", "timestamp[xx, tz=UTC]",
-                                 "fixed_size_binary(0)", "fixed_size_binary(x)"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "timestamp[s, tz=]",
+        "timestamp[xx, tz=UTC]",
+        "fixed_size_binary(0)",
+        "fixed_size_binary(x)",
+    ],
+)
 def test_malformed_zone_and_fixed_size_binary_strings_are_rejected(bad):
     from chbench.datagen.spec import parse_arrow_type
+
     with pytest.raises(SpecError):
         parse_arrow_type(bad)
 
 
 @pytest.mark.parametrize("arrow_type", ["timestamp[s, tz=UTC]", "fixed_size_binary(4)"])
 def test_a_generated_dataset_cannot_use_zones_or_fixed_size_binary(arrow_type):
-    spec = DatasetSpec(rows=10, arrow_type=arrow_type, null_count=0, seed=0,
-                       value_range=(0, 5))
+    spec = DatasetSpec(
+        rows=10, arrow_type=arrow_type, null_count=0, seed=0, value_range=(0, 5)
+    )
     with pytest.raises(SpecError, match="path dataset"):
         spec.validate()
 
 
-@pytest.mark.parametrize("dtype, scale", [(pa.decimal64(18, 18), 18), (pa.decimal32(9, 2), 2)])
+@pytest.mark.parametrize(
+    "dtype, scale", [(pa.decimal64(18, 18), 18), (pa.decimal32(9, 2), 2)]
+)
 def test_a_narrow_decimal_file_is_loaded_and_measured(tmp_path, dtype, scale):
     # dictionary_encode has no kernel for decimal32/64; the metrics go through decimal128
-    values = [decimal.Decimal(1) / 4 if scale == 18 else decimal.Decimal("1.25"),
-              decimal.Decimal(0), None,
-              decimal.Decimal(1) / 4 if scale == 18 else decimal.Decimal("1.25")]
+    values = [
+        decimal.Decimal(1) / 4 if scale == 18 else decimal.Decimal("1.25"),
+        decimal.Decimal(0),
+        None,
+        decimal.Decimal(1) / 4 if scale == 18 else decimal.Decimal("1.25"),
+    ]
     array = pa.array(values, dtype)
     spec = path_spec(write(tmp_path, array), "v")
     ds = load_or_generate(spec, tmp_path / "cache")

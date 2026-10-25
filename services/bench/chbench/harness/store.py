@@ -45,6 +45,7 @@ isinstance-checked), so the same code accepts either the real dataclasses
 or a duck-typed stand-in exposing the same names -- which is what this
 module's own tests use.
 """
+
 from __future__ import annotations
 
 import json
@@ -274,8 +275,10 @@ class Store:
         losing one to a schema change would throw away measurements.
         """
         for table, column, decl in _ADDED_COLUMNS:
-            existing = {row[1] for row in
-                        self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            existing = {
+                row[1]
+                for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
@@ -286,14 +289,17 @@ class Store:
         `.clip_collapsed` and `.round_collapsed` are bundled into one JSON
         object in `achieved_json`, since spec 6.1 gives `datasets` no column
         for each separately; `.warnings` keeps its own listed column."""
-        achieved_json = json.dumps({
-            "achieved": manifest.achieved,
-            "targets": manifest.targets,
-            "within_tolerance": manifest.within_tolerance,
-            "solves": {k: _as_plain(v) for k, v in manifest.solves.items()},
-            "clip_collapsed": manifest.clip_collapsed,
-            "round_collapsed": manifest.round_collapsed,
-        }, default=_json_default)
+        achieved_json = json.dumps(
+            {
+                "achieved": manifest.achieved,
+                "targets": manifest.targets,
+                "within_tolerance": manifest.within_tolerance,
+                "solves": {k: _as_plain(v) for k, v in manifest.solves.items()},
+                "clip_collapsed": manifest.clip_collapsed,
+                "round_collapsed": manifest.round_collapsed,
+            },
+            default=_json_default,
+        )
         self.conn.execute(
             """
             INSERT INTO datasets (dataset_id, spec_json, achieved_json, warnings,
@@ -305,16 +311,29 @@ class Store:
                 warnings=excluded.warnings,
                 arrow_path=excluded.arrow_path
             """,
-            (manifest.dataset_id, manifest.spec.to_json(), achieved_json,
-             json.dumps(list(manifest.warnings), default=_json_default),
-             arrow_path, _now()),
+            (
+                manifest.dataset_id,
+                manifest.spec.to_json(),
+                achieved_json,
+                json.dumps(list(manifest.warnings), default=_json_default),
+                arrow_path,
+                _now(),
+            ),
         )
         self.conn.commit()
 
     # -- tables -------------------------------------------------------------
 
-    def upsert_table(self, table_id: str, dataset_id: str, variant, load_result,
-                      clickhouse_version: str, *, suite_name: str | None = None) -> None:
+    def upsert_table(
+        self,
+        table_id: str,
+        dataset_id: str,
+        variant,
+        load_result,
+        clickhouse_version: str,
+        *,
+        suite_name: str | None = None,
+    ) -> None:
         """`status`/`skip_reason` reconcile two sources: a `variant` marked
         `skipped` never reached the loader, so its own status/reason wins;
         otherwise (`load_result` present) the load's own outcome ("ok" or
@@ -329,12 +348,22 @@ class Store:
         (ruling R18), which is how `tables_for_suite` finds this table even
         before any query against it has produced a sample."""
         if variant.status == "skipped":
-            status, reason, stats, insert_ms = "skipped", variant.skip_reason, None, None
+            status, reason, stats, insert_ms = (
+                "skipped",
+                variant.skip_reason,
+                None,
+                None,
+            )
         elif load_result is not None:
             status, reason = load_result.status, load_result.error
             stats, insert_ms = load_result.stats, load_result.insert_ms
         else:
-            status, reason, stats, insert_ms = variant.status, variant.skip_reason, None, None
+            status, reason, stats, insert_ms = (
+                variant.status,
+                variant.skip_reason,
+                None,
+                None,
+            )
 
         self.conn.execute(
             """
@@ -368,18 +397,30 @@ class Store:
                 clickhouse_version=excluded.clickhouse_version,
                 warnings=excluded.warnings
             """,
-            (table_id, dataset_id, variant.ch_type, variant.nullable, variant.primary_key,
-             variant.projection, variant.codec, variant.skip_index, variant.compression,
-             status, reason,
-             stats.compressed_bytes if stats else None,
-             stats.uncompressed_bytes if stats else None,
-             stats.marks_bytes if stats else None,
-             stats.index_compressed_bytes if stats else None,
-             stats.index_uncompressed_bytes if stats else None,
-             stats.index_marks_bytes if stats else None,
-             stats.rows if stats else None,
-             insert_ms, clickhouse_version, _now(),
-             json.dumps(list(variant.warnings), default=_json_default)),
+            (
+                table_id,
+                dataset_id,
+                variant.ch_type,
+                variant.nullable,
+                variant.primary_key,
+                variant.projection,
+                variant.codec,
+                variant.skip_index,
+                variant.compression,
+                status,
+                reason,
+                stats.compressed_bytes if stats else None,
+                stats.uncompressed_bytes if stats else None,
+                stats.marks_bytes if stats else None,
+                stats.index_compressed_bytes if stats else None,
+                stats.index_uncompressed_bytes if stats else None,
+                stats.index_marks_bytes if stats else None,
+                stats.rows if stats else None,
+                insert_ms,
+                clickhouse_version,
+                _now(),
+                json.dumps(list(variant.warnings), default=_json_default),
+            ),
         )
         if suite_name is not None:
             self.conn.execute(
@@ -393,8 +434,16 @@ class Store:
 
     # -- queries --------------------------------------------------------
 
-    def upsert_query(self, query_id: str, table_id: str, qv, explain: str, *,
-                      status: str | None = None, error: str | None = None) -> None:
+    def upsert_query(
+        self,
+        query_id: str,
+        table_id: str,
+        qv,
+        explain: str,
+        *,
+        status: str | None = None,
+        error: str | None = None,
+    ) -> None:
         """`status` and `error` carry the `RunResult`'s own outcome ("ok",
         "error" or "interrupted", with the runner's message).
 
@@ -424,9 +473,20 @@ class Store:
                 status=excluded.status,
                 error=excluded.error
             """,
-            (query_id, table_id, qv.kind, qv.predicate_kind, qv.target_fraction,
-             qv.actual_fraction, qv.predicate_sql, qv.cache_mode, qv.qcc, explain,
-             status, error),
+            (
+                query_id,
+                table_id,
+                qv.kind,
+                qv.predicate_kind,
+                qv.target_fraction,
+                qv.actual_fraction,
+                qv.predicate_sql,
+                qv.cache_mode,
+                qv.qcc,
+                explain,
+                status,
+                error,
+            ),
         )
         self.conn.commit()
 
@@ -452,7 +512,9 @@ class Store:
         """
         row = self.conn.execute(
             "SELECT suite_yaml FROM runs WHERE suite_name = ? "
-            "ORDER BY started_at DESC LIMIT 1", (suite_name,)).fetchone()
+            "ORDER BY started_at DESC LIMIT 1",
+            (suite_name,),
+        ).fetchone()
         return row[0] if row and row[0] else None
 
     # -- runs -------------------------------------------------------------
@@ -469,7 +531,8 @@ class Store:
 
     def finish_run(self, run_id: str) -> None:
         self.conn.execute(
-            "UPDATE runs SET finished_at = ? WHERE run_id = ?", (_now(), run_id))
+            "UPDATE runs SET finished_at = ? WHERE run_id = ?", (_now(), run_id)
+        )
         self.conn.commit()
 
     def unfinished_runs(self, suite_name: str) -> list[tuple[str, str]]:
@@ -484,7 +547,8 @@ class Store:
         rows = self.conn.execute(
             "SELECT run_id, started_at FROM runs "
             "WHERE suite_name = ? AND finished_at IS NULL ORDER BY started_at",
-            (suite_name,)).fetchall()
+            (suite_name,),
+        ).fetchall()
         return [(run_id, started_at) for run_id, started_at in rows]
 
     # -- samples --------------------------------------------------------
@@ -500,17 +564,27 @@ class Store:
                                   selected_granules, profile_events_json, ran_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """,
-            (query_id, sample.sample_no, run_id, sample.client_ms, sample.server_ms,
-             sample.read_rows, sample.read_bytes, sample.memory_bytes,
-             sample.selected_marks, sample.selected_granules,
-             json.dumps(dict(sample.profile_events), default=_json_default),
-             _ran_at_text(sample.ran_at)),
+            (
+                query_id,
+                sample.sample_no,
+                run_id,
+                sample.client_ms,
+                sample.server_ms,
+                sample.read_rows,
+                sample.read_bytes,
+                sample.memory_bytes,
+                sample.selected_marks,
+                sample.selected_granules,
+                json.dumps(dict(sample.profile_events), default=_json_default),
+                _ran_at_text(sample.ran_at),
+            ),
         )
         self.conn.commit()
 
     def samples_held(self, query_id: str) -> int:
         row = self.conn.execute(
-            "SELECT count(*) FROM samples WHERE query_id = ?", (query_id,)).fetchone()
+            "SELECT count(*) FROM samples WHERE query_id = ?", (query_id,)
+        ).fetchone()
         return int(row[0])
 
     # -- report / clean ---------------------------------------------------

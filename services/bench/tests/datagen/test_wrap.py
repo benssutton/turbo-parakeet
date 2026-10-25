@@ -7,8 +7,14 @@ from chbench.datagen.wrap import wrap
 
 
 def s(**kw) -> DatasetSpec:
-    d = dict(rows=1000, arrow_type="float64", value_range=(-1.0, 10.0),
-             decimal_places=8, null_count=0, seed=0)
+    d = dict(
+        rows=1000,
+        arrow_type="float64",
+        value_range=(-1.0, 10.0),
+        decimal_places=8,
+        null_count=0,
+        seed=0,
+    )
     d.update(kw)
     return DatasetSpec(**d)
 
@@ -17,11 +23,18 @@ def vals(n=1000):
     return np.round(np.random.default_rng(0).uniform(-1, 10, n), 8)
 
 
-@pytest.mark.parametrize("t,pt", [
-    ("float64", pa.float64()), ("float32", pa.float32()), ("int32", pa.int32()),
-    ("uint32", pa.uint32()), ("decimal32(9,8)", pa.decimal32(9, 8)),
-    ("decimal64(18,8)", pa.decimal64(18, 8)), ("string", pa.string()),
-])
+@pytest.mark.parametrize(
+    "t,pt",
+    [
+        ("float64", pa.float64()),
+        ("float32", pa.float32()),
+        ("int32", pa.int32()),
+        ("uint32", pa.uint32()),
+        ("decimal32(9,8)", pa.decimal32(9, 8)),
+        ("decimal64(18,8)", pa.decimal64(18, 8)),
+        ("string", pa.string()),
+    ],
+)
 def test_casts_to_the_requested_arrow_type(t, pt):
     v = vals() if "decimal" in t or "float" in t else np.arange(1000)
     a = wrap(v, s(arrow_type=t, value_range=(0.0, 1000.0)), np.random.default_rng(0))
@@ -70,14 +83,22 @@ def test_decimal32_overflow_is_reported_against_rounded_values():
 
 def test_integer_overflow_is_an_assertion_not_a_spec_error():
     with pytest.raises(AssertionError, match="validation"):
-        wrap(np.array([300, 1]), s(arrow_type="int8", value_range=(0, 300), rows=2,
-                                   decimal_places=None), np.random.default_rng(0))
+        wrap(
+            np.array([300, 1]),
+            s(arrow_type="int8", value_range=(0, 300), rows=2, decimal_places=None),
+            np.random.default_rng(0),
+        )
 
 
 def test_list_type_chunks_into_arrays():
     v = np.arange(5000)
-    spec = s(rows=1000, arrow_type="list<int32>", value_range=(0.0, 5000.0),
-             array_len_range=(3, 7), decimal_places=None)
+    spec = s(
+        rows=1000,
+        arrow_type="list<int32>",
+        value_range=(0.0, 5000.0),
+        array_len_range=(3, 7),
+        decimal_places=None,
+    )
     a = wrap(v, spec, np.random.default_rng(0))
     assert pa.types.is_list(a.type)
     assert a.type == spec.arrow_dtype
@@ -87,9 +108,15 @@ def test_list_type_chunks_into_arrays():
 
 def test_list_outer_nulls_are_injected():
     v = np.arange(5000)
-    spec = s(rows=1000, arrow_type="list<int32>", value_range=(0.0, 5000.0),
-             array_len_range=(3, 7), null_count=50, array_null_count=100,
-             decimal_places=None)
+    spec = s(
+        rows=1000,
+        arrow_type="list<int32>",
+        value_range=(0.0, 5000.0),
+        array_len_range=(3, 7),
+        null_count=50,
+        array_null_count=100,
+        decimal_places=None,
+    )
     a = wrap(v, spec, np.random.default_rng(0))
     assert a.null_count == 50
     assert len(a) == 1000
@@ -103,19 +130,31 @@ def test_list_outer_nulls_are_injected():
 
 def test_list_inner_nulls_are_injected():
     v = np.arange(5000)
-    spec = s(rows=1000, arrow_type="list<int32>", value_range=(0.0, 5000.0),
-             array_len_range=(3, 7), array_null_count=100, decimal_places=None)
+    spec = s(
+        rows=1000,
+        arrow_type="list<int32>",
+        value_range=(0.0, 5000.0),
+        array_len_range=(3, 7),
+        array_null_count=100,
+        decimal_places=None,
+    )
     a = wrap(v, spec, np.random.default_rng(0))
     inner = [e for row in a.to_pylist() for e in row]
     assert sum(e is None for e in inner) == 100
 
 
-@pytest.mark.parametrize("t,pt,v", [
-    ("timestamp[ms]", pa.timestamp("ms"), np.arange(1000) * 86_400_000),
-    ("date32", pa.date32(), np.arange(1000)),
-    ("time32[ms]", pa.time32("ms"), np.arange(1000)),
-])
+@pytest.mark.parametrize(
+    "t,pt,v",
+    [
+        ("timestamp[ms]", pa.timestamp("ms"), np.arange(1000) * 86_400_000),
+        ("date32", pa.date32(), np.arange(1000)),
+        ("time32[ms]", pa.time32("ms"), np.arange(1000)),
+    ],
+)
 def test_date_and_timestamp_cast_from_integers(t, pt, v):
-    a = wrap(v, s(arrow_type=t, value_range=(0.0, 1e12),
-                  decimal_places=None), np.random.default_rng(0))
+    a = wrap(
+        v,
+        s(arrow_type=t, value_range=(0.0, 1e12), decimal_places=None),
+        np.random.default_rng(0),
+    )
     assert a.type == pt

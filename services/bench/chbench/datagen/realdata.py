@@ -6,6 +6,7 @@ column instead of a generator recipe. Its `rows`, `arrow_type`, `null_count`,
 by `path_spec`; the generation targets do not apply. Raises `SpecError` only,
 like the rest of the spec layer.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -35,8 +36,11 @@ def arrow_type_string(dtype: pa.DataType) -> str:
     elif pa.types.is_decimal128(dtype):
         s = f"decimal128({dtype.precision},{dtype.scale})"
     elif pa.types.is_timestamp(dtype):
-        s = (f"timestamp[{dtype.unit}]" if dtype.tz is None
-             else f"timestamp[{dtype.unit}, tz={dtype.tz}]")
+        s = (
+            f"timestamp[{dtype.unit}]"
+            if dtype.tz is None
+            else f"timestamp[{dtype.unit}, tz={dtype.tz}]"
+        )
     elif pa.types.is_fixed_size_binary(dtype):
         s = f"fixed_size_binary({dtype.byte_width})"
     elif pa.types.is_time32(dtype):
@@ -46,7 +50,8 @@ def arrow_type_string(dtype: pa.DataType) -> str:
     if s is None or parse_arrow_type(s) != dtype:
         raise SpecError(
             f"arrow type {dtype} cannot be expressed in chbench's arrow_type "
-            "vocabulary (spec section 4.1)")
+            "vocabulary (spec section 4.1)"
+        )
     return s
 
 
@@ -69,11 +74,14 @@ def read_column(path: str | Path, column: str) -> pa.Array:
         with pa.OSFile(str(path), "rb") as source:
             table = pa.ipc.open_file(source).read_all()
     except (OSError, pa.ArrowInvalid) as e:
-        raise SpecError(f"dataset path {str(path)!r} is not a readable Arrow IPC "
-                        f"file: {e}") from e
+        raise SpecError(
+            f"dataset path {str(path)!r} is not a readable Arrow IPC " f"file: {e}"
+        ) from e
     if column not in table.schema.names:
-        raise SpecError(f"dataset column {column!r} is not in {str(path)!r}; it "
-                        f"has {table.schema.names!r}")
+        raise SpecError(
+            f"dataset column {column!r} is not in {str(path)!r}; it "
+            f"has {table.schema.names!r}"
+        )
     chunked = table.column(column)
     return chunked.chunk(0) if chunked.num_chunks == 1 else chunked.combine_chunks()
 
@@ -93,8 +101,11 @@ def _value_range(array: pa.Array) -> tuple[float, float] | None:
     column, in the generator's units (temporals as integers in their unit's
     resolution); None for strings or when every value is null."""
     t = array.type
-    if (pa.types.is_string(t) or pa.types.is_fixed_size_binary(t)
-            or array.null_count == len(array)):
+    if (
+        pa.types.is_string(t)
+        or pa.types.is_fixed_size_binary(t)
+        or array.null_count == len(array)
+    ):
         return None
     array = widen_decimal(array)
     if pa.types.is_date32(t):
@@ -109,8 +120,9 @@ def _value_range(array: pa.Array) -> tuple[float, float] | None:
     return float(bounds["min"].as_py()), float(bounds["max"].as_py())
 
 
-def path_spec(path: str | Path, column: str, *, seed: int = 0,
-              decimal_places: int | None = None) -> DatasetSpec:
+def path_spec(
+    path: str | Path, column: str, *, seed: int = 0, decimal_places: int | None = None
+) -> DatasetSpec:
     """Measure `column` of the Arrow IPC file at `path` into a validated
     `DatasetSpec`. A decimal column's `decimal_places` is its scale (an explicit
     value must equal it); for a float column it is the explicit value, else
@@ -121,9 +133,15 @@ def path_spec(path: str | Path, column: str, *, seed: int = 0,
     if pa.types.is_decimal(dtype) and decimal_places is None:
         decimal_places = dtype.scale
     spec = DatasetSpec(
-        rows=len(array), arrow_type=arrow_type_string(dtype),
-        null_count=array.null_count, seed=seed, value_range=_value_range(array),
+        rows=len(array),
+        arrow_type=arrow_type_string(dtype),
+        null_count=array.null_count,
+        seed=seed,
+        value_range=_value_range(array),
         decimal_places=decimal_places,
-        path=path, column=column, content_hash=file_digest(path, column))
+        path=path,
+        column=column,
+        content_hash=file_digest(path, column),
+    )
     spec.validate()
     return spec

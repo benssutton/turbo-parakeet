@@ -20,6 +20,7 @@ repository root on sys.path itself, resolved from its own __file__ rather
 than the current directory, so `chbench` (installed in editable mode)
 imports correctly either way.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -40,8 +41,9 @@ from chbench.datagen.spec import DatasetSpec
 ROWS = 10_000_000
 
 
-def layout_interarrival_vectorised(support: np.ndarray, counts: np.ndarray, cv: float,
-                                   rng: np.random.Generator) -> np.ndarray:
+def layout_interarrival_vectorised(
+    support: np.ndarray, counts: np.ndarray, cv: float, rng: np.random.Generator
+) -> np.ndarray:
     """`sequence.layout_interarrival` with the per-run loop replaced.
 
     Everything up to `free_int` is copied verbatim so the rng is consumed
@@ -64,7 +66,7 @@ def layout_interarrival_vectorised(support: np.ndarray, counts: np.ndarray, cv: 
     shape = 1.0 / cv**2
     mean_gap = S / (m + 1) + (run_len[:-1].mean() if m > 1 else 0.0)
     draws = rng.gamma(shape, mean_gap / shape, size=m + 1)
-    interior = np.maximum(draws[:m - 1] - run_len[:-1], 0.0)
+    interior = np.maximum(draws[: m - 1] - run_len[:-1], 0.0)
     free = np.concatenate(([draws[m - 1]], interior, [draws[m]]))
     free_int = largest_remainder(free, S)
 
@@ -84,14 +86,23 @@ def layout_interarrival_vectorised(support: np.ndarray, counts: np.ndarray, cv: 
 
 
 def main() -> None:
-    spec = DatasetSpec(rows=ROWS, arrow_type="float64", value_range=(-1.0, 10.0),
-                       decimal_places=8, null_count=0, seed=42, cardinality_ratio=0.75,
-                       interarrival_cv=1.0)
+    spec = DatasetSpec(
+        rows=ROWS,
+        arrow_type="float64",
+        value_range=(-1.0, 10.0),
+        decimal_places=8,
+        null_count=0,
+        seed=42,
+        cardinality_ratio=0.75,
+        interarrival_cv=1.0,
+    )
     t0 = time.perf_counter()
     ms = build_multiset(spec, np.random.default_rng(spec.seed))
-    print(f"multiset at {ROWS:,} rows: {time.perf_counter() - t0:.2f}s; "
-          f"support {len(ms.support):,}, repeat-runs {(ms.counts >= 2).sum():,}, "
-          f"singles {(ms.counts == 1).sum():,}")
+    print(
+        f"multiset at {ROWS:,} rows: {time.perf_counter() - t0:.2f}s; "
+        f"support {len(ms.support):,}, repeat-runs {(ms.counts >= 2).sum():,}, "
+        f"singles {(ms.counts == 1).sum():,}"
+    )
 
     t0 = time.perf_counter()
     a = layout_interarrival(ms.support, ms.counts, 1.0, np.random.default_rng(7))
@@ -99,13 +110,17 @@ def main() -> None:
     print(f"package layout_interarrival (Python loop): {t_loop:.2f}s")
 
     t0 = time.perf_counter()
-    b = layout_interarrival_vectorised(ms.support, ms.counts, 1.0, np.random.default_rng(7))
+    b = layout_interarrival_vectorised(
+        ms.support, ms.counts, 1.0, np.random.default_rng(7)
+    )
     t_vec = time.perf_counter() - t0
     print(f"vectorised layout (numpy only):            {t_vec:.2f}s")
 
     same = np.array_equal(a, b)
-    print(f"np.array_equal(package, vectorised): {same}; "
-          f"speedup {t_loop / t_vec:.1f}x")
+    print(
+        f"np.array_equal(package, vectorised): {same}; "
+        f"speedup {t_loop / t_vec:.1f}x"
+    )
     if not same:
         raise SystemExit("vectorised layout differs from the package layout")
 

@@ -11,6 +11,7 @@ Storage statistics come **only** from `column_data_compressed_bytes`,
 column's row (FINDINGS §5). Those per-column figures exist only for Wide
 parts, which every `CREATE TABLE` from `ddl.py` forces.
 """
+
 from __future__ import annotations
 
 import re
@@ -42,9 +43,9 @@ class StorageStats:
 
 @dataclass(frozen=True)
 class LoadResult:
-    status: str                 # "ok" | "error"
+    status: str  # "ok" | "error"
     error: str | None
-    insert_ms: float | None     # None when the insert did not complete
+    insert_ms: float | None  # None when the insert did not complete
     stats: StorageStats | None
 
 
@@ -56,9 +57,16 @@ _TIME64_RE = re.compile(r"^Time64\((\d)\)$")
 
 # Arrow types for the fixed-width scalar ClickHouse types.
 _SCALAR_ARROW = {
-    "Float32": pa.float32(), "Float64": pa.float64(),
-    "Int8": pa.int8(), "Int16": pa.int16(), "Int32": pa.int32(), "Int64": pa.int64(),
-    "UInt8": pa.uint8(), "UInt16": pa.uint16(), "UInt32": pa.uint32(), "UInt64": pa.uint64(),
+    "Float32": pa.float32(),
+    "Float64": pa.float64(),
+    "Int8": pa.int8(),
+    "Int16": pa.int16(),
+    "Int32": pa.int32(),
+    "Int64": pa.int64(),
+    "UInt8": pa.uint8(),
+    "UInt16": pa.uint16(),
+    "UInt32": pa.uint32(),
+    "UInt64": pa.uint64(),
     "String": pa.string(),
     "Bool": pa.bool_(),
     "Date": pa.date32(),
@@ -76,13 +84,17 @@ _DECIMAL_ARROW = {
 _DATETIME64_UNIT = {"0": "s", "3": "ms", "6": "us", "9": "ns"}
 
 # Time64(p): Arrow has time32 for seconds and milliseconds, time64 for the rest.
-_TIME64_ARROW = {"0": pa.time32("s"), "3": pa.time32("ms"),
-                 "6": pa.time64("us"), "9": pa.time64("ns")}
+_TIME64_ARROW = {
+    "0": pa.time32("s"),
+    "3": pa.time32("ms"),
+    "6": pa.time64("us"),
+    "9": pa.time64("ns"),
+}
 
 
 def base_type(ch_type: str) -> str:
     """Strip `LowCardinality(...)` and `Nullable(...)` wrappers, in any nesting."""
-    while (m := _WRAPPER_RE.match(ch_type)):
+    while m := _WRAPPER_RE.match(ch_type):
         ch_type = m.group(1)
     return ch_type
 
@@ -149,21 +161,30 @@ def storage_stats(client: CHClient, name: str) -> StorageStats:
         "sum(column_marks_bytes), sum(rows), count() "
         "FROM system.parts_columns "
         "WHERE database = {db:String} AND table = {t:String} AND column = 'v' AND active",
-        parameters={"db": database, "t": table})
+        parameters={"db": database, "t": table},
+    )
     compressed, uncompressed, marks, nrows, parts = rows[0]
     idx = client.query_rows(
         "SELECT sum(data_compressed_bytes), sum(data_uncompressed_bytes), sum(marks_bytes) "
         "FROM system.data_skipping_indices WHERE database = {db:String} AND table = {t:String}",
-        parameters={"db": database, "t": table})
+        parameters={"db": database, "t": table},
+    )
     ic, iu, im = (int(x or 0) for x in idx[0])
-    return StorageStats(compressed_bytes=int(compressed), uncompressed_bytes=int(uncompressed),
-                        marks_bytes=int(marks), rows=int(nrows), parts=int(parts),
-                        index_compressed_bytes=ic, index_uncompressed_bytes=iu,
-                        index_marks_bytes=im)
+    return StorageStats(
+        compressed_bytes=int(compressed),
+        uncompressed_bytes=int(uncompressed),
+        marks_bytes=int(marks),
+        rows=int(nrows),
+        parts=int(parts),
+        index_compressed_bytes=ic,
+        index_uncompressed_bytes=iu,
+        index_marks_bytes=im,
+    )
 
 
-def load_table(client: CHClient, name: str, variant: TableVariant,
-               dataset: Dataset) -> LoadResult:
+def load_table(
+    client: CHClient, name: str, variant: TableVariant, dataset: Dataset
+) -> LoadResult:
     """Drop, create, insert, optimise and measure one table variant.
 
     The insert is `insert_arrow` of a two-column table: `row_id UInt64` from
@@ -194,6 +215,10 @@ def load_table(client: CHClient, name: str, variant: TableVariant,
             client.command(drop_table_sql(name))
         except Exception:  # noqa: BLE001
             pass
-        return LoadResult(status="error", error=f"{type(e).__name__}: {e}",
-                          insert_ms=insert_ms, stats=None)
+        return LoadResult(
+            status="error",
+            error=f"{type(e).__name__}: {e}",
+            insert_ms=insert_ms,
+            stats=None,
+        )
     return LoadResult(status="ok", error=None, insert_ms=insert_ms, stats=stats)
