@@ -31,7 +31,8 @@ quality; improve, and repeat b–d. Last: run the loop on (a sample of) real dat
   - ClickHouse: column type, codec chain (GCD, Delta, DoubleDelta, then LZ4 / ZSTD + level), skip indexes
     (`minmax`, `set`, `bloom_filter`, GRANULARITY) and `ORDER BY`.
 - **Formats.** In-memory and Arrow IPC only. **No Parquet anywhere**: not as an analysis target, and not for the
-  project's own files (fixtures, benchmark results). `tests/test_layering.py` guards every tracked Python file.
+  project's own files (fixtures, benchmark results). `tests/test_layering.py` guards every tracked Python file under
+  `tests/` and `services/`.
 - **Row order.** The frame's row order is taken to be the stored order. Order-dependent metrics (runs, MinMax, Set,
   delta) are measured on it, beside random-order baselines. For ClickHouse the caller supplies data sorted by the
   intended `ORDER BY`. Evaluating proposed orders is the ordering recommender's job (ToDo 19).

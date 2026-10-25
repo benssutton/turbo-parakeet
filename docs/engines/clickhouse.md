@@ -111,7 +111,7 @@ Use where there is more than one value of different types in any given row.
 
 ### Primary Key (Ordering)
 
-In ClickHouse the primary key works by sorting data on the given rows, and then creating a sparse index (i.e. just the first and last values) for each granule (8196 rows).
+In ClickHouse the primary key works by sorting data on the given rows, and then creating a sparse index (i.e. just the first and last values) for each granule (8192 rows).
 
 https://clickhouse.com/docs/concepts/core-concepts/primary-indexes
 https://clickhouse.com/docs/guides/clickhouse/data-modelling/sparse-primary-indexes
@@ -153,7 +153,7 @@ https://en.wikipedia.org/wiki/Lincoln_index
 
 Both scalar String values and Strings as the inner type of List/Array columns will nearly always be more efficiently encoded as Low Cardinality/Categorical.
 
-2. *GCD (Greatest Common Denominator)*  Where values in a column are all multiples of a common denominator, it may be possible to shrink the datatype by dividing all values by the GCD and storing the multiplier in the column's metadata.
+2. *GCD (Greatest Common Divisor)*  Where values in a column are all multiples of a common divisor, it may be possible to shrink the datatype by dividing all values by the GCD and storing the multiplier in the column's metadata.
 
 GCD can be used with integer, decimal and date/time columns.
 
@@ -203,7 +203,7 @@ https://clickhouse.com/docs/concepts/best-practices/using-data-skipping-indices
 
 Skipping indexes exploit local clustering of values per block.  On randomly distributed data they cost CPU and storage and save nothing.
 
-Clustering of values within a (numeric) dataset can be identified via the Index of Dispersion.  Poisson-distributed values will have a mean equal to the variance.  The index of dispersion is σ squared/μ.  And index of dispersion = 1 indicates a true random distribution, > 1 indicates clustering, whereas an index of dispersion > 1 indicates an under-dispersed set.
+Clustering of values within a (numeric) dataset can be identified via the Index of Dispersion.  Poisson-distributed values will have a mean equal to the variance.  The index of dispersion is σ squared/μ.  And index of dispersion = 1 indicates a true random distribution, > 1 indicates clustering, whereas an index of dispersion < 1 indicates an under-dispersed set.
 
 https://en.wikipedia.org/wiki/Index_of_dispersion
 
