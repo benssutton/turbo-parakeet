@@ -204,6 +204,22 @@ def coverage_rust_full() -> None:
 def coverage_py() -> None:
     _run([PY, "-m", "pytest", "--cov=.", "--cov-report=xml", "--cov-report=html", "-q"])
     _run([PY, "-m", "pytest", "--cov=chbench", "--cov-report=xml", "-q"], BENCH)
+    _repo_relative_coverage(BENCH / "coverage.xml", BENCH / "chbench")
+
+
+def _repo_relative_coverage(report: Path, source: Path) -> None:
+    """Rewrite a coverage.xml whose file names are relative to `source` so they are relative
+    to the repository root, as in the root coverage.xml (what the Sonar scanner resolves).
+    """
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(report)
+    prefix = source.relative_to(ROOT).as_posix()
+    for cls in tree.iter("class"):
+        cls.set("filename", f"{prefix}/{cls.get('filename')}")
+    for src in tree.iter("source"):
+        src.text = str(ROOT)
+    tree.write(report, encoding="utf-8", xml_declaration=True)
 
 
 def _sonar_network() -> str:

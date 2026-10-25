@@ -101,7 +101,7 @@ On demand:
 - `coverage-rust-full` — Rust coverage from the unit tests merged with the Python tests run
   against an instrumented extension (what CI uploads to Codecov). The normal extension is
   restored afterwards.
-- `coverage-py` — Python coverage (`coverage.xml`, `htmlcov/`).
+- `coverage-py` — Python coverage (`coverage.xml`, `htmlcov/`; the bench's in `services/bench/coverage.xml`).
 - `sonar` — Python and Java coverage, then the SonarQube scanner (needs Docker,
   `SONARQUBE_TOKEN` and the compose stack running).
 

@@ -116,7 +116,10 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
       add a line to `tests/performance/benchmark_recommend.py` before large frames.
     - Range queries (`col BETWEEN a AND b`), where minmax indexes earn most of their value — **on hold**: needs a design
       for how point and range queries combine in the decision, and whether ClickHouse's set index skips ranges.
-11. **Recommender parity and Polars state.**
+11. **Recommender gaps, parity and Polars state.**
+    - Entropy of list inner values: the `entropy*` columns cover the top-level values only.
+    - Exemplars with `id_columns`: still to decide how identifier columns that are themselves null or ineligible
+      (Int128 / UInt128, Object) are reported, and what a List column with nulls inside counts as.
     - String columns whose null slots hold bytes (built with `pl.when(...).then(None)` or `Series.set`): one-shot
       measures those bytes in its cast candidates (`datafusion_size_bytes`), streaming does not; `assert_parity`
       excuses the gap only for the original type. Decide which is right (an Arrow cast keeps the bytes; a writer may

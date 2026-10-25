@@ -69,7 +69,7 @@ Prioritise performance & simplicity.
 
 # Checks, CI and local tooling
 `python scripts/check.py <step|group>` (run with the p312 Python) runs exactly what CI runs: `fast` (rustfmt, black, clippy for both
-feature sets, ruff, and the `layering` step), `check` (fast + build + `cargo test --lib` + pytest + `test-bench`, the bench's own pytest run from `services/bench/`; `pytest.ini` runs it on 4 pytest-xdist workers, `-n 0` for serial), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
+feature sets, ruff, and the `layering` step), `check` (fast + build + `cargo test --lib` + pytest + `test-bench`, the bench's own pytest run from `services/bench/`; the root `pytest.ini` runs `test-py` on 4 pytest-xdist workers, `-n 0` for serial; the bench run is serial), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
 `lint`, `build`, `test-rust`, `test-py`, `test-bench`, `test-java`, `coverage-rust`, `coverage-rust-full`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
 Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin, pytest-xdist) and `rust-toolchain.toml` (compiler, rustfmt, clippy); `requirements.txt` caps each runtime / reference library below its next major version (a new major arrives through a Dependabot PR);
 `Cargo.lock` is committed. Optional git hooks: `.pre-commit-config.yaml` (commit: rustfmt + black; push: clippy + ruff + Rust tests). The hooks call `python`: put the p312 env on `PATH` first (Git Bash: `export PATH="/c/Users/Alexander/miniconda3/envs/p312:/c/Users/Alexander/miniconda3/envs/p312/Scripts:$PATH"`; the push hook's Rust tests also need `PYO3_PYTHON`), else they fail with "Python was not found" and the commit / push is refused.

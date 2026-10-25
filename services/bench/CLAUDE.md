@@ -72,11 +72,11 @@ axis over a string or date dataset) is rejected at parse time.
   (`validate.KNOWN_CODECS`), then the `compression` axis (`LZ4`, `ZSTD` or `ZSTD(N)`, N 1–22).
   GCD on disk keeps the column width and saves 13–45% on multiples of 1000.
 - **Skip indexes:** `skip_index` values are `<index>[:<G>]`, G = GRANULARITY in {1, 2, 4, 8} (default 1), index
-  `minmax`, `set(N)` or `bloom_filter(F)` with F in {0.001, 0.01, 0.025, 0.05}; `none` leaves the table unindexed.
+  `minmax`, `set(N)`, `bloom_filter` (ClickHouse's default fpr) or `bloom_filter(F)` with F in {0.001, 0.01, 0.025, 0.05}; `none` leaves the table unindexed.
   `storage_stats` reads `system.data_skipping_indices`: the store and the report / CSV carry `index_compressed_bytes` /
   `index_uncompressed_bytes` (the store also `index_marks_bytes`). Sizes (FINDINGS §10): a `bloom_filter` block is sized
   by its distinct values — ceil(D × b / 8) + 1–3 bytes, b = 15 / 10 / 8 / 7 bits for fpr 0.001 / 0.01 / 0.025 / 0.05 —
-  not by its rows; `minmax` is 16 B and `set` 8 B + 8 B per value per Int64 block.
+  not by its rows; `minmax` is 16 B and `set` 8 B + 8 B per value per Int64 block (8 B when it overflows).
 
 # Measurement notes
 - Rank by `server_p50` under ≈ 100 ms: client time has a floor of ≈ 50 ms through Docker Desktop's HTTP path.

@@ -829,7 +829,7 @@ pub(crate) fn emulate(streams: &[Stream], chain: Chain) -> Result<Emulated, Stri
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Skip indexes (sizes measured on ClickHouse 26.8: FINDINGS §10)
+// Skip indexes (sizes measured on ClickHouse 26.8: services/bench/spikes/FINDINGS.md §10)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Bloom filter bits per distinct value of an index block, by false-positive rate (measured).

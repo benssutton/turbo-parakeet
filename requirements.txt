@@ -6,7 +6,7 @@ maturin>=1.15.0,<2
 
 # Data / columnar format
 polars>=2.0.0,<3
-pyarrow>=14.0,<26
+pyarrow>=18.0,<26
 numpy>=2.5.3,<3
 datafusion>=55.0.0,<56
 pyyaml>=6.0,<7  # to_chbench suite files; services/bench suites

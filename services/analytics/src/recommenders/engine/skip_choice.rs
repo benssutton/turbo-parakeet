@@ -16,7 +16,7 @@ use arrow_schema::Field;
 /// ClickHouse rows per granule.
 const GRANULE_ROWS: u64 = 8_192;
 
-/// Types on which ClickHouse 26.8 rejects `bloom_filter` (FINDINGS §9).
+/// Types on which ClickHouse 26.8 rejects `bloom_filter` (services/bench/spikes/FINDINGS.md §9).
 fn bloom_unsupported(ch_type: &str) -> bool {
     let mut t = ch_type;
     while let Some(inner) = t
