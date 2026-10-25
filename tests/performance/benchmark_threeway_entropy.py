@@ -4,23 +4,23 @@ ThreewayEntropyPolars (reference).
 
 Run: python tests/performance/benchmark_threeway_entropy.py
 
-large_dataset is cut to its first 40 columns (9,880 triplets): all 101 columns
-give 166,650 triplets (~65 s per Rust run), far past the reference's budget.
+cover is cut to its first 40 columns (9,880 triplets): all 77 columns give 73,150
+triplets, far past the reference's budget.
 """
 
-from harness import Dataset, large_dataset, run
+from harness import Dataset, cover_dataset, run
 
-from datagen import low_cardinality, near_constant, near_unique
+from synthdata.scenarios import low_cardinality, near_constant, near_unique
 
 if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.threeway_entropy",
         [
-            large_dataset(columns=40),
-            # All 101 columns -> C(101, 3) = 166,650 triplets. Neither the one-triplet-at-a-
+            cover_dataset(columns=40),
+            # All 77 columns -> C(77, 3) = 73,150 triplets. Neither the one-triplet-at-a-
             # time Polars reference nor a 4096-estimator sketch per triplet finishes within
             # budget, so only the exact Rust implementation is timed here.
-            large_dataset(exclude=("ThreewayEntropyPolars", "ThreewayEntropyAmsRust")),
+            cover_dataset(exclude=("ThreewayEntropyPolars", "ThreewayEntropyAmsRust")),
             Dataset("narrow 1M x 5", lambda: {"t": low_cardinality(1_000_000, 5)}),
             Dataset("wide 20K x 30", lambda: {"t": low_cardinality(20_000, 30)}),
             Dataset("near-unique 1M x 9", lambda: {"t": near_unique()}),

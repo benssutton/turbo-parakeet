@@ -3,14 +3,14 @@ Delta speed benchmark: DeltaRust vs DeltaPolars (Python-int reference).
 
 Run: python tests/performance/benchmark_delta.py
 
-Shapes: large_dataset (realistic mix); timestamps 1M x 4 (regular step + jitter, ms);
+Shapes: cover (50 000 rows, the covering mix); timestamps 1M x 4 (regular step + jitter, ms);
 wide 20K x 100 (random walks of varying step size). The reference works in Python ints,
 so the shapes are smaller than the numpy-fast techniques'.
 """
 
 import numpy as np
 import polars as pl
-from harness import Dataset, large_dataset, run
+from harness import Dataset, cover_dataset, run
 
 
 def timestamps() -> dict[str, pl.DataFrame]:
@@ -45,7 +45,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.delta",
         [
-            large_dataset(),
+            cover_dataset(),
             Dataset("timestamps 1M x 4", timestamps),
             Dataset("wide 20K x 100", wide),
         ],

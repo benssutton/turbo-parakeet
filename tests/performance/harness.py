@@ -3,10 +3,10 @@ Shared benchmark harness: speed, peak memory and accuracy of every implementatio
 technique. Every
 tests/performance/benchmark_<technique>.py is:
 
-    from harness import Dataset, large_dataset, run
-    from datagen import ...
+    from harness import Dataset, cover_dataset, run
+    from synthdata.scenarios import ...
     if __name__ == "__main__":
-        run("turbo_parakeet.techniques.<technique>", [large_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
+        run("turbo_parakeet.techniques.<technique>", [cover_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
 
 One child process per measurement, i.e. per (dataset, implementation, variant, threads),
 reading the dataset from Arrow IPC files the parent wrote once. The child (this file,
@@ -58,10 +58,10 @@ import polars as pl
 
 sys.path.insert(
     0, str(Path(__file__).parents[1])
-)  # tests/ -> `import datagen` in benchmark scripts
+)  # tests/ -> `performance.<package>` in the child processes
 
 import turbo_parakeet  # noqa: E402
-from datagen import large_dataset as generated_large_dataset  # noqa: E402
+from synthdata.cover import cover  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
 SINGLE_THREAD_ENV = {"RAYON_NUM_THREADS": "1", "POLARS_MAX_THREADS": "1"}
@@ -124,13 +124,15 @@ class Variant:
     )  # estimators (EXACT = False) only
 
 
-def large_dataset(columns: int | None = None, exclude: tuple[str, ...] = ()) -> Dataset:
-    """datagen.large_dataset() (50K rows × 101 cols, generated), optionally only its first `columns`."""
-    label = "large_dataset" + (f" (first {columns} cols)" if columns else "")
+def cover_dataset(
+    rows: int = 50_000, columns: int | None = None, exclude: tuple[str, ...] = ()
+) -> Dataset:
+    """synthdata's covering frame at `rows` (the benchmark-scale tier), optionally only its first `columns`."""
+    label = f"cover ({rows} rows)" + (f" (first {columns} cols)" if columns else "")
 
     def make() -> dict[str, pl.DataFrame]:
-        df = generated_large_dataset()
-        return {"large": df.select(df.columns[:columns]) if columns else df}
+        df = cover(rows)
+        return {"cover": df.select(df.columns[:columns]) if columns else df}
 
     return Dataset(label, make, exclude)
 

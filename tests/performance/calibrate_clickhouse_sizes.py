@@ -24,13 +24,12 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 import yaml
+from synthdata.cover import cover
+
+from turbo_parakeet.recommenders import OneShotRecommender, to_chbench
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / "services" / "bench"  # chbench runs with this as its working directory
-sys.path[:0] = [str(ROOT / "tests")]
-
-import datagen  # noqa: E402
-from turbo_parakeet.recommenders import OneShotRecommender, to_chbench  # noqa: E402
 
 N = 1_000_000
 RESULT = Path(__file__).parent / "results" / "clickhouse_calibration.arrow"
@@ -164,7 +163,7 @@ def main() -> None:
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     work = Path(tempfile.mkdtemp(prefix="calibrate_ch_"))
-    frames = {"large": datagen.large_dataset_mixed(), **gcd_frames(), **delta_frames()}
+    frames = {"cover": cover(50_000), **gcd_frames(), **delta_frames()}
 
     delta_names = set(delta_frames())
     suites: list[tuple[str, Path]] = []  # (frame, yaml)

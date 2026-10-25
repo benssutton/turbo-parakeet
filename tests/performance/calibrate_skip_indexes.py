@@ -27,13 +27,12 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 import yaml
+from synthdata.cover import cover
+
+from turbo_parakeet.recommenders import OneShotRecommender, to_chbench
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / "services" / "bench"  # chbench runs with this as its working directory
-sys.path[:0] = [str(ROOT / "tests")]
-
-import datagen  # noqa: E402
-from turbo_parakeet.recommenders import OneShotRecommender, to_chbench  # noqa: E402
 
 N = 1_000_000
 LARGE_ROWS = 200_000
@@ -279,11 +278,7 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     work = Path(args.reuse or tempfile.mkdtemp(prefix="calibrate_skip_"))
     suites: list[tuple[str, Path, str]] = []
-    frames = (
-        {}
-        if args.reuse
-        else {**known_frames(), "large": datagen.large_dataset_mixed(LARGE_ROWS)}
-    )
+    frames = {} if args.reuse else {**known_frames(), "cover": cover(LARGE_ROWS)}
     if args.reuse:
         for d in sorted(p for p in work.iterdir() if p.is_dir() and p.name != "cache"):
             for p in sorted(d.glob("*.yaml")):

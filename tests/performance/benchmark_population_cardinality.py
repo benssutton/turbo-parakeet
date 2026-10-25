@@ -9,9 +9,9 @@ Run: python tests/performance/benchmark_population_cardinality.py
 
 from functools import cache
 
-from harness import Dataset, large_dataset, run
+from harness import Dataset, cover_dataset, run
 
-from datagen import population_samples
+from synthdata.scenarios import population_samples
 
 POPULATIONS = [
     (d, shape)
@@ -35,5 +35,5 @@ def samples(n_rows: int) -> Dataset:
 if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.population_cardinality",
-        [large_dataset(), samples(1_000_000), samples(100_000)],
+        [cover_dataset(), samples(1_000_000), samples(100_000)],
     )
