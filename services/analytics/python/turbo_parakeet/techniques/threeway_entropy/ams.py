@@ -1,7 +1,7 @@
 import polars as pl
 
 from turbo_parakeet import _plugin
-from turbo_parakeet.techniques._ams import check_ams_params
+from turbo_parakeet.techniques._ams import AMS_ATOL_BITS, check_ams_params
 from turbo_parakeet.techniques.base import group_by_frame, metric_mismatches
 from turbo_parakeet.techniques.threeway_entropy.base import ThreewayEntropy
 
@@ -9,12 +9,12 @@ from turbo_parakeet.techniques.threeway_entropy.base import ThreewayEntropy
 class ThreewayEntropyAmsRust(ThreewayEntropy):
     """Rust extension `ams_threeway_joint_entropy`: one Chakrabarti–Cormode–McGregor sketch
     (`num_samples` estimators, O(num_samples) memory) per triplet, rayon-parallel; h_abc
-    agrees with the reference within RTOL."""
+    agrees with the reference within max(RTOL·|exact|, ATOL)."""
 
     EXACT = False
     # mixed_dtypes(1_000) at num_samples=4096, seed=0: max relative error 3.9% (h_abc), 2.7% (h_ab).
     RTOL = 0.05
-    ATOL = 1e-9
+    ATOL = AMS_ATOL_BITS  # agrees within max(RTOL·|exact|, ATOL)
 
     def __init__(self, *, num_samples: int = 4096, seed: int = 0, **thresholds):
         super().__init__(**thresholds)
@@ -45,7 +45,7 @@ class ThreewayEntropyAmsRust(ThreewayEntropy):
         return pl.concat(parts)
 
     def agreement(self, result: pl.DataFrame, reference: pl.DataFrame) -> list[str]:
-        """h_abc within RTOL, n_rows exact."""
+        """h_abc within max(RTOL·|exact|, ATOL), n_rows exact."""
         keys = self.key_columns()
         problems = metric_mismatches(
             result, reference, keys, ["h_abc"], self.RTOL, self.ATOL

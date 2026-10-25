@@ -93,3 +93,20 @@ def test_ams_is_an_estimator():
     assert MarginalEntropyAmsRust.EXACT is False
     with pytest.raises(ValueError):
         MarginalEntropyAmsRust(num_samples=0)
+
+
+@pytest.mark.parametrize("got, ok", [(0.94, True), (1.09, True), (0.85, False)])
+def test_ams_agreement_is_relative_or_absolute_in_bits(got, ok):
+    """A 1-bit column: 0.06 bits off exceeds RTOL (5%) but not ATOL (0.1 bits)."""
+    from turbo_parakeet.techniques.marginal_entropy import (
+        MarginalEntropyAmsRust,
+        MarginalEntropyPolars,
+    )
+
+    frames = {"t": pl.DataFrame({"x": [1, 2] * 50})}
+    want = MarginalEntropyPolars().add(frames).result()
+    assert want["h"][0] == pytest.approx(1.0)
+    problems = MarginalEntropyAmsRust().agreement(
+        want.with_columns(h=pl.lit(got)), want
+    )
+    assert (problems == []) is ok

@@ -211,3 +211,22 @@ def test_accuracy_keeps_nan_mi_error():
 def test_accuracy_counts_null_mi_as_missing():
     out = _three_column_accuracy(None)
     assert out["n_missing"] == 1
+
+
+@pytest.mark.parametrize("got, ok", [(0.94, True), (0.85, False)])
+def test_ams_agreement_is_relative_or_absolute_in_bits(got, ok):
+    """h_a of a 1-bit column 0.06 bits off: beyond RTOL (5%), within ATOL (0.1 bits);
+    MI within RTOL·(h_a + h_b + h_ab) + 3·ATOL."""
+    from turbo_parakeet.techniques.pairwise_entropy import (
+        PairwiseEntropyAmsRust,
+        PairwiseEntropyPolars,
+    )
+
+    frames = {"t": pl.DataFrame({"a": [1, 1, 2, 2], "b": [1, 2, 1, 2]})}
+    want = PairwiseEntropyPolars().add(frames).result()
+    ams = PairwiseEntropyAmsRust()
+    problems = ams.agreement(want.with_columns(h_a=pl.lit(got)), want)
+    assert (problems == []) is ok
+    # bound = 0.05 · (1 + 1 + 2) + 0.3 = 0.5 bits
+    assert ams.agreement(want.with_columns(mi=pl.col("mi") + 0.49), want) == []
+    assert ams.agreement(want.with_columns(mi=pl.col("mi") + 0.51), want) != []

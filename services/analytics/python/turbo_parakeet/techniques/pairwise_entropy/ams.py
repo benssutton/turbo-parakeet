@@ -3,7 +3,7 @@ import math
 import polars as pl
 
 from turbo_parakeet import _plugin
-from turbo_parakeet.techniques._ams import check_ams_params
+from turbo_parakeet.techniques._ams import AMS_ATOL_BITS, check_ams_params
 from turbo_parakeet.techniques.base import group_by_frame, metric_mismatches
 from turbo_parakeet.techniques.pairwise_entropy.base import PairwiseEntropy
 
@@ -12,12 +12,13 @@ class PairwiseEntropyAmsRust(PairwiseEntropy):
     """Rust extension functions `ams_marginal_entropy` + `ams_pairwise_joint_entropy`: one
     Chakrabarti–Cormode–McGregor sketch (`num_samples` estimators, O(num_samples) memory)
     per column and per pair, rayon-parallel. Entropies agree with the reference within
-    RTOL; MI / NMI within the error the entropies propagate (see `agreement`)."""
+    max(RTOL·|exact|, ATOL); MI / NMI within the error the entropies propagate (see
+    `agreement`)."""
 
     EXACT = False
     # mixed_dtypes(1_000) at num_samples=4096, seed=0: max relative error 2.7% (h_ab).
     RTOL = 0.05
-    ATOL = 1e-9
+    ATOL = AMS_ATOL_BITS  # agrees within max(RTOL·|exact|, ATOL)
 
     def __init__(self, *, num_samples: int = 4096, seed: int = 0, **thresholds):
         super().__init__(**thresholds)
@@ -55,8 +56,8 @@ class PairwiseEntropyAmsRust(PairwiseEntropy):
         return pl.concat(parts)
 
     def agreement(self, result: pl.DataFrame, reference: pl.DataFrame) -> list[str]:
-        """Entropies within RTOL. MI within RTOL·(h_a + h_b + h_ab) of the reference and NMI
-        within that bound ÷ min(h_a, h_b): MI is a difference of estimates, so its relative
+        """Entropies within max(RTOL·|exact|, ATOL). MI within RTOL·(h_a + h_b + h_ab) + 3·ATOL
+        of the reference and NMI within that bound ÷ min(h_a, h_b): MI is a difference of estimates, so its relative
         error is unbounded. Conclusions are not compared: an estimate within tolerance can
         still land on the other side of a threshold."""
         keys = self.key_columns()
@@ -80,7 +81,7 @@ class PairwiseEntropyAmsRust(PairwiseEntropy):
             label = " ~ ".join(
                 f"{r[keys[i]]}.{r[keys[i + 1]]}" for i in range(0, len(keys), 2)
             )
-            bound = self.RTOL * (r["h_a"] + r["h_b"] + r["h_ab"]) + self.ATOL
+            bound = self.RTOL * (r["h_a"] + r["h_b"] + r["h_ab"]) + 3 * self.ATOL
             if r["got_mi"] is None or not abs(r["got_mi"] - r["mi"]) <= bound:
                 problems.append(
                     f"{label}: mi {r['got_mi']!r} != {r['mi']!r} ± {bound:.3g}"

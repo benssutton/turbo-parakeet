@@ -116,3 +116,21 @@ def test_accuracy_compares_the_joint_entropy_only():
     assert out["max_rel_err"] == pytest.approx(0.02)
     assert out["n_missing"] == 0
     assert ThreewayEntropyAmsRust.EXACT is False
+
+
+@pytest.mark.parametrize("got, ok", [(0.94, True), (0.85, False)])
+def test_ams_agreement_is_relative_or_absolute_in_bits(got, ok):
+    """A 1-bit triplet 0.06 bits off: beyond RTOL (5%), within ATOL (0.1 bits)."""
+    from turbo_parakeet.techniques.threeway_entropy import (
+        ThreewayEntropyAmsRust,
+        ThreewayEntropyPolars,
+    )
+
+    x = [1, 2] * 50
+    frames = {"t": pl.DataFrame({"a": x, "b": x, "c": x})}
+    want = ThreewayEntropyPolars().add(frames).result()
+    assert want["h_abc"][0] == pytest.approx(1.0)
+    problems = ThreewayEntropyAmsRust().agreement(
+        want.with_columns(h_abc=pl.lit(got)), want
+    )
+    assert (problems == []) is ok

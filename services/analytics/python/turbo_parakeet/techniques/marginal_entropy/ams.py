@@ -1,7 +1,7 @@
 import polars as pl
 
 from turbo_parakeet import _plugin
-from turbo_parakeet.techniques._ams import check_ams_params
+from turbo_parakeet.techniques._ams import AMS_ATOL_BITS, check_ams_params
 from turbo_parakeet.techniques.base import group_by_frame
 from turbo_parakeet.techniques.marginal_entropy.base import MarginalEntropy
 
@@ -13,7 +13,7 @@ class MarginalEntropyAmsRust(MarginalEntropy):
 
     EXACT = False
     RTOL = 0.05
-    ATOL = 1e-9
+    ATOL = AMS_ATOL_BITS  # agrees within max(RTOL·|exact|, ATOL)
 
     def __init__(self, *, num_samples: int = 4096, seed: int = 0):
         super().__init__()
