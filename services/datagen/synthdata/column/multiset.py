@@ -12,7 +12,6 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pyarrow as pa
-from scipy.stats import lognorm, norm
 
 from synthdata.column.metrics import (
     entropy_of_counts,
@@ -369,6 +368,10 @@ def density_counts(
         else:  # validate() guarantees value_range here
             lo, hi = spec.value_range
             mean = (lo + hi) / 2
+        from scipy.stats import (
+            norm,
+        )  # imported here: scipy.stats costs ~1.4 s to import
+
         weights = norm.pdf(support - d.shift, loc=mean, scale=sig)
     elif d.kind == "lognormal":
         sig = sigma if sigma is not None else d.sigma
@@ -384,6 +387,8 @@ def density_counts(
                 "requires a positive mean"
             )
         mu_log = np.log(d.mean) - sig**2 / 2  # mean is BEFORE the shift
+        from scipy.stats import lognorm
+
         weights = lognorm.pdf(support - d.shift, s=sig, scale=np.exp(mu_log))
     else:
         raise ValueError(f"unknown distribution kind {d.kind!r}")
