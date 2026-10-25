@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,8 +8,10 @@ from polars.testing import assert_frame_equal
 
 import synthdata.scenarios as sc
 
-# Height, width, schema and row-hash sum of each scenario, frozen when the scenarios
-# moved here byte-identical from the former root fixture module: they stay stable.
+# Height, width, schema and a digest of each scenario's values, frozen when the scenarios
+# moved here byte-identical from the former root fixture module: they stay stable. The
+# digest hashes the rows' Python values (repr), so it is the same on every platform —
+# Polars' `hash_rows` is not (String hashes differ between Windows and Linux).
 FROZEN = json.loads((Path(__file__).with_name("frozen.json")).read_text())
 
 
@@ -17,7 +20,7 @@ def _summary(df: pl.DataFrame) -> dict:
         "height": df.height,
         "width": df.width,
         "schema": {k: str(v) for k, v in df.schema.items()},
-        "hash": int(df.hash_rows().sum()),
+        "digest": hashlib.sha256(repr(df.rows()).encode()).hexdigest(),
     }
 
 

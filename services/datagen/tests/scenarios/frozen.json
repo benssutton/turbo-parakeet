@@ -27,7 +27,7 @@
      "arr_high_unique": "Array(Int32, shape=(3,))",
      "arr_sparse": "Array(Int32, shape=(3,))"
     },
-    "hash": 12182836367743138601
+    "digest": "005bd750b198bced4abe92ad6a25159f5cd52ed2f39e233e7372fef38704faea"
    }
   }
  },
@@ -48,7 +48,7 @@
      "c004": "Int64",
      "c005": "Int64"
     },
-    "hash": 16259668908678515937
+    "digest": "295bfcfaceca8eb6f2da1136d4f7e0bedd5a278f11de551c5880e3fc197eea9e"
    }
   }
  },
@@ -98,7 +98,7 @@
      "struct": "Struct({'a': Int64, 'b': String})",
      "all_null": "String"
     },
-    "hash": 11292021297823629754
+    "digest": "887eac4cc7693797a70a531290679fbc7b09571936114afad1876877e6ebed98"
    }
   }
  },
@@ -116,7 +116,7 @@
      "region": "String",
      "score": "Int64"
     },
-    "hash": 10244798571341534826
+    "digest": "6301c6278b91e26ac6a927d2c838bddf95a55829691f36d0a175aa1593a1bcd6"
    },
    "orders": {
     "height": 200,
@@ -128,7 +128,7 @@
      "region": "String",
      "amount": "Int64"
     },
-    "hash": 5551072126918191561
+    "digest": "13737231583eeed58ddb55e1cd647bd9d772246894725a4114c23adb2da4741b"
    },
    "archive": {
     "height": 200,
@@ -137,7 +137,7 @@
      "id": "Int64",
      "name": "String"
     },
-    "hash": 212886650047385976
+    "digest": "768df086cc02e54b6ae7ff39b7162cc3bada7ec3ccdc58e1e7c8de2c19d591f3"
    }
   }
  },
@@ -169,7 +169,7 @@
      "small_18": "Int64",
      "small_19": "Int64"
     },
-    "hash": 16066826987894930405
+    "digest": "676d7c62ca971c723a878797ff290288f04a9a1d7d91a2102f152d0ea1ad8835"
    },
    "large": {
     "height": 200,
@@ -196,7 +196,7 @@
      "large_18": "Int64",
      "large_19": "Int64"
     },
-    "hash": 15140876889794666674
+    "digest": "403d4389b9f2ab8925b8f77d6c14e97864ef2866d7e35ca4f2fbdb553abde079"
    }
   }
  },
@@ -228,7 +228,7 @@
      "ind0_10": "Int64",
      "ind0_11": "Int64"
     },
-    "hash": 4604379407351947646
+    "digest": "4a643b81639a2e3876dd7194935e488f19e915fc3a615834a6293ccd3bcc7841"
    },
    "df1": {
     "height": 200,
@@ -255,7 +255,7 @@
      "ind1_10": "Int64",
      "ind1_11": "Int64"
     },
-    "hash": 7250452628029165885
+    "digest": "82df210f1c6d4eb99214f1cecf6774ea9bbe07c6d1fadd9def1ebe08f42bbe82"
    }
   }
  },
@@ -278,7 +278,7 @@
      "low": "Int64",
      "flag": "Int64"
     },
-    "hash": 14075550945542041579
+    "digest": "a837f33390c64f1f3bf181348411ee7ca16cfcefcd6f34b52c75ea4c41d8bcb1"
    }
   }
  },
@@ -295,7 +295,7 @@
      "f1": "Int64",
      "f2": "Int64"
     },
-    "hash": 16200857888201185595
+    "digest": "c555c79b083d59b8177b8f252e4e28a3bbc28956838f2b18b92fe954acd30e63"
    }
   }
  },
@@ -315,7 +315,7 @@
      "skewed": "Int64",
      "zipf_str": "String"
     },
-    "hash": 18266123456919181188
+    "digest": "2c4265afba7ea0c17fc0aaf782ab132809bae1d4d1c417233e755e0c1d95389b"
    }
   }
  },
@@ -334,7 +334,7 @@
      "c1": "Int64",
      "c2": "Int64"
     },
-    "hash": 5220736735663932271
+    "digest": "f5d5ce6b0c8da315a78acc2592d5990eda7e9465b323dca09aa306469728a6ee"
    }
   }
  },
@@ -351,7 +351,7 @@
      "c0": "Int64",
      "c1": "Int64"
     },
-    "hash": 14768739910376656848
+    "digest": "76b2bd8eee5e1336af9a97cbd963f3776e751627884be7071e12509b9301ff14"
    }
   }
  },
@@ -370,7 +370,7 @@
      "c0": "Int64",
      "c1": "Int64"
     },
-    "hash": 9763038782302634827
+    "digest": "4019933f7eb3b3063648681f867f248a7b9fec365b4c18192aac57067758ba8a"
    }
   }
  },
@@ -388,7 +388,7 @@
     "schema": {
      "s0": "String"
     },
-    "hash": 2098328612469628576
+    "digest": "99d4bbe32b3ba5fadcf89b2064914d1aa5f3c98bcd1317a0a473868472580c76"
    }
   }
  },
@@ -406,7 +406,7 @@
      "num_str": "String",
      "iso_str": "String"
     },
-    "hash": 191595217578899579
+    "digest": "1b40c61f0e8bf3c2dde1b603a319079fa4907b1e63b96e270cedf1bbe0e8efa9"
    }
   }
  },
@@ -433,7 +433,7 @@
      "c010": "String",
      "c011": "Date"
     },
-    "hash": 17850331999094511128
+    "digest": "7ba3a69e9e623d374e46cb564885f8f09bc530993c32f4a79f22579b89bb9976"
    }
   }
  },
@@ -450,7 +450,7 @@
      "list_str": "List(String)",
      "struct": "Struct({'a': Int64, 'b': String})"
     },
-    "hash": 9593815387712640804
+    "digest": "5e2952d805d65edcf194e8f8b8dfa67f21a237ea7343432ca40fe87f1f3b7557"
    }
   }
  }
