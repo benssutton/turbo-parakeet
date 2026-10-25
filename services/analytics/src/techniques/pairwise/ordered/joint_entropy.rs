@@ -505,7 +505,10 @@ mod tests {
         let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
         assert_eq!(result.len(), 1);
 
-        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!((h - 2.0).abs() < 1e-10, "Expected 2.0, got {}", h);
     }
@@ -516,7 +519,10 @@ mod tests {
         let s2 = Series::new("b".into(), &[1i32; 100]);
         let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
 
-        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!(h.abs() < 1e-10, "Expected 0.0, got {}", h);
     }
@@ -752,7 +758,10 @@ mod tests {
         let s1 = Series::new("a".into(), &[Some(0i32), None, Some(0), None]);
         let s2 = Series::new("b".into(), &[1i32, 1, 2, 2]);
         let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!((h - 2.0).abs() < 1e-10, "Expected 2.0, got {}", h);
     }
@@ -765,7 +774,10 @@ mod tests {
         let s1 = Series::new("a".into(), &v);
         let s2 = Series::new("b".into(), &v);
         let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         let expected = 2000f64.log2();
         assert!(
@@ -785,7 +797,10 @@ mod tests {
         let s2 = Series::new("b".into(), &v);
         let s3 = Series::new("c".into(), &v);
         let result = threeway_joint_entropy_impl(&[s1, s2, s3], no_triplets()).unwrap();
-        let df = result.into_frame().unnest(["threeway_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["threeway_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         let expected = 200f64.log2();
         assert!(
@@ -807,7 +822,10 @@ mod tests {
         let s1 = Series::new("a".into(), &v1);
         let s2 = Series::new("b".into(), &v2);
         let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
-        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
 
         // Reference: brute-force count.
@@ -832,7 +850,10 @@ mod tests {
         let s2 = Series::new("b".into(), &[true, true, false, false]);
         let result = pairwise_joint_entropy_impl(&[s1, s2], no_pairs()).unwrap();
         assert_eq!(result.len(), 1);
-        let df = result.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["pairwise_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!((0.0..=2.0).contains(&h));
     }

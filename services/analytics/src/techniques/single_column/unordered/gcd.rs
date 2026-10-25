@@ -204,7 +204,7 @@ pub(crate) fn column_gcd_impl(inputs: &[Series]) -> PolarsResult<Series> {
         .into_series()
         .with_name("dtype".into());
     let gcd_s = Int128Chunked::from_iter_options("gcd".into(), gcds.into_iter())
-        .into_decimal_unchecked(Some(38), 0)
+        .into_decimal_unchecked(38, 0)
         .into_series();
 
     let struct_ca = StructChunked::from_series(
@@ -225,7 +225,7 @@ mod tests {
     use polars_arrow::bitmap::Bitmap;
 
     // Arrow has no plain 128-bit integer; decimal128(38, 0) is the widest native type.
-    const GCD_DTYPE: DataType = DataType::Decimal(Some(38), Some(0));
+    const GCD_DTYPE: DataType = DataType::Decimal(38, 0);
 
     fn gcd_of(s: Series) -> Option<i128> {
         series_gcd(&s).unwrap()
@@ -280,7 +280,7 @@ mod tests {
         );
         let dec = |v: &[i128]| {
             Int128Chunked::from_slice("a".into(), v)
-                .into_decimal_unchecked(Some(38), 0)
+                .into_decimal_unchecked(38, 0)
                 .into_series()
         };
         assert_eq!(gcd_of(dec(&[10i128.pow(38) - 1])), Some(10i128.pow(38) - 1));
@@ -438,24 +438,26 @@ mod tests {
         let b = Series::new("b".into(), &["x", "y"]);
         let c = Series::new("c".into(), &[9u8, 6]);
         let out = column_gcd_impl(&[a, b, c]).unwrap();
-        let df = out.into_frame().unnest(["column_gcd"]).unwrap();
+        let df = out.into_frame().unnest(["column_gcd"], None).unwrap();
         let cols: Vec<_> = df
             .column("column")
             .unwrap()
             .str()
             .unwrap()
-            .into_no_null_iter()
+            .iter()
+            .flatten()
             .collect();
         let dtypes: Vec<_> = df
             .column("dtype")
             .unwrap()
             .str()
             .unwrap()
-            .into_no_null_iter()
+            .iter()
+            .flatten()
             .collect();
         let gcd = df.column("gcd").unwrap();
         assert_eq!(gcd.dtype(), &GCD_DTYPE);
-        let gcds: Vec<_> = gcd.decimal().unwrap().physical().into_iter().collect();
+        let gcds: Vec<_> = gcd.decimal().unwrap().physical().iter().collect();
         assert_eq!(cols, ["a", "b", "c"]);
         assert_eq!(dtypes, ["i64", "str", "u8"]);
         assert_eq!(gcds, [Some(4), None, Some(3)]);

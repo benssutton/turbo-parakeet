@@ -77,7 +77,7 @@ mod tests {
         population_cardinality_impl(&[s], seed)
             .unwrap()
             .into_frame()
-            .unnest(["population_cardinality"])
+            .unnest(["population_cardinality"], None)
             .unwrap()
     }
 

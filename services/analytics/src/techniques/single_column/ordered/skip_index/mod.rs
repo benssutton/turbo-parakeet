@@ -518,7 +518,7 @@ mod tests {
             DataType::Datetime(TimeUnit::Microseconds, None),
             DataType::Duration(TimeUnit::Milliseconds),
             DataType::Time,
-            DataType::Decimal(Some(10), Some(2)),
+            DataType::Decimal(10, 2),
             DataType::String,
             DataType::Binary,
         ] {

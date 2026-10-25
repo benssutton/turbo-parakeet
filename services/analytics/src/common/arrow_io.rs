@@ -840,7 +840,7 @@ mod tests {
                 ],
             ),
             Int128Chunked::from_slice("d".into(), &[120, -5, 0])
-                .into_decimal_unchecked(Some(10), 2)
+                .into_decimal_unchecked(10, 2)
                 .into_series(),
             Series::new("t".into(), &[0i64, 1, 2])
                 .cast(&DataType::Datetime(
@@ -934,7 +934,7 @@ mod tests {
 
     #[test]
     fn plain_dictionary_arrays_import_as_categorical() {
-        // No Polars metadata (no `_PL_CATEGORICAL2` key): polars 0.51 still recognises
+        // No Polars metadata (no `_PL_CATEGORICAL2` key): polars 0.55 still recognises
         // a plain arrow-rs Dictionary<_, Utf8> array (any integer key width) and
         // imports it as Categorical, keyed to a fresh, ad hoc category set.
         use arrow_array::types::{Int32Type, Int8Type};

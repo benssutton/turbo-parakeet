@@ -235,7 +235,7 @@ mod tests {
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_chi_squared"])
+            .unnest(["pairwise_chi_squared"], None)
             .unwrap();
         let chi2 = df
             .column("chi2_stat")
@@ -265,7 +265,7 @@ mod tests {
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_chi_squared"])
+            .unnest(["pairwise_chi_squared"], None)
             .unwrap();
         let chi2 = df
             .column("chi2_stat")
@@ -303,7 +303,7 @@ mod tests {
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_chi_squared"])
+            .unnest(["pairwise_chi_squared"], None)
             .unwrap();
         let chi2 = df
             .column("chi2_stat")
@@ -328,7 +328,7 @@ mod tests {
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_chi_squared"])
+            .unnest(["pairwise_chi_squared"], None)
             .unwrap();
         let chi2 = df
             .column("chi2_stat")
@@ -366,7 +366,7 @@ mod tests {
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_chi_squared"])
+            .unnest(["pairwise_chi_squared"], None)
             .unwrap();
         let low = df
             .column("low_expected_count")
@@ -388,7 +388,7 @@ mod tests {
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_chi_squared"])
+            .unnest(["pairwise_chi_squared"], None)
             .unwrap();
         let low = df
             .column("low_expected_count")
@@ -427,7 +427,7 @@ mod tests {
         let result = pairwise_chi_squared_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_chi_squared"])
+            .unnest(["pairwise_chi_squared"], None)
             .unwrap();
         let n_valid = df.column("n_valid").unwrap().u32().unwrap().get(0).unwrap();
         assert_eq!(n_valid, 4);

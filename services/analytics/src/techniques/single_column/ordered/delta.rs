@@ -225,7 +225,7 @@ fn physical_values(s: &Series) -> PolarsResult<Option<Vec<i128>>> {
     let phys = s.to_physical_repr();
     macro_rules! collect {
         ($ca:expr) => {
-            $ca.into_iter().flatten().map(|v| v as i128).collect()
+            $ca.iter().flatten().map(|v| v as i128).collect()
         };
     }
     let v: Vec<i128> = match phys.dtype() {
@@ -308,7 +308,7 @@ pub(crate) fn delta_impl(inputs: &[Series]) -> PolarsResult<Series> {
     };
     let dec = |name: &str, f: fn(&ColumnDelta) -> Option<i128>| {
         Int128Chunked::from_iter_options(name.into(), cols.iter().map(f))
-            .into_decimal_unchecked(Some(38), 0)
+            .into_decimal_unchecked(38, 0)
             .into_series()
     };
     let fields = [

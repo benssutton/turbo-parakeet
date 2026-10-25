@@ -678,7 +678,7 @@ pub(crate) fn candidates(lvl: &Level, params: &Params) -> Result<Vec<Candidate>,
                     r.integers(lo, hi, "integer", "");
                 }
             }
-            PT::Decimal(_, s) => r.decimal(s.unwrap_or(0)),
+            PT::Decimal(_, s) => r.decimal(*s),
             PT::Float32 | PT::Float64 => r.float(),
             PT::Datetime(..) | PT::Duration(_) | PT::Time => r.temporal(),
             dt if is_text(dt) => r.text(params)?,
@@ -738,7 +738,7 @@ mod tests {
     #[test]
     fn decimal_scale_reduced_by_gcd() {
         let dec = polars::prelude::Int128Chunked::from_slice("x".into(), &[120, 340])
-            .into_decimal_unchecked(Some(10), 2)
+            .into_decimal_unchecked(10, 2)
             .into_series();
         assert_eq!(names(dec), ["decimal32(2, 1)", "decimal128(10, 2)"]);
     }
@@ -808,7 +808,7 @@ mod tests {
         let ints = Series::new("x".into(), &[1i64, 2]);
         let d = describe_one(&ints, 0).unwrap();
         let values = export_series(&ints, CompatLevel::oldest()).unwrap();
-        for dtype in [PT::Float64, PT::Decimal(Some(10), Some(2)), PT::String] {
+        for dtype in [PT::Float64, PT::Decimal(10, 2), PT::String] {
             let lvl = Level::of_values(
                 &dtype,
                 values.clone(),

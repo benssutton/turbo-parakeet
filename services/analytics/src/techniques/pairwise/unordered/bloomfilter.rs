@@ -473,10 +473,7 @@ mod tests {
                 i
             );
         }
-        let found_count = results_bool
-            .into_iter()
-            .filter(|&x| x.unwrap_or(false))
-            .count();
+        let found_count = results_bool.iter().filter(|&x| x.unwrap_or(false)).count();
         assert_eq!(found_count, 10000, "All 10,000 items should be found");
     }
 
@@ -505,10 +502,7 @@ mod tests {
         let results = membership_test(&test_series, membership_kwargs).unwrap();
         let results_bool = results.bool().unwrap();
 
-        let false_positives = results_bool
-            .into_iter()
-            .filter(|&x| x.unwrap_or(false))
-            .count();
+        let false_positives = results_bool.iter().filter(|&x| x.unwrap_or(false)).count();
         let false_positive_rate = (false_positives as f64) / 10000.0;
 
         println!(
@@ -671,14 +665,18 @@ mod tests {
             m,
         };
         let result = membership_ratio_multi_impl(&[col1, col2], &membership_kwargs).unwrap();
-        let df = result.into_frame().unnest(["membership_ratio"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["membership_ratio"], None)
+            .unwrap();
 
         let names: Vec<&str> = df
             .column("col_name")
             .unwrap()
             .str()
             .unwrap()
-            .into_no_null_iter()
+            .iter()
+            .flatten()
             .collect();
         assert_eq!(names, ["contained", "mixed"]);
 

@@ -139,7 +139,8 @@ mod tests {
             .unwrap()
             .str()
             .unwrap()
-            .into_no_null_iter()
+            .iter()
+            .flatten()
             .collect()
     }
 
@@ -148,7 +149,7 @@ mod tests {
         let out =
             ams_pairwise_joint_entropy_impl(&frame(1000), PairwiseKwargs { pairs: None }, 256, 0)
                 .unwrap();
-        let df = out.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = out.into_frame().unnest(["pairwise_entropy"], None).unwrap();
         // (hi,lo) (hi,k) (hi,k2) (lo,k) (lo,k2) (k,k2)
         assert_eq!(column(&df, "col_a"), ["hi", "hi", "hi", "lo", "lo", "k"]);
         assert_eq!(column(&df, "col_b"), ["lo", "k", "k2", "k", "k2", "k2"]);
@@ -169,7 +170,7 @@ mod tests {
             pairs: Some(vec![vec!["lo".into(), "hi".into()]]),
         };
         let out = ams_pairwise_joint_entropy_impl(&frame(100), pairs, 64, 0).unwrap();
-        let df = out.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = out.into_frame().unnest(["pairwise_entropy"], None).unwrap();
         assert_eq!(column(&df, "col_a"), ["lo"]);
         assert_eq!(column(&df, "col_b"), ["hi"]);
     }
@@ -188,7 +189,7 @@ mod tests {
             triplets: Some(vec![vec!["hi".into(), "lo".into(), "k".into()]]),
         };
         let out = ams_threeway_joint_entropy_impl(&frame(1000), triplets, 256, 0).unwrap();
-        let df = out.into_frame().unnest(["threeway_entropy"]).unwrap();
+        let df = out.into_frame().unnest(["threeway_entropy"], None).unwrap();
         assert_eq!(column(&df, "col_c"), ["k"]);
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!((h - 1000f64.log2()).abs() < 1e-12);
@@ -229,7 +230,7 @@ mod tests {
                 0,
             )
             .unwrap();
-            out.into_frame().unnest(["pairwise_entropy"]).unwrap()
+            out.into_frame().unnest(["pairwise_entropy"], None).unwrap()
         };
         let lo_x = || vec!["lo".to_string(), "x".to_string()];
         let alone = run(vec![lo_x()]);
@@ -255,7 +256,10 @@ mod tests {
                 pairs: Some(vec![vec![a.into(), b.into()]]),
             };
             let out = ams_pairwise_joint_entropy_impl(&cols, kw, 64, 0).unwrap();
-            entropy_of(&out.into_frame().unnest(["pairwise_entropy"]).unwrap(), 0)
+            entropy_of(
+                &out.into_frame().unnest(["pairwise_entropy"], None).unwrap(),
+                0,
+            )
         };
         assert_eq!(pair("lo", "x"), pair("x", "lo"));
         let triple = |a: &str, b: &str, c: &str| {
@@ -263,7 +267,10 @@ mod tests {
                 triplets: Some(vec![vec![a.into(), b.into(), c.into()]]),
             };
             let out = ams_threeway_joint_entropy_impl(&cols, kw, 64, 0).unwrap();
-            entropy_of(&out.into_frame().unnest(["threeway_entropy"]).unwrap(), 0)
+            entropy_of(
+                &out.into_frame().unnest(["threeway_entropy"], None).unwrap(),
+                0,
+            )
         };
         assert_eq!(triple("lo", "x", "hi"), triple("hi", "lo", "x"));
         assert_eq!(triple("lo", "x", "hi"), triple("x", "hi", "lo"));
@@ -291,7 +298,7 @@ mod tests {
         let out =
             ams_pairwise_joint_entropy_impl(&[half, k], PairwiseKwargs { pairs: None }, 4096, 0)
                 .unwrap();
-        let df = out.into_frame().unnest(["pairwise_entropy"]).unwrap();
+        let df = out.into_frame().unnest(["pairwise_entropy"], None).unwrap();
         assert!(
             (entropy_of(&df, 0) - 1.0).abs() < 0.1,
             "{}",
@@ -319,7 +326,7 @@ mod tests {
         let out =
             ams_threeway_joint_entropy_impl(&[a, b, c], ThreewayKwargs { triplets: None }, 4096, 0)
                 .unwrap();
-        let df = out.into_frame().unnest(["threeway_entropy"]).unwrap();
+        let df = out.into_frame().unnest(["threeway_entropy"], None).unwrap();
         assert!(
             (entropy_of(&df, 0) - 1.0).abs() < 0.1,
             "{}",

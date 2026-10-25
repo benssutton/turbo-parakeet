@@ -477,8 +477,10 @@ mod tests {
         // render as different values, 1.00 vs 100) built directly via AnyValue::Decimal
         // (unscaled, scale) → encode_series hashes to_physical_repr()'s raw i128, so
         // these must hash equal regardless of the differing scale metadata.
-        let a = Series::from_any_values("a".into(), &[AnyValue::Decimal(100, 2)], false).unwrap();
-        let b = Series::from_any_values("b".into(), &[AnyValue::Decimal(100, 0)], false).unwrap();
+        let a =
+            Series::from_any_values("a".into(), &[AnyValue::Decimal(100, 38, 2)], false).unwrap();
+        let b =
+            Series::from_any_values("b".into(), &[AnyValue::Decimal(100, 38, 0)], false).unwrap();
         let ea = encode_series(&a).unwrap();
         let eb = encode_series(&b).unwrap();
         assert_eq!(ea.values[0], eb.values[0]);

@@ -5,10 +5,10 @@
 maturin>=1.15.0,<2
 
 # Data / columnar format
-polars>=1.44.2,<2
+polars>=2.0.0,<3
 pyarrow>=14.0,<26
 numpy>=2.5.3,<3
-datafusion>=54.0.0,<55
+datafusion>=55.0.0,<56
 pyyaml>=6.0,<7  # turbo_parakeet.recommenders.to_chbench (suite files)
 
 # Testing

@@ -17,7 +17,7 @@ pub(crate) type Row = Vec<AnyValue<'static>>;
 pub(crate) fn value_fields() -> Vec<(&'static str, DataType)> {
     use DataType::{Boolean, Float64 as F64, String as Str, UInt32 as U32, UInt64 as U64};
     // Arrow has no plain 128-bit integer; parse_i128 caps values at 38 digits.
-    let d38 = DataType::Decimal(Some(38), Some(0));
+    let d38 = DataType::Decimal(38, 0);
     vec![
         ("n_unique", U64),
         ("unique", Boolean),
@@ -104,7 +104,7 @@ pub(crate) fn u32v(v: Option<u32>) -> AnyValue<'static> {
     v.map_or(AnyValue::Null, AnyValue::UInt32)
 }
 pub(crate) fn d38v(v: Option<i128>) -> AnyValue<'static> {
-    v.map_or(AnyValue::Null, |v| AnyValue::Decimal(v, 0))
+    v.map_or(AnyValue::Null, |v| AnyValue::Decimal(v, 38, 0))
 }
 pub(crate) fn listv(v: &[u64]) -> AnyValue<'static> {
     AnyValue::List(Series::new(PlSmallStr::EMPTY, v))
@@ -215,7 +215,7 @@ fn ranked_values(s: &Series, ranked: &[(u64, u64)]) -> PolarsResult<Ranking> {
     let values = s.take_slice(&idx)?.cast(&DataType::String)?;
     Ok(values
         .str()?
-        .into_iter()
+        .iter()
         .zip(ranked)
         .map(|(v, &(count, _))| (v.expect("ranked first rows are non-null").to_owned(), count))
         .collect())
@@ -420,7 +420,7 @@ pub(crate) fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
     let values = phys.i64()?;
     let count = match tz {
         None => values
-            .into_iter()
+            .iter()
             .flatten()
             .filter(|v| v.rem_euclid(per_day) == 0)
             .count(),
@@ -431,7 +431,7 @@ pub(crate) fn n_midnight(s: &Series) -> PolarsResult<Option<u64>> {
                 .map_err(|_| polars_err!(ComputeError: "describe: unknown time zone {tz}"))?;
             let per_sec = per_day / 86_400;
             values
-                .into_iter()
+                .iter()
                 .flatten()
                 .filter(|&v| {
                     v.rem_euclid(per_sec) == 0

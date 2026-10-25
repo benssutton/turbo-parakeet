@@ -24,7 +24,7 @@ pub(crate) fn whole_range(
 ) -> Option<(f64, f64)> {
     match dtype {
         dt if dt.is_integer() => numeric,
-        PT::Decimal(_, Some(0)) => numeric,
+        PT::Decimal(_, 0) => numeric,
         PT::Float32 | PT::Float64 => floats
             .filter(|f| f.n_fractional == 0 && f.n_nan == 0 && f.n_inf == 0)
             .and(numeric),
@@ -150,14 +150,8 @@ mod tests {
     fn whole_ranges() {
         let r = Some((0.0, 3.0));
         assert_eq!(whole_range(&PT::Int64, 4, r, None, None), r);
-        assert_eq!(
-            whole_range(&PT::Decimal(Some(10), Some(0)), 4, r, None, None),
-            r
-        );
-        assert_eq!(
-            whole_range(&PT::Decimal(Some(10), Some(2)), 4, r, None, None),
-            None
-        );
+        assert_eq!(whole_range(&PT::Decimal(10, 0), 4, r, None, None), r);
+        assert_eq!(whole_range(&PT::Decimal(10, 2), 4, r, None, None), None);
         assert_eq!(whole_range(&PT::Date, 4, r, None, None), None);
         let whole = FloatStats {
             n_fractional: 0,

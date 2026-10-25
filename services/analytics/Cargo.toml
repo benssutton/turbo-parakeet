@@ -17,8 +17,8 @@ python = ["dep:pyo3"]
 
 [dependencies]
 #Polars (kernels) and pyo3 (bindings/python.rs)
-polars = { version = "0.51.0", default-features = false, features = ["lazy", "performant", "dtype-slim", "dtype-i8", "dtype-i16", "dtype-time", "dtype-decimal", "dtype-struct", "dtype-array", "dtype-categorical", "temporal", "timezones", "fmt", "zip_with"] }
-polars-arrow = { version = "0.51.0", default-features = false }
+polars = { version = "0.55.2", default-features = false, features = ["lazy", "performant", "dtype-slim", "dtype-i8", "dtype-i16", "dtype-time", "dtype-decimal", "dtype-struct", "dtype-array", "dtype-categorical", "temporal", "timezones", "fmt", "zip_with"] }
+polars-arrow = { version = "0.55.2", default-features = false }
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py39"], optional = true }
 
 #Concurrent hashmaps & hashing functions
@@ -40,7 +40,7 @@ libm = "0.2"
 gcd = "2.3"
 
 #describe: IPC ZSTD sizes, shortest float repr, time zones, buffer casts
-zstd = "0.14"
+zstd = "0.14.3"
 #ClickHouse / Arrow IPC LZ4 sizes: liblz4 (the library ClickHouse and pyarrow use)
 lz4 = "1.28"
 ryu = "1"

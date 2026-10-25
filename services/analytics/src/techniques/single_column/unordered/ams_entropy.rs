@@ -845,7 +845,7 @@ mod tests {
     }
 
     fn entropies(out: Series, name: &str) -> Vec<f64> {
-        let df = out.into_frame().unnest([name]).unwrap();
+        let df = out.into_frame().unnest([name], None).unwrap();
         df.column("entropy")
             .unwrap()
             .f64()

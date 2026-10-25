@@ -230,7 +230,7 @@ pub(crate) fn rescale(original: &polars::prelude::DataType, recommended: &AT) ->
         )
         | (PT::Date, AT::Date32) => Some(1),
         (PT::Decimal(_, s), AT::Decimal32(_, r) | AT::Decimal64(_, r) | AT::Decimal128(_, r)) => {
-            let d = i32::try_from(s.unwrap_or(0)).ok()? - i32::from(*r);
+            let d = i32::try_from(*s).ok()? - i32::from(*r);
             u32::try_from(d).ok().and_then(|d| 10i128.checked_pow(d))
         }
         (PT::Datetime(u, _), AT::Timestamp(r, _)) => {
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(rescale(&PT::Int64, &AT::Int8), Some(1));
         assert_eq!(rescale(&PT::Date, &AT::Date32), Some(1));
         assert_eq!(
-            rescale(&PT::Decimal(Some(10), Some(4)), &AT::Decimal32(7, 2)),
+            rescale(&PT::Decimal(10, 4), &AT::Decimal32(7, 2)),
             Some(100)
         );
         assert_eq!(

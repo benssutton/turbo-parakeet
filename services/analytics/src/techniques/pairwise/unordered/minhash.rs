@@ -22,9 +22,9 @@ fn band_buckets(
     rows_per_band: usize,
 ) -> PolarsResult<Buckets> {
     let mut buckets: Buckets = HashMap::with_hasher(FoldHashFast::default());
-    for (idx, opt_sig) in signatures.into_iter().enumerate() {
+    for (idx, opt_sig) in signatures.series_iter().enumerate() {
         let Some(sig_series) = opt_sig else { continue };
-        let sig: Vec<u32> = sig_series.u32()?.into_iter().flatten().collect();
+        let sig: Vec<u32> = sig_series.u32()?.iter().flatten().collect();
         for band_idx in 0..num_bands {
             let start = band_idx * rows_per_band;
             let end = start + rows_per_band;
@@ -90,7 +90,8 @@ pub(crate) fn lsh_candidates_impl(inputs: &[Series], kwargs: &LSHKwargs) -> Pola
     let col_b = StringChunked::from_iter_values("col_b".into(), pairs_b.iter().map(|s| s.as_str()));
 
     // Create a struct with two fields
-    let df = DataFrame::new(vec![col_a.into_series().into(), col_b.into_series().into()])?;
+    let df =
+        DataFrame::new_infer_height(vec![col_a.into_series().into(), col_b.into_series().into()])?;
 
     // Convert to series
     Ok(df.into_struct("candidates".into()).into_series())
@@ -176,7 +177,7 @@ pub(crate) fn minhash_impl(inputs: &[Series], kwargs: &MinHashKwargs) -> PolarsR
     let minhash_col = list_builder.finish();
 
     // Return as struct series with M rows
-    let df = DataFrame::new(vec![
+    let df = DataFrame::new_infer_height(vec![
         name_col.into_series().into(),
         minhash_col.into_series().into(),
     ])?;
@@ -263,7 +264,7 @@ mod tests {
     /// Create test data
     fn create_test_dataframes() -> (DataFrame, DataFrame) {
         // DataFrame 1:
-        let df1 = DataFrame::new(vec![
+        let df1 = DataFrame::new_infer_height(vec![
             Column::new("A".into(), &[1i64, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             Column::new("B".into(), &[3i64, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
             Column::new("C".into(), &[10i64, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
@@ -271,7 +272,7 @@ mod tests {
         .unwrap();
 
         // DataFrame 2:
-        let df2 = DataFrame::new(vec![
+        let df2 = DataFrame::new_infer_height(vec![
             Column::new("A".into(), &[1i64, 2, 3, 4, 5]),
             Column::new("B".into(), &[4i64, 5, 6, 7, 8]),
             Column::new("C".into(), &[10i64, 11, 12, 13, 14]),

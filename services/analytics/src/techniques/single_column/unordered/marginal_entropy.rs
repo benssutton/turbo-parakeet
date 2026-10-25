@@ -118,7 +118,10 @@ mod tests {
         let result = marginal_entropy_impl(&[s]).unwrap();
         assert_eq!(result.len(), 1);
 
-        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["marginal_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!((h - 2.0).abs() < 1e-10, "Expected 2.0, got {}", h);
     }
@@ -128,7 +131,10 @@ mod tests {
         let s = Series::new("a".into(), &[7i32; 100]);
         let result = marginal_entropy_impl(&[s]).unwrap();
 
-        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["marginal_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!(h.abs() < 1e-10, "Expected 0.0, got {}", h);
     }
@@ -142,13 +148,17 @@ mod tests {
         assert!(matches!(result.dtype(), DataType::Struct(_)));
         assert_eq!(result.len(), 3);
 
-        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["marginal_entropy"], None)
+            .unwrap();
         let names: Vec<&str> = df
             .column("col_name")
             .unwrap()
             .str()
             .unwrap()
-            .into_no_null_iter()
+            .iter()
+            .flatten()
             .collect();
         assert_eq!(names, vec!["a", "b", "c"]);
     }
@@ -159,7 +169,10 @@ mod tests {
         // over r=5 → H = -(2/5*log2(2/5)*2 + 1/5*log2(1/5)).
         let s = Series::new("a".into(), &[Some(1i32), Some(1), None, None, Some(2)]);
         let result = marginal_entropy_impl(&[s]).unwrap();
-        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["marginal_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
 
         let p1: f64 = 2.0 / 5.0;
@@ -191,7 +204,10 @@ mod tests {
     fn test_marginal_boolean_column() {
         let s = Series::new("a".into(), &[true, false, true, false, true]);
         let result = marginal_entropy_impl(&[s]).unwrap();
-        let df = result.into_frame().unnest(["marginal_entropy"]).unwrap();
+        let df = result
+            .into_frame()
+            .unnest(["marginal_entropy"], None)
+            .unwrap();
         let h = df.column("entropy").unwrap().f64().unwrap().get(0).unwrap();
         assert!((0.0..=1.0).contains(&h));
     }
@@ -249,7 +265,7 @@ mod tests {
     #[test]
     fn test_decimal_to_u64() {
         let s = Series::new("test".into(), &[1i32, 2, 1])
-            .cast(&DataType::Decimal(Some(10), Some(0)))
+            .cast(&DataType::Decimal(10, 0))
             .unwrap();
         let enc = encode_series(&s).unwrap();
         assert_ne!(enc.values[0], enc.values[1]); // 1 ≠ 2

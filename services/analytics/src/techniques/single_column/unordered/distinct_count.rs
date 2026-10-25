@@ -65,7 +65,7 @@ mod tests {
         let df = hll_distinct_impl(&[s], p)
             .unwrap()
             .into_frame()
-            .unnest(["distinct_count"])
+            .unnest(["distinct_count"], None)
             .unwrap();
         let get_u = |c: &str| df.column(c).unwrap().u64().unwrap().get(0).unwrap();
         let get_f = |c: &str| df.column(c).unwrap().f64().unwrap().get(0).unwrap();

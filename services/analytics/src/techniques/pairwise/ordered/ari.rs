@@ -206,7 +206,7 @@ mod tests {
         let result = pairwise_adjusted_rand_impl(&[s1, s2], no_pairs()).unwrap();
         let df = result
             .into_frame()
-            .unnest(["pairwise_adjusted_rand"])
+            .unnest(["pairwise_adjusted_rand"], None)
             .unwrap();
         let ari = df.column("ari").unwrap().f64().unwrap().get(0).unwrap();
         let n_valid = df.column("n_valid").unwrap().u32().unwrap().get(0).unwrap();

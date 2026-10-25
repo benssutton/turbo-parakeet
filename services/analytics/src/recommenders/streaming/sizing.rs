@@ -164,7 +164,7 @@ pub(crate) fn original_polars(
         AT::Utf8 | AT::LargeUtf8 | AT::Binary | AT::LargeBinary => {
             let data = match (o.views_input, o.all > 0) {
                 (true, _) => o.all as f64,
-                (false, true) => pad(s.sum_len),
+                (false, true) => pad(s.sum_len - o.lead as f64),
                 (false, false) => 0.0,
             };
             v + pad(16.0 * s.n) + data
@@ -197,6 +197,8 @@ pub(crate) fn original_polars(
 pub(crate) struct ViewShape {
     shape: Shape,
     all: u64,
+    /// Bytes of the values before the first one over 12 bytes (`LevelStats::lead_len`).
+    lead: u64,
     distinct: u64,
     views_input: bool,
     cats: Option<Cats>,
@@ -209,6 +211,7 @@ pub(crate) fn view_shape(lvl: &Level, st: &LevelStats, views_input: bool) -> Vie
     ViewShape {
         shape: lvl.shape(),
         all: st.views.as_ref().map_or(0, ViewSim::bytes),
+        lead: st.lead_len,
         distinct: st
             .sample
             .as_ref()

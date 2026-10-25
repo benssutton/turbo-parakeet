@@ -354,6 +354,8 @@ pub(crate) struct BatchStats {
     sketch: Hll,
     /// Text / binary levels: lengths of the values over 12 bytes, row order.
     long_lens: Option<Vec<u64>>,
+    /// Bytes of the values before the first one over 12 bytes (0 without one).
+    lead_len: u64,
     /// Measured classic size, when the classic type has no analytic size.
     size_bytes: u64,
     polars_bytes: u64,
@@ -428,6 +430,9 @@ impl BatchStats {
             text_source: (top.is_none() && is_text(s.dtype()))
                 .then(|| TextSource::new(s.clone(), offset)),
             sketch,
+            lead_len: lens
+                .as_ref()
+                .map_or(0, |l| l.iter().take_while(|&&x| x <= 12).sum()),
             long_lens: lens.map(|l| l.into_iter().filter(|&x| x > 12).collect()),
             size_bytes,
             polars_bytes: ipc_body_bytes(export_series(s, CompatLevel::newest())?.as_ref(), None)?,
@@ -520,6 +525,10 @@ pub(crate) struct LevelStats {
     pub hll: Option<Hll>,
     /// All values' view blocks (Utf8View / BinaryView results), row order.
     pub views: Option<ViewSim>,
+    /// Bytes of the values before the first one over 12 bytes: Polars' zero-copy
+    /// import of a compact string array (`binary_to_binview`, polars-compute 0.55)
+    /// keeps its values buffer only from that value on.
+    pub lead_len: u64,
     /// Per-batch sums of the measured classic size (types with no analytic size) and
     /// of the Polars-layout size.
     pub size_bytes: u64,
@@ -583,6 +592,9 @@ impl LevelStats {
         }
         if let Some(lens) = b.long_lens {
             let v = self.views.get_or_insert_with(Default::default);
+            if v.bytes() == 0 {
+                self.lead_len += b.lead_len;
+            }
             lens.into_iter().for_each(|l| v.push(l));
         }
         self.size_bytes += b.size_bytes;
