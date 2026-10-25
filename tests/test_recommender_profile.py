@@ -9,12 +9,12 @@ import pytest
 
 from turbo_parakeet import _plugin
 from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
-from datagen import describe_mixed, large_dataset, large_dataset_mixed
+from synthdata.cover import cover_small, cover_windows
+from synthdata.scenarios import describe_mixed
 
 FRAMES = [
     pytest.param(lambda: describe_mixed(2_000), id="describe_mixed"),
-    pytest.param(large_dataset, id="large"),
-    pytest.param(large_dataset_mixed, id="mixed"),
+    pytest.param(cover_small, id="cover"),
 ]
 
 
@@ -153,7 +153,7 @@ def test_entropy_estimator_is_validated():
 
 @pytest.mark.slow
 def test_ams_streaming_entropy_on_the_large_dataset():
-    frame = large_dataset()
+    frame = cover_windows()
     exact = {
         r["column"]: r
         for r in OneShotRecommender().add(frame).result().iter_rows(named=True)

@@ -137,16 +137,16 @@ def cover_windows(seed: int = 0) -> pl.DataFrame:
 
 
 def _with_nested(df: pl.DataFrame, seed: int) -> pl.DataFrame:
-    """List(Int32) with 0-3 items and 10% nulls, Array(Int32, 3), Struct{a: Int64,
-    b: String}."""
+    """List(Int32) with 0-3 items and 10% nulls (a null row holds no slots, as Polars and
+    pyarrow build them), Array(Int32, 3), Struct{a: Int64, b: String}."""
     rng = np.random.default_rng([seed, 99])
     n = df.height
     lengths = rng.integers(0, 4, n)
+    null = rng.random(n) < 0.1
+    lengths[null] = 0
     offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int32)
     values = pa.array(rng.integers(0, 100, int(offsets[-1])), pa.int32())
-    lists = pa.ListArray.from_arrays(
-        pa.array(offsets), values, mask=pa.array(rng.random(n) < 0.1)
-    )
+    lists = pa.ListArray.from_arrays(pa.array(offsets), values, mask=pa.array(null))
     items = pa.array(rng.integers(0, 10, 3 * n), pa.int32())
     arrays = pa.FixedSizeListArray.from_arrays(items, 3)
     return df.with_columns(

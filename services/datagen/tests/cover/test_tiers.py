@@ -42,3 +42,10 @@ def test_spread():
     s = spread(df, 10)
     assert s.width == 10 and s.columns[0] == df.columns[0]
     assert spread(df, 10_000).width == df.width
+
+
+def test_null_list_rows_hold_no_slots():
+    lists = cover_small()["list_int"].to_arrow()
+    assert 0 < lists.null_count < len(lists)
+    lengths = pl.Series(lists.offsets).diff().drop_nulls()
+    assert lengths.filter(pl.Series(lists.is_null())).sum() == 0

@@ -12,7 +12,7 @@ from polars.testing import assert_frame_equal
 
 from turbo_parakeet import _core as rs
 from turbo_parakeet._dtypes import holds_wide_integer
-from datagen import mixed_dtypes
+from synthdata.cover import cover_small, spread
 from harness import load, run
 
 PACKAGES = (
@@ -162,7 +162,7 @@ RUST_AND_REFERENCE = [
 @pytest.mark.parametrize("kind", ["table", "record_batch", "reader"])
 @pytest.mark.parametrize("spec", RUST_AND_REFERENCE)
 def test_arrow_inputs_match_polars(spec, kind):
-    df = mixed_dtypes(200, seed=1)
+    df = spread(cover_small(), 18).head(200)
     table = pa.table(
         df
     )  # through __arrow_c_stream__: keeps Polars' Categorical metadata

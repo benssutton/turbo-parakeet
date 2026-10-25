@@ -18,7 +18,8 @@ import pytest
 
 from turbo_parakeet.techniques.describe import _sizes
 from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
-from datagen import describe_mixed, large_dataset, stringified
+from synthdata.cover import cover_small
+from synthdata.scenarios import describe_mixed, stringified
 from harness import pyarrow_body
 
 
@@ -817,9 +818,7 @@ ORACLE_FRAMES = [
     pytest.param(
         lambda: {"strings": stringified(describe_mixed(500))}, id="stringified"
     ),
-    pytest.param(
-        lambda: {"large": large_dataset()}, id="large", marks=pytest.mark.slow
-    ),
+    pytest.param(lambda: {"cover": cover_small()}, id="cover", marks=pytest.mark.slow),
 ]
 
 
@@ -854,7 +853,13 @@ def test_sizes_match_pyarrow_and_polars_casts(make):
                 .rechunk()
                 .to_arrow(compat_level=pl.CompatLevel.oldest())
             )
-            arrow = arrow.cast(pa_type(r["datafusion_type"]), safe=False)
+            target = pa_type(r["datafusion_type"])
+            # pyarrow has no cast to null: an all-null column's null array is the cast.
+            arrow = (
+                pa.nulls(len(arrow))
+                if pa.types.is_null(target) and arrow.null_count == len(arrow)
+                else arrow.cast(target, safe=False)
+            )
             polars = (
                 s
                 if original
@@ -1076,7 +1081,7 @@ def polars_top_k(s: pl.Series, k: int | None) -> list:
 @pytest.mark.parametrize("make", ORACLE_FRAMES)
 def test_top_k_matches_polars(make):
     frames = make()
-    params = {"categorical_threshold": 50_000} if "large" in frames else {}
+    params = {"categorical_threshold": 50_000} if "cover" in frames else {}
     result = recommend_frames(frames, **params)
     checked = 0
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):
