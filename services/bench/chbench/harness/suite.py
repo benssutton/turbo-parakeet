@@ -16,8 +16,8 @@ from typing import Any
 import pyarrow as pa
 import yaml
 
-from chbench.datagen import DatasetSpec, Distribution, SpecError
-from chbench.datagen.realdata import path_spec
+from synthdata import DatasetSpec, Distribution, SpecError
+from synthdata.column.realdata import path_spec
 from chbench.harness.validate import (
     BLOOM_FPRS,
     KNOWN_CODECS,

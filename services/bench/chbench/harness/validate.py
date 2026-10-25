@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from chbench.datagen import DatasetSpec
+from synthdata import DatasetSpec
 
 if TYPE_CHECKING:
     # Deferred: chbench.harness.suite imports the vocabulary constants below,

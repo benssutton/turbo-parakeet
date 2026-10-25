@@ -33,7 +33,7 @@ from __future__ import annotations
 import numpy as np
 import pyarrow as pa
 
-from chbench.datagen.spec import DatasetSpec, representable_range
+from synthdata.column.spec import DatasetSpec, representable_range
 
 
 def wrap(values: np.ndarray, spec: DatasetSpec, rng: np.random.Generator) -> pa.Array:

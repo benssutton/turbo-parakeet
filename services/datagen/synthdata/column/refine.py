@@ -36,10 +36,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from chbench.datagen.metrics import interarrival_cv
-from chbench.datagen.sequence import MIN_REPEAT_RUNS, layout_interarrival
-from chbench.datagen.solve import SolveResult, SolveStatus, solve_monotone
-from chbench.datagen.spec import DatasetSpec
+from synthdata.column.metrics import interarrival_cv
+from synthdata.column.sequence import MIN_REPEAT_RUNS, layout_interarrival
+from synthdata.column.solve import SolveResult, SolveStatus, solve_monotone
+from synthdata.column.spec import DatasetSpec
 
 INPUT_CV_LO = 0.05
 INPUT_CV_HI = 10.0

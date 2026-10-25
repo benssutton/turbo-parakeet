@@ -2,8 +2,8 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from chbench.datagen.spec import DatasetSpec
-from chbench.datagen.wrap import wrap
+from synthdata.column.spec import DatasetSpec
+from synthdata.column.wrap import wrap
 
 
 def s(**kw) -> DatasetSpec:

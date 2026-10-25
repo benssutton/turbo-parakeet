@@ -9,9 +9,9 @@ from dataclasses import replace
 import pyarrow as pa
 import pytest
 
-from chbench.datagen import Manifest, load_or_generate
-from chbench.datagen.realdata import path_spec
-from chbench.datagen.spec import DatasetSpec, Distribution, SpecError
+from synthdata import Manifest, load_or_generate
+from synthdata.column.realdata import path_spec
+from synthdata.column.spec import DatasetSpec, Distribution, SpecError
 
 COLUMNS = {
     "int32": pa.array([3, None, 3, 7, 9, None, 1, 1], pa.int32()),
@@ -208,8 +208,8 @@ def test_missing_file_column_and_unexpressible_type(tmp_path):
     ],
 )
 def test_arrow_type_strings_round_trip_zones_and_fixed_size_binary(dtype, text):
-    from chbench.datagen.realdata import arrow_type_string
-    from chbench.datagen.spec import parse_arrow_type
+    from synthdata.column.realdata import arrow_type_string
+    from synthdata.column.spec import parse_arrow_type
 
     assert arrow_type_string(dtype) == text
     assert parse_arrow_type(text) == dtype
@@ -235,7 +235,7 @@ def test_zoned_timestamp_and_fixed_size_binary_files_are_measured(tmp_path):
     ],
 )
 def test_malformed_zone_and_fixed_size_binary_strings_are_rejected(bad):
-    from chbench.datagen.spec import parse_arrow_type
+    from synthdata.column.spec import parse_arrow_type
 
     with pytest.raises(SpecError):
         parse_arrow_type(bad)

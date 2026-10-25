@@ -3,7 +3,7 @@ import json
 import pyarrow as pa
 import pytest
 
-from chbench.datagen.spec import (
+from synthdata.column.spec import (
     DatasetSpec,
     Distribution,
     SpecError,

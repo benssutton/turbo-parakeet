@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synthdata"
+version = "0.1.0"
+description = "Seeded synthetic columnar datasets with targeted, measured statistics"
+requires-python = ">=3.12"
+dependencies = ["numpy", "scipy", "pyarrow>=18", "polars"]
+
+[tool.setuptools.packages.find]
+include = ["synthdata*"]

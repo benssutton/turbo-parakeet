@@ -2,10 +2,10 @@ import time
 
 import pytest
 
-from chbench.datagen import generate
-from chbench.datagen.metrics import runs_expected
-from chbench.datagen.multiset import entropy_ceiling, entropy_floor
-from chbench.datagen.spec import DatasetSpec, Distribution
+from synthdata import generate
+from synthdata.column.metrics import runs_expected
+from synthdata.column.multiset import entropy_ceiling, entropy_floor
+from synthdata.column.spec import DatasetSpec, Distribution
 
 pytestmark = pytest.mark.slow
 

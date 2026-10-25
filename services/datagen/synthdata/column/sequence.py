@@ -42,14 +42,14 @@ from dataclasses import dataclass
 import numpy as np
 import pyarrow as pa
 
-from chbench.datagen.metrics import (
+from synthdata.column.metrics import (
     dichotomise,
     largest_remainder,
     runs_expected,
     runs_z_bounds,
 )
-from chbench.datagen.solve import SolveStatus
-from chbench.datagen.spec import DatasetSpec
+from synthdata.column.solve import SolveStatus
+from synthdata.column.spec import DatasetSpec
 
 # interarrival_cv is the CV of the gaps between repeat-run starts; two gaps need
 # three runs, so below this the metric is undefined (too few duplicates to

@@ -1,6 +1,6 @@
 import pytest
 
-from chbench.datagen.solve import SolveStatus, solve_monotone
+from synthdata.column.solve import SolveStatus, solve_monotone
 
 
 def test_solves_an_increasing_function():

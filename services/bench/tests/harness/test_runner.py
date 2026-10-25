@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from chbench.datagen import DatasetSpec, generate
+from synthdata import DatasetSpec, generate
 from chbench.harness.ddl import table_name
 from chbench.harness.loader import load_table
 from chbench.harness.queries import QueryVariant, expand_queries

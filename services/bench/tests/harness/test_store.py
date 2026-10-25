@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 
 import numpy as np
 
-from chbench.datagen.cache import SolveRecord
+from synthdata.generate import SolveRecord
 from chbench.harness.store import Store
 
 

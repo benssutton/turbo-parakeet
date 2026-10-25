@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from chbench.datagen.metrics import (
+from synthdata.column.metrics import (
     cardinality_ratio,
     dichotomise,
     entropy_bits,
@@ -8,17 +8,17 @@ from chbench.datagen.metrics import (
     runs_z,
     runs_z_bounds,
 )
-from chbench.datagen.sequence import (
+from synthdata.column.sequence import (
     composition,
     dichotomy_kind_for,
     layout_runs,
     runs_plan,
     target_run_count,
 )
-from chbench.datagen.solve import SolveStatus
-from chbench.datagen.spec import DatasetSpec
-from chbench.datagen.metrics import interarrival_cv
-from chbench.datagen.sequence import layout_interarrival, layout_sequence
+from synthdata.column.solve import SolveStatus
+from synthdata.column.spec import DatasetSpec
+from synthdata.column.metrics import interarrival_cv
+from synthdata.column.sequence import layout_interarrival, layout_sequence
 
 # Reference output for test_layout_interarrival_matches_the_retained_spike_reference,
 # captured from the loop implementation at commit fdfd875 before this task's step 3
@@ -80,7 +80,7 @@ def test_achieved_z_is_within_half_a_run_step_of_target():
     x = skewed()
     b = dichotomise(x)
     n1, n2 = int(b.sum()), int((~b).sum())
-    from chbench.datagen.metrics import runs_expected
+    from synthdata.column.metrics import runs_expected
 
     _, sd = runs_expected(n1, n2)
     y = layout_runs(x, -0.25, np.random.default_rng(1))

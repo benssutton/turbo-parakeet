@@ -33,10 +33,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from chbench.datagen.metrics import largest_remainder
-from chbench.datagen.multiset import build_multiset
-from chbench.datagen.sequence import layout_interarrival
-from chbench.datagen.spec import DatasetSpec
+from synthdata.column.metrics import largest_remainder
+from synthdata.column.multiset import build_multiset
+from synthdata.column.sequence import layout_interarrival
+from synthdata.column.spec import DatasetSpec
 
 ROWS = 10_000_000
 

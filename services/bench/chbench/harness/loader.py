@@ -22,7 +22,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from chbench.datagen import Dataset
+from synthdata import Dataset
 from chbench.harness.client import CHClient
 from chbench.harness.ddl import create_table_sql, drop_table_sql, optimize_sql
 from chbench.harness.validate import TableVariant

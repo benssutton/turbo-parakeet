@@ -14,13 +14,13 @@ import numpy as np
 import pyarrow as pa
 from scipy.stats import lognorm, norm
 
-from chbench.datagen.metrics import (
+from synthdata.column.metrics import (
     entropy_of_counts,
     index_of_dispersion,
     largest_remainder,
 )
-from chbench.datagen.solve import SolveResult, solve_monotone
-from chbench.datagen.spec import DatasetSpec
+from synthdata.column.solve import SolveResult, solve_monotone
+from synthdata.column.spec import DatasetSpec
 
 CLIP_WARN_FRACTION = 0.01  # FINDINGS §4
 REDRAW_CAP = 20

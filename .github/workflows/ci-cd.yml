@@ -12,7 +12,8 @@ name: Full CI Pipeline
 #   - CodeQL (the slowest job, hence the longest pipeline) runs on pull requests, the schedule
 #     and dispatch, not on pushes to main;
 #   - the Python tests run once on Linux, inside the Rust coverage job.
-#   - the bench tests (services/bench) run in the same job; ClickHouse is not started.
+#   - the bench and synthdata tests (services/bench, services/datagen) run in the same job;
+#     ClickHouse is not started.
 on:
   push:
     branches: [main]
@@ -129,6 +130,9 @@ jobs:
       # (the tests that need the server skip).
       - name: Run bench tests
         run: python scripts/check.py test-bench
+
+      - name: Run synthdata tests
+        run: python scripts/check.py test-datagen
 
       - name: Upload Rust coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

@@ -16,7 +16,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from chbench.datagen.spec import _SCALARS, DatasetSpec, SpecError, parse_arrow_type
+from synthdata.column.spec import _SCALARS, DatasetSpec, SpecError, parse_arrow_type
 
 __all__ = ["arrow_type_string", "file_digest", "read_column", "path_spec"]
 

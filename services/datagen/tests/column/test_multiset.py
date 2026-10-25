@@ -1,19 +1,19 @@
 import numpy as np
 import pytest
 
-from chbench.datagen.multiset import build_multiset, draw_support
-from chbench.datagen.spec import DatasetSpec, Distribution
-from chbench.datagen.multiset import (
+from synthdata.column.multiset import build_multiset, draw_support
+from synthdata.column.spec import DatasetSpec, Distribution
+from synthdata.column.multiset import (
     density_counts,
     entropy_ceiling,
     entropy_floor,
     powerlaw_counts,
     solve_entropy,
 )
-from chbench.datagen.metrics import entropy_of_counts
-from chbench.datagen.solve import SolveStatus
-from chbench.datagen.multiset import solve_dispersion
-from chbench.datagen.metrics import index_of_dispersion
+from synthdata.column.metrics import entropy_of_counts
+from synthdata.column.solve import SolveStatus
+from synthdata.column.multiset import solve_dispersion
+from synthdata.column.metrics import index_of_dispersion
 
 
 def spec(**kw) -> DatasetSpec:

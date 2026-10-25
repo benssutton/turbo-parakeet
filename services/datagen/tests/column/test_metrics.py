@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from chbench.datagen.metrics import (
+from synthdata.column.metrics import (
     cardinality_ratio,
     dichotomise,
     entropy_bits,

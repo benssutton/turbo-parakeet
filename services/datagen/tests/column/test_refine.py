@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from chbench.datagen.metrics import interarrival_cv
-from chbench.datagen.refine import refine_interarrival
-from chbench.datagen.spec import DatasetSpec
-from tests.datagen.test_sequence import float_mset
+from synthdata.column.metrics import interarrival_cv
+from synthdata.column.refine import refine_interarrival
+from synthdata.column.spec import DatasetSpec
+from tests.column.test_sequence import float_mset
 
 
 def spec_for(counts, **kw) -> DatasetSpec:
@@ -24,7 +24,7 @@ def spec_for(counts, **kw) -> DatasetSpec:
 @pytest.mark.parametrize("target", [0.5, 1.0, 1.5])
 def test_refinement_beats_the_unrefined_draw(target):
     support, counts = float_mset()
-    from chbench.datagen.sequence import layout_interarrival
+    from synthdata.column.sequence import layout_interarrival
 
     raw = interarrival_cv(
         layout_interarrival(support, counts, target, np.random.default_rng(1)),

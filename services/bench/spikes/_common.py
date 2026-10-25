@@ -1,7 +1,7 @@
 """Metric functions shared by the feasibility spikes.
 
 These are the run definitions (runs test, inter-arrival CV, floats compared
-after rounding) and are the seed of chbench/datagen/metrics.py.
+after rounding) and are the seed of synthdata/column/metrics.py.
 """
 
 from __future__ import annotations

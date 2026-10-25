@@ -4,9 +4,10 @@ import math
 import pyarrow as pa
 import pytest
 
-from chbench.datagen import generate, load_or_generate, save
-from chbench.datagen.cache import WARNING_PREFIXES, Manifest, SolveRecord
-from chbench.datagen.spec import DatasetSpec, Distribution, SpecError
+from synthdata import generate, load_or_generate, save
+from synthdata.column.solve import WARNING_PREFIXES
+from synthdata.generate import Manifest, SolveRecord
+from synthdata.column.spec import DatasetSpec, Distribution, SpecError
 
 
 def uc1(rows=20_000, **kw) -> DatasetSpec:
