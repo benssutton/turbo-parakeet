@@ -57,7 +57,7 @@ def set_baseline(
     counts: np.ndarray, n_null: int, n: int, w: int, max_size: int
 ) -> tuple[float, float, float, float]:
     """(expected_skip_rows, expected_skip_values, expected_window_distinct,
-    expected_overflow_fraction) under a random row order (spec §2.5), over count classes.
+    expected_overflow_fraction) under a random row order, over count classes.
     """
     values = Counter(counts.tolist())
     entries = Counter(counts.tolist() + ([n_null] if n_null else []))

@@ -1,6 +1,5 @@
 """Distinct values in the population behind each column, unseen ones included
-(per-column scope; spec docs/superpowers/specs/2026-10-24-cardinality-entropy-techniques-design.md §3).
-"""
+(per-column scope)."""
 
 import math
 

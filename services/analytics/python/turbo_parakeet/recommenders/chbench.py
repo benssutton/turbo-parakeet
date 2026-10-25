@@ -1,10 +1,10 @@
 """`to_chbench`: a recommender result as runnable suites for the bench
-(`services/bench`, package `chbench`) — spec 2026-10-19 §7, skip indexes 2026-10-20 §8.2. A helper,
-not a recommender.
+(`services/bench`, package `chbench`). A helper, not a recommender.
 
 Skip index: when the result chose one (`clickhouse_skip_index`, e.g. `"set(125) GRANULARITY 4"`),
 the recommended suite's `skip_index` axis is `[<chosen in chbench's grammar>, "none"]`, e.g.
-`["set(125):4", "none"]` (chbench ruling R38: `<index>[:<G>]`); the original suite keeps `["none"]`.
+`["set(125):4", "none"]` (chbench's skip-axis grammar: `<index>[:<G>]`); the original suite
+keeps `["none"]`.
 Queries: full_scan, point `in` filters (`values: 1`) at target fractions 0.001, 0.01 and 0.05,
 and a range filter on range-capable types.
 
@@ -176,8 +176,8 @@ def to_chbench(
     chbench takes a type's parameters (Decimal scale, DateTime64 precision, ...) from the dataset
     file, so a column whose recommended Arrow type differs from the original gets two suites:
     `<name>` (the column cast to the recommended Arrow type) and `<name>_original` (the column
-    as it is), each with its own `.arrow` and `.predicted.json`; otherwise one `<name>` suite.
-    Spec §7."""
+    as it is), each with its own `.arrow` and `.predicted.json`; otherwise one `<name>`
+    suite."""
     import pyarrow as pa
 
     out = Path(out_dir)

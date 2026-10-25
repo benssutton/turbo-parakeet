@@ -1,5 +1,4 @@
-"""Per-column profile for choosing narrower / more compressible Arrow types (Spec A:
-docs/superpowers/specs/2026-09-26-describe-technique-design.md).
+"""Per-column profile for choosing narrower / more compressible Arrow types.
 
 Implementations fill METRICS and the private INPUTS (first-occurrence argmin / argmax,
 f1, f2, capture history); the base renders min / max (arrow-rs text, `_plugin.render`),
@@ -105,8 +104,8 @@ ESTIMATES = {
 _LEVEL = {"min": pl.String, "max": pl.String, **ESTIMATES, "class": pl.String}
 CONCLUSIONS = {**_LEVEL, **{f"inner_{k}": v for k, v in _LEVEL.items()}}
 
-# Agreement (spec 2026-10-01 §13.8): exact unless listed. est_method and
-# estimates_agree depend on each implementation's own seeded split: not compared.
+# Agreement: exact unless listed. est_method and estimates_agree depend on each
+# implementation's own seeded split: not compared.
 EXACT_CONCLUSIONS = [
     c
     for c in CONCLUSIONS
@@ -262,7 +261,7 @@ class Describe(Technique):
 def _render(
     s: pl.Series, lo: int | None, hi: int | None
 ) -> tuple[str | None, str | None]:
-    """min / max as arrow-rs text (spec 2026-10-01 §13.1); None for nested dtypes."""
+    """min / max as arrow-rs text; None for nested dtypes."""
     if lo is None or isinstance(s.dtype, NESTED):
         return None, None
     from turbo_parakeet import _plugin

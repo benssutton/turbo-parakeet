@@ -1,5 +1,4 @@
-"""One-sample runs test over k categories: does row order cluster equal values? (spec
-docs/superpowers/specs/2026-10-13-runs-test-design.md)"""
+"""One-sample runs test over k categories: does row order cluster equal values?"""
 
 import polars as pl
 

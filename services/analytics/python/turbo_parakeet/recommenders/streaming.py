@@ -1,14 +1,13 @@
 """StreamingRecommender: Recommend's dtype recommendations from batches added over time.
 
-Spec: docs/superpowers/specs/2026-09-29-streaming-recommender-design.md. All state lives
-in Rust (src/recommenders/streaming/): exact running statistics prove each recommendation on every
-row; a sample of contiguous row blocks (`reservoir_rows`, in blocks of `block_rows`)
-gives ZSTD sizes — those of an IPC file written in `block_rows` batches — and a
+All state lives in Rust (src/recommenders/streaming/): exact running statistics prove each
+recommendation on every row; a sample of contiguous row blocks (`reservoir_rows`, in blocks
+of `block_rows`) gives ZSTD sizes — those of an IPC file written in `block_rows` batches — and a
 cross-check. Not a technique on the uniform contract: add batches, result at any time.
 
-Distinct counts (spec docs/superpowers/specs/2026-10-01-recommender-parity-design.md):
-every eligible level, every dtype, keeps a HyperLogLog and a bottom-k distinct sample
-(k = max(categorical_threshold, 1000)); exact while the sample holds every value.
+Distinct counts: every eligible level, every dtype, keeps a HyperLogLog and a bottom-k
+distinct sample (k = max(categorical_threshold, 1000)); exact while the sample holds every
+value.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ class StreamingRecommender:
     the recommender received, so it can differ by input form (e.g. string_view from
     Polars, large_string from pyarrow).
 
-    Exemplars (spec docs/superpowers/specs/2026-10-18-recommender-schema-entropy-exemplars-design.md):
+    Exemplars:
     `exemplar_row` is the first non-null row of the column, `exemplar_value` its text,
     `null_exemplar_row` the first null row; `exemplar_id` / `null_exemplar_id` hold the
     values of the `id_columns` at those rows as a Struct with one field per id column, in
@@ -61,20 +60,19 @@ class StreamingRecommender:
     each `add` holds one 8-byte key per row per column until its batch is absorbed
     (≈ 8 MB per column per million-row batch): add smaller batches for wide frames.
 
-    `entropy_estimator` (default `"ams"`, spec §8): past the exact phase, `"sample"` (the bottom-k distinct
+    `entropy_estimator` (default `"ams"`: `"sample"` errs up to 9.6% on Zipf 0.8 / 1.1,
+    `"ams"` at most 0.8% on every benchmarked shape): past the exact phase, `"sample"` (the bottom-k distinct
     sample with the HyperLogLog distinct count: no extra per-row cost, weak on skewed columns whose heavy values fall
     outside the sample) or `"ams"` (an AMS sketch fed every row of every eligible
     column from the first batch: ≈ 4 096 estimators per column, accurate on skew).
 
-    Compression (spec docs/superpowers/specs/2026-10-19-clickhouse-recommendations-design.md
-    §4): `zstd_levels` are the ZSTD levels tried (distinct, each in 1…22);
+    Compression: `zstd_levels` are the ZSTD levels tried (distinct, each in 1…22);
     `zstd_level_tolerance` the relative size slack within which the lowest level wins;
     `zstd_min_saving` the smallest relative saving that makes ZSTD preferable to LZ4;
     `transform_min_saving` the smallest relative saving that keeps a transform codec (GCD, Delta, DoubleDelta) over no transform. The three
     fractions lie in [0, 1).
 
-    Skip indexes (spec docs/superpowers/specs/2026-10-20-skip-index-recommendations-design.md
-    §4): `skip_granularities` are the GRANULARITY values tried, `set_max_sizes` the
+    Skip indexes: `skip_granularities` are the GRANULARITY values tried, `set_max_sizes` the
     `set(max_size)` sizes and `bloom_fprs` the `bloom_filter` false-positive rates
     (each non-empty and distinct; fprs in (0, 1)). `min_skip` is the smallest share of
     rows a point query must skip, `min_gain` the smallest gain over a random row order,
@@ -85,7 +83,7 @@ class StreamingRecommender:
     run-end-encoded column ("Min/Max accumulator not implemented"), while every other operator
     probed works and returns identical results, and Arrow IPC files with REE columns read fine; an
     REE recommendation would break common queries. Re-run tests/performance/spike_datafusion_ree.py
-    after a DataFusion upgrade; REE is added (spec 2026-10-21) once MIN / MAX work.
+    after a DataFusion upgrade; REE is added once MIN / MAX work.
     """
 
     def __init__(

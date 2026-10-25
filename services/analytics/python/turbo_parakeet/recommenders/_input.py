@@ -1,5 +1,4 @@
-"""Input preparation shared by the recommenders (spec
-docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md §5.2)."""
+"""Input preparation shared by the recommenders."""
 
 from __future__ import annotations
 

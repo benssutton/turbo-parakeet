@@ -121,7 +121,7 @@ def frequencies(s: pl.Series, seed: int) -> pl.DataFrame:
 def extremes(s: pl.Series, freq: pl.DataFrame) -> dict:
     """First occurrence of the min and max: sort the distinct values (Polars order;
     NaN excluded) and take their first-occurrence indices."""
-    if isinstance(s.dtype, NESTED):  # no extremes (spec 2026-10-01 §13.3)
+    if isinstance(s.dtype, NESTED):  # no extremes
         return {"argmin": None, "argmax": None}
     values = freq.select("v", "first")
     if isinstance(s.dtype, FLOATS):

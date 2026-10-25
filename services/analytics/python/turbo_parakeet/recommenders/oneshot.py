@@ -1,9 +1,9 @@
 """OneShotRecommender: the narrowest value-preserving Arrow type per column of one frame.
 
-Spec: docs/superpowers/specs/2026-10-04-oneshot-recommender-design.md. All state lives
-in Rust (src/recommenders/oneshot.rs): `add` collects each column's exact statistics and sizes;
-`result` casts every candidate type, verifies it row by row and measures it (Arrow and
-Polars layouts, plain and ZSTD) — once; later calls return the same table.
+All state lives in Rust (src/recommenders/oneshot.rs): `add` collects each column's exact
+statistics and sizes; `result` casts every candidate type, verifies it row by row and
+measures it (Arrow and Polars layouts, plain and ZSTD) — once; later calls return the
+same table.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ class OneShotRecommender:
     plain and ZSTD. `candidates` lists every candidate with its rule, the metric
     values it tested, its predicted / projected size and its outcome.
 
-    Exemplars (spec docs/superpowers/specs/2026-10-18-recommender-schema-entropy-exemplars-design.md):
+    Exemplars:
     `exemplar_row` is the first non-null row of the column, `exemplar_value` its text,
     `null_exemplar_row` the first null row; `exemplar_id` / `null_exemplar_id` hold the
     values of the `id_columns` at those rows as a Struct with one field per id column, in
@@ -55,15 +55,13 @@ class OneShotRecommender:
     `boolean_pairs`: (true text, false text) pairs a two-valued string column may map
     to Boolean, compared case-insensitively.
 
-    Compression (spec docs/superpowers/specs/2026-10-19-clickhouse-recommendations-design.md
-    §4): `zstd_levels` are the ZSTD levels tried (distinct, each in 1…22);
+    Compression: `zstd_levels` are the ZSTD levels tried (distinct, each in 1…22);
     `zstd_level_tolerance` the relative size slack within which the lowest level wins;
     `zstd_min_saving` the smallest relative saving that makes ZSTD preferable to LZ4;
     `transform_min_saving` the smallest relative saving that keeps a transform codec (GCD, Delta, DoubleDelta) over no transform. The three
     fractions lie in [0, 1).
 
-    Skip indexes (spec docs/superpowers/specs/2026-10-20-skip-index-recommendations-design.md
-    §4): `skip_granularities` are the GRANULARITY values tried, `set_max_sizes` the
+    Skip indexes: `skip_granularities` are the GRANULARITY values tried, `set_max_sizes` the
     `set(max_size)` sizes and `bloom_fprs` the `bloom_filter` false-positive rates
     (each non-empty and distinct; fprs in (0, 1)). `min_skip` is the smallest share of
     rows a point query must skip, `min_gain` the smallest gain over a random row order,
@@ -74,7 +72,7 @@ class OneShotRecommender:
     run-end-encoded column ("Min/Max accumulator not implemented"), while every other operator
     probed works and returns identical results, and Arrow IPC files with REE columns read fine; an
     REE recommendation would break common queries. Re-run tests/performance/spike_datafusion_ree.py
-    after a DataFusion upgrade; REE is added (spec 2026-10-21) once MIN / MAX work.
+    after a DataFusion upgrade; REE is added once MIN / MAX work.
     """
 
     def __init__(

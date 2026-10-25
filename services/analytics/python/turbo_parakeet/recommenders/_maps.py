@@ -1,5 +1,4 @@
-"""Arrow export of a recommender result (spec
-docs/superpowers/specs/2026-10-07-top-k-frequencies-design.md §6)."""
+"""Arrow export of a recommender result."""
 
 from __future__ import annotations
 
