@@ -14,7 +14,8 @@ reading the dataset from Arrow IPC files the parent wrote once. The child (this 
 Impl(**params).add(frames).result() and reports `peak_mb`, the peak working set above
 `load_mb` (the OS peak never resets, so only a fresh process gives a clean figure;
 `peak_is_upper_bound` when the warm-up never exceeded the load-time peak, so `peak_mb` only
-bounds the figure from above), then times `runs` runs (fresh instance each) → median / min.
+bounds the figure from above), then times runs (fresh instance each) until they add up to
+`sample_s` (10 s) — at least one, at most `runs` — → median / min, `n_runs`.
 A warm-up over `budget_s` is "skipped: over budget". Params cross as JSON (tuples arrive as
 lists). The parent holds the frames and every result while the children run (RAM / disk
 pressure on very large datasets), and the "N" thread runs inherit the caller's environment
@@ -67,6 +68,7 @@ RESULTS_DIR = Path(__file__).parent / "results"
 SINGLE_THREAD_ENV = {"RAYON_NUM_THREADS": "1", "POLARS_MAX_THREADS": "1"}
 CHILD_TIMEOUT_S = 1800
 PEAK_TOLERANCE_MB = 1.0  # a peak this close to the load-time peak never moved
+SAMPLE_S = 10.0  # seconds of timed runs per measurement (adaptive repeats)
 COLUMNS = [
     "dataset",
     "implementation",
@@ -75,6 +77,7 @@ COLUMNS = [
     "status",
     "median_ms",
     "min_ms",
+    "n_runs",
     "load_mb",
     "peak_mb",
     "peak_is_upper_bound",
@@ -100,6 +103,7 @@ FIXED_DTYPES = {
     ),
     **dict.fromkeys(("peak_is_upper_bound", "agrees", "exact_rust_agrees"), pl.Boolean),
     "speedup_vs_exact_rust": pl.Float64,
+    "n_runs": pl.Int64,
 }
 
 
@@ -197,7 +201,10 @@ def time_call(
     runs: int,
     budget_s: float,
     on_warmup: Callable[[], None] | None = None,
+    sample_s: float = SAMPLE_S,
 ) -> tuple[list[float] | None, object]:
+    """The warm-up (never a sample), then timed runs until they add up to `sample_s`:
+    at least one, at most `runs`. None when the warm-up exceeds `budget_s`."""
     t0 = time.perf_counter()
     result = fn()
     elapsed = time.perf_counter() - t0
@@ -205,8 +212,8 @@ def time_call(
         on_warmup()
     if elapsed > budget_s:
         return None, None
-    times = []
-    for _ in range(runs):
+    times: list[float] = []
+    while len(times) < runs and (not times or sum(times) < sample_s):
         t0 = time.perf_counter()
         result = fn()
         times.append(time.perf_counter() - t0)
@@ -312,6 +319,7 @@ def _measure(
     threads: str,
     runs: int,
     budget_s: float,
+    sample_s: float,
     out: str,
 ) -> dict:
     spec = Path(out).with_suffix(".json")
@@ -325,6 +333,7 @@ def _measure(
                     "frames": frames,
                     "runs": runs,
                     "budget_s": budget_s,
+                    "sample_s": sample_s,
                     "out": out,
                 }
             )
@@ -385,6 +394,7 @@ def _child(spec_path: str) -> None:
         spec["runs"],
         spec["budget_s"],
         on_warmup=lambda: peak.append(memory_mb()[1]),
+        sample_s=spec["sample_s"],
     )
     peak_mb, is_upper_bound = peak_extra(load_mb, peak_before, peak[0])
     info = {
@@ -397,6 +407,7 @@ def _child(spec_path: str) -> None:
             status=f"skipped: over budget ({spec['budget_s']:.0f}s)",
             median_ms=None,
             min_ms=None,
+            n_runs=None,
         )
     else:
         result.write_ipc(spec["out"])
@@ -404,6 +415,7 @@ def _child(spec_path: str) -> None:
             status="ok",
             median_ms=statistics.median(times) * 1e3,
             min_ms=min(times) * 1e3,
+            n_runs=len(times),
         )
     print(json.dumps(info))
 
@@ -473,6 +485,7 @@ def run(
     runs: int = 5,
     budget_s: float = 60.0,
     results_name: str | None = None,
+    sample_s: float = SAMPLE_S,
 ) -> pl.DataFrame:
     params, impl_params = params or {}, impl_params or {}
     variants = variants or [Variant()]
@@ -522,7 +535,17 @@ def run(
                 )
                 out = str(folder / f"result{j}.arrow")
                 row.update(
-                    _measure(package, name, kwargs, paths, threads, runs, budget_s, out)
+                    _measure(
+                        package,
+                        name,
+                        kwargs,
+                        paths,
+                        threads,
+                        runs,
+                        budget_s,
+                        sample_s,
+                        out,
+                    )
                 )
                 if row["status"] == "ok":
                     results[name, label, threads] = _read_ipc(out)
@@ -593,6 +616,7 @@ def _report(
                 *keys,
                 "median_ms",
                 "min_ms",
+                "n_runs",
                 "peak_mb",
                 "peak_is_upper_bound",
                 "agrees",

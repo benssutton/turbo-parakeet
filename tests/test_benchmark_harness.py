@@ -281,3 +281,25 @@ def test_truth_reaches_the_accuracy_hook(bench):
     ] == pytest.approx(0.2)
     # truth goes to the reference comparison only
     assert "exact_rust_truth_rel_err" not in bench.columns
+
+
+def test_time_call_stops_once_the_sample_time_is_reached(monkeypatch):
+    clock = iter(
+        [
+            *(0.0, 3.0),  # warm-up: 3 s
+            *(3.0, 7.0),  # run 1: 4 s
+            *(7.0, 11.0),  # run 2: 4 s -> 8 s of samples
+            *(11.0, 15.0),  # run 3: 4 s -> 12 s >= 10: stop
+            *(15.0, 19.0),
+        ]
+    )
+    monkeypatch.setattr(harness.time, "perf_counter", lambda: next(clock))
+    times, _ = time_call(lambda: 1, runs=5, budget_s=60, sample_s=10)
+    assert times == [4.0, 4.0, 4.0]
+
+
+def test_time_call_always_takes_one_sample(monkeypatch):
+    clock = iter([0.0, 20.0, 20.0, 45.0])
+    monkeypatch.setattr(harness.time, "perf_counter", lambda: next(clock))
+    times, _ = time_call(lambda: 1, runs=5, budget_s=60, sample_s=10)
+    assert times == [25.0]
