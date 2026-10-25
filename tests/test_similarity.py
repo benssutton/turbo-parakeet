@@ -21,7 +21,7 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.similarity import Similarity, SimilarityExactLRU
-from datagen import containment_pairs, related_frames, similar_frames
+from synthdata.scenarios import containment_pairs, related_frames, similar_frames
 from harness import (
     assert_agrees,
     assert_contract,

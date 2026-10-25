@@ -1,6 +1,6 @@
 import pytest
 
-from chbench.datagen import DatasetSpec, generate
+from synthdata import DatasetSpec, generate
 from chbench.harness.ddl import table_name
 from chbench.harness.loader import load_table, storage_stats
 from chbench.harness.validate import TableVariant

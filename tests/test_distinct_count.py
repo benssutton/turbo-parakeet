@@ -10,7 +10,8 @@ Accuracy only — nothing here is timed. Benchmarks live in tests/performance/.
 import polars as pl
 import pytest
 
-from datagen import large_dataset, low_cardinality, mixed_dtypes
+from synthdata.cover import cover_small, spread
+from synthdata.scenarios import low_cardinality, mixed_dtypes
 from harness import (
     assert_agrees,
     assert_contract,
@@ -44,7 +45,7 @@ def tolerance(impl: str) -> tuple[float, float]:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "mixed": mixed_dtypes(300),
+        "cover": spread(cover_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -58,11 +59,10 @@ def test_contract(impl):
 @pytest.mark.parametrize(
     "make",
     [
-        lambda: large_dataset(),
-        lambda: mixed_dtypes(2_000),
+        cover_small,
         lambda: low_cardinality(200_000, 4, cardinality=100_000),
     ],
-    ids=["large", "mixed", "highcard"],
+    ids=["cover", "highcard"],
 )
 def test_agrees_with_reference(impl, make):
     frames = {"t": make()}

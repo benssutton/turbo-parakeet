@@ -1,7 +1,8 @@
 """
 Three-way joint entropy accuracy tests — every implementation in turbo_parakeet.techniques.threeway_entropy.
 
-Reference: ThreewayEntropyPolars. mixed_dtypes: 18 eligible columns → C(18,3) = 816 triplets.
+Reference: ThreewayEntropyPolars. spread(cover_small(), 18): C(18,3) = 816 triplets, of
+which C(14,3) = 364 computed (binary and struct columns are ineligible).
 """
 
 import math
@@ -10,7 +11,7 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.threeway_entropy import ThreewayEntropy
-from datagen import mixed_dtypes
+from synthdata.cover import cover_small, spread
 from harness import (
     assert_agrees,
     assert_contract,
@@ -28,16 +29,17 @@ OTHERS = implementation_params(PKG, include_reference=False)
 
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"t": mixed_dtypes(200)}
+    frames = {"t": spread(cover_small(), 18).head(200)}
     cls = load(impl)
     out = run(cls, frames)
     assert_contract(cls, out, frames)
     assert out.height == 816
+    assert (out["status"] == "computed").sum() == 364
 
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"t": mixed_dtypes(1_000)}
+    frames = {"t": spread(cover_small(), 18).head(1_000)}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -116,3 +118,21 @@ def test_accuracy_compares_the_joint_entropy_only():
     assert out["max_rel_err"] == pytest.approx(0.02)
     assert out["n_missing"] == 0
     assert ThreewayEntropyAmsRust.EXACT is False
+
+
+@pytest.mark.parametrize("got, ok", [(0.94, True), (0.85, False)])
+def test_ams_agreement_is_relative_or_absolute_in_bits(got, ok):
+    """A 1-bit triplet 0.06 bits off: beyond RTOL (5%), within ATOL (0.1 bits)."""
+    from turbo_parakeet.techniques.threeway_entropy import (
+        ThreewayEntropyAmsRust,
+        ThreewayEntropyPolars,
+    )
+
+    x = [1, 2] * 50
+    frames = {"t": pl.DataFrame({"a": x, "b": x, "c": x})}
+    want = ThreewayEntropyPolars().add(frames).result()
+    assert want["h_abc"][0] == pytest.approx(1.0)
+    problems = ThreewayEntropyAmsRust().agreement(
+        want.with_columns(h_abc=pl.lit(got)), want
+    )
+    assert (problems == []) is ok

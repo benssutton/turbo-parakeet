@@ -22,7 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from chbench.datagen.metrics import (
+from synthdata.column.metrics import (
     cardinality_ratio,
     dichotomise,
     entropy_bits,

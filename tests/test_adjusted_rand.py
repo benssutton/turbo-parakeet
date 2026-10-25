@@ -2,17 +2,20 @@
 Pairwise Adjusted Rand Index accuracy tests — every implementation in turbo_parakeet.techniques.adjusted_rand.
 
 Reference: AdjustedRandSklearn (sklearn.metrics.adjusted_rand_score on string
-labels after dropping rows where either column is null). Eligible columns in
-mixed_dtypes: everything except list_* / arr_* (12) → C(12,2) = 66 computed pairs.
+labels after dropping rows where either column is null). spread(cover_small(), 14) — 14,
+not 18, keeps the pair count and the sklearn reference's time below the old fixture's;
+that spread has no Duration column (tested separately below).
+Eligible: everything except binary and struct (11) → C(11,2) = 55 computed pairs.
 """
 
 import math
+from datetime import time, timedelta
 
 import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.adjusted_rand import AdjustedRand
-from datagen import mixed_dtypes
+from synthdata.cover import cover_small, spread
 from harness import (
     assert_agrees,
     assert_contract,
@@ -30,16 +33,16 @@ OTHERS = implementation_params(PKG, include_reference=False)
 
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"t": mixed_dtypes(200)}
+    frames = {"t": spread(cover_small(), 14).head(200)}
     cls = load(impl)
     out = run(cls, frames)
     assert_contract(cls, out, frames)
-    assert (out["status"] == "computed").sum() == 66
+    assert (out["status"] == "computed").sum() == 55
 
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"t": mixed_dtypes(1_000)}
+    frames = {"t": spread(cover_small(), 14).head(1_000)}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -73,6 +76,25 @@ def test_no_overlap_is_nan(impl):
 def test_negative_zero_and_zero_are_one_label(impl):
     row = _ari(impl, [-0.0, 0.0, 1.0, 1.0], [3, 3, 4, 4])
     assert row["ari"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_time_labels_keep_sub_second_precision(impl):
+    micros = [0, 1, 500, 999_999, 250_000]
+    codes = [i % 5 for i in range(1_000)]
+    times = [time(0, 0, 1, micros[c]) for c in codes]
+    row = _ari(impl, times, codes)
+    assert row["ari"] == pytest.approx(1.0)
+    assert row["n_valid"] == 1_000
+
+
+@pytest.mark.parametrize("impl", ALL)
+def test_duration_column_computes(impl):
+    codes = [i % 4 for i in range(400)]
+    durations = [timedelta(microseconds=c * 7 + 1) for c in codes]
+    row = _ari(impl, durations, codes)
+    assert row["ari"] == pytest.approx(1.0)
+    assert row["n_valid"] == 400
 
 
 def test_conclusions_default_override_and_nan():

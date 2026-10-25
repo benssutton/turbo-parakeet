@@ -281,3 +281,73 @@ def test_truth_reaches_the_accuracy_hook(bench):
     ] == pytest.approx(0.2)
     # truth goes to the reference comparison only
     assert "exact_rust_truth_rel_err" not in bench.columns
+
+
+def test_time_call_stops_once_the_sample_time_is_reached(monkeypatch):
+    clock = iter(
+        [
+            *(0.0, 3.0),  # warm-up: 3 s
+            *(3.0, 7.0),  # run 1: 4 s
+            *(7.0, 11.0),  # run 2: 4 s -> 8 s of samples
+            *(11.0, 15.0),  # run 3: 4 s -> 12 s >= 10: stop
+            *(15.0, 19.0),
+        ]
+    )
+    monkeypatch.setattr(harness.time, "perf_counter", lambda: next(clock))
+    times, _ = time_call(lambda: 1, runs=5, budget_s=60, sample_s=10)
+    assert times == [4.0, 4.0, 4.0]
+
+
+def test_time_call_always_takes_one_sample(monkeypatch):
+    clock = iter([0.0, 20.0, 20.0, 45.0])
+    monkeypatch.setattr(harness.time, "perf_counter", lambda: next(clock))
+    times, _ = time_call(lambda: 1, runs=5, budget_s=60, sample_s=10)
+    assert times == [25.0]
+
+
+PAIR = "performance.fake_pair"
+SIX = {"t": pl.DataFrame({c: [float(i), 2.0, 3.0] for i, c in enumerate("abcdef")})}
+
+
+@pytest.fixture(scope="module")
+def pair_bench(tmp_path_factory):
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(harness, "RESULTS_DIR", tmp_path_factory.mktemp("pair"))
+        return harness.run(
+            PAIR,
+            [
+                Dataset("capped", lambda: SIX),
+                Dataset("all", lambda: SIX, combinations=None),
+                Dataset("three", lambda: SIX, combinations=3),
+            ],
+            max_combinations=4,
+            runs=1,
+        )
+
+
+@pytest.mark.slow
+def test_combination_cap_and_override(pair_bench):
+    n = {
+        d: set(pair_bench.filter(dataset=d)["n_combinations"])
+        for d in ("capped", "all", "three")
+    }
+    assert n == {"capped": {4}, "all": {15}, "three": {3}}
+    assert set(pair_bench["agrees"].drop_nulls()) == {True}
+
+
+@pytest.mark.slow
+def test_single_thread_only_on_the_first_dataset(pair_bench):
+    rust = pair_bench.filter(implementation="FakePairRust")
+    assert set(rust.filter(dataset="capped")["threads"]) == {"N", "1"}
+    assert set(rust.filter(dataset="all")["threads"]) == {"N"}
+    assert set(rust.filter(dataset="three")["threads"]) == {"N"}
+    # algorithmic / parallel only where a 1-thread row exists; total everywhere
+    n = rust.filter(threads="N")
+    assert n.filter(dataset="capped")["parallel"].is_not_null().all()
+    assert n.filter(pl.col("dataset") != "capped")["parallel"].is_null().all()
+    assert n["total"].is_not_null().all()
+
+
+@pytest.mark.slow
+def test_per_column_techniques_are_never_capped(bench):
+    assert set(bench["n_combinations"]) == {2}  # FakeSum on the two columns of "tiny"

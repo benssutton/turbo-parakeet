@@ -18,7 +18,8 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.runs_test.polars import exact_moments
-from datagen import large_dataset, large_dataset_mixed, mixed_dtypes, runs_int, runs_str
+from synthdata.cover import cover_small, cover_windows, spread
+from synthdata.scenarios import runs_int, runs_str
 from harness import (
     assert_agrees,
     assert_contract,
@@ -94,7 +95,7 @@ ELIGIBLE_DTYPES = [
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "mixed": mixed_dtypes(300),
+        "cover": spread(cover_small(), 18).head(300),
         "runs": runs_int(1_000, 2, 10, 50),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
@@ -107,11 +108,8 @@ def test_contract(impl):
 
 
 @pytest.mark.parametrize("impl", OTHERS)
-@pytest.mark.parametrize(
-    "make", [large_dataset, large_dataset_mixed], ids=["large", "mixed"]
-)
-def test_agrees_with_reference_large_dataset(impl, make):
-    frames = {"large": make()}
+def test_agrees_with_reference_cover_windows(impl):
+    frames = {"windows": cover_windows()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -119,7 +117,7 @@ def test_agrees_with_reference_large_dataset(impl, make):
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference_seeded(impl):
     frames = {
-        "mixed": mixed_dtypes(2_000),
+        "cover": spread(cover_small(), 18),
         "ints": runs_int(200_000, 3, 25, 100),
         "strs": runs_str(200_000, 2, 5, 1_000),
     }

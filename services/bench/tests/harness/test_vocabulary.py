@@ -13,8 +13,8 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from chbench.datagen import load_or_generate
-from chbench.datagen.realdata import path_spec
+from synthdata import load_or_generate
+from synthdata.column.realdata import path_spec
 from chbench.harness.ddl import table_name
 from chbench.harness.loader import arrow_type_for, load_table
 from chbench.harness.queries import (

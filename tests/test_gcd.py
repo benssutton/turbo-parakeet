@@ -21,7 +21,8 @@ import pyarrow as pa
 import pytest
 
 from turbo_parakeet.techniques.gcd import Gcd
-from datagen import integer_multiples, mixed_dtypes
+from synthdata.cover import cover_small, spread
+from synthdata.scenarios import integer_multiples
 from harness import (
     assert_agrees,
     assert_contract,
@@ -112,7 +113,10 @@ ALL_DTYPES = [pytest.param(p.values[0], id=p.id) for p in CASES]
 
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"mixed": mixed_dtypes(200), "ints": integer_multiples(500, 3, 12)}
+    frames = {
+        "cover": spread(cover_small(), 18).head(200),
+        "ints": integer_multiples(500, 3, 12),
+    }
     cls = load(impl)
     assert_contract(cls, run(cls, frames), frames)
 
@@ -123,7 +127,10 @@ def test_contract(impl):
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"ints": integer_multiples(5_000, 4, 3_600), "mixed": mixed_dtypes(500)}
+    frames = {
+        "ints": integer_multiples(5_000, 4, 3_600),
+        "cover": spread(cover_small(), 18).head(500),
+    }
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 

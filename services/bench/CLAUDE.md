@@ -8,7 +8,7 @@ Motivation: documented advice (e.g. Decimal64 + T64 for fixed-precision numerics
 this produces evidence instead. Paths below are relative to `services/bench/`.
 
 # Design
-- The generator is best-effort: it records *achieved* metrics in a manifest and warns on misses; only the `DatasetSpec` layer
+- The generator (`synthdata`, `services/datagen/`) is best-effort: it records *achieved* metrics in a manifest and warns on misses; only the `DatasetSpec` layer
   raises (`SpecError`: `DatasetSpec` validation, or a real-data file that cannot be read or has changed since its spec).
 - Two stages: a multiset (values + frequencies, solved for cardinality ratio, entropy or index of dispersion), then a
   sequence (the order, for a runs z-score or an inter-arrival CV), then a bounded refine pass for the inter-arrival CV
@@ -59,7 +59,7 @@ axis over a string or date dataset) is rejected at parse time.
 # Suite vocabulary
 - **Real-data datasets:** `dataset: {path: <file>.arrow, column: <name>}` (path relative to the suite file,
   `decimal_places` optional) reads the column as stored; nothing is generated or cached; `rows`, `arrow_type`,
-  `null_count`, `decimal_places`, `value_range` are measured from the file (`datagen/realdata.py`), and `dataset_id`
+  `null_count`, `decimal_places`, `value_range` are measured from the file (`synthdata/column/realdata.py`), and `dataset_id`
   follows the file's content. This is what `turbo_parakeet.recommenders.to_chbench` writes.
 - **Types** (measured on ClickHouse 26.8.31.2, `spikes/spike_ch_vocabulary.py`, FINDINGS §9): `Int8/16/32/64`,
   `UInt8/16/32/64`, `Float32/64`, `Bool`, `Decimal32/64/128`, `Date`, `Date32`, `DateTime`, `DateTime64`,
@@ -86,7 +86,7 @@ axis over a string or date dataset) is rejected at parse time.
 
 # Layout
 ```
-chbench/datagen/   spec, multiset, sequence, refine, solve, metrics, wrap, cache, realdata
+synthdata          (services/datagen) the generator: the column pipeline (spec, multiset, sequence, refine, solve, metrics, wrap, realdata) and its cache
 chbench/harness/   suite, validate, ddl, client, loader, queries, runner, store, report, orchestrate
 chbench/cli.py     chbench run | report | datasets | clean
 suites/            YAML suites (example use cases)

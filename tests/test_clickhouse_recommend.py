@@ -5,7 +5,8 @@ from decimal import Decimal
 import polars as pl
 import pyarrow as pa
 import pytest
-from datagen import describe_mixed, large_dataset_mixed
+from synthdata.cover import cover_windows
+from synthdata.scenarios import describe_mixed
 from harness import pyarrow_body
 
 from turbo_parakeet import _plugin
@@ -14,8 +15,8 @@ from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 
 @pytest.mark.parametrize(
     "make_frame",
-    [lambda: describe_mixed(2_000), large_dataset_mixed],
-    ids=["describe", "large"],
+    [lambda: describe_mixed(2_000), cover_windows],
+    ids=["describe", "cover"],
 )
 def test_lz4_frame_body_sizes_equal_pyarrow(make_frame):
     frame = make_frame()

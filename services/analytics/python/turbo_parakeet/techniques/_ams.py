@@ -1,5 +1,9 @@
 """Parameter checks shared by the AMS entropy classes."""
 
+# The sketch's error is roughly constant in bits (sd ≈ sqrt(Var / num_samples) ≈ 0.022 bits at
+# 4 096 samples for a 1-bit column), so 0.1 bits ≈ 4.5σ; relative-only fails 1-bit columns ~1 seed in 7.
+AMS_ATOL_BITS = 0.1
+
 MAX_SAMPLES = 2**20  # keep in step with `ams_samples` in src/bindings/api/techniques.rs
 
 

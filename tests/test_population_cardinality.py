@@ -14,7 +14,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from datagen import large_dataset, mixed_dtypes, population_samples
+from synthdata.cover import cover_small, spread
+from synthdata.scenarios import population_samples
 from harness import (
     assert_agrees,
     assert_contract,
@@ -39,7 +40,7 @@ def stats(impl, s, **params):
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "mixed": mixed_dtypes(300),
+        "cover": spread(cover_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -58,8 +59,7 @@ def test_agrees_with_reference(impl, seed):
         seed=seed,
     )
     for frames in (
-        {"large": large_dataset()},
-        {"mixed": mixed_dtypes(2_000)},
+        {"cover": cover_small()},
         {"s": sample},
     ):
         cls = load(impl)

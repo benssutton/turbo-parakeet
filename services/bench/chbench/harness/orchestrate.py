@@ -81,7 +81,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from rich.console import Console
 
-from chbench.datagen.cache import load_or_generate
+from synthdata.cache import load_or_generate
 from chbench.harness.client import CHClient, Connection
 from chbench.harness.ddl import table_name
 from chbench.harness.loader import load_table

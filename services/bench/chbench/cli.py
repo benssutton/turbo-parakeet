@@ -39,7 +39,7 @@ from clickhouse_connect.driver.exceptions import OperationalError
 from rich.console import Console
 from rich.table import Table
 
-from chbench.datagen.cache import Manifest
+from synthdata.generate import Manifest
 from chbench.harness.client import CHClient, Connection
 from chbench.harness.orchestrate import (
     UnfinishedRunError,
@@ -59,7 +59,7 @@ DEFAULT_CACHE_DIR = "datasets"
 _DEFAULT_PERCENTILES = (50, 90, 99)
 
 # The metrics a manifest can carry, in the order `datasets --metrics` shows
-# them. Mirrors `chbench.datagen.cache._TARGETABLE`; a metric absent from a
+# them. Mirrors `synthdata.generate._TARGETABLE`; a metric absent from a
 # manifest's `achieved` renders as a dash rather than an error, so the two
 # lists drifting apart degrades the display instead of breaking it.
 _METRICS = (

@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CRATE = ROOT / "services" / "analytics"
 JAVA = CRATE / "bindings" / "java"
 BENCH = ROOT / "services" / "bench"
+DATAGEN = ROOT / "services" / "datagen"
 PY = sys.executable
 WINDOWS = os.name == "nt"
 MVNW = str(JAVA / ("mvnw.cmd" if WINDOWS else "mvnw"))
@@ -94,6 +95,11 @@ def test_bench() -> None:
     # package would shadow the root tests/ in one session. Tests needing ClickHouse skip
     # when the server is unreachable.
     _run([PY, "-m", "pytest", "-q"], BENCH)
+
+
+def test_datagen() -> None:
+    # Its own pytest run, rooted at services/datagen (its pytest.ini).
+    _run([PY, "-m", "pytest", "-q"], DATAGEN)
 
 
 # Cargo profile of the C ABI library the Java tests load: `ci` (release without fat LTO,
@@ -205,6 +211,8 @@ def coverage_py() -> None:
     _run([PY, "-m", "pytest", "--cov=.", "--cov-report=xml", "--cov-report=html", "-q"])
     _run([PY, "-m", "pytest", "--cov=chbench", "--cov-report=xml", "-q"], BENCH)
     _repo_relative_coverage(BENCH / "coverage.xml", BENCH / "chbench")
+    _run([PY, "-m", "pytest", "--cov=synthdata", "--cov-report=xml", "-q"], DATAGEN)
+    _repo_relative_coverage(DATAGEN / "coverage.xml", DATAGEN / "synthdata")
 
 
 def _repo_relative_coverage(report: Path, source: Path) -> None:
@@ -287,6 +295,7 @@ STEPS = {
     "test-rust": test_rust,
     "test-py": test_py,
     "test-bench": test_bench,
+    "test-datagen": test_datagen,
     "test-java": test_java,
     "coverage-rust": coverage_rust,
     "coverage-rust-full": coverage_rust_full,  # unit + pytest, merged
@@ -303,6 +312,7 @@ GROUPS = {
         "test-rust",
         "test-py",
         "test-bench",
+        "test-datagen",
     ],
     "ci": [
         "fmt-check",
@@ -312,6 +322,7 @@ GROUPS = {
         "test-rust",
         "test-py",
         "test-bench",
+        "test-datagen",
         "test-java",
     ],
 }

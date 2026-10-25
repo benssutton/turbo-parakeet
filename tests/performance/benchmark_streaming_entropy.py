@@ -26,10 +26,9 @@ import numpy as np
 import polars as pl
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))  # tests/: datagen
 sys.path.insert(0, str(HERE))  # harness
 
-from datagen import large_dataset_mixed  # noqa: E402
+from synthdata.cover import cover  # noqa: E402
 from harness import memory_mb  # noqa: E402
 
 from turbo_parakeet.recommenders import (  # noqa: E402
@@ -68,7 +67,7 @@ SHAPES = {
             )
         }
     ),
-    "large_dataset_mixed": large_dataset_mixed,
+    "cover 50K": lambda: cover(50_000),
 }
 if os.environ.get("BENCH_SHAPES"):
     SHAPES = {
@@ -97,6 +96,7 @@ def child(shape: str, estimator: str) -> None:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
     rows = []
     for shape, make in SHAPES.items():
         frame = make()

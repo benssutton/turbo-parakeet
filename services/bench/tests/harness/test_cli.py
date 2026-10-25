@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from chbench.datagen import DatasetSpec
-from chbench.datagen.cache import load_or_generate
+from synthdata import DatasetSpec
+from synthdata.cache import load_or_generate
 from chbench.harness.store import Store
 from tests.harness.test_orchestrate import SMALL
 

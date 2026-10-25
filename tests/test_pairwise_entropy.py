@@ -3,7 +3,8 @@ Pairwise joint entropy / mutual information accuracy tests — every implementat
 in turbo_parakeet.techniques.pairwise_entropy.
 
 Reference: PairwiseEntropyPolars (value_counts → entropy(base=2)); null is its own
-category. mixed_dtypes: all 18 columns eligible → C(18,2) = 153 pairs.
+category. spread(cover_small(), 18): 14 eligible columns (binary and struct are not)
+→ C(14,2) = 91 computed pairs of 153.
 """
 
 import math
@@ -12,7 +13,7 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.pairwise_entropy import PairwiseEntropy
-from datagen import mixed_dtypes
+from synthdata.cover import cover_small, spread
 from harness import (
     assert_agrees,
     assert_contract,
@@ -46,16 +47,16 @@ def _mi_tol(impl, k: int) -> float:
 
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"t": mixed_dtypes(200)}
+    frames = {"t": spread(cover_small(), 18).head(200)}
     cls = load(impl)
     out = run(cls, frames)
     assert_contract(cls, out, frames)
-    assert (out["status"] == "computed").sum() == 153
+    assert (out["status"] == "computed").sum() == 91
 
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"t": mixed_dtypes(1_000)}
+    frames = {"t": spread(cover_small(), 18).head(1_000)}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -161,7 +162,7 @@ def test_ams_seed_is_reproducible_and_num_samples_checked():
 
     from turbo_parakeet.techniques.pairwise_entropy import PairwiseEntropyAmsRust
 
-    frames = {"t": mixed_dtypes(300)}
+    frames = {"t": spread(cover_small(), 18).head(300)}
     first = run(PairwiseEntropyAmsRust, frames)
     assert_frame_equal(first, run(PairwiseEntropyAmsRust, frames))
     assert not first["h_ab"].equals(run(PairwiseEntropyAmsRust, frames, seed=1)["h_ab"])
@@ -211,3 +212,22 @@ def test_accuracy_keeps_nan_mi_error():
 def test_accuracy_counts_null_mi_as_missing():
     out = _three_column_accuracy(None)
     assert out["n_missing"] == 1
+
+
+@pytest.mark.parametrize("got, ok", [(0.94, True), (0.85, False)])
+def test_ams_agreement_is_relative_or_absolute_in_bits(got, ok):
+    """h_a of a 1-bit column 0.06 bits off: beyond RTOL (5%), within ATOL (0.1 bits);
+    MI within RTOL·(h_a + h_b + h_ab) + 3·ATOL."""
+    from turbo_parakeet.techniques.pairwise_entropy import (
+        PairwiseEntropyAmsRust,
+        PairwiseEntropyPolars,
+    )
+
+    frames = {"t": pl.DataFrame({"a": [1, 1, 2, 2], "b": [1, 2, 1, 2]})}
+    want = PairwiseEntropyPolars().add(frames).result()
+    ams = PairwiseEntropyAmsRust()
+    problems = ams.agreement(want.with_columns(h_a=pl.lit(got)), want)
+    assert (problems == []) is ok
+    # bound = 0.05 · (1 + 1 + 2) + 0.3 = 0.5 bits
+    assert ams.agreement(want.with_columns(mi=pl.col("mi") + 0.49), want) == []
+    assert ams.agreement(want.with_columns(mi=pl.col("mi") + 0.51), want) != []

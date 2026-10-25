@@ -42,9 +42,10 @@ class MinHashRust(Similarity):
         # (overlap == 1.0) with Jaccard below that is pruned before verification ever
         # runs, even for ordinary low-cardinality columns with no extreme size skew
         # (e.g. 3 vs 9 distinct values, Jaccard 0.33 < 0.43) — not only pairs with huge
-        # cardinality differences. Measured on datagen.large_dataset(): recall 0.65
-        # (407/625), all 218 misses are containment pairs with Jaccard from 0.00002 to
-        # 0.33 (median 0.10) that never became LSH candidates.
+        # cardinality differences. Measured on the former 50K x 101 benchmark frame:
+        # recall 0.65 (407/625), all 218 misses are containment pairs with Jaccard from
+        # 0.00002 to 0.33 (median 0.10) that never became LSH candidates; the
+        # synthdata containment_pairs scenario reproduces it (an xfail recall test).
         self.lsh_threshold = min(
             self.jaccard_threshold * 0.9, self.overlap_threshold * 0.45
         )

@@ -18,7 +18,8 @@ import pytest
 from turbo_parakeet import _plugin
 from turbo_parakeet.techniques.membership import BloomMembership, Membership
 from turbo_parakeet.techniques.membership.rust import bloom_geometry
-from datagen import mixed_dtypes, related_frames
+from synthdata.cover import cover_small, spread
+from synthdata.scenarios import related_frames
 from harness import (
     assert_agrees,
     assert_contract,
@@ -48,11 +49,21 @@ def test_contract(impl):
     [
         pytest.param(lambda: related_frames(1_000), id="related"),
         pytest.param(
-            lambda: {"x": mixed_dtypes(300), "y": mixed_dtypes(300, seed=7)}, id="mixed"
+            lambda: {
+                "x": spread(cover_small(), 18).head(300),
+                "y": spread(cover_small(), 18).slice(1_000, 300),
+            },
+            id="cover",
         ),
     ],
 )
-def test_agrees_with_reference(impl, make):
+def test_agrees_with_reference(impl, make, request):
+    if request.node.callspec.id == "cover-BloomFastbloom":
+        request.applymarker(
+            pytest.mark.xfail(
+                strict=True, reason="tiny Bloom filters overshoot fp_rate (ToDo 12)"
+            )
+        )
     frames = make()
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))

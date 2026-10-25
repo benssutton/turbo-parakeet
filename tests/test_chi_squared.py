@@ -2,9 +2,10 @@
 Pairwise chi-squared accuracy tests — every implementation in turbo_parakeet.techniques.chi_squared.
 
 Reference: ChiSquaredScipy (scipy.stats.chi2_contingency, correction=False, after
-dropping rows where either column is null). Eligible columns in mixed_dtypes:
-boolean_*, uint32_*, categorical_* (9) → C(9,2) = 36 computed pairs; float64_*,
-list_*, arr_* are ineligible.
+dropping rows where either column is null). spread(cover_small(), 14) — 14, not 18,
+keeps the pair count and the scipy reference's time below the old fixture's; that spread
+has no Duration column: 8 eligible columns (integer, string, categorical, boolean) →
+C(8,2) = 28 computed pairs; float, decimal, binary and struct columns are ineligible.
 """
 
 import math
@@ -13,7 +14,7 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.chi_squared import ChiSquared
-from datagen import mixed_dtypes
+from synthdata.cover import cover_small, spread
 from harness import (
     assert_agrees,
     assert_contract,
@@ -33,17 +34,17 @@ NAN = float("nan")
 # 1. Contract
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"t": mixed_dtypes(200)}
+    frames = {"t": spread(cover_small(), 14).head(200)}
     cls = load(impl)
     out = run(cls, frames)
     assert_contract(cls, out, frames)
-    assert (out["status"] == "computed").sum() == 36
+    assert (out["status"] == "computed").sum() == 28
 
 
 # 2. Reference agreement
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"t": mixed_dtypes(1_000)}
+    frames = {"t": spread(cover_small(), 14).head(1_000)}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 

@@ -4,8 +4,8 @@ A toolkit for storing and querying columnar data efficiently in ClickHouse, Data
 types, encodings, compression, skip indexes and sort orders from patterns and relationships between columns, and tests
 those recommendations empirically. Three components:
 
-1. **Synthetic data** — seeded generators with targeted statistics (`services/bench/chbench/datagen`, `tests/datagen.py`;
-   to be consolidated).
+1. **Synthetic data** — `services/datagen/` (`synthdata`): seeded generators with targeted statistics, frames with
+   planted relations, pairwise covering datasets and named scenarios.
 2. **Analytics** — `services/analytics/`: techniques and recommenders; Python API over a Rust extension (pyo3, Arrow at
    the FFI boundary), with a Java binding over the same C ABI.
 3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of ClickHouse table variants,

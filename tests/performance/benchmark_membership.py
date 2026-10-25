@@ -4,15 +4,15 @@ Membership (containment) speed benchmark: BloomRust vs BloomFastbloom vs Members
 Run: python tests/performance/benchmark_membership.py
 """
 
-from harness import Dataset, large_dataset, run
+from harness import Dataset, cover_dataset, run
 
-from datagen import related_frames, similar_frames
+from synthdata.scenarios import related_frames, similar_frames
 
 if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.membership",
         [
-            large_dataset(),
+            cover_dataset(),
             Dataset(
                 "narrow related 3 frames x 1M rows", lambda: related_frames(1_000_000)
             ),

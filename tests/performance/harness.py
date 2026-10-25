@@ -3,10 +3,10 @@ Shared benchmark harness: speed, peak memory and accuracy of every implementatio
 technique. Every
 tests/performance/benchmark_<technique>.py is:
 
-    from harness import Dataset, large_dataset, run
-    from datagen import ...
+    from harness import Dataset, cover_dataset, run
+    from synthdata.scenarios import ...
     if __name__ == "__main__":
-        run("turbo_parakeet.techniques.<technique>", [large_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
+        run("turbo_parakeet.techniques.<technique>", [cover_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
 
 One child process per measurement, i.e. per (dataset, implementation, variant, threads),
 reading the dataset from Arrow IPC files the parent wrote once. The child (this file,
@@ -14,7 +14,8 @@ reading the dataset from Arrow IPC files the parent wrote once. The child (this 
 Impl(**params).add(frames).result() and reports `peak_mb`, the peak working set above
 `load_mb` (the OS peak never resets, so only a fresh process gives a clean figure;
 `peak_is_upper_bound` when the warm-up never exceeded the load-time peak, so `peak_mb` only
-bounds the figure from above), then times `runs` runs (fresh instance each) → median / min.
+bounds the figure from above), then times runs (fresh instance each) until they add up to
+`sample_s` (10 s) — at least one, at most `runs` — → median / min, `n_runs`.
 A warm-up over `budget_s` is "skipped: over budget". Params cross as JSON (tuples arrive as
 lists). The parent holds the frames and every result while the children run (RAM / disk
 pressure on very large datasets), and the "N" thread runs inherit the caller's environment
@@ -34,6 +35,14 @@ Rust implementation with EXACT = True, if there is exactly one — as `exact_rus
 `accuracy(..., truth=...)`. Variants: `Variant.estimator_params` go to estimators only, so the
 exact implementations run once per distinct `Variant.params` (their rows carry the first
 such variant's label).
+
+Techniques of ARITY >= 2 compute at most `max_combinations` (50) combinations per dataset,
+picked once in the parent by `stratified_combinations` (one per dtype-family /
+cardinality-regime stratum in turn) and given to every implementation, so all compute the
+same rows; `Dataset(combinations=...)` overrides it (an int, or None for all).
+`n_combinations` is the number of result rows. Rust runs at 1 thread only on the run's
+first dataset (`Dataset(single_thread=...)` overrides): algorithmic / parallel come from
+there, total from every dataset.
 """
 
 from __future__ import annotations
@@ -58,23 +67,28 @@ import polars as pl
 
 sys.path.insert(
     0, str(Path(__file__).parents[1])
-)  # tests/ -> `import datagen` in benchmark scripts
+)  # tests/ -> `performance.<package>` in the child processes
 
 import turbo_parakeet  # noqa: E402
-from datagen import large_dataset as generated_large_dataset  # noqa: E402
+from synthdata.cover import cover  # noqa: E402
+from turbo_parakeet.techniques._select import stratified_combinations  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
 SINGLE_THREAD_ENV = {"RAYON_NUM_THREADS": "1", "POLARS_MAX_THREADS": "1"}
 CHILD_TIMEOUT_S = 1800
 PEAK_TOLERANCE_MB = 1.0  # a peak this close to the load-time peak never moved
+SAMPLE_S = 10.0  # seconds of timed runs per measurement (adaptive repeats)
+MAX_COMBINATIONS = 50  # ARITY >= 2: combinations computed per dataset
 COLUMNS = [
     "dataset",
     "implementation",
     "variant",
     "threads",
+    "n_combinations",
     "status",
     "median_ms",
     "min_ms",
+    "n_runs",
     "load_mb",
     "peak_mb",
     "peak_is_upper_bound",
@@ -100,6 +114,8 @@ FIXED_DTYPES = {
     ),
     **dict.fromkeys(("peak_is_upper_bound", "agrees", "exact_rust_agrees"), pl.Boolean),
     "speedup_vs_exact_rust": pl.Float64,
+    "n_runs": pl.Int64,
+    "n_combinations": pl.Int64,
 }
 
 
@@ -113,6 +129,11 @@ class Dataset:
     truth: Callable[[], dict[tuple[str, str], float]] | None = (
         None  # (frame, column) → known true value, passed to accuracy()
     )
+    # ARITY >= 2: how many combinations to compute — "cap" (the run's max_combinations),
+    # an int, or None (all of them). Per-column techniques always use every column.
+    combinations: int | None | str = "cap"
+    # Rust at 1 thread as well as N: None = only on the run's first dataset.
+    single_thread: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -124,13 +145,15 @@ class Variant:
     )  # estimators (EXACT = False) only
 
 
-def large_dataset(columns: int | None = None, exclude: tuple[str, ...] = ()) -> Dataset:
-    """datagen.large_dataset() (50K rows × 101 cols, generated), optionally only its first `columns`."""
-    label = "large_dataset" + (f" (first {columns} cols)" if columns else "")
+def cover_dataset(
+    rows: int = 50_000, columns: int | None = None, exclude: tuple[str, ...] = ()
+) -> Dataset:
+    """synthdata's covering frame at `rows` (the benchmark-scale tier), optionally only its first `columns`."""
+    label = f"cover ({rows} rows)" + (f" (first {columns} cols)" if columns else "")
 
     def make() -> dict[str, pl.DataFrame]:
-        df = generated_large_dataset()
-        return {"large": df.select(df.columns[:columns]) if columns else df}
+        df = cover(rows)
+        return {"cover": df.select(df.columns[:columns]) if columns else df}
 
     return Dataset(label, make, exclude)
 
@@ -195,7 +218,10 @@ def time_call(
     runs: int,
     budget_s: float,
     on_warmup: Callable[[], None] | None = None,
+    sample_s: float = SAMPLE_S,
 ) -> tuple[list[float] | None, object]:
+    """The warm-up (never a sample), then timed runs until they add up to `sample_s`:
+    at least one, at most `runs`. None when the warm-up exceeds `budget_s`."""
     t0 = time.perf_counter()
     result = fn()
     elapsed = time.perf_counter() - t0
@@ -203,8 +229,8 @@ def time_call(
         on_warmup()
     if elapsed > budget_s:
         return None, None
-    times = []
-    for _ in range(runs):
+    times: list[float] = []
+    while len(times) < runs and (not times or sum(times) < sample_s):
         t0 = time.perf_counter()
         result = fn()
         times.append(time.perf_counter() - t0)
@@ -310,6 +336,8 @@ def _measure(
     threads: str,
     runs: int,
     budget_s: float,
+    sample_s: float,
+    combos: list | None,
     out: str,
 ) -> dict:
     spec = Path(out).with_suffix(".json")
@@ -323,6 +351,8 @@ def _measure(
                     "frames": frames,
                     "runs": runs,
                     "budget_s": budget_s,
+                    "sample_s": sample_s,
+                    "combinations": combos,
                     "out": out,
                 }
             )
@@ -375,14 +405,17 @@ def _child(spec_path: str) -> None:
     spec = json.loads(Path(spec_path).read_text())
     frames = {n: _read_ipc(p) for n, p in spec["frames"].items()}
     cls = getattr(importlib.import_module(spec["package"]), spec["implementation"])
+    combos = spec.get("combinations")  # JSON: lists of [frame, column] lists
+    combos = None if combos is None else [tuple(tuple(c) for c in k) for k in combos]
     gc.collect()
     load_mb, peak_before = memory_mb()
     peak: list[float] = []
     times, result = time_call(
-        lambda: cls(**spec["params"]).add(frames).result(),
+        lambda: cls(**spec["params"]).add(frames).result(combinations=combos),
         spec["runs"],
         spec["budget_s"],
         on_warmup=lambda: peak.append(memory_mb()[1]),
+        sample_s=spec["sample_s"],
     )
     peak_mb, is_upper_bound = peak_extra(load_mb, peak_before, peak[0])
     info = {
@@ -395,6 +428,7 @@ def _child(spec_path: str) -> None:
             status=f"skipped: over budget ({spec['budget_s']:.0f}s)",
             median_ms=None,
             min_ms=None,
+            n_runs=None,
         )
     else:
         result.write_ipc(spec["out"])
@@ -402,6 +436,7 @@ def _child(spec_path: str) -> None:
             status="ok",
             median_ms=statistics.median(times) * 1e3,
             min_ms=min(times) * 1e3,
+            n_runs=len(times),
         )
     print(json.dumps(info))
 
@@ -471,6 +506,8 @@ def run(
     runs: int = 5,
     budget_s: float = 60.0,
     results_name: str | None = None,
+    sample_s: float = SAMPLE_S,
+    max_combinations: int | None = MAX_COMBINATIONS,
 ) -> pl.DataFrame:
     params, impl_params = params or {}, impl_params or {}
     variants = variants or [Variant()]
@@ -500,13 +537,25 @@ def run(
             for j, (n, f) in enumerate(frames.items()):
                 paths[n] = str(folder / f"frame{j}.arrow")
                 f.write_ipc(paths[n])
+            # chosen once, with the run-level params, and shared by every implementation
+            reference = classes.get(module.REFERENCE) or next(iter(classes.values()))
+            limit = max_combinations if ds.combinations == "cap" else ds.combinations
+            if reference.ARITY >= 2 and limit is not None:
+                combos = stratified_combinations(reference(**params), frames, limit)
+                n_combinations = len(combos)
+            else:
+                combos, n_combinations = None, len(reference.enumerate(frames))
+            single = ds.single_thread if ds.single_thread is not None else i == 0
             ds_rows, results, kwargs_of = [], {}, {}
             for j, (name, label, group, threads, kwargs) in enumerate(plan):
+                if threads == "1" and not single:
+                    continue
                 row = {
                     "dataset": ds.name,
                     "implementation": name,
                     "variant": label,
                     "threads": threads,
+                    "n_combinations": n_combinations,
                     "group": group,
                 }
                 ds_rows.append(row)
@@ -520,7 +569,18 @@ def run(
                 )
                 out = str(folder / f"result{j}.arrow")
                 row.update(
-                    _measure(package, name, kwargs, paths, threads, runs, budget_s, out)
+                    _measure(
+                        package,
+                        name,
+                        kwargs,
+                        paths,
+                        threads,
+                        runs,
+                        budget_s,
+                        sample_s,
+                        combos,
+                        out,
+                    )
                 )
                 if row["status"] == "ok":
                     results[name, label, threads] = _read_ipc(out)
@@ -589,8 +649,10 @@ def _report(
         print(
             frame.select(
                 *keys,
+                "n_combinations",
                 "median_ms",
                 "min_ms",
+                "n_runs",
                 "peak_mb",
                 "peak_is_upper_bound",
                 "agrees",

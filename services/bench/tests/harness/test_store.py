@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 
 import numpy as np
 
-from chbench.datagen.cache import SolveRecord
+from synthdata.generate import SolveRecord
 from chbench.harness.store import Store
 
 
@@ -13,7 +13,7 @@ def manifest(dataset_id="d1"):
         dataset_id=dataset_id,
         spec=NS(to_json=lambda: '{"rows": 1}'),
         achieved={"cardinality_ratio": 0.5},
-        warnings=["miss: x"],
+        warnings=["miss: entropy_bits: x"],
         targets={},
         within_tolerance={},
         solves={},
