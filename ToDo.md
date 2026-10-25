@@ -1,6 +1,6 @@
 # ToDo
 
-The objectives these items serve are in [CLAUDE.md § Project Objectives](CLAUDE.md#project-objectives). Items are numbered
+The objectives these items serve are in [CLAUDE.md, Project Objectives](CLAUDE.md#project-objectives). Items are numbered
 for reference only; CLAUDE.md cites them by number.
 
 **Suggested order:** the five tracks in order — synthetic data (1), the evaluation loop (2–3), adversarial datasets (4),

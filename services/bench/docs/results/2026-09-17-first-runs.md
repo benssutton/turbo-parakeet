@@ -1,5 +1,7 @@
 # First runs of the two example suites, 2026-09-17
 
+> Dated record. References here to "spec §n" and rulings "Rnn" point to the retired chbench framework design (archived 2026-10-25); they are kept as written.
+
 The first end-to-end runs of `chbench` on the two suites in spec §5.1,
 `suites/float_codecs.yaml` and `suites/int_encodings.yaml`, at their
 specified 10 000 000 rows. Every number below is from the CSV exports

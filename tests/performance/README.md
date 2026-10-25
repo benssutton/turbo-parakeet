@@ -14,7 +14,7 @@ Results are written to `tests/performance/results/<technique>_<timestamp>.arrow`
 Each row is one (dataset, implementation, variant, threads) measurement, run in its own child process. Rust
 implementations run at N threads and at 1 thread, which gives the algorithmic, parallel and total speedups.
 Estimators (sketches) are scored against the reference and against their exact Rust sibling where one exists
-(`exact_rust_*`, `speedup_vs_exact_rust`). Design: `docs/superpowers/specs/2026-10-24-benchmark-uniformity-design.md`.
+(`exact_rust_*`, `speedup_vs_exact_rust`).
 
 "N×M" below means N rows by M columns.
 

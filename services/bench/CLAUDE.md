@@ -8,7 +8,7 @@ Motivation: documented advice (e.g. Decimal64 + T64 for fixed-precision numerics
 this produces evidence instead. Paths below are relative to `services/bench/`.
 
 # Design
-- The generator is best-effort: it records *achieved* metrics in a manifest and warns on misses; only the spec layer
+- The generator is best-effort: it records *achieved* metrics in a manifest and warns on misses; only the `DatasetSpec` layer
   raises (`SpecError`: `DatasetSpec` validation, or a real-data file that cannot be read or has changed since its spec).
 - Two stages: a multiset (values + frequencies, solved for cardinality ratio, entropy or index of dispersion), then a
   sequence (the order, for a runs z-score or an inter-arrival CV), then a bounded refine pass for the inter-arrival CV

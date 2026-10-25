@@ -1,5 +1,7 @@
 # Synthetic data generation: feasibility findings
 
+> Dated record. References here to "spec §n" and rulings "Rnn" point to the retired chbench framework design (archived 2026-10-25); they are kept as written.
+
 Retained record of what was tried when designing the generator, what worked,
 what did not, and the gotchas. Scripts live alongside this file and are
 re-run from the repository root: `python spikes/<script>.py`. Each script
