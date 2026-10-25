@@ -153,9 +153,8 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
     Every technique file imports Polars today (~25k lines of Rust): spike first (port one kernel, e.g. GCD or the runs
     test, and benchmark it against the Polars version), then convert one kernel at a time under 24. A second benefit:
     build time (cold build ≈ 20 min).
-15. **Explicit combination lists.** No technique accepts a column / pair / triplet list today: `add()` takes frames and
-    `Technique.enumerate` runs every compatible combination. Add the optional explicit list; 19 and 20 need it
-    (101 columns = 166 650 triplets).
+15. **Explicit combination lists.** Done: `result(combinations=…)` and `techniques._select.stratified_combinations`; the
+    benchmarks compute 50 stratified combinations per pair / triplet dataset.
 16. **Uniform interfaces** where parameters have the same meaning, and consistent optional parameters.
     - `AdjustedRandSklearn._labels` casts every column to String, which Polars refuses for Duration
       (InvalidOperationError) although the base treats Duration as eligible; cast temporal columns to their physical

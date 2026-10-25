@@ -12,8 +12,9 @@ repository root. Items in ToDo.md are cited by number.
 
 # Analytical Functions
 
-Every technique is used the same way — `Impl(**params).add({"name": frame, ...}).result()` —
-and returns one flat table: `df_a, col_a[, df_b, col_b[, df_c, col_c]] | status | descriptors | metrics | conclusions`.
+Every technique is used the same way — `Impl(**params).add({"name": frame, ...}).result()` — or
+`.result(combinations=[...])` for an explicit list (each of `ARITY` (frame, column) pairs, rows in that order,
+ineligible entries listed) — and returns one flat table: `df_a, col_a[, df_b, col_b[, df_c, col_c]] | status | descriptors | metrics | conclusions`.
 `status` ∈ {computed, ineligible, pruned}; null = not computed, NaN = computed but undefined.
 Ineligible columns/pairs are always listed, never dropped. Results must export to native Arrow
 (`result().to_arrow()`, checked in every contract test): never a Polars-only dtype such as Int128 —
@@ -175,11 +176,14 @@ Every technique package declares `REFERENCE` (the exact accuracy reference) and 
   One child process per (dataset, implementation, variant, threads) — one result row each — reading the dataset from Arrow IPC
   written once: the warm-up `Impl(**params).add(frames).result()` gives `peak_mb` (working set above the loaded data;
   `peak_is_upper_bound`: true when the warm-up never exceeded the load-time peak, so `peak_mb` only bounds the figure from above),
-  then 5 timed runs (fresh instance) give median/min. Rust implementations run at N and 1 threads
+  then timed runs (fresh instance) until they add up to 10 s, 1–5 (`n_runs`), give median/min. Rust implementations run at N and 1 threads
+  (1 thread on each benchmark's first dataset only)
   (`RAYON_NUM_THREADS=1`, `POLARS_MAX_THREADS=1`): **algorithmic** (fastest non-Rust ÷ Rust@1), **parallel** (Rust@1 ÷ Rust@N),
   **total**. Every result is scored against the reference — `agrees` (`agreement()`) and `Technique.accuracy()` (default: max / p95
   relative error over `ACCURACY_METRICS` and `n_missing`; Top-k: tie-aware precision, ARE / AAE, bound violations against exact
   counts) — and an estimator's (`EXACT = False`) also against its exact Rust sibling (`exact_rust_*`, `speedup_vs_exact_rust`).
+  Pair / triplet techniques compute 50 combinations per dataset, chosen by `techniques._select.stratified_combinations`
+  (strata: dtype families × cardinality regime flat / hash / u128) and shared by every implementation (`n_combinations`).
   `Variant.estimator_params` (e.g. `memory_bytes`) go to estimators only. Never a gate. Results →
   `tests/performance/results/<technique>_<timestamp>.arrow` (Arrow IPC, ZSTD; git-ignored).
 - Rust unit tests: `cargo test --lib <module>::` from `services/analytics/` with `PYO3_PYTHON` set to the env's `python.exe` and the env dir on `PATH` (else `STATUS_DLL_NOT_FOUND`).
