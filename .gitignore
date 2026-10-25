@@ -16,3 +16,7 @@ htmlcov/
 .scannerwork/
 services/analytics/lcov.info
 services/analytics/coverage-html/
+
+# services/bench (chbench): the SQLite results store and the dataset cache
+services/bench/results.db
+services/bench/datasets/
