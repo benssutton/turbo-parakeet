@@ -156,9 +156,6 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
 15. **Explicit combination lists.** Done: `result(combinations=…)` and `techniques._select.stratified_combinations`; the
     benchmarks compute 50 stratified combinations per pair / triplet dataset.
 16. **Uniform interfaces** where parameters have the same meaning, and consistent optional parameters.
-    - `AdjustedRandSklearn._labels` casts every column to String, which Polars refuses for Duration
-      (InvalidOperationError) although the base treats Duration as eligible; cast temporal columns to their physical
-      integer first.
 17. **Consolidate counting.** Frequency counts are taken separately in Describe, entropy and elsewhere; review and share.
 18. **DataFusion in the technique benchmarks.** Deterministic techniques: Rust vs Python Polars vs Python DataFusion.
     Probabilistic techniques: Rust probabilistic vs Rust deterministic, and Rust probabilistic vs Python probabilistic vs

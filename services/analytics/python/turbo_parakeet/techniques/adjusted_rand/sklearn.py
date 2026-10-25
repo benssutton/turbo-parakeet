@@ -7,7 +7,13 @@ from turbo_parakeet.techniques.adjusted_rand.base import AdjustedRand
 
 
 def _labels(series: pl.Series) -> list[str]:
-    """String labels; -0.0 and 0.0 are one label, as in the Rust encoder."""
+    """String labels; -0.0 and 0.0 are one label, as in the Rust encoder.
+
+    Temporal columns are labelled by their physical integer: the String cast drops Time's
+    sub-second digits and is not defined for Duration.
+    """
+    if series.dtype.is_temporal():
+        series = series.to_physical()
     if series.dtype.is_float():
         series = (
             series.to_frame()
