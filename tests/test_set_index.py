@@ -15,7 +15,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from datagen import large_dataset, large_dataset_mixed, mixed_dtypes, runs_int, runs_str
+from synthdata.cover import cover_small, cover_windows, spread
+from synthdata.scenarios import runs_int, runs_str
 from harness import (
     assert_agrees,
     assert_contract,
@@ -62,7 +63,7 @@ def agree(impl: str, frames: dict, **params) -> None:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "mixed": mixed_dtypes(300),
+        "cover": spread(cover_small(), 18).head(300),
         "runs": runs_int(1_000, 2, 10, 50),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
@@ -95,11 +96,8 @@ def test_ineligible_columns_are_listed(impl):
 @pytest.mark.parametrize(
     "params", [{}, {"index_granularity": 1_024, "granularity": 2, "max_size": 0}]
 )
-@pytest.mark.parametrize(
-    "make", [large_dataset, large_dataset_mixed], ids=["large", "mixed"]
-)
-def test_agrees_with_reference_large_dataset(impl, params, make):
-    agree(impl, {"large": make()}, **params)
+def test_agrees_with_reference_cover_windows(impl, params):
+    agree(impl, {"windows": cover_windows()}, **params)
 
 
 @pytest.mark.parametrize("impl", OTHERS)
@@ -107,7 +105,7 @@ def test_agrees_with_reference_large_dataset(impl, params, make):
 def test_agrees_with_reference_seeded(impl, max_size):
     # 200 000 rows: more window starts than one parallel range (2^16)
     frames = {
-        "mixed": mixed_dtypes(2_000),
+        "cover": spread(cover_small(), 18),
         "ints": runs_int(200_000, 3, 25, 100),
         "strs": runs_str(200_000, 2, 5, 1_000),
     }
