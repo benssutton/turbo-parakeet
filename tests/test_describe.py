@@ -15,7 +15,8 @@ import pyarrow as pa
 import pytest
 
 from turbo_parakeet.techniques.describe import Describe, _sizes, estimators
-from datagen import describe_mixed, large_dataset, large_dataset_mixed, stringified
+from synthdata.cover import cover_small
+from synthdata.scenarios import describe_mixed, stringified
 from harness import (
     assert_agrees,
     assert_contract,
@@ -484,11 +485,8 @@ def test_agrees_with_reference(impl):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("impl", OTHERS)
-@pytest.mark.parametrize(
-    "make", [large_dataset, large_dataset_mixed], ids=["large", "mixed"]
-)
-def test_agrees_with_reference_on_large_dataset(impl, make):
-    frames = {"large": make()}
+def test_agrees_with_reference_on_the_cover(impl):
+    frames = {"cover": cover_small()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -943,21 +941,21 @@ def test_stringified_describe_mixed(impl):
 
 
 @pytest.mark.parametrize("impl", ALL)
-def test_stringified_large_dataset_columns(impl):
-    large = large_dataset().head(5_000)
+def test_stringified_cover_columns(impl):
+    cover = cover_small()
     cols = [
         c
-        for c, dt in large.schema.items()
-        if dt in (pl.Int32, pl.Int64, pl.Date, pl.Float64)
-    ][:25]
-    source = large.select(cols)
+        for c, dt in cover.schema.items()
+        if dt in (pl.Int64, pl.UInt32, pl.Date, pl.Float64)
+    ]
+    source = cover.select(cols)
     out = {
         r["col_a"]: r
         for r in run(load(impl), {"s": stringified(source)}).iter_rows(named=True)
     }
     for c in cols:
         n = _non_null(source, c)
-        if source[c].dtype in (pl.Int32, pl.Int64):
+        if source[c].dtype in (pl.Int64, pl.UInt32):
             assert out[c]["n_numeric_int"] == n, c
         elif source[c].dtype == pl.Date:
             assert out[c]["n_iso_date"] == n, c

@@ -11,7 +11,8 @@ import math
 import polars as pl
 import pytest
 
-from datagen import large_dataset, low_cardinality, mixed_dtypes, near_constant
+from synthdata.cover import cover_small, spread
+from synthdata.scenarios import low_cardinality, near_constant
 from harness import (
     assert_agrees,
     assert_contract,
@@ -36,7 +37,7 @@ def h(impl: str, s: pl.Series) -> float:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "mixed": mixed_dtypes(300),
+        "cover": spread(cover_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -50,11 +51,10 @@ def test_contract(impl):
 @pytest.mark.parametrize(
     "make",
     [
-        lambda: large_dataset(),
-        lambda: mixed_dtypes(2_000),
+        cover_small,
         lambda: low_cardinality(50_000, 6),
     ],
-    ids=["large", "mixed", "lowcard"],
+    ids=["cover", "lowcard"],
 )
 def test_agrees_with_reference(impl, make):
     frames = {"t": make()}

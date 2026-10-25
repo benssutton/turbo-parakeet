@@ -16,7 +16,8 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.top_k import TopK
-from datagen import mixed_dtypes, top_k_streams
+from synthdata.cover import cover_small, spread
+from synthdata.scenarios import top_k_streams
 from harness import (
     assert_agrees,
     assert_contract,
@@ -49,7 +50,7 @@ def tops(impl: str, frame: pl.DataFrame, **params) -> dict[str, list | None]:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "mixed": mixed_dtypes(300),
+        "cover": spread(cover_small(), 18).head(300),
         "zipf": top_k_streams(20_000),
         "empty": pl.DataFrame({"x": pl.Series([], dtype=pl.Int64)}),
     }
