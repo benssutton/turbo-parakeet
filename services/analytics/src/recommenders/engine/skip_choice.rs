@@ -162,7 +162,8 @@ fn screen_bloom_fprs(
     let bloom_ok = !bloom_unsupported(ch_type);
     if !bloom_ok {
         for &fpr in &p.bloom_fprs {
-            let evidence = format!("bloom_filter is not supported on {ch_type} (chbench R36)");
+            let evidence =
+                format!("bloom_filter is not supported on {ch_type} (ClickHouse 26.8 rejects it)");
             pruned.push(bloom_pruned(fpr, p, evidence));
         }
     }
@@ -172,7 +173,7 @@ fn screen_bloom_fprs(
         if bloom_ok && !known.contains(&fpr) {
             let list: Vec<String> = known.iter().map(f64::to_string).collect();
             let evidence = format!(
-                "bloom_filter fpr {fpr} not measured (chbench R37: {})",
+                "bloom_filter fpr {fpr} not measured (measured fprs: {})",
                 list.join(", ")
             );
             pruned.push(bloom_pruned(fpr, p, evidence));

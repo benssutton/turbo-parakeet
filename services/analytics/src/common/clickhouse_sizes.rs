@@ -1064,7 +1064,7 @@ pub(crate) fn skip_index_bytes(
                 .find(|(f, _)| *f == fpr)
                 .ok_or_else(|| {
                     format!(
-                        "bloom_filter fpr {fpr} not measured (chbench R37: 0.001, 0.01, 0.025, 0.05)"
+                        "bloom_filter fpr {fpr} not measured (measured fprs: 0.001, 0.01, 0.025, 0.05)"
                     )
                 })?
                 .1;

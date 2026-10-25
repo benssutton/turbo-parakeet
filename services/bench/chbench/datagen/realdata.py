@@ -50,7 +50,7 @@ def arrow_type_string(dtype: pa.DataType) -> str:
     if s is None or parse_arrow_type(s) != dtype:
         raise SpecError(
             f"arrow type {dtype} cannot be expressed in chbench's arrow_type "
-            "vocabulary (spec section 4.1)"
+            "vocabulary"
         )
     return s
 

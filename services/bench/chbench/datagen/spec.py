@@ -177,7 +177,7 @@ class Distribution:
 
 @dataclass(frozen=True)
 class Tolerances:
-    """Defaults are the measured table in spec section 4.1. Do not invent new ones."""
+    """Defaults are measured values (FINDINGS §6); do not invent new ones."""
 
     entropy_bits: float = 0.01
     cardinality_ratio: float = 0.001
@@ -247,7 +247,7 @@ class DatasetSpec:
         ):
             raise SpecError(
                 f"arrow_type {self.arrow_type!r} (a time zone or fixed_size_binary) "
-                "is only available to a path dataset (spec section 4.6); the "
+                "is only available to a path dataset; the "
                 "generator draws no such values"
             )
         if self.content_hash is not None:

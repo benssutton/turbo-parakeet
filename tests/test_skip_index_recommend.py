@@ -93,7 +93,7 @@ def test_decimal_column_has_no_bloom_candidate():
     bloom = [r for r in rows if r["kind"] == "bloom_filter"]
     assert all(r["outcome"] == "pruned" for r in bloom), show(rows)
     assert bloom, show(rows)
-    assert all("R36" in r["evidence"] for r in bloom), show(rows)
+    assert all("not supported on" in r["evidence"] for r in bloom), show(rows)
     assert index is None or not index.startswith("bloom_filter")
 
 
@@ -323,6 +323,6 @@ def test_unmeasured_bloom_fpr_is_pruned_with_the_rule():
     assert all(r["outcome"] == "pruned" for r in bloom), show(rows)
     assert all(
         r["evidence"]
-        == "bloom_filter fpr 0.1 not measured (chbench R37: 0.001, 0.01, 0.025, 0.05)"
+        == "bloom_filter fpr 0.1 not measured (measured fprs: 0.001, 0.01, 0.025, 0.05)"
         for r in bloom
     ), show(rows)
