@@ -35,6 +35,14 @@ Rust implementation with EXACT = True, if there is exactly one — as `exact_rus
 `accuracy(..., truth=...)`. Variants: `Variant.estimator_params` go to estimators only, so the
 exact implementations run once per distinct `Variant.params` (their rows carry the first
 such variant's label).
+
+Techniques of ARITY >= 2 compute at most `max_combinations` (50) combinations per dataset,
+picked once in the parent by `stratified_combinations` (one per dtype-family /
+cardinality-regime stratum in turn) and given to every implementation, so all compute the
+same rows; `Dataset(combinations=...)` overrides it (an int, or None for all).
+`n_combinations` is the number of result rows. Rust runs at 1 thread only on the run's
+first dataset (`Dataset(single_thread=...)` overrides): algorithmic / parallel come from
+there, total from every dataset.
 """
 
 from __future__ import annotations
@@ -63,17 +71,20 @@ sys.path.insert(
 
 import turbo_parakeet  # noqa: E402
 from synthdata.cover import cover  # noqa: E402
+from turbo_parakeet.techniques._select import stratified_combinations  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
 SINGLE_THREAD_ENV = {"RAYON_NUM_THREADS": "1", "POLARS_MAX_THREADS": "1"}
 CHILD_TIMEOUT_S = 1800
 PEAK_TOLERANCE_MB = 1.0  # a peak this close to the load-time peak never moved
 SAMPLE_S = 10.0  # seconds of timed runs per measurement (adaptive repeats)
+MAX_COMBINATIONS = 50  # ARITY >= 2: combinations computed per dataset
 COLUMNS = [
     "dataset",
     "implementation",
     "variant",
     "threads",
+    "n_combinations",
     "status",
     "median_ms",
     "min_ms",
@@ -104,6 +115,7 @@ FIXED_DTYPES = {
     **dict.fromkeys(("peak_is_upper_bound", "agrees", "exact_rust_agrees"), pl.Boolean),
     "speedup_vs_exact_rust": pl.Float64,
     "n_runs": pl.Int64,
+    "n_combinations": pl.Int64,
 }
 
 
@@ -117,6 +129,11 @@ class Dataset:
     truth: Callable[[], dict[tuple[str, str], float]] | None = (
         None  # (frame, column) → known true value, passed to accuracy()
     )
+    # ARITY >= 2: how many combinations to compute — "cap" (the run's max_combinations),
+    # an int, or None (all of them). Per-column techniques always use every column.
+    combinations: int | None | str = "cap"
+    # Rust at 1 thread as well as N: None = only on the run's first dataset.
+    single_thread: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -320,6 +337,7 @@ def _measure(
     runs: int,
     budget_s: float,
     sample_s: float,
+    combos: list | None,
     out: str,
 ) -> dict:
     spec = Path(out).with_suffix(".json")
@@ -334,6 +352,7 @@ def _measure(
                     "runs": runs,
                     "budget_s": budget_s,
                     "sample_s": sample_s,
+                    "combinations": combos,
                     "out": out,
                 }
             )
@@ -386,11 +405,13 @@ def _child(spec_path: str) -> None:
     spec = json.loads(Path(spec_path).read_text())
     frames = {n: _read_ipc(p) for n, p in spec["frames"].items()}
     cls = getattr(importlib.import_module(spec["package"]), spec["implementation"])
+    combos = spec.get("combinations")  # JSON: lists of [frame, column] lists
+    combos = None if combos is None else [tuple(tuple(c) for c in k) for k in combos]
     gc.collect()
     load_mb, peak_before = memory_mb()
     peak: list[float] = []
     times, result = time_call(
-        lambda: cls(**spec["params"]).add(frames).result(),
+        lambda: cls(**spec["params"]).add(frames).result(combinations=combos),
         spec["runs"],
         spec["budget_s"],
         on_warmup=lambda: peak.append(memory_mb()[1]),
@@ -486,6 +507,7 @@ def run(
     budget_s: float = 60.0,
     results_name: str | None = None,
     sample_s: float = SAMPLE_S,
+    max_combinations: int | None = MAX_COMBINATIONS,
 ) -> pl.DataFrame:
     params, impl_params = params or {}, impl_params or {}
     variants = variants or [Variant()]
@@ -515,13 +537,25 @@ def run(
             for j, (n, f) in enumerate(frames.items()):
                 paths[n] = str(folder / f"frame{j}.arrow")
                 f.write_ipc(paths[n])
+            # chosen once, with the run-level params, and shared by every implementation
+            reference = classes.get(module.REFERENCE) or next(iter(classes.values()))
+            limit = max_combinations if ds.combinations == "cap" else ds.combinations
+            if reference.ARITY >= 2 and limit is not None:
+                combos = stratified_combinations(reference(**params), frames, limit)
+                n_combinations = len(combos)
+            else:
+                combos, n_combinations = None, len(reference.enumerate(frames))
+            single = ds.single_thread if ds.single_thread is not None else i == 0
             ds_rows, results, kwargs_of = [], {}, {}
             for j, (name, label, group, threads, kwargs) in enumerate(plan):
+                if threads == "1" and not single:
+                    continue
                 row = {
                     "dataset": ds.name,
                     "implementation": name,
                     "variant": label,
                     "threads": threads,
+                    "n_combinations": n_combinations,
                     "group": group,
                 }
                 ds_rows.append(row)
@@ -544,6 +578,7 @@ def run(
                         runs,
                         budget_s,
                         sample_s,
+                        combos,
                         out,
                     )
                 )
@@ -614,6 +649,7 @@ def _report(
         print(
             frame.select(
                 *keys,
+                "n_combinations",
                 "median_ms",
                 "min_ms",
                 "n_runs",
