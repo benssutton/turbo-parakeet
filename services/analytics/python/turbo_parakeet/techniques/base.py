@@ -4,6 +4,9 @@ Every technique is used the same way:
 
     result = Impl(**params).add({"name": frame, ...}).result()
 
+`result(combinations=[...])` computes only the listed combinations (each `ARITY`
+(frame, column) pairs), in that order.
+
 and returns one flat table, in canonical combination order:
 
     df_a, col_a[, df_b, col_b[, df_c, col_c]] | status | DESCRIPTORS | METRICS | CONCLUSIONS
@@ -94,7 +97,9 @@ class Technique(ABC):
         self._on_add()
         return self
 
-    def result(self) -> pl.DataFrame:
+    def result(self, combinations: Sequence[Combo] | None = None) -> pl.DataFrame:
+        """`combinations`: compute only these (each `ARITY` (frame, column) pairs), in
+        this order; None: every combination in canonical order."""
         if not self._frames:
             raise ValueError(f"{type(self).__name__}.result() called before add()")
         frames = {
@@ -103,15 +108,15 @@ class Technique(ABC):
         }
         self._collected = frames
         try:
-            ok = {
-                (n, c): self.eligible(f[c])
-                for n, f in frames.items()
-                for c in f.columns
-            }
-            dtypes = {
-                (n, c): dt for n, f in frames.items() for c, dt in f.schema.items()
-            }
-            combos = self.enumerate(frames)
+            combos = (
+                self.enumerate(frames)
+                if combinations is None
+                else self._requested(frames, combinations)
+            )
+            used = dict.fromkeys(col for k in combos for col in k)
+            ok = {(n, c): self.eligible(frames[n][c]) for n, c in used}
+            schemas = {n: f.schema for n, f in frames.items()}  # once per frame
+            dtypes = {(n, c): schemas[n][c] for n, c in used}
             usable = [
                 all(ok[col] for col in k)
                 and self.compatible([dtypes[col] for col in k])
@@ -174,6 +179,34 @@ class Technique(ABC):
                 )
             )
         raise ValueError(f"unknown SCOPE {cls.SCOPE!r}")
+
+    def _requested(
+        self, frames: dict[str, pl.DataFrame], combinations: Sequence
+    ) -> list[Combo]:
+        """The caller's combinations as Combos, validated (ValueError)."""
+        name = type(self).__name__
+        out: list[Combo] = []
+        seen: set[frozenset] = set()
+        for entry in combinations:
+            k = tuple(tuple(col) for col in entry)
+            if len(k) != self.ARITY or any(len(col) != 2 for col in k):
+                raise ValueError(
+                    f"{name}: a combination is {self.ARITY} (frame, column) pairs, got {entry!r}"
+                )
+            for n, c in k:
+                if n not in frames or c not in frames[n].columns:
+                    raise ValueError(f"{name}: unknown column {c!r} of frame {n!r}")
+            if len(set(k)) != len(k):
+                raise ValueError(f"{name}: combination {entry!r} repeats a column")
+            if self.SCOPE == "ordered" and len({n for n, _ in k}) != 1:
+                raise ValueError(
+                    f"{name}: an ordered combination lies within one frame, got {entry!r}"
+                )
+            if frozenset(k) in seen:
+                raise ValueError(f"{name}: duplicate combination {entry!r}")
+            seen.add(frozenset(k))
+            out.append(k)
+        return out
 
     @classmethod
     def keys_frame(cls, combos: Sequence[Combo]) -> pl.DataFrame:

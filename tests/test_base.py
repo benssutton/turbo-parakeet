@@ -580,3 +580,57 @@ def test_accuracy_restricts_to_accuracy_metrics():
     result = reference.with_columns(other=pl.col("other") * 2)
     out = OnlyScore().accuracy(frames, result, reference)
     assert out == {"max_rel_err": 0.0, "p95_rel_err": 0.0, "n_missing": 0}
+
+
+# ── explicit combinations ─────────────────────────────────────────────────────
+
+
+def test_explicit_combinations_in_the_given_order():
+    out = Toy().add(FRAMES).result(combinations=[(G_A, G_CCC), (F_BB, F_A)])
+    assert out.select("df_a", "col_a", "df_b", "col_b").rows() == [
+        ("g", "a", "g", "ccc"),
+        ("f", "bb", "f", "a"),
+    ]
+    assert out["status"].to_list() == ["computed", "computed"]
+
+
+def test_explicit_ineligible_combination_is_listed():
+    out = Toy().add(FRAMES).result(combinations=[(F_A, F_S)])
+    assert out["status"].to_list() == ["ineligible"] and out["score"].to_list() == [
+        None
+    ]
+
+
+def test_none_is_every_combination():
+    t = Toy().add(FRAMES)
+    assert t.result(combinations=None).equals(Toy().add(FRAMES).result())
+
+
+def test_explicit_combinations_per_scope():
+    per = PerColumnToy().add(FRAMES).result(combinations=[(G_CCC,), (F_A,)])
+    assert per["col_a"].to_list() == ["ccc", "a"]
+    multi = MultiSetToy().add(FRAMES).result(combinations=[(F_A, G_A)])
+    assert multi.select("df_a", "df_b").rows() == [("f", "g")]
+    tri = TripletToy().add(FRAMES).result(combinations=[(F_S, F_A, F_BB)])
+    assert tri.height == 1 and tri["status"][0] == "computed"
+
+
+@pytest.mark.parametrize(
+    "combos, match",
+    [
+        ([(F_A,)], "2 \(frame, column\) pairs"),
+        ([(F_A, ("f", "nope"))], "unknown column"),
+        ([(F_A, ("h", "a"))], "unknown column"),
+        ([(F_A, F_A)], "repeats a column"),
+        ([(F_A, F_BB), (F_BB, F_A)], "duplicate"),
+        ([(F_A, G_A)], "one frame"),
+    ],
+)
+def test_explicit_combinations_are_validated(combos, match):
+    with pytest.raises(ValueError, match=match):
+        Toy().add(FRAMES).result(combinations=combos)
+
+
+def test_explicit_combinations_accept_lists():
+    out = Toy().add(FRAMES).result(combinations=[[["f", "a"], ["f", "bb"]]])
+    assert out.height == 1 and out["status"][0] == "computed"
