@@ -5,33 +5,67 @@ for reference only; CLAUDE.md cites them by number.
 
 **Suggested order:** the five tracks in order — synthetic data (1), the evaluation loop (2–3), adversarial datasets (4),
 engines (5–7), real data (8) — with the analytics items (9–24) taken up as they unblock or as the loop surfaces them.
-Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemeal with 19–21; 14 under 24.
+Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 and 20 before 21; 13 lands piecemeal with 19–21; 14 under 24.
 
 ---
 
-## Track 1 — synthetic data (`services/datagen`)
+## Track 1 — synthetic data (`services/datagen`) — complete
 
-1. **Synthetic data.** Done: `synthdata` (`services/datagen`) — column pipeline, frame layer (relations, row order,
-   measured manifests), pairwise covering tiers `cover_small` / `cover_windows`, scenarios; every dataset the tests,
-   benchmarks and bench use comes from it. Still open:
-   - Carried, validation: the dispersion solve's sigma bracket `[0.01, 3.0]` is absolute, so wide integer ranges clamp
-     (scale it with the range, or state that dispersion targets suit narrow ranges); `array_null_count` and the
-     categories-versus-rows rule ignore `null_count` (decide whether achieved metrics describe the sequence or the
-     visible column — today the sequence, before nulls).
-   - Carried, manifest: `runs_z` shares the bisection status vocabulary without ever taking `invalid_bracket` /
-     `not_converged`; `NOT_CONVERGED`'s message claims non-monotonicity it has not established.
-   - Carried, structure and speed: `powerlaw_counts` is recomputed after `solve_entropy`; the uniform lattice draw on
-     the uncapped path gives the two endpoints half weight; `wrap`'s spill fallback is dead (make it an assertion) and
-     its decimal bound loses precision as a float; when `runs_z` is dropped for a single-group dichotomy the CV
-     tolerance is recorded as `None` indistinguishably; re-time the inter-arrival figures on a quiet machine. Do not
-     add an early exit to `solve_monotone`: it defeats `NOT_CONVERGED` detection (tried and rejected).
-   - The dispersion solve's guard and objective share a build only at the bracket ends (≈ 2 of ≈ 105 builds saved,
-     ≈ 1.5–2.5 min at 10M rows); a real speed-up needs a change to `solve_monotone`.
-   - The full-range uncapped `int64` draw likely overflows as `uint64` did (float 2⁶³ cast to int64).
-   - `cover(rows)` below ≈ 1 000 rows is seed-fragile in strict mode: the runs-order |rho| noise reaches 0.35–0.43 at
-     500 rows (2 of 10 seeds fail). A better order statistic (e.g. a longest-run share; needs a `FRAME_VERSION` bump)
-     would fix it.
-   - Relations on an all-null parent (`ForeignKey` / `Subset`) fail in `rng.choice(0)`; validation does not catch it.
+1. **Synthetic data — complete.** `synthdata` (`services/datagen`): the column pipeline (targets, measured manifest,
+   Arrow IPC cache), the frame layer (`ColumnSpec`, relations, row order, null patterns, type mapping, strict mode,
+   frame cache), the pairwise covering design (`cover_small()` 2 000 rows / `cover_windows()` 73 728 rows, 60 covering +
+   14 relation + 3 nested columns, all 233 allowed factor-level pairs) and the named scenarios. Every dataset the tests,
+   the benchmarks and the bench use comes from it; `tests/datagen.py` is retired. Follow-ups — none blocks Track 2;
+   take them up when the loop touches the code, or as one cleanup PR:
+   - **Validation (`synthdata/column/spec.py`, `multiset.py`).**
+     - The dispersion solve's sigma bracket `[0.01, 3.0]` (`solve_dispersion(lo, hi)`) is absolute, so on a wide
+       integer range any realistic `index_of_dispersion` target clamps (correctly reported, but unreachable). Scale the
+       bracket with the value range, or document that dispersion targets suit narrow ranges.
+     - `array_null_count` validation and the categories-versus-rows rule ignore `null_count`: when nulls displace value
+       rows a category can end with no non-null occurrence. Decide whether achieved metrics describe the sequence
+       (today: before nulls) or the visible column, then make validation and the manifest agree.
+     - The full-range uncapped `int64` draw likely overflows as `uint64` did before its fix (a float 2⁶³ cast to int64,
+       tripping `wrap`'s assertion). Reproduce, then reject or handle it in `validate()` as the `uint64` case is.
+   - **Manifest wording (`synthdata/column/solve.py`, `generate.py`).** `runs_z` shares the bisection status vocabulary
+     although it never takes `invalid_bracket` / `not_converged`; `NOT_CONVERGED`'s message claims a non-monotone
+     objective it has not established (a monotone step function that cannot land inside tolerance gives the same
+     status) — reword the message; consider a runs-specific status set.
+   - **Correctness and dead code (`multiset.py`, `wrap.py`, `sequence.py`).**
+     - The uniform lattice draw on the uncapped path draws a continuous uniform and rounds, giving the two endpoints
+       half weight: draw integers directly.
+     - `wrap`'s spill fallback is unreachable under the inner-count rule: replace it with an assertion. Its decimal
+       bound is computed as a float and loses precision for wide integer parts (pyarrow's cast still catches true
+       overflow): compute it with integers / `Decimal`.
+     - When `runs_z` is dropped for a single-group dichotomy, the inter-arrival CV tolerance is recorded as `None`,
+       indistinguishable from the combined-target case; record why it was not applied.
+   - **Speed (`multiset.py`, `solve.py`).**
+     - The dispersion solve's guard and objective share a multiset build only at the bracket ends (≈ 2 of ≈ 105 builds
+       saved; ≈ 1.5–2.5 min at 10M rows). A real speed-up needs `solve_monotone` to evaluate guard and objective at the
+       same points, or a cheaper objective. Do not add an early exit to `solve_monotone`: it defeats `NOT_CONVERGED`
+       detection (tried and rejected).
+     - `powerlaw_counts` is recomputed after `solve_entropy` returns (immaterial at k = 1 000).
+     - Re-time the inter-arrival-CV figures on a quiet machine (earlier timings were taken under fivefold load swings).
+   - **Frame layer and covering (`synthdata/frame/`, `synthdata/cover/`).**
+     - `cover(rows)` below ≈ 1 000 rows is seed-fragile in strict mode: runs-order |rho| noise reaches 0.35–0.43 at
+       500 rows (2 of 10 seeds fail; `CLUSTERED_RHO` / `UNORDERED_RHO` in `cover/classify.py` cannot separate runs from
+       clustered binary / heavy columns there). A better order statistic — e.g. the longest-run share or rho relative to
+       the sorted arrangement, a new key in `frame/measure.column_stats` — fixes it; bump `FRAME_VERSION`
+       (`frame/spec.py`) so cached frames regenerate.
+     - Relations on an all-null parent (`ForeignKey`, `Subset` in `frame/relations.derive`) fail in `rng.choice(0, …)`;
+       `frame/spec._validate_relation` does not catch it — reject an all-null parent there.
+     - `check()` (`frame/generate.py`) splits a pipeline warning at the first ": ", so a column name containing ": "
+       would be misparsed; strict mode also does not compare the measured `entropy_norm` with the spec's `entropy`
+       (only the column pipeline's own entropy warning) — compare it, with the pipeline's tolerance.
+     - A cached `cover_small()` costs ≈ 0.6 s per process against ≈ 0.8 s cold (IPC read, strict coverage check, nested
+       columns): cache the checked frame with its nested columns, or skip the coverage re-check for a verified cache.
+   - **Tests and timing.**
+     - `test-py` is 80–85 s against 162 s before (52%; the goal was ≤ 50%). The one test above 10 s is
+       `tests/test_benchmark_harness.py`'s fixture (≈ 15 s; it spawns real benchmark child processes — kept by design).
+     - `test_benchmark_harness.py::test_a_failing_child_is_an_error_row` failed once under 4 xdist workers (not
+       reproduced in 8 later local runs nor in CI): if it recurs, capture the row statuses it saw.
+     - `services/datagen/tests/scenarios/frozen.json` freezes each scenario's values by a SHA-256 of `repr(df.rows())`
+       (portable; Polars' `hash_rows` differs between Windows and Linux): a Polars upgrade that changes a value's Python
+       representation would need it regenerated (`test_scenarios.py` documents how it was built).
 
 ## Track 2 — evaluation loop
 
@@ -154,7 +188,14 @@ Dependencies: 1 before 2–4; 2 before 4; 12 and 20 before 21; 13 lands piecemea
     test, and benchmark it against the Polars version), then convert one kernel at a time under 24. A second benefit:
     build time (cold build ≈ 20 min).
 15. **Explicit combination lists.** Done: `result(combinations=…)` and `techniques._select.stratified_combinations`; the
-    benchmarks compute 50 stratified combinations per pair / triplet dataset.
+    benchmarks compute 50 stratified combinations per pair / triplet dataset (full run 8 115 → 2 356 s). Follow-ups:
+    - The harness picks a dataset's combinations once, with the run-level `params`; a `Variant.params` or `impl_params`
+      that changed `eligible` / `compatible` would leave that implementation with ineligible rows. Pick per parameter
+      group if a benchmark ever varies eligibility.
+    - `n_combinations` counts result rows: with a cap it holds eligible combinations only, uncapped (`None`, or per-column
+      techniques) it includes the ineligible ones. Report eligible and total separately if the difference matters.
+    - `stratified_combinations` runs `n_unique` on every candidate column in the parent (untimed, but slow on very wide
+      or long datasets): sample or reuse Describe's counts if it becomes noticeable.
 16. **Uniform interfaces** where parameters have the same meaning, and consistent optional parameters.
 17. **Consolidate counting.** Frequency counts are taken separately in Describe, entropy and elsewhere; review and share.
 18. **DataFusion in the technique benchmarks.** Deterministic techniques: Rust vs Python Polars vs Python DataFusion.
