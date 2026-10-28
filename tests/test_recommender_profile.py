@@ -14,7 +14,7 @@ from synthdata.scenarios import describe_mixed
 
 FRAMES = [
     pytest.param(lambda: describe_mixed(2_000), id="describe_mixed"),
-    pytest.param(synth_small, id="cover"),
+    pytest.param(synth_small, id="synth_frame"),
 ]
 
 

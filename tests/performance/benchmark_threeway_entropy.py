@@ -7,7 +7,7 @@ Run: python tests/performance/benchmark_threeway_entropy.py
 Each dataset computes 50 stratified triplets (400 on the wide shape).
 """
 
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 from synthdata.scenarios import low_cardinality, near_constant, near_unique
 
@@ -15,7 +15,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.threeway_entropy",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset("narrow 1M x 5", lambda: {"t": low_cardinality(1_000_000, 5)}),
             # Many small combinations: per-combination overhead.
             Dataset(

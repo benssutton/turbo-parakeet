@@ -40,7 +40,7 @@ def stats(impl, s, **params):
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(synth_small(), 18).head(300),
+        "synth_frame": spread(synth_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -59,7 +59,7 @@ def test_agrees_with_reference(impl, seed):
         seed=seed,
     )
     for frames in (
-        {"cover": synth_small()},
+        {"synth_frame": synth_small()},
         {"s": sample},
     ):
         cls = load(impl)

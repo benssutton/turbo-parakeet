@@ -17,7 +17,7 @@ Estimators (sketches) are scored against the reference and against their exact R
 (`exact_rust_*`, `speedup_vs_exact_rust`).
 
 "N×M" below means N rows by M columns. Datasets come from `synthdata` (`services/datagen`): `synth_frame(50 000)` is the
-covering frame at 50 000 rows (`synthdata.synth.synth_frame`, via `harness.cover_dataset`: 77 columns — the pairwise
+covering frame at 50 000 rows (`synthdata.synth.synth_frame`, via `harness.synth_dataset`: 77 columns — the pairwise
 covering design over family, cardinality, skew, nulls, order and structure, a planted-relations block and nested
 extras); the other shapes are `synthdata.scenarios` functions (`describe_narrow`, `describe_wide`,
 `describe_nested`, `integer_multiples`, `integer_random`, `runs_int`, `runs_str`, `low_cardinality`, `near_unique`,

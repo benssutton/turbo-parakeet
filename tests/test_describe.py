@@ -486,7 +486,7 @@ def test_agrees_with_reference(impl):
 @pytest.mark.slow
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference_on_the_cover(impl):
-    frames = {"cover": synth_small()}
+    frames = {"synth_frame": synth_small()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -942,13 +942,13 @@ def test_stringified_describe_mixed(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_stringified_cover_columns(impl):
-    cover = synth_small()
+    synth = synth_small()
     cols = [
         c
-        for c, dt in cover.schema.items()
+        for c, dt in synth.schema.items()
         if dt in (pl.Int64, pl.UInt32, pl.Date, pl.Float64)
     ]
-    source = cover.select(cols)
+    source = synth.select(cols)
     out = {
         r["col_a"]: r
         for r in run(load(impl), {"s": stringified(source)}).iter_rows(named=True)

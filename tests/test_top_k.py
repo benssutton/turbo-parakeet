@@ -50,7 +50,7 @@ def tops(impl: str, frame: pl.DataFrame, **params) -> dict[str, list | None]:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(synth_small(), 18).head(300),
+        "synth_frame": spread(synth_small(), 18).head(300),
         "zipf": top_k_streams(20_000),
         "empty": pl.DataFrame({"x": pl.Series([], dtype=pl.Int64)}),
     }

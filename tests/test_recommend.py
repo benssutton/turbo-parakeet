@@ -818,7 +818,9 @@ ORACLE_FRAMES = [
     pytest.param(
         lambda: {"strings": stringified(describe_mixed(500))}, id="stringified"
     ),
-    pytest.param(lambda: {"cover": synth_small()}, id="cover", marks=pytest.mark.slow),
+    pytest.param(
+        lambda: {"synth_frame": synth_small()}, id="synth_frame", marks=pytest.mark.slow
+    ),
 ]
 
 
@@ -1081,7 +1083,7 @@ def polars_top_k(s: pl.Series, k: int | None) -> list:
 @pytest.mark.parametrize("make", ORACLE_FRAMES)
 def test_top_k_matches_polars(make):
     frames = make()
-    params = {"categorical_threshold": 50_000} if "cover" in frames else {}
+    params = {"categorical_threshold": 50_000} if "synth_frame" in frames else {}
     result = recommend_frames(frames, **params)
     checked = 0
     for r in result.filter(pl.col("status") == "computed").iter_rows(named=True):

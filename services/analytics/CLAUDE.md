@@ -171,7 +171,7 @@ Every technique package declares `REFERENCE` (the exact accuracy reference) and 
   `synth_windows()` (73 728 rows); benchmarks on `synth_frame(50_000)` and the named `synthdata.scenarios`.
   Optional libraries missing → visible skip naming the library.
 - `tests/performance/benchmark_<technique>.py` — **speed, peak memory and accuracy**: ~20-line scripts calling
-  `harness.run(package, datasets[, variants])` on `harness.cover_dataset()` (`synthdata.synth_frame(50_000)`, 77 columns) + a narrow/long + a wide shape
+  `harness.run(package, datasets[, variants])` on `harness.synth_dataset()` (`synthdata.synth_frame(50_000)`, 77 columns) + a narrow/long + a wide shape
   (a `Dataset.truth` — known population values — reaches `accuracy(..., truth=...)`, e.g. population cardinality).
   One child process per (dataset, implementation, variant, threads) — one result row each — reading the dataset from Arrow IPC
   written once: the warm-up `Impl(**params).add(frames).result()` gives `peak_mb` (working set above the loaded data;

@@ -16,7 +16,7 @@ from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 @pytest.mark.parametrize(
     "make_frame",
     [lambda: describe_mixed(2_000), synth_windows],
-    ids=["describe", "cover"],
+    ids=["describe", "synth_frame"],
 )
 def test_lz4_frame_body_sizes_equal_pyarrow(make_frame):
     frame = make_frame()

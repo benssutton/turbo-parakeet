@@ -45,7 +45,7 @@ def tolerance(impl: str) -> tuple[float, float]:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(synth_small(), 18).head(300),
+        "synth_frame": spread(synth_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -62,7 +62,7 @@ def test_contract(impl):
         synth_small,
         lambda: low_cardinality(200_000, 4, cardinality=100_000),
     ],
-    ids=["cover", "highcard"],
+    ids=["synth_frame", "highcard"],
 )
 def test_agrees_with_reference(impl, make):
     frames = {"t": make()}

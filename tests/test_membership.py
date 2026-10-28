@@ -53,12 +53,12 @@ def test_contract(impl):
                 "x": spread(synth_small(), 18).head(300),
                 "y": spread(synth_small(), 18).slice(1_000, 300),
             },
-            id="cover",
+            id="synth_frame",
         ),
     ],
 )
 def test_agrees_with_reference(impl, make, request):
-    if request.node.callspec.id == "cover-BloomFastbloom":
+    if request.node.callspec.id == "synth_frame-BloomFastbloom":
         request.applymarker(
             pytest.mark.xfail(
                 strict=True, reason="tiny Bloom filters overshoot fp_rate (ToDo 12)"

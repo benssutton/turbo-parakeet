@@ -37,7 +37,7 @@ def h(impl: str, s: pl.Series) -> float:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(synth_small(), 18).head(300),
+        "synth_frame": spread(synth_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -54,7 +54,7 @@ def test_contract(impl):
         synth_small,
         lambda: low_cardinality(50_000, 6),
     ],
-    ids=["cover", "lowcard"],
+    ids=["synth_frame", "lowcard"],
 )
 def test_agrees_with_reference(impl, make):
     frames = {"t": make()}

@@ -7,7 +7,7 @@ The hypothesis here is "probabilistic pruning in Rust beats LRU-cached exact
 checking of every pair"; `agrees` also enforces recall ≥ Similarity.MIN_RECALL.
 """
 
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 from synthdata.scenarios import related_frames, similar_frames
 
@@ -15,7 +15,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.similarity",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset(
                 "narrow related 3 frames x 1M rows", lambda: related_frames(1_000_000)
             ),

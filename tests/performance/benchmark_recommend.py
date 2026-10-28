@@ -33,7 +33,7 @@ from turbo_parakeet.recommenders import (  # noqa: E402
 )
 
 DATASETS = {
-    "cover 50K": lambda: synth_frame(50_000),
+    "synth_frame 50K": lambda: synth_frame(50_000),
     "narrow 1M x 4": lambda: describe_narrow(1_000_000),
     "wide 50K x 100": lambda: describe_wide(50_000, 100),
     "zipf 1M x 4": lambda: zipf_frame(),

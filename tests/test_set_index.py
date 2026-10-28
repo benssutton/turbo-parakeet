@@ -63,7 +63,7 @@ def agree(impl: str, frames: dict, **params) -> None:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(synth_small(), 18).head(300),
+        "synth_frame": spread(synth_small(), 18).head(300),
         "runs": runs_int(1_000, 2, 10, 50),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
@@ -105,7 +105,7 @@ def test_agrees_with_reference_cover_windows(impl, params):
 def test_agrees_with_reference_seeded(impl, max_size):
     # 200 000 rows: more window starts than one parallel range (2^16)
     frames = {
-        "cover": spread(synth_small(), 18),
+        "synth_frame": spread(synth_small(), 18),
         "ints": runs_int(200_000, 3, 25, 100),
         "strs": runs_str(200_000, 2, 5, 1_000),
     }

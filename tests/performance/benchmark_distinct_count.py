@@ -11,7 +11,7 @@ Run: python tests/performance/benchmark_distinct_count.py
 
 import numpy as np
 import polars as pl
-from harness import Dataset, Variant, cover_dataset, run
+from harness import Dataset, Variant, synth_dataset, run
 
 from synthdata.scenarios import describe_wide
 
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.distinct_count",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset("narrow 10M x 4", narrow),
             Dataset("wide 1M x 100", lambda: {"t": describe_wide(1_000_000, 100)}),
             Dataset("strings 10M x 2", strings),

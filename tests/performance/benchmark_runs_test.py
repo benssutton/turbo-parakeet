@@ -11,7 +11,7 @@ random 10M x 4 (R ≈ n, one hash insert per row — the worst case); wide 1M x 
 """
 
 import polars as pl
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 from synthdata.scenarios import runs_int, runs_str
 
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.runs_test",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset("long runs 10M x 4", long_runs),
             Dataset(
                 "random 10M x 4", lambda: {"t": runs_int(10_000_000, 4, 1, 10_000_000)}

@@ -9,7 +9,7 @@ GcdMath is excluded from the 10^7–10^8-value shapes: to_list() alone would
 exhaust memory.
 """
 
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 from synthdata.scenarios import integer_multiples, integer_random
 
@@ -19,7 +19,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.gcd",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset(
                 "narrow 10M x 4",
                 lambda: {"t": integer_multiples(10_000_000, 4, G)},

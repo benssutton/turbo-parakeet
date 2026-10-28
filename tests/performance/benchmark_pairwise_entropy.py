@@ -6,7 +6,7 @@ PairwiseEntropyPolars (reference).
 Run: python tests/performance/benchmark_pairwise_entropy.py
 """
 
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 from synthdata.scenarios import low_cardinality, near_constant, near_unique
 
@@ -14,7 +14,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.pairwise_entropy",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset("narrow 2M x 4", lambda: {"t": low_cardinality(2_000_000, 4)}),
             # Many small combinations: per-combination overhead.
             Dataset(

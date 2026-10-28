@@ -10,7 +10,7 @@ so the shapes are smaller than the numpy-fast techniques'.
 
 import numpy as np
 import polars as pl
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 
 def timestamps() -> dict[str, pl.DataFrame]:
@@ -45,7 +45,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.delta",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset("timestamps 1M x 4", timestamps),
             Dataset("wide 20K x 100", wide),
         ],

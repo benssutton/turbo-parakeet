@@ -19,7 +19,7 @@ be false from ties at the k-th count (agreement precision is a lower bound there
 
 import argparse
 
-from harness import Dataset, Variant, cover_dataset, run
+from harness import Dataset, Variant, synth_dataset, run
 
 from synthdata.scenarios import TOP_K_COLUMNS, low_cardinality, top_k_streams
 from turbo_parakeet.techniques.top_k.base import default_budget
@@ -58,7 +58,7 @@ if __name__ == "__main__":
         run(
             PKG,
             [
-                cover_dataset(),
+                synth_dataset(),
                 Dataset(
                     "narrow 10M x 4",
                     lambda: {"t": low_cardinality(10_000_000, 4, cardinality=1_000)},

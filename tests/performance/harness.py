@@ -3,10 +3,10 @@ Shared benchmark harness: speed, peak memory and accuracy of every implementatio
 technique. Every
 tests/performance/benchmark_<technique>.py is:
 
-    from harness import Dataset, cover_dataset, run
+    from harness import Dataset, synth_dataset, run
     from synthdata.scenarios import ...
     if __name__ == "__main__":
-        run("turbo_parakeet.techniques.<technique>", [cover_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
+        run("turbo_parakeet.techniques.<technique>", [synth_dataset(), Dataset("narrow …", …), Dataset("wide …", …)])
 
 One child process per measurement, i.e. per (dataset, implementation, variant, threads),
 reading the dataset from Arrow IPC files the parent wrote once. The child (this file,
@@ -145,15 +145,17 @@ class Variant:
     )  # estimators (EXACT = False) only
 
 
-def cover_dataset(
+def synth_dataset(
     rows: int = 50_000, columns: int | None = None, exclude: tuple[str, ...] = ()
 ) -> Dataset:
     """synthdata's covering frame at `rows` (the benchmark-scale tier), optionally only its first `columns`."""
-    label = f"cover ({rows} rows)" + (f" (first {columns} cols)" if columns else "")
+    label = f"synth_frame ({rows} rows)" + (
+        f" (first {columns} cols)" if columns else ""
+    )
 
     def make() -> dict[str, pl.DataFrame]:
         df = synth_frame(rows)
-        return {"cover": df.select(df.columns[:columns]) if columns else df}
+        return {"synth_frame": df.select(df.columns[:columns]) if columns else df}
 
     return Dataset(label, make, exclude)
 

@@ -67,7 +67,7 @@ SHAPES = {
             )
         }
     ),
-    "cover 50K": lambda: synth_frame(50_000),
+    "synth_frame 50K": lambda: synth_frame(50_000),
 }
 if os.environ.get("BENCH_SHAPES"):
     SHAPES = {

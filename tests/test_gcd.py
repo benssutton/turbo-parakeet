@@ -114,7 +114,7 @@ ALL_DTYPES = [pytest.param(p.values[0], id=p.id) for p in CASES]
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(synth_small(), 18).head(200),
+        "synth_frame": spread(synth_small(), 18).head(200),
         "ints": integer_multiples(500, 3, 12),
     }
     cls = load(impl)
@@ -129,7 +129,7 @@ def test_contract(impl):
 def test_agrees_with_reference(impl):
     frames = {
         "ints": integer_multiples(5_000, 4, 3_600),
-        "cover": spread(synth_small(), 18).head(500),
+        "synth_frame": spread(synth_small(), 18).head(500),
     }
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))

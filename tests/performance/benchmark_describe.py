@@ -8,7 +8,7 @@ column — chunked frequency maps and scanners); wide 1M x 100 (parallelism acro
 columns); nested 1M x 3 (inner values, row-encoded extremes, struct hashing).
 """
 
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 from synthdata.scenarios import describe_narrow, describe_nested, describe_wide
 
@@ -16,7 +16,7 @@ if __name__ == "__main__":
     run(
         "turbo_parakeet.techniques.describe",
         [
-            cover_dataset(),
+            synth_dataset(),
             Dataset("narrow 10M x 4", lambda: {"t": describe_narrow(10_000_000)}),
             Dataset("wide 1M x 100", lambda: {"t": describe_wide(1_000_000, 100)}),
             Dataset("nested 1M x 3", lambda: {"t": describe_nested(1_000_000)}),

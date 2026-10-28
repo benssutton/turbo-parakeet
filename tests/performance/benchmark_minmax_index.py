@@ -11,7 +11,7 @@ parallelism across columns). Results (4 CPUs): Rust 6.6-25.1x total vs Polars, a
 """
 
 import polars as pl
-from harness import Dataset, cover_dataset, run
+from harness import Dataset, synth_dataset, run
 
 from synthdata.scenarios import runs_int, runs_str
 
@@ -41,7 +41,7 @@ def wide() -> dict[str, pl.DataFrame]:
 
 
 DATASETS = [
-    cover_dataset(),
+    synth_dataset(),
     Dataset("clustered 10M x 4", clustered),
     Dataset("random 10M x 4", lambda: {"t": runs_int(10_000_000, 4, 1, 100_000)}),
     Dataset("wide 1M x 100", wide),
