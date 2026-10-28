@@ -6,6 +6,7 @@ stored order (the former skip calibration's block statistics). Bloom: the expect
 
 from __future__ import annotations
 
+import calendar
 import datetime
 import decimal
 import math
@@ -32,18 +33,22 @@ def parse_skip(skip: str) -> tuple[str, float | None, int]:
     )
 
 
-def _temporal(text: str, dtype: pl.DataType):
-    """A quoted date / datetime / time as a value comparable with the column (chbench writes UTC
-    wall-clock for datetimes); nanoseconds go through numpy, Python datetimes stop at microseconds.
-    """
+_NS_PER_UNIT = {"ns": 1, "us": 1_000, "ms": 1_000_000}
+
+
+def _temporal(text: str, dtype: pl.DataType) -> int:
+    """A quoted date / datetime / time as the column's physical integer (days since the epoch;
+    epoch ticks in the datetime's unit; nanoseconds since midnight). chbench writes datetimes as
+    UTC wall-clock, which is what polars stores for zoned columns too."""
     if dtype == pl.Date:
-        return datetime.date.fromisoformat(text)
+        return (datetime.date.fromisoformat(text) - datetime.date(1970, 1, 1)).days
+    whole, _, frac = text.partition(".")
+    ns = int(frac.ljust(9, "0")[:9]) if frac else 0
     if dtype == pl.Time:
-        return datetime.time.fromisoformat(text)
-    if dtype.time_unit == "ns":
-        return np.datetime64(text, "ns")
-    v = datetime.datetime.fromisoformat(text)
-    return v.replace(tzinfo=datetime.timezone.utc) if dtype.time_zone else v
+        t = datetime.time.fromisoformat(whole)
+        return ((t.hour * 60 + t.minute) * 60 + t.second) * 1_000_000_000 + ns
+    secs = calendar.timegm(datetime.datetime.fromisoformat(whole).timetuple())
+    return (secs * 1_000_000_000 + ns) // _NS_PER_UNIT[dtype.time_unit]
 
 
 def parse_literal(lit: str, dtype: pl.DataType):
@@ -52,9 +57,8 @@ def parse_literal(lit: str, dtype: pl.DataType):
     datetimes, times and decimals arrive quoted; a quoted number for a numeric dtype is not parsed.
     """
     lit = lit.strip()
-    wrapped = _WRAPPED.fullmatch(
-        lit
-    )  # toDateTime64('..', p, 'UTC') / toDateTime('..', 'UTC')
+    # toDateTime64('..', p, 'UTC') / toDateTime('..', 'UTC')
+    wrapped = _WRAPPED.fullmatch(lit)
     if wrapped:
         lit = wrapped.group(1)
     try:
@@ -86,10 +90,6 @@ def value_of(predicate_sql: str | None, dtype: pl.DataType):
     """The single value of chbench's point predicate `v IN (<literal>)`, or None."""
     m = re.fullmatch(r"v IN \((.*)\)", predicate_sql or "", re.DOTALL)
     return parse_literal(m.group(1), dtype) if m else None
-
-
-def _physical(v):
-    return int(v.astype("int64")) if isinstance(v, np.datetime64) else v
 
 
 class _Blocks:
@@ -139,9 +139,8 @@ class SkipPredictor:
 
     def __init__(self, col: pl.Series):
         self.col = col.cast(pl.UInt8) if col.dtype == pl.Boolean else col
-        if col.dtype == pl.Datetime(
-            "ns"
-        ):  # polars cannot compare it with np.datetime64
+        # temporal columns are compared as integers: no unit or zone mismatch
+        if col.dtype.is_temporal():
             self.col = col.to_physical()
         self.total_marks = math.ceil(len(col) / MARK_ROWS)
         self._blocks: dict[tuple[str, int], _Blocks] = {}
@@ -149,7 +148,6 @@ class SkipPredictor:
     def skip(self, skip: str, v) -> float:
         if skip == "none":
             return 0.0
-        v = _physical(v)
         kind, arg, g = parse_skip(skip)
         if (kind, g) not in self._blocks:
             self._blocks[kind, g] = _Blocks(self.col, g, kind)
@@ -160,4 +158,4 @@ class SkipPredictor:
         return share * (1 - arg) if kind == "bloom_filter" else share
 
     def rows_of(self, v) -> int:
-        return int((self.col == _physical(v)).sum())
+        return int((self.col == v).sum())
