@@ -57,3 +57,9 @@ def test_unreadable_ipc_path(tmp_path):
 def test_duplicates_are_rejected():
     with pytest.raises(RegistryError, match="twice"):
         resolve(["gcd", "calibration"])
+
+
+@pytest.mark.parametrize("arg", ["gcd:abc", "gcd:0", "gcd:-5"])
+def test_bad_rows_override(arg):
+    with pytest.raises(RegistryError, match="rows must be a positive integer"):
+        resolve([arg])

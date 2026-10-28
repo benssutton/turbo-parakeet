@@ -102,7 +102,12 @@ def _named(arg: str) -> list[Dataset]:
     if rows_text:
         if not entry.scalable:
             raise RegistryError(f"{name} has a fixed size ({entry.rows} rows)")
-        rows = int(rows_text)
+        try:
+            rows = int(rows_text)
+        except ValueError:
+            rows = 0
+        if rows <= 0:
+            raise RegistryError(f"{arg}: rows must be a positive integer")
     return [Dataset(name, rows, lambda f=entry.factory, n=rows: f(n))]
 
 
