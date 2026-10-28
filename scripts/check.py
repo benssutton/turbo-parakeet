@@ -1,7 +1,7 @@
 """Project checks: the same commands locally and in CI (.github/workflows/ci-cd.yml).
 
     python scripts/check.py fast        # formatting + lint (seconds)
-    python scripts/check.py check       # fast + build the extension + Rust, Python and bench tests
+    python scripts/check.py check       # fast + build the extension + Rust, Python, bench, synthdata and evaluate tests
     python scripts/check.py ci          # check + the Java binding tests (what the pipeline runs)
     python scripts/check.py <step> ...  # any steps, in order (see STEPS)
 
@@ -23,6 +23,7 @@ CRATE = ROOT / "services" / "analytics"
 JAVA = CRATE / "bindings" / "java"
 BENCH = ROOT / "services" / "bench"
 DATAGEN = ROOT / "services" / "datagen"
+EVALUATE = ROOT / "services" / "evaluate"
 PY = sys.executable
 WINDOWS = os.name == "nt"
 MVNW = str(JAVA / ("mvnw.cmd" if WINDOWS else "mvnw"))
@@ -100,6 +101,12 @@ def test_bench() -> None:
 def test_datagen() -> None:
     # Its own pytest run, rooted at services/datagen (its pytest.ini).
     _run([PY, "-m", "pytest", "-q"], DATAGEN)
+
+
+def test_evaluate() -> None:
+    # Its own pytest run, rooted at services/evaluate (its pytest.ini). Tests needing
+    # ClickHouse skip when the server is unreachable.
+    _run([PY, "-m", "pytest", "-q"], EVALUATE)
 
 
 # Cargo profile of the C ABI library the Java tests load: `ci` (release without fat LTO,
@@ -213,6 +220,8 @@ def coverage_py() -> None:
     _repo_relative_coverage(BENCH / "coverage.xml", BENCH / "chbench")
     _run([PY, "-m", "pytest", "--cov=synthdata", "--cov-report=xml", "-q"], DATAGEN)
     _repo_relative_coverage(DATAGEN / "coverage.xml", DATAGEN / "synthdata")
+    _run([PY, "-m", "pytest", "--cov=evaluate", "--cov-report=xml", "-q"], EVALUATE)
+    _repo_relative_coverage(EVALUATE / "coverage.xml", EVALUATE / "evaluate")
 
 
 def _repo_relative_coverage(report: Path, source: Path) -> None:
@@ -296,6 +305,7 @@ STEPS = {
     "test-py": test_py,
     "test-bench": test_bench,
     "test-datagen": test_datagen,
+    "test-evaluate": test_evaluate,
     "test-java": test_java,
     "coverage-rust": coverage_rust,
     "coverage-rust-full": coverage_rust_full,  # unit + pytest, merged
@@ -313,6 +323,7 @@ GROUPS = {
         "test-py",
         "test-bench",
         "test-datagen",
+        "test-evaluate",
     ],
     "ci": [
         "fmt-check",
@@ -323,6 +334,7 @@ GROUPS = {
         "test-py",
         "test-bench",
         "test-datagen",
+        "test-evaluate",
         "test-java",
     ],
 }

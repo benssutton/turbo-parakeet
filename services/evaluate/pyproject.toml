@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evaluate"
+version = "0.1.0"
+description = "The evaluation loop: recommend, benchmark the recommendation against alternatives, score"
+requires-python = ">=3.12"
+# synthdata, chbench and turbo_parakeet are local packages installed by requirements.txt (-e);
+# naming them here would send pip to PyPI for a same-named stranger.
+dependencies = ["numpy", "polars", "pyarrow>=18", "pyyaml", "psutil"]
+
+[project.scripts]
+evaluate = "evaluate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["evaluate*"]
