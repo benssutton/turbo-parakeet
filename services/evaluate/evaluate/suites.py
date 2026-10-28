@@ -12,6 +12,7 @@ from pathlib import Path
 import polars as pl
 import pyarrow as pa
 import yaml
+from chbench.harness.suite import load_suite
 from turbo_parakeet import _plugin
 from turbo_parakeet.recommenders import to_chbench
 
@@ -79,15 +80,13 @@ def _size_suite(base_suite, table, col, row, codec_value, original, samples):
     if not original:
         plain = "LowCardinality" if codec_value == "LowCardinality" else "none"
         for c in cands:
-            if (
-                c["codecs"] in TRANSFORMS
-            ):  # a pruned transform with no compression: no cell
+            # a pruned transform with no compression: no cell
+            if c["codecs"] in TRANSFORMS:
                 continue
             by_cell[_cell(c["codecs"], plain)] = c
     if original:
-        codecs = list(
-            GRID_CODECS
-        )  # holds every transform; no LowCardinality cell (no prediction)
+        # holds every transform; no LowCardinality cell (no prediction)
+        codecs = list(GRID_CODECS)
         comps = list(dict.fromkeys([*GRID_COMPRESSIONS, comp_rec]))
     else:
         codecs = list(
@@ -105,8 +104,12 @@ def _size_suite(base_suite, table, col, row, codec_value, original, samples):
         for c in comps:
             cand = by_cell.get((k, c))
             if cand is not None:
+                # a pruned candidate has no bytes: the emulator fills the cell
+                nbytes = cand["predicted_bytes"]
+                if nbytes is None:
+                    nbytes = _emulated(table, col, k, c)
                 predicted[f"{base}|{k}|{c}"] = {
-                    "bytes": cand["predicted_bytes"],
+                    "bytes": nbytes,
                     "origin": "candidate",
                     "outcome": cand["outcome"],
                 }
@@ -170,6 +173,7 @@ def build(
     rows = {r["column"]: r for r in result.iter_rows(named=True)}
     prefix = sanitise(dataset)
     entries: list[dict] = []
+    dropped: list[dict] = []
     for yp in sorted(handoff.glob("*.yaml")):
         base_suite = yaml.safe_load(yp.read_text(encoding="utf-8"))
         col = base_suite["dataset"]["column"]
@@ -209,6 +213,13 @@ def build(
             (out / f"{name}.predicted.json").write_text(
                 json.dumps(predicted, indent=2), encoding="utf-8"
             )
+            try:
+                load_suite(out / f"{name}.yaml")
+            except Exception as e:  # chbench cannot express the column
+                for f in (f"{name}.yaml", f"{name}.predicted.json"):
+                    (out / f).unlink()
+                dropped.append({"column": col, "reason": f"{name}: {e}"})
+                continue
             entries.append(
                 {
                     "dataset": dataset,
@@ -225,5 +236,16 @@ def build(
                 }
             )
     shutil.rmtree(handoff, ignore_errors=True)
+    if dropped:
+        for a in {a for a in (out.glob("*.arrow"))} - {
+            out / e["arrow"] for e in entries
+        }:
+            a.unlink()
+        (out / "skipped.json").write_text(
+            json.dumps(
+                [{"column": c, "reason": r} for c, r in skipped] + dropped, indent=2
+            ),
+            encoding="utf-8",
+        )
     (out / "suites.json").write_text(json.dumps(entries, indent=2), encoding="utf-8")
     return entries

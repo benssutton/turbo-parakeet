@@ -136,3 +136,13 @@ def test_skipped_columns_are_recorded(tmp_path):
     assert entries == []
     skipped = json.loads((tmp_path / "skipped.json").read_text())
     assert skipped and skipped[0]["column"] == "l"
+
+
+def test_unexpressible_column_is_skipped_not_indexed(tmp_path):
+    frame = pl.DataFrame({"b": [b"ab", b"cd", b"ab"] * 1000, "ids": np.arange(3000)})
+    result = OneShotRecommender().add(frame).result()
+    entries = build("n", result, frame, tmp_path, samples=1)
+    assert {e["column"] for e in entries} == {"ids"}
+    skipped = json.loads((tmp_path / "skipped.json").read_text())
+    assert [s["column"] for s in skipped] == ["b"]
+    assert not list(tmp_path.glob("n__b*"))
