@@ -378,3 +378,25 @@ def test_unfinished_runs_lists_only_runs_without_finished_at(tmp_path):
         ).fetchone()[0]
         assert s.unfinished_runs("A") == [(stale, started)]
         assert s.unfinished_runs("C") == []
+
+
+def test_table_rows_lists_skipped_tables_without_samples(tmp_path):
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        s.upsert_table("t_ok", "d1", variant(), load_result(), "26.8", suite_name="su")
+        skipped = variant()
+        skipped.status, skipped.skip_reason, skipped.codec = (
+            "skipped",
+            "GCD on Float64",
+            "GCD",
+        )
+        s.upsert_table("t_skip", "d1", skipped, None, "26.8", suite_name="su")
+        s.upsert_table(
+            "t_other", "d1", variant(), load_result(), "26.8", suite_name="other"
+        )
+        rows = {r["table_id"]: r for r in s.table_rows("su")}
+    assert set(rows) == {"t_ok", "t_skip"}
+    assert rows["t_ok"]["compressed_bytes"] == 100
+    assert rows["t_skip"]["status"] == "skipped"
+    assert rows["t_skip"]["skip_reason"] == "GCD on Float64"
+    assert rows["t_skip"]["compressed_bytes"] is None

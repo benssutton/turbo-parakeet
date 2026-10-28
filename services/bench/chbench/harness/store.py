@@ -607,6 +607,19 @@ class Store:
         columns = [d[0] for d in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
+    def table_rows(self, suite_name: str) -> list[dict]:
+        """Every `tables` column of each table recorded against `suite_name`, including cells
+        `expand_grid` skipped (status `skipped`, with `skip_reason`) and tables whose queries
+        hold no samples — which `query_rows`, joined through `samples`, leaves out."""
+        cur = self.conn.execute(
+            "SELECT tb.* FROM tables tb "
+            "JOIN suite_tables st ON st.table_id = tb.table_id "
+            "WHERE st.suite_name = ? ORDER BY tb.table_id",
+            (suite_name,),
+        )
+        columns = [d[0] for d in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
     def tables_for_suite(self, suite_name: str) -> list[str]:
         """The rendered ClickHouse table names (`ddl.table_name(suite_name,
         table_id)` -- the exact string `create_table_sql`/`drop_table_sql`
