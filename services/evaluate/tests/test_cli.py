@@ -67,3 +67,51 @@ def test_report_on_a_scored_run(tmp_path, capsys):
     summarise(run, score_run(run))
     assert main(["report", str(run.path)]) == 0
     assert "columns 1" in capsys.readouterr().out
+
+
+def test_a_failing_dataset_does_not_stop_the_others(tmp_path, capsys, monkeypatch):
+    import evaluate.run as run_mod
+
+    real = run_mod.build
+
+    def build(name, *a, **k):
+        if name == "synth_frame":
+            raise RuntimeError("boom")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(run_mod, "build", build)
+    args = ["run", "synth_frame:2000", "gcd:2000", "--dry-run"]
+    assert main([*args, "--runs-dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "synth_frame: failed (RuntimeError: boom)" in out and "gcd:" in out
+    (run_path,) = tmp_path.iterdir()
+    datasets = json.loads((run_path / "run.json").read_text())["datasets"]
+    assert datasets["synth_frame"] == {
+        **datasets["synth_frame"],
+        "status": "failed",
+        "error": "RuntimeError: boom",
+    }
+    assert datasets["gcd"]["status"] == "prepared"
+    # resume after the fix: the stale error is dropped
+    monkeypatch.setattr(run_mod, "build", real)
+    assert (
+        main(["run", "synth_frame:2000", "--dry-run", "--resume", str(run_path)]) == 0
+    )
+    entry = json.loads((run_path / "run.json").read_text())["datasets"]["synth_frame"]
+    assert entry["status"] == "prepared" and "error" not in entry
+    assert not list((run_path / "synth_frame").glob("*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        ["report", "{missing}"],
+        ["compare", "{missing}", "{missing}"],
+        ["run", "synth_frame:2000", "--resume", "{missing}"],
+    ],
+)
+def test_missing_run_dir_exits_2(tmp_path, capsys, cmd):
+    missing = str(tmp_path / "nope")
+    assert main([a.format(missing=missing) for a in cmd]) == 2
+    assert "is not a run directory" in capsys.readouterr().err
+    assert not any(tmp_path.iterdir())

@@ -4,6 +4,7 @@ summary. Each step skips what is on disk, so `--resume` continues an interrupted
 from __future__ import annotations
 
 import json
+import os
 import warnings
 from pathlib import Path
 
@@ -39,7 +40,10 @@ def _prepare(
     if not frame_path.is_file():
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            load().write_ipc(frame_path)
+            # via a temp file: a crash leaves no truncated frame that resume would take as done
+            tmp = frame_path.with_name(frame_path.name + ".tmp")
+            load().write_ipc(tmp)
+            os.replace(tmp, frame_path)
         info["warnings"] = [str(w.message) for w in caught]
         for w in info["warnings"]:
             print(f"  {name}: warning: {w}")
@@ -59,6 +63,7 @@ def _prepare(
         result = pl.read_ipc(run.result(name))
         run.suites(name).mkdir(exist_ok=True)
         entries = build(name, result, frame, run.suites(name), samples=samples)
+    info.pop("error", None)  # a stale failure from an earlier attempt
     run.update_dataset(name, **{**info, "status": "prepared"})
     return entries
 
@@ -91,7 +96,16 @@ def run_loop(
     print(f"run {run.path}")
     prepared: dict[str, list[dict]] = {}
     for d in datasets:
-        entries = _prepare(run, d.name, d.rows, d.load, samples)
+        try:
+            entries = _prepare(run, d.name, d.rows, d.load, samples)
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 - one dataset's failure must not stop the others
+            info = run.info()["datasets"].get(d.name, {"rows": d.rows})
+            error = f"{type(e).__name__}: {e}"
+            run.update_dataset(d.name, **{**info, "status": "failed", "error": error})
+            print(f"  {d.name}: failed ({error})")
+            continue
         if entries is not None:
             prepared[d.name] = entries
     if dry_run:
@@ -116,6 +130,7 @@ def run_loop(
     info["suite_errors"] = {k: v for k, v in errors.items() if v}
     for name in prepared:
         info["datasets"][name]["status"] = "ok"
+        info["datasets"][name].pop("error", None)
     run.write_info(info)
     for suite, err in info["suite_errors"].items():
         print(f"  ERROR {suite}: {err}")

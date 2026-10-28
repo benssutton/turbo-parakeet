@@ -37,6 +37,20 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _missing(args) -> str | None:
+    """The first run directory argument that is not one (or lacks what the command reads)."""
+    if args.cmd == "run":
+        need = [(args.resume, "run.json")] if args.resume is not None else []
+    elif args.cmd == "report":
+        need = [(args.run_dir, "run.json")]
+    else:
+        need = [(args.run_a, "summary.arrow"), (args.run_b, "summary.arrow")]
+    for path, file in need:
+        if not (path / file).is_file():
+            return f"{path} is not a run directory (no {file})"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -46,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
     from evaluate.run import report_run, run_loop
     from evaluate.summary import compare
 
+    missing = _missing(args)
+    if missing is not None:
+        print(f"evaluate: {missing}", file=sys.stderr)
+        return 2
     try:
         if args.cmd == "run":
             names = ["--all" if a == "__all__" else a for a in args.datasets]
