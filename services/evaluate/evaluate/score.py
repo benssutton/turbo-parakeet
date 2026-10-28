@@ -119,6 +119,10 @@ def type_gain(
     when the recommended type is the original (no original suite)."""
     if orig is None:
         return 0.0, 0.0
+    if (
+        _best(orig, "measured_bytes") is None
+    ):  # an original suite without measured cells
+        return None, None
     out = []
     for key in ("predicted_bytes", "measured_bytes"):
         r, o = _best(rec, key), _best(orig, key)
@@ -219,9 +223,8 @@ def _cpu_us(events_json: str | None) -> float | None:
     if not events_json:
         return None
     e = json.loads(events_json)
-    if "UserTimeMicroseconds" not in e:
-        return None
-    return e["UserTimeMicroseconds"] + e.get("SystemTimeMicroseconds", 0)
+    parts = [e[k] for k in ("UserTimeMicroseconds", "SystemTimeMicroseconds") if k in e]
+    return sum(parts) if parts else None  # ClickHouse omits zero counters
 
 
 def query_cost(entry: dict, rows: list[dict]) -> list[dict]:
@@ -241,6 +244,7 @@ def query_cost(entry: dict, rows: list[dict]) -> list[dict]:
                 "skip_index": r["skip_index"],
                 "query_kind": r["kind"],
                 "target_fraction": r["target_fraction"],
+                "predicate_sql": r["predicate_sql"],
                 "samples": len(samples),
                 **{
                     f"{k}_p50": _p50([s[k] for s in samples])
@@ -331,6 +335,7 @@ FILES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("skip_index", _S),
         ("query_kind", _S),
         ("target_fraction", _F),
+        ("predicate_sql", _S),
         ("samples", _I),
         ("server_ms_p50", _F),
         ("client_ms_p50", _F),
@@ -394,6 +399,10 @@ def score_run(run: RunDir) -> dict:
             db = run.stores(name) / f"{e['suite']}.db"
             if not db.is_file():
                 notes["missing_stores"] += 1
+                if (
+                    e["role"] == "size"
+                ):  # an original with no store: its gain is unknown, not 0
+                    by_column.setdefault(e["column"], {}).setdefault(e["type_role"], [])
                 continue
             predicted = json.loads(
                 (suites_dir / e["predicted"]).read_text(encoding="utf-8")

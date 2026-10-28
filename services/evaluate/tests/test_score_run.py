@@ -23,6 +23,7 @@ def test_query_cost_p50s_and_cpu():
             "skip_index": "none",
             "kind": "filter",
             "target_fraction": 0.01,
+            "predicate_sql": "v IN (1)",
             "server_ms": ms,
             "client_ms": ms + 50,
             "memory_bytes": mem,
@@ -181,3 +182,31 @@ def test_missing_cost_json_is_a_row(tmp_path):
     score_run(run)
     cost = pl.read_ipc(run.path / "recommend_cost.arrow")
     assert cost["status"].to_list() == ["missing"] and cost["cpu_s"].to_list() == [None]
+
+
+def test_cpu_us_partial_and_empty():
+    from evaluate.score import _cpu_us, _p50
+
+    assert _cpu_us("{}") is None and _cpu_us(None) is None
+    assert _cpu_us(json.dumps({"SystemTimeMicroseconds": 7})) == 7
+    assert _cpu_us(json.dumps({"UserTimeMicroseconds": 5})) == 5
+    assert _p50([1.0, float("nan"), 3.0]) == 2.0
+
+
+def test_missing_original_store_gives_null_gain(tmp_path):
+    run = _run_dir(tmp_path)
+    suites = run.suites("d")
+    entries = json.loads((suites / "suites.json").read_text())
+    orig = {
+        **entries[0],
+        "suite": "d__c_original",
+        "type_role": "original",
+        "predicted": "d__c_original.predicted.json",
+    }
+    (suites / "suites.json").write_text(json.dumps([*entries, orig]))
+    (suites / "d__c_original.predicted.json").write_text("{}")
+    notes = score_run(run)
+    assert notes["missing_stores"] == 1
+    reg = pl.read_ipc(run.path / "size_regret.arrow")
+    assert reg["type_gain_predicted"].to_list() == [None]
+    assert reg["type_gain_measured"].to_list() == [None]
