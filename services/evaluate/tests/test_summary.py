@@ -77,3 +77,14 @@ def test_report_prints_the_coverage_line(tmp_path, capsys):
     summarise(run, score_run(run))
     report(run)
     assert "columns 1 (skipped 0)" in capsys.readouterr().out
+
+
+def test_compare_count_decrease_is_negative(tmp_path):
+    for name, n in (("a", 2), ("b", 1)):
+        (tmp_path / name).mkdir()
+        df = pl.DataFrame({"section": ["size"], "type": ["UInt32"], "n": [n]})
+        df.with_columns(pl.col("n").cast(pl.UInt32)).write_ipc(
+            tmp_path / name / "summary.arrow"
+        )
+    d = compare(tmp_path / "a", tmp_path / "b")
+    assert d["n_delta"].to_list() == [-1.0]

@@ -134,6 +134,9 @@ def report(run: RunDir) -> None:
     with pl.Config(tbl_rows=200, tbl_cols=20, fmt_str_lengths=40):
         for section in ("size", "size_regret", "skip", "skip_regret", "cost"):
             part = s.filter(pl.col("section") == section)
+            if part.is_empty():
+                print(f"\n{section}\n(no rows)")
+                continue
             part = part.select(
                 [c for c in part.columns if part[c].null_count() < part.height]
             )
@@ -155,5 +158,11 @@ def compare(a: Path, b: Path) -> pl.DataFrame:
     ]
     j = sa.join(sb, on=keys, how="full", coalesce=True, suffix="_b", nulls_equal=True)
     return j.select(
-        *keys, *[(pl.col(f"{m}_b") - pl.col(m)).alias(f"{m}_delta") for m in metrics]
+        *keys,
+        *[
+            (pl.col(f"{m}_b").cast(pl.Float64) - pl.col(m).cast(pl.Float64)).alias(
+                f"{m}_delta"
+            )
+            for m in metrics
+        ],
     )
