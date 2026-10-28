@@ -18,7 +18,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from synthdata.cover import cover_small, spread
+from synthdata.synth import synth_small, spread
 from harness import (
     assert_agrees,
     assert_contract,
@@ -76,7 +76,7 @@ def eligible_frame(n: int, seed: int = 1) -> pl.DataFrame:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(cover_small(), 18).head(300),
+        "cover": spread(synth_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
         "ineligible": pl.DataFrame(
             {
@@ -105,7 +105,7 @@ def test_contract(impl):
 def test_agrees_cover(impl):
     # The reference walks every row in Python (~11 µs a row): the 2 000-row tier keeps it
     # fast; chunk boundaries are covered below.
-    frames = {"cover": cover_small()}
+    frames = {"cover": synth_small()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 

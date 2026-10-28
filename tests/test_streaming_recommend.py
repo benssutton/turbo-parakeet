@@ -14,7 +14,7 @@ import pytest
 from turbo_parakeet.techniques.describe import _sizes
 from turbo_parakeet.techniques.gcd import GcdRust
 from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
-from synthdata.cover import WINDOW_ROWS, cover_manifest, cover_windows
+from synthdata.synth import WINDOW_ROWS, synth_manifest, synth_windows
 from synthdata.scenarios import describe_mixed, stringified
 
 CANDIDATE = pl.Struct(
@@ -541,7 +541,7 @@ def test_parity_with_list_columns(batch_rows):
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_rows", [7_919, 50_000])
 def test_parity_on_cover_windows(batch_rows):
-    frame = cover_windows()
+    frame = synth_windows()
     # One block (9 x 8 192 rows): batches cross, the sample is the whole column.
     streamed = stream(frame, batch_rows, block_rows=frame.height)
     assert_parity(streamed, frame, batch_rows >= frame.height)
@@ -582,7 +582,7 @@ def test_zstd_sizes_are_those_of_a_file_written_in_blocks():
 def covering_columns(orders: tuple[str, ...]) -> list[str]:
     """The covering columns whose intended order level is one of `orders` (walks, which
     are ordered, left out)."""
-    _, intended = cover_manifest(WINDOW_ROWS)
+    _, intended = synth_manifest(WINDOW_ROWS)
     return [
         c
         for c, lv in intended.items()
@@ -591,7 +591,7 @@ def covering_columns(orders: tuple[str, ...]) -> list[str]:
 
 
 def assert_sampled_zstd_within_ten_percent(columns: list[str]):
-    frame = cover_windows().select(columns)
+    frame = synth_windows().select(columns)
     full = stream(frame, 10_000, block_rows=4_096, reservoir_rows=frame.height + 4_096)
     sampled = stream(frame, 10_000, block_rows=4_096, reservoir_rows=16_384)
     checked = 0

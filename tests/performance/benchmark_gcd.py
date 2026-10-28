@@ -3,7 +3,7 @@ Whole-column GCD speed benchmark: GcdRust vs GcdNumpy vs GcdMath (reference).
 
 Run: python tests/performance/benchmark_gcd.py
 
-Shapes: cover (50 000 rows, the covering mix); narrow/long (parallelism inside a
+Shapes: synth_frame (50 000 rows, the covering mix); narrow/long (parallelism inside a
 column); wide (parallelism across columns); early exit (random values, GCD 1).
 GcdMath is excluded from the 10^7–10^8-value shapes: to_list() alone would
 exhaust memory.

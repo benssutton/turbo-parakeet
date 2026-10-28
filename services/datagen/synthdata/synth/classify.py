@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 import polars as pl
 import pyarrow as pa
 
-from synthdata.cover.factors import FACTORS, MAX_STEP, STRUCTURED
-from synthdata.cover.pairwise import allowed_pairs, pairs
+from synthdata.synth.factors import FACTORS, MAX_STEP, STRUCTURED
+from synthdata.synth.pairwise import allowed_pairs, pairs
 from synthdata.frame.measure import column_stats
 
 UNKNOWN = "?"

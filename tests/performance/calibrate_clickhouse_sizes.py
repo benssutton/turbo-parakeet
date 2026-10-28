@@ -24,7 +24,7 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 import yaml
-from synthdata.cover import cover
+from synthdata.synth import synth_frame
 
 from turbo_parakeet.recommenders import OneShotRecommender, to_chbench
 
@@ -163,7 +163,7 @@ def main() -> None:
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     work = Path(tempfile.mkdtemp(prefix="calibrate_ch_"))
-    frames = {"cover": cover(50_000), **gcd_frames(), **delta_frames()}
+    frames = {"synth_frame": synth_frame(50_000), **gcd_frames(), **delta_frames()}
 
     delta_names = set(delta_frames())
     suites: list[tuple[str, Path]] = []  # (frame, yaml)

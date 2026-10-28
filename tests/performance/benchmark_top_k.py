@@ -4,13 +4,13 @@ Top-k benchmark: TopKHeavyKeeperRust and TopKSpaceSavingRust (estimators) vs Top
 
 Run: python tests/performance/benchmark_top_k.py [--rows N]
 
-Shapes: cover (50 000 rows, the covering mix); narrow / long (parallelism inside a column:
+Shapes: synth_frame (50 000 rows, the covering mix); narrow / long (parallelism inside a column:
 SpaceSaving merges 2^20-row chunks, HeavyKeeper cannot); wide (parallelism across columns);
 one 10M x 1 dataset per stream of synthdata.scenarios.TOP_K_COLUMNS (Zipf α = 1.5 / 1.1 / 0.8, flat,
 skewed, string), one column each so precision and memory are per stream.
 Variants: k ∈ {5, 256} × memory_bytes ∈ {¼, 1, 4} × max(16 KiB, k × 1 KiB); the reference
 runs once per k. Accuracy is against exact counts (TopK.accuracy): tie-aware precision,
-are / aae, SpaceSaving's max_bound_violation and sketch_bytes. `agrees` on cover can
+are / aae, SpaceSaving's max_bound_violation and sketch_bytes. `agrees` on synth_frame can
 be false from ties at the k-th count (agreement precision is a lower bound there).
 
 --rows N: the scale run instead: zipf_11 alone at N rows, k = 5 at 1× budget

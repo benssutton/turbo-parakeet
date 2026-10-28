@@ -13,7 +13,7 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
 
 1. **Synthetic data — complete.** `synthdata` (`services/datagen`): the column pipeline (targets, measured manifest,
    Arrow IPC cache), the frame layer (`ColumnSpec`, relations, row order, null patterns, type mapping, strict mode,
-   frame cache), the pairwise covering design (`cover_small()` 2 000 rows / `cover_windows()` 73 728 rows, 60 covering +
+   frame cache), the pairwise covering design (`synth_small()` 2 000 rows / `synth_windows()` 73 728 rows, 60 covering +
    14 relation + 3 nested columns, all 233 allowed factor-level pairs) and the named scenarios. Every dataset the tests,
    the benchmarks and the bench use comes from it; `tests/datagen.py` is retired. Follow-ups — none blocks Track 2;
    take them up when the loop touches the code, or as one cleanup PR:
@@ -45,9 +45,9 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
        detection (tried and rejected).
      - `powerlaw_counts` is recomputed after `solve_entropy` returns (immaterial at k = 1 000).
      - Re-time the inter-arrival-CV figures on a quiet machine (earlier timings were taken under fivefold load swings).
-   - **Frame layer and covering (`synthdata/frame/`, `synthdata/cover/`).**
-     - `cover(rows)` below ≈ 1 000 rows is seed-fragile in strict mode: runs-order |rho| noise reaches 0.35–0.43 at
-       500 rows (2 of 10 seeds fail; `CLUSTERED_RHO` / `UNORDERED_RHO` in `cover/classify.py` cannot separate runs from
+   - **Frame layer and covering (`synthdata/frame/`, `synthdata/synth/`).**
+     - `synth_frame(rows)` below ≈ 1 000 rows is seed-fragile in strict mode: runs-order |rho| noise reaches 0.35–0.43 at
+       500 rows (2 of 10 seeds fail; `CLUSTERED_RHO` / `UNORDERED_RHO` in `synth/classify.py` cannot separate runs from
        clustered binary / heavy columns there). A better order statistic — e.g. the longest-run share or rho relative to
        the sorted arrangement, a new key in `frame/measure.column_stats` — fixes it; bump `FRAME_VERSION`
        (`frame/spec.py`) so cached frames regenerate.
@@ -56,7 +56,7 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
      - `check()` (`frame/generate.py`) splits a pipeline warning at the first ": ", so a column name containing ": "
        would be misparsed; strict mode also does not compare the measured `entropy_norm` with the spec's `entropy`
        (only the column pipeline's own entropy warning) — compare it, with the pipeline's tolerance.
-     - A cached `cover_small()` costs ≈ 0.6 s per process against ≈ 0.8 s cold (IPC read, strict coverage check, nested
+     - A cached `synth_small()` costs ≈ 0.6 s per process against ≈ 0.8 s cold (IPC read, strict coverage check, nested
        columns): cache the checked frame with its nested columns, or skip the coverage re-check for a verified cache.
    - **Tests and timing.**
      - `test-py` is 80–85 s against 162 s before (52%; the goal was ≤ 50%). The one test above 10 s is

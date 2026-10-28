@@ -6,7 +6,7 @@ empirically. As the engines improve, the techniques and recommendations are re-m
 
 ## Components
 1. **Synthetic data** — `services/datagen/` (`synthdata`): the column pipeline, the frame layer (relations, row order,
-   measured manifests), the pairwise covering tiers `cover_small()` / `cover_windows()` and the named scenarios. Every
+   measured manifests), the pairwise covering tiers `synth_small()` / `synth_windows()` and the named scenarios. Every
    dataset the tests, benchmarks and bench use comes from it.
 2. **Analytics** — `services/analytics/`: techniques (metrics), recommenders and detectors (decisions); Rust core,
    Python API `turbo_parakeet`, Java binding. Details: `services/analytics/CLAUDE.md`.

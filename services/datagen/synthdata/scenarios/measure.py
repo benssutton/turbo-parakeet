@@ -6,7 +6,7 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 
-from synthdata.cover.classify import base_values_of, family_of
+from synthdata.synth.classify import base_values_of, family_of
 from synthdata.frame.generate import FrameManifest
 from synthdata.frame.measure import column_stats
 

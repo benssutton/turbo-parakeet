@@ -11,7 +11,7 @@ import math
 import polars as pl
 import pytest
 
-from synthdata.cover import cover_small, spread
+from synthdata.synth import synth_small, spread
 from synthdata.scenarios import low_cardinality, near_constant
 from harness import (
     assert_agrees,
@@ -37,7 +37,7 @@ def h(impl: str, s: pl.Series) -> float:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(cover_small(), 18).head(300),
+        "cover": spread(synth_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -51,7 +51,7 @@ def test_contract(impl):
 @pytest.mark.parametrize(
     "make",
     [
-        cover_small,
+        synth_small,
         lambda: low_cardinality(50_000, 6),
     ],
     ids=["cover", "lowcard"],

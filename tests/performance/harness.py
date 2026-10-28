@@ -70,7 +70,7 @@ sys.path.insert(
 )  # tests/ -> `performance.<package>` in the child processes
 
 import turbo_parakeet  # noqa: E402
-from synthdata.cover import cover  # noqa: E402
+from synthdata.synth import synth_frame  # noqa: E402
 from turbo_parakeet.techniques._select import stratified_combinations  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -152,7 +152,7 @@ def cover_dataset(
     label = f"cover ({rows} rows)" + (f" (first {columns} cols)" if columns else "")
 
     def make() -> dict[str, pl.DataFrame]:
-        df = cover(rows)
+        df = synth_frame(rows)
         return {"cover": df.select(df.columns[:columns]) if columns else df}
 
     return Dataset(label, make, exclude)

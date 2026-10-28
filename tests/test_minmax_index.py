@@ -15,7 +15,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from synthdata.cover import cover_small, cover_windows, spread
+from synthdata.synth import synth_small, synth_windows, spread
 from synthdata.scenarios import runs_int, runs_str
 from harness import (
     assert_agrees,
@@ -56,7 +56,7 @@ def minmax_oracle(values: list, window: int) -> dict:
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(cover_small(), 18).head(300),
+        "cover": spread(synth_small(), 18).head(300),
         "runs": runs_int(1_000, 2, 10, 50),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
@@ -89,7 +89,7 @@ def test_ineligible_columns_are_listed(impl):
 @pytest.mark.parametrize("impl", OTHERS)
 @pytest.mark.parametrize("params", [{}, {"index_granularity": 1_024, "granularity": 2}])
 def test_agrees_with_reference_cover_windows(impl, params):
-    frames = {"windows": cover_windows()}
+    frames = {"windows": synth_windows()}
     cls = load(impl)
     assert_agrees(
         cls(**params), run(cls, frames, **params), run(reference(PKG), frames, **params)
@@ -100,7 +100,7 @@ def test_agrees_with_reference_cover_windows(impl, params):
 def test_agrees_with_reference_seeded(impl):
     # 200 000 rows: more window starts than one parallel range (2^16)
     frames = {
-        "cover": spread(cover_small(), 18),
+        "cover": spread(synth_small(), 18),
         "ints": runs_int(200_000, 3, 25, 100),
         "strs": runs_str(200_000, 2, 5, 1_000),
     }

@@ -27,7 +27,7 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 import yaml
-from synthdata.cover import cover
+from synthdata.synth import synth_frame
 
 from turbo_parakeet.recommenders import OneShotRecommender, to_chbench
 
@@ -278,7 +278,9 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     work = Path(args.reuse or tempfile.mkdtemp(prefix="calibrate_skip_"))
     suites: list[tuple[str, Path, str]] = []
-    frames = {} if args.reuse else {**known_frames(), "cover": cover(LARGE_ROWS)}
+    frames = (
+        {} if args.reuse else {**known_frames(), "synth_frame": synth_frame(LARGE_ROWS)}
+    )
     if args.reuse:
         for d in sorted(p for p in work.iterdir() if p.is_dir() and p.name != "cache"):
             for p in sorted(d.glob("*.yaml")):

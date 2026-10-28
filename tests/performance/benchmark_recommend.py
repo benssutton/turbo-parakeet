@@ -22,7 +22,7 @@ import polars as pl
 import pyarrow as pa
 
 HERE = Path(__file__).resolve().parent
-from synthdata.cover import cover  # noqa: E402
+from synthdata.synth import synth_frame  # noqa: E402
 from synthdata.scenarios import describe_narrow, describe_wide  # noqa: E402
 
 from turbo_parakeet.techniques.describe import _sizes  # noqa: E402
@@ -33,7 +33,7 @@ from turbo_parakeet.recommenders import (  # noqa: E402
 )
 
 DATASETS = {
-    "cover 50K": lambda: cover(50_000),
+    "cover 50K": lambda: synth_frame(50_000),
     "narrow 1M x 4": lambda: describe_narrow(1_000_000),
     "wide 50K x 100": lambda: describe_wide(50_000, 100),
     "zipf 1M x 4": lambda: zipf_frame(),

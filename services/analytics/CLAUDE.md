@@ -167,11 +167,11 @@ Every technique package declares `REFERENCE` (the exact accuracy reference) and 
      MinHash: evaluated pairs exact + recall ≥ 0.85;
   3. known answers (hand-worked cases, reference included);
   4. conclusions, once per technique base, via `with_metrics` (including a NaN row).
-  Agreement tests run on `synthdata.cover_small()` (2 000 rows); order-dependent and recommender parity tests on
-  `cover_windows()` (73 728 rows); benchmarks on `cover(50_000)` and the named `synthdata.scenarios`.
+  Agreement tests run on `synthdata.synth_small()` (2 000 rows); order-dependent and recommender parity tests on
+  `synth_windows()` (73 728 rows); benchmarks on `synth_frame(50_000)` and the named `synthdata.scenarios`.
   Optional libraries missing → visible skip naming the library.
 - `tests/performance/benchmark_<technique>.py` — **speed, peak memory and accuracy**: ~20-line scripts calling
-  `harness.run(package, datasets[, variants])` on `harness.cover_dataset()` (`synthdata.cover(50_000)`, 77 columns) + a narrow/long + a wide shape
+  `harness.run(package, datasets[, variants])` on `harness.cover_dataset()` (`synthdata.synth_frame(50_000)`, 77 columns) + a narrow/long + a wide shape
   (a `Dataset.truth` — known population values — reaches `accuracy(..., truth=...)`, e.g. population cardinality).
   One child process per (dataset, implementation, variant, threads) — one result row each — reading the dataset from Arrow IPC
   written once: the warm-up `Impl(**params).add(frames).result()` gives `peak_mb` (working set above the loaded data;

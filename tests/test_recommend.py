@@ -18,7 +18,7 @@ import pytest
 
 from turbo_parakeet.techniques.describe import _sizes
 from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
-from synthdata.cover import cover_small
+from synthdata.synth import synth_small
 from synthdata.scenarios import describe_mixed, stringified
 from harness import pyarrow_body
 
@@ -818,7 +818,7 @@ ORACLE_FRAMES = [
     pytest.param(
         lambda: {"strings": stringified(describe_mixed(500))}, id="stringified"
     ),
-    pytest.param(lambda: {"cover": cover_small()}, id="cover", marks=pytest.mark.slow),
+    pytest.param(lambda: {"cover": synth_small()}, id="cover", marks=pytest.mark.slow),
 ]
 
 

@@ -1,7 +1,7 @@
 """
 Three-way joint entropy accuracy tests — every implementation in turbo_parakeet.techniques.threeway_entropy.
 
-Reference: ThreewayEntropyPolars. spread(cover_small(), 18): C(18,3) = 816 triplets, of
+Reference: ThreewayEntropyPolars. spread(synth_small(), 18): C(18,3) = 816 triplets, of
 which C(14,3) = 364 computed (binary and struct columns are ineligible).
 """
 
@@ -11,7 +11,7 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.threeway_entropy import ThreewayEntropy
-from synthdata.cover import cover_small, spread
+from synthdata.synth import synth_small, spread
 from harness import (
     assert_agrees,
     assert_contract,
@@ -29,7 +29,7 @@ OTHERS = implementation_params(PKG, include_reference=False)
 
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"t": spread(cover_small(), 18).head(200)}
+    frames = {"t": spread(synth_small(), 18).head(200)}
     cls = load(impl)
     out = run(cls, frames)
     assert_contract(cls, out, frames)
@@ -39,7 +39,7 @@ def test_contract(impl):
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"t": spread(cover_small(), 18).head(1_000)}
+    frames = {"t": spread(synth_small(), 18).head(1_000)}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 

@@ -1,7 +1,7 @@
 import polars as pl
 
-from synthdata.cover.classify import classify, coverage, coverage_of, family_of
-from synthdata.cover.factors import column_spec, normalise
+from synthdata.synth.classify import classify, coverage, coverage_of, family_of
+from synthdata.synth.factors import column_spec, normalise
 from synthdata.frame import FrameSpec, generate_frame
 
 FULL = dict(

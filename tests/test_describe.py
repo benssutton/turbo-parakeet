@@ -15,7 +15,7 @@ import pyarrow as pa
 import pytest
 
 from turbo_parakeet.techniques.describe import Describe, _sizes, estimators
-from synthdata.cover import cover_small
+from synthdata.synth import synth_small
 from synthdata.scenarios import describe_mixed, stringified
 from harness import (
     assert_agrees,
@@ -486,7 +486,7 @@ def test_agrees_with_reference(impl):
 @pytest.mark.slow
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference_on_the_cover(impl):
-    frames = {"cover": cover_small()}
+    frames = {"cover": synth_small()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -942,7 +942,7 @@ def test_stringified_describe_mixed(impl):
 
 @pytest.mark.parametrize("impl", ALL)
 def test_stringified_cover_columns(impl):
-    cover = cover_small()
+    cover = synth_small()
     cols = [
         c
         for c, dt in cover.schema.items()

@@ -3,7 +3,7 @@ Delta speed benchmark: DeltaRust vs DeltaPolars (Python-int reference).
 
 Run: python tests/performance/benchmark_delta.py
 
-Shapes: cover (50 000 rows, the covering mix); timestamps 1M x 4 (regular step + jitter, ms);
+Shapes: synth_frame (50 000 rows, the covering mix); timestamps 1M x 4 (regular step + jitter, ms);
 wide 20K x 100 (random walks of varying step size). The reference works in Python ints,
 so the shapes are smaller than the numpy-fast techniques'.
 """

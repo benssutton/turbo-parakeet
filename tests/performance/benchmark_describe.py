@@ -3,7 +3,7 @@ describe speed benchmark: DescribeRust vs DescribeDataFusion vs DescribePolars (
 
 Run: python tests/performance/benchmark_describe.py
 
-Shapes: cover (50 000 rows, the covering mix); narrow 10M x 4 (parallelism inside a
+Shapes: synth_frame (50 000 rows, the covering mix); narrow 10M x 4 (parallelism inside a
 column — chunked frequency maps and scanners); wide 1M x 100 (parallelism across
 columns); nested 1M x 3 (inner values, row-encoded extremes, struct hashing).
 """

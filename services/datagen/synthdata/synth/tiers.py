@@ -9,9 +9,9 @@ import polars as pl
 import pyarrow as pa
 
 from synthdata.cache import load_or_generate_frame
-from synthdata.cover.classify import coverage
-from synthdata.cover.factors import column_spec, mid_distinct
-from synthdata.cover.pairwise import covering
+from synthdata.synth.classify import coverage
+from synthdata.synth.factors import column_spec, mid_distinct
+from synthdata.synth.pairwise import covering
 from synthdata.frame import (
     ColumnSpec,
     CompositeKey,
@@ -92,7 +92,7 @@ def relation_block(rows: int) -> dict:
     }
 
 
-def cover_spec(rows: int, seed: int = 0) -> tuple[FrameSpec, dict]:
+def synth_spec(rows: int, seed: int = 0) -> tuple[FrameSpec, dict]:
     """(FrameSpec, intended levels per covering column)."""
     columns, intended = {}, {}
     for i, levels in enumerate(covering()):
@@ -103,18 +103,18 @@ def cover_spec(rows: int, seed: int = 0) -> tuple[FrameSpec, dict]:
     return FrameSpec(rows=rows, columns=columns, seed=seed), intended
 
 
-def cover_manifest(rows: int, seed: int = 0):
+def synth_manifest(rows: int, seed: int = 0):
     """(FrameManifest, intended levels) of the covering frame at `rows`."""
-    spec, intended = cover_spec(rows, seed)
+    spec, intended = synth_spec(rows, seed)
     _, manifest = load_or_generate_frame(spec, strict=True)
     return manifest, intended
 
 
 @functools.cache
-def cover(rows: int, seed: int = 0) -> pl.DataFrame:
+def synth_frame(rows: int, seed: int = 0) -> pl.DataFrame:
     """The covering frame at any length (cached in process and on disk). Strict: every
     covering column's measured levels equal its intended ones."""
-    spec, intended = cover_spec(rows, seed)
+    spec, intended = synth_spec(rows, seed)
     df, manifest = load_or_generate_frame(spec, strict=True)
     cov = coverage(manifest, intended)
     if cov.mismatches:
@@ -128,12 +128,12 @@ def cover(rows: int, seed: int = 0) -> pl.DataFrame:
     return _with_nested(df, seed)
 
 
-def cover_small(seed: int = 0) -> pl.DataFrame:
-    return cover(SMALL_ROWS, seed)
+def synth_small(seed: int = 0) -> pl.DataFrame:
+    return synth_frame(SMALL_ROWS, seed)
 
 
-def cover_windows(seed: int = 0) -> pl.DataFrame:
-    return cover(WINDOW_ROWS, seed)
+def synth_windows(seed: int = 0) -> pl.DataFrame:
+    return synth_frame(WINDOW_ROWS, seed)
 
 
 def _with_nested(df: pl.DataFrame, seed: int) -> pl.DataFrame:

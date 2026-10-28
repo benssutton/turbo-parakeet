@@ -1,5 +1,5 @@
-from synthdata.cover.factors import normalise
-from synthdata.cover.pairwise import allowed_pairs, candidates, covering, pairs
+from synthdata.synth.factors import normalise
+from synthdata.synth.pairwise import allowed_pairs, candidates, covering, pairs
 
 
 def test_covering_covers_every_allowed_pair_and_only_allowed_columns():

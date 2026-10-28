@@ -18,7 +18,7 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.runs_test.polars import exact_moments
-from synthdata.cover import cover_small, cover_windows, spread
+from synthdata.synth import synth_small, synth_windows, spread
 from synthdata.scenarios import runs_int, runs_str
 from harness import (
     assert_agrees,
@@ -95,7 +95,7 @@ ELIGIBLE_DTYPES = [
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(cover_small(), 18).head(300),
+        "cover": spread(synth_small(), 18).head(300),
         "runs": runs_int(1_000, 2, 10, 50),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
@@ -109,7 +109,7 @@ def test_contract(impl):
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference_cover_windows(impl):
-    frames = {"windows": cover_windows()}
+    frames = {"windows": synth_windows()}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 
@@ -117,7 +117,7 @@ def test_agrees_with_reference_cover_windows(impl):
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference_seeded(impl):
     frames = {
-        "cover": spread(cover_small(), 18),
+        "cover": spread(synth_small(), 18),
         "ints": runs_int(200_000, 3, 25, 100),
         "strs": runs_str(200_000, 2, 5, 1_000),
     }

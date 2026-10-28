@@ -14,7 +14,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from synthdata.cover import cover_small, spread
+from synthdata.synth import synth_small, spread
 from synthdata.scenarios import population_samples
 from harness import (
     assert_agrees,
@@ -40,7 +40,7 @@ def stats(impl, s, **params):
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
     frames = {
-        "cover": spread(cover_small(), 18).head(300),
+        "cover": spread(synth_small(), 18).head(300),
         "empty": pl.DataFrame(schema={"x": pl.Int64}),
     }
     cls = load(impl)
@@ -59,7 +59,7 @@ def test_agrees_with_reference(impl, seed):
         seed=seed,
     )
     for frames in (
-        {"cover": cover_small()},
+        {"cover": synth_small()},
         {"s": sample},
     ):
         cls = load(impl)

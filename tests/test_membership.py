@@ -18,7 +18,7 @@ import pytest
 from turbo_parakeet import _plugin
 from turbo_parakeet.techniques.membership import BloomMembership, Membership
 from turbo_parakeet.techniques.membership.rust import bloom_geometry
-from synthdata.cover import cover_small, spread
+from synthdata.synth import synth_small, spread
 from synthdata.scenarios import related_frames
 from harness import (
     assert_agrees,
@@ -50,8 +50,8 @@ def test_contract(impl):
         pytest.param(lambda: related_frames(1_000), id="related"),
         pytest.param(
             lambda: {
-                "x": spread(cover_small(), 18).head(300),
-                "y": spread(cover_small(), 18).slice(1_000, 300),
+                "x": spread(synth_small(), 18).head(300),
+                "y": spread(synth_small(), 18).slice(1_000, 300),
             },
             id="cover",
         ),

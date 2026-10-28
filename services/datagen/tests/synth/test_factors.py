@@ -1,6 +1,6 @@
 import pytest
 
-from synthdata.cover.factors import FACTORS, column_spec, normalise
+from synthdata.synth.factors import FACTORS, column_spec, normalise
 from synthdata.frame import ColumnSpec, FrameSpec
 
 FULL = dict(

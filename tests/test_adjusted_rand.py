@@ -2,7 +2,7 @@
 Pairwise Adjusted Rand Index accuracy tests — every implementation in turbo_parakeet.techniques.adjusted_rand.
 
 Reference: AdjustedRandSklearn (sklearn.metrics.adjusted_rand_score on string
-labels after dropping rows where either column is null). spread(cover_small(), 14) — 14,
+labels after dropping rows where either column is null). spread(synth_small(), 14) — 14,
 not 18, keeps the pair count and the sklearn reference's time below the old fixture's;
 that spread has no Duration column (tested separately below).
 Eligible: everything except binary and struct (11) → C(11,2) = 55 computed pairs.
@@ -15,7 +15,7 @@ import polars as pl
 import pytest
 
 from turbo_parakeet.techniques.adjusted_rand import AdjustedRand
-from synthdata.cover import cover_small, spread
+from synthdata.synth import synth_small, spread
 from harness import (
     assert_agrees,
     assert_contract,
@@ -33,7 +33,7 @@ OTHERS = implementation_params(PKG, include_reference=False)
 
 @pytest.mark.parametrize("impl", ALL)
 def test_contract(impl):
-    frames = {"t": spread(cover_small(), 14).head(200)}
+    frames = {"t": spread(synth_small(), 14).head(200)}
     cls = load(impl)
     out = run(cls, frames)
     assert_contract(cls, out, frames)
@@ -42,7 +42,7 @@ def test_contract(impl):
 
 @pytest.mark.parametrize("impl", OTHERS)
 def test_agrees_with_reference(impl):
-    frames = {"t": spread(cover_small(), 14).head(1_000)}
+    frames = {"t": spread(synth_small(), 14).head(1_000)}
     cls = load(impl)
     assert_agrees(cls(), run(cls, frames), run(reference(PKG), frames))
 

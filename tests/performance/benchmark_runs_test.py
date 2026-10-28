@@ -3,7 +3,7 @@ Runs-test speed benchmark: RunsTestRust vs RunsTestPolars (reference).
 
 Run: python tests/performance/benchmark_runs_test.py
 
-Shapes: cover (50 000 rows, the covering mix); long runs 10M x 4 (REE-friendly, mean run
+Shapes: synth_frame (50 000 rows, the covering mix); long runs 10M x 4 (REE-friendly, mean run
 1 000, int + string: the kernel hashes once per run, so the per-row scan dominates);
 random 10M x 4 (R ≈ n, one hash insert per row — the worst case); wide 1M x 100 (mean runs
 1 / 10 / 100 / 1 000; parallelism across columns). Results (on the former 50K x 101 mix): Rust total 16.9x,

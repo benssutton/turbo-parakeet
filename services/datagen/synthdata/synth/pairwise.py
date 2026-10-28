@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import itertools
 
-from synthdata.cover.factors import FACTORS, normalise
+from synthdata.synth.factors import FACTORS, normalise
 
 Pair = tuple[tuple[str, str], tuple[str, str]]
 NAMES = tuple(FACTORS)

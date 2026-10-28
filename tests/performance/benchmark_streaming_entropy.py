@@ -28,7 +28,7 @@ import polars as pl
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # harness
 
-from synthdata.cover import cover  # noqa: E402
+from synthdata.synth import synth_frame  # noqa: E402
 from harness import memory_mb  # noqa: E402
 
 from turbo_parakeet.recommenders import (  # noqa: E402
@@ -67,7 +67,7 @@ SHAPES = {
             )
         }
     ),
-    "cover 50K": lambda: cover(50_000),
+    "cover 50K": lambda: synth_frame(50_000),
 }
 if os.environ.get("BENCH_SHAPES"):
     SHAPES = {
