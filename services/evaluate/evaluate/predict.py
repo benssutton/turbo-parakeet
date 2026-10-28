@@ -76,12 +76,14 @@ def parse_literal(lit: str, dtype: pl.DataType):
         if lit.lower() in ("true", "false"):
             return int(lit.lower() == "true")
         if dtype.is_integer():
-            return int(lit)
+            # chbench renders a nullable integer column's values as floats ("7.0")
+            d = decimal.Decimal(lit)
+            return int(d) if d == d.to_integral_value() else None
         if dtype.is_float():
             return float(lit)
         if dtype == pl.Boolean:
             return int(lit.lower() in ("true", "1"))
-    except (ValueError, decimal.InvalidOperation):
+    except (ValueError, OverflowError, decimal.InvalidOperation):
         pass
     return None
 

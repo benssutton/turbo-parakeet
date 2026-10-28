@@ -23,6 +23,10 @@ def test_parse_literal_and_value_of():
     assert parse_literal("true", pl.Boolean) == 1
     assert parse_literal("'1970-01-06'", pl.Date) == 5
     assert parse_literal("'2026-01-01'", pl.Int64) is None
+    # chbench renders a nullable integer column's values as floats (numpy has no nullable int)
+    assert parse_literal("1061684000.0", pl.UInt32) == 1061684000
+    assert parse_literal("-999999596.0", pl.Int32) == -999999596
+    assert parse_literal("2.5", pl.Int64) is None
     assert value_of("v IN (7)", pl.Int64) == 7
     assert value_of("v BETWEEN 1 AND 2", pl.Int64) is None
     # a multi-value list is not a point query
