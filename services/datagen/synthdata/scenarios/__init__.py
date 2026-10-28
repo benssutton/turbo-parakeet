@@ -1,5 +1,6 @@
 """Explicit planted-answer and shape scenarios (frames with a known truth)."""
 
+from synthdata.scenarios.codecs import delta_frame, gcd_frame, skip_frame
 from synthdata.scenarios.entropy_extremes import near_constant, near_unique
 from synthdata.scenarios.integers import (
     integer_multiples,
@@ -22,10 +23,12 @@ from synthdata.scenarios.zoo import (
 __all__ = [
     "TOP_K_COLUMNS",
     "containment_pairs",
+    "delta_frame",
     "describe_mixed",
     "describe_narrow",
     "describe_nested",
     "describe_wide",
+    "gcd_frame",
     "integer_multiples",
     "integer_random",
     "low_cardinality",
@@ -39,6 +42,7 @@ __all__ = [
     "runs_int",
     "runs_str",
     "similar_frames",
+    "skip_frame",
     "stringified",
     "top_k_streams",
 ]
