@@ -38,7 +38,7 @@ def _memory_mb() -> tuple[float | None, float | None]:
 def _child(frame_path: Path, out_dir: Path) -> None:
     from turbo_parakeet.recommenders import OneShotRecommender
 
-    frame = pl.read_ipc(frame_path)
+    frame = pl.read_ipc(frame_path.read_bytes())
     current, _ = _memory_mb()
     wall0, cpu0 = time.perf_counter(), time.process_time()
     result = OneShotRecommender().add(frame).result()
@@ -67,6 +67,7 @@ def recommend(frame_path: Path, out_dir: Path) -> dict:
     out_dir = Path(out_dir)
     cost_path = out_dir / "cost.json"
     cost_path.unlink(missing_ok=True)
+    (out_dir / "result.arrow").unlink(missing_ok=True)
     run = subprocess.run(
         [sys.executable, "-m", "evaluate.recommend", str(frame_path), str(out_dir)],
         capture_output=True,
