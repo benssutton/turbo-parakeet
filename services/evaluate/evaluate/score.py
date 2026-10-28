@@ -233,7 +233,7 @@ def query_cost(entry: dict, rows: list[dict]) -> list[dict]:
     for r in rows:
         by.setdefault(r["query_id"], []).append(r)
     out = []
-    for samples in by.values():
+    for _, samples in sorted(by.items()):  # by query_id: byte-stable files
         r = samples[0]
         out.append(
             {
