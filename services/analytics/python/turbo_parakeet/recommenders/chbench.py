@@ -9,7 +9,7 @@ Queries: full_scan, point `in` filters (`values: 1`) at target fractions 0.001, 
 and a range filter on range-capable types.
 
 `<name>.predicted.json` maps `"<type>|<codec>|<compression>"` to the predicted column bytes, as
-before (also the `skip = none` cells, so the calibration script is unchanged), and for the cells of
+before (also the `skip = none` cells), and for the cells of
 the chosen index `"<type>|<codec>|<compression>|<skip>"` to
 `{"column_bytes": …, "index_bytes": …}` (the chosen candidate's predicted index size).
 """

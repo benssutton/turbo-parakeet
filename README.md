@@ -2,7 +2,7 @@
 
 A toolkit for storing and querying columnar data efficiently in ClickHouse, DataFusion and Polars. It recommends column
 types, encodings, compression, skip indexes and sort orders from patterns and relationships between columns, and tests
-those recommendations empirically. Three components:
+those recommendations empirically. Four components:
 
 1. **Synthetic data** — `services/datagen/` (`synthdata`): seeded generators with targeted statistics, frames with
    planted relations, pairwise covering datasets and named scenarios.
@@ -10,6 +10,8 @@ those recommendations empirically. Three components:
    the FFI boundary), with a Java binding over the same C ABI.
 3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of ClickHouse table variants,
    runs query grids and reports sizes and timings.
+4. **Evaluation loop** — `services/evaluate/` (`evaluate`): recommends, benchmarks the ClickHouse recommendations
+   against alternatives with chbench and scores prediction error, regret, CPU and memory.
 
 Objectives and architecture: [CLAUDE.md](CLAUDE.md); planned work: [ToDo.md](ToDo.md).
 
@@ -33,7 +35,7 @@ Use the conda env `p312` (Python 3.12).
    - `cargo install cargo-llvm-cov` — the coverage steps.
    - JDK 25 — the Java tests.
    - Docker — local SonarQube, see [sonar/README.md](sonar/README.md).
-   - Docker with the `chbench-ch` ClickHouse container — the bench's integration tests and the calibration scripts (see [services/bench/CLAUDE.md](services/bench/CLAUDE.md)).
+   - Docker with the `chbench-ch` ClickHouse container — the bench's integration tests and the evaluation loop (see [services/bench/CLAUDE.md](services/bench/CLAUDE.md)).
    - `pre-commit install` — git hooks (commit: rustfmt + black; push: clippy + ruff + Rust tests).
      The hooks call `python`, so the p312 env must be on `PATH` when you commit or push
      (activate it, or in Git Bash
@@ -91,6 +93,8 @@ Run `python scripts/check.py ci` with the p312 Python. It runs these steps, in o
 | `test-rust` | `cargo test --lib` |
 | `test-py` | pytest on 4 pytest-xdist workers (`-n 4` in `pytest.ini`; `-n 0` for serial) |
 | `test-bench` | pytest for `services/bench` (its own run; tests needing ClickHouse skip without the server) |
+| `test-datagen` | pytest for `services/datagen` (its own run) |
+| `test-evaluate` | pytest for `services/evaluate` (its own run; the live test skips without the server) |
 | `test-java` | builds the C library with Cargo profile `ci` (release without fat LTO), then `./mvnw test` with JaCoCo |
 
 Groups: `fast` = `fmt-check` + `lint` + `layering`; `check` = everything except `test-java`; `ci` = all of
@@ -116,7 +120,7 @@ weekly on Mondays, and on manual dispatch. A newer push cancels a superseded run
 | Job | When | What it runs |
 |---|---|---|
 | Linting & Formatting | always | `check.py fast` |
-| Rust Tests & Coverage | always | `check.py coverage-rust-full`, then `check.py test-bench`, then Codecov upload |
+| Rust Tests & Coverage | always | `check.py coverage-rust-full`, then `check.py test-bench`, `test-datagen`, `test-evaluate`, then Codecov upload |
 | Java Tests | not on pull requests | `check.py test-java` (profile `ci`); weekly and dispatch also run it with `CAPI_PROFILE=release` |
 | Python Tests (Windows) | weekly and dispatch only | `check.py build` (release), then `check.py test-py` |
 | CodeQL | pull requests, weekly, dispatch (not pushes; public repos only) | CodeQL analysis |

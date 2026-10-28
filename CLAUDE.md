@@ -12,6 +12,8 @@ empirically. As the engines improve, the techniques and recommendations are re-m
    Python API `turbo_parakeet`, Java binding. Details: `services/analytics/CLAUDE.md`.
 3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of table variants and runs query
    grids; ClickHouse today, Polars and DataFusion planned (ToDo 5). Details: `services/bench/CLAUDE.md`.
+4. **Evaluation loop** — `services/evaluate/` (`evaluate`): steps b–d of the loop for ClickHouse (recommend, benchmark
+   against alternatives, score: prediction error, regret, CPU and memory). Details: `services/evaluate/CLAUDE.md`.
 
 ## The loop
 a. Design synthetic datasets that try to defeat the analytic techniques. b. Run them through the techniques and
@@ -41,11 +43,10 @@ quality; improve, and repeat b–d. Last: run the loop on (a sample of) real dat
 - **Validation.** DataFusion and Polars recommendations are proven in process: cast, verified row by row and measured
   as IPC; their empirical query bench is ToDo 5. ClickHouse recommendations carry predicted metrics and are validated
   empirically by the bench: `turbo_parakeet.recommenders.to_chbench` writes the recommender's Arrow result as IPC plus a
-  chbench suite, and `tests/performance/calibrate_*.py` compare predicted with measured (ToDo 2 turns this into the
-  loop).
+  chbench suite, and the evaluation loop (`services/evaluate`) compares predicted with measured and scores regret.
 - **Deliverables.** Analytics: every recommender and detector ships one-shot and streaming versions (streaming tested
   for parity against one-shot) and a Java binding at parity; techniques have no Java binding (Python API only).
-  Synthetic data and the bench are Python only.
+  Synthetic data, the bench and the evaluation loop are Python only.
 
 # Layout
 ```
@@ -53,8 +54,9 @@ turbo-parakeet/
 ├── services/
 │   ├── datagen/       # component 1: synthdata — synthetic data (its tests: check.py test-datagen)
 │   ├── analytics/     # component 2: Rust crate, Python package turbo_parakeet, Java binding (its CLAUDE.md)
-│   └── bench/         # component 3: chbench — datagen, harness, CLI, suites, spikes (its CLAUDE.md)
-├── tests/             # turbo_parakeet's tests; performance/ (benchmarks, calibration)
+│   ├── bench/         # component 3: chbench — datagen, harness, CLI, suites, spikes (its CLAUDE.md)
+│   └── evaluate/      # component 4: the evaluation loop (its tests: check.py test-evaluate)
+├── tests/             # turbo_parakeet's tests; performance/ (benchmarks, spikes)
 ├── docs/engines/      # engine knowledge notes (clickhouse.md)
 ├── scripts/           # check.py (local = CI), check_layering.py
 ├── notebooks/, sonar/
@@ -70,8 +72,8 @@ Prioritise performance & simplicity.
 
 # Checks, CI and local tooling
 `python scripts/check.py <step|group>` (run with the p312 Python) runs exactly what CI runs: `fast` (rustfmt, black, clippy for both
-feature sets, ruff, and the `layering` step), `check` (fast + build + `cargo test --lib` + pytest + `test-bench`, the bench's own pytest run from `services/bench/`, + `test-datagen`, the same from `services/datagen/`; the root `pytest.ini` runs `test-py` on 4 pytest-xdist workers, `-n 0` for serial; the bench run is serial), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
-`lint`, `build`, `test-rust`, `test-py`, `test-bench`, `test-datagen`, `test-java`, `coverage-rust`, `coverage-rust-full`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
+feature sets, ruff, and the `layering` step), `check` (fast + build + `cargo test --lib` + pytest + `test-bench`, the bench's own pytest run from `services/bench/`, + `test-datagen`, the same from `services/datagen/`, + `test-evaluate`, the same from `services/evaluate/`; the root `pytest.ini` runs `test-py` on 4 pytest-xdist workers, `-n 0` for serial; the bench and evaluate runs are serial), `ci` (check + Java), or single steps (`fmt`, `fmt-check`,
+`lint`, `build`, `test-rust`, `test-py`, `test-bench`, `test-datagen`, `test-evaluate`, `test-java`, `coverage-rust`, `coverage-rust-full`, `coverage-py`, `sonar`). Run `check` / `ci` before pushing.
 Versions are pinned: `requirements-dev.txt` (black, ruff, pre-commit, maturin, pytest-xdist) and `rust-toolchain.toml` (compiler, rustfmt, clippy); `requirements.txt` caps each runtime / reference library below its next major version (a new major arrives through a Dependabot PR);
 `Cargo.lock` is committed. Optional git hooks: `.pre-commit-config.yaml` (commit: rustfmt + black; push: clippy + ruff + Rust tests). The hooks call `python`: put the p312 env on `PATH` first (Git Bash: `export PATH="/c/Users/Alexander/miniconda3/envs/p312:/c/Users/Alexander/miniconda3/envs/p312/Scripts:$PATH"`; the push hook's Rust tests also need `PYO3_PYTHON`), else they fail with "Python was not found" and the commit / push is refused.
 `.github/workflows/ci-cd.yml`: lint, Rust + Python coverage (one job: unit tests, then pytest on an instrumented extension), Java,

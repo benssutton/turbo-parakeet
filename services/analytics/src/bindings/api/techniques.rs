@@ -366,7 +366,7 @@ pub fn column_sizes(batch: &RecordBatch, zstd_level: i32) -> Result<RecordBatch>
 }
 
 /// `column`, `bytes`: each column's Arrow IPC body size under `codec` (`"none"`, `"lz4"`,
-/// `"zstd:<level>"`). Private: tests and the calibration script.
+/// `"zstd:<level>"`). Private: tests only.
 pub fn ipc_body_sizes(batch: &RecordBatch, codec: &str) -> Result<RecordBatch> {
     use crate::common::ipc_sizes::{ipc_body_size, Codec};
     let codec = match codec {

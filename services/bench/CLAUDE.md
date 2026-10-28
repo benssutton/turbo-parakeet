@@ -105,7 +105,8 @@ notebooks/         results_explorer.ipynb
   T64 is the best Decimal64 codec in generation order (37.4 MB vs 57.1 MB LZ4 alone), Delta + ZSTD wins sorted by value;
   Decimal64 is smaller than Float64 in all twelve matched cells and slower to scan in ten; Float64 at 8 dp is
   incompressible unsorted.
-- turbo-parakeet's calibrations run here: the ClickHouse size emulator (fixed-width types within max(2% of measured,
-  256 bytes), `LowCardinality(String)` within 2.5%, String not yet — ToDo 9) and the skip-index predictions (minmax /
-  set skip shares and index bytes exact; bloom within 1–2 marks per query and 1% in bytes).
+- The evaluation loop (`services/evaluate`) runs its suites here: the ClickHouse size emulator (fixed-width types
+  byte-exact, `LowCardinality(String)` median 0.8%, String not yet — ToDo 9) and the skip-index predictions (minmax /
+  set skip shares and index bytes exact on non-null columns, Nullable not yet — ToDo 10; bloom within 0.009–0.041 per
+  query and 0.5% in bytes).
 - Open: ToDo 3 (noise, inert axes, Decimal32), ToDo 1 (generator items), ToDo 5 (engines).

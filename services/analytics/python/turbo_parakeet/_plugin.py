@@ -196,7 +196,7 @@ def column_sizes(df: pl.DataFrame, zstd_level: int) -> pl.DataFrame:
 
 def ipc_body_sizes(table, codec: str) -> dict[str, int]:
     """Arrow IPC body bytes per column of an Arrow table under `codec` ("none", "lz4",
-    "zstd:<level>"). Private: tests and the calibration script only."""
+    "zstd:<level>"). Private: tests only."""
     out = pl.DataFrame(_rs.ipc_body_sizes(table, codec))
     return dict(zip(out["column"], out["bytes"]))
 

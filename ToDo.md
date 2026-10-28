@@ -69,11 +69,23 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
 
 ## Track 2 — evaluation loop
 
-2. **Loop tool.** One tool for steps b–d of the objectives: generate → recommend → benchmark the recommendation against
-   alternatives on the same data → score. Scores: prediction error (predicted vs measured sizes, skip shares), regret
-   (the measured best option vs the recommended one), and the analytics' own cost (time, memory). It absorbs
-   `tests/performance/calibrate_clickhouse_sizes.py` and `calibrate_skip_indexes.py`. One results store to be chosen
-   (the bench writes SQLite `results.db`; the analytics benchmarks write Arrow IPC). ClickHouse first.
+2. **Loop tool — done** (`services/evaluate`, `python -m evaluate run | report | compare`): registry → recommend (cost
+   in a child process) → per column a size suite (candidates + the codec × compression grid) and a skip suite (chosen +
+   rejected candidates + none) → chbench, one SQLite store per suite → six Arrow IPC score files (prediction error,
+   regret, query CPU / memory, recommender cost) and a summary. It replaces the two calibration scripts, at parity
+   cell for cell (369 size cells, 99 skip queries; `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`).
+   Follow-ups:
+   - Decision agreement: re-apply the recommender's rules to measured bytes.
+   - Query-time scoring once ToDo 3 bounds the noise.
+   - The streaming recommender in the loop.
+   - Binary columns are not expressible in chbench's `arrow_type` vocabulary: `to_chbench` emits suites chbench
+     rejects, and the loop drops them into `suites/skipped.json` (5 synth_frame columns). Either chbench learns
+     `binary` or `to_chbench` skips them with a reason.
+   - The recommender's pruned ClickHouse candidates carry no predicted bytes; the loop fills those cells from the
+     emulator (`_plugin.clickhouse_profile`). Decide whether the recommender should report them.
+   - chbench renders a nullable integer column's queried values as floats (`1061684000.0`: numpy has no nullable
+     int); exact up to 2^53 only, so a nullable Int64 / UInt64 value above it is queried wrongly. Render from the
+     Arrow array instead (`services/bench/chbench/harness/queries.py`).
 3. **Bench measurement quality.**
    - Noise: single p50s of identical tables disagree by up to 2× (UInt32 Delta, filter 0.05: 58.5–168.0 ms over three
      identical tables); ten samples on a shared laptop cannot resolve differences under 2× — repeat runs on a quiet
@@ -130,9 +142,14 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    - Date32 / DateTime64 range limits (1900–2299) are not checked by the type mapping.
    - Block cutting: a granule over 1 MiB closes the open block early (ClickHouse fills it first); matters only for rows
      averaging > 128 bytes.
+   - Delta / DoubleDelta on Float64, Bool and Time64 (and GCD on Bool) are not predicted, though ClickHouse accepts
+     them: 118 measured cells without a prediction in each loop run.
 10. **Skip indexes.**
-    - Calibration is thin: one column per kind at G ≥ 2, only bloom fpr 0.025 chosen, point queries on Date / Decimal
-      literals not parsed by the calibration script.
+    - Nullable columns: ClickHouse's minmax index counts a block's NULL as +∞ (the measured shares agree cell for cell
+      with that model), and `set` skipped nothing on the two nullable columns measured; the skip technique and the
+      loop's predictor (`services/evaluate/evaluate/predict.py`) both ignore NULLs, so nullable minmax / set shares
+      are over-predicted by up to 0.96 and their index bytes are off by up to 72%. Model it in both.
+    - Calibration is still thin for bloom: only fpr 0.025, one column (`grouped_hashes`).
     - Streaming: inject the running counts into the population and baselines instead of the sample's.
     - Cost: one-shot runs ≈ 4 granularities × 3 window scans plus ≈ 12 index-size emulations per column (bloom adds 4);
       add a line to `tests/performance/benchmark_recommend.py` before large frames.
