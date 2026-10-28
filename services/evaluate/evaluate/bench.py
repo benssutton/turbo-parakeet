@@ -44,26 +44,42 @@ def drop_tables(store: Path, suite_name: str) -> None:
 
 
 def run_one(yaml_path: Path, store: Path, cache: Path) -> str | None:
-    """Run one suite into its own store, then drop its tables; the error text, or None."""
+    """Run one suite into its own store, then drop its tables; the error text, or None. A failed
+    drop is reported after the run's own error (the store still holds the results)."""
+    error = None
+    suite = None
     try:
         suite = load_suite(yaml_path)
-        try:
-            run_suite(
-                suite,
-                store_path=store,
-                cache_dir=cache,
-                ignore_unfinished=True,
-                console=Console(file=io.StringIO(), width=200),
-            )
-        finally:
-            if store.is_file():
-                drop_tables(store, suite.name)
+        run_suite(
+            suite,
+            store_path=store,
+            cache_dir=cache,
+            ignore_unfinished=True,
+            console=Console(file=io.StringIO(), width=200),
+        )
     except Exception as e:  # noqa: BLE001 - recorded, the run carries on
-        return f"{type(e).__name__}: {e}"
-    return None
+        error = f"{type(e).__name__}: {e}"
+    if suite is not None and store.is_file():
+        try:
+            drop_tables(store, suite.name)
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 - cleanup failure must not mask the run's error
+            drop = f"drop failed: {type(e).__name__}: {e}"
+            error = f"{error}; {drop}" if error else drop
+    return error
 
 
 Runner = Callable[[Path, Path, Path], "str | None"]
+
+
+def _result(future) -> str | None:
+    try:
+        return future.result()
+    except (
+        Exception
+    ) as e:  # noqa: BLE001 - e.g. BrokenProcessPool: keep the other suites
+        return f"{type(e).__name__}: {e}"
 
 
 def run_all(
@@ -82,4 +98,4 @@ def run_all(
         return {y.stem: runner(y, s, c) for y, s, c in args}
     with ProcessPoolExecutor(workers) as pool:
         futures = {y.stem: pool.submit(runner, y, s, c) for y, s, c in args}
-        return {stem: f.result() for stem, f in futures.items()}
+        return {stem: _result(f) for stem, f in futures.items()}
