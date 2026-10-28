@@ -4,6 +4,10 @@ reads a run directory and writes the files. Metrics only: no thresholds."""
 
 from __future__ import annotations
 
+import math
+
+from evaluate.predict import MARK_ROWS, SkipPredictor, parse_skip, value_of
+
 
 def base_type(ch_type: str) -> str:
     """`Nullable(...)` / `LowCardinality(...)` stripped, parameters dropped."""
@@ -112,3 +116,83 @@ def type_gain(
         r, o = _best(rec, key), _best(orig, key)
         out.append(r / o - 1 if r is not None and o else None)
     return out[0], out[1]
+
+
+def skip_queries(
+    entry: dict, rows: list[dict], predictor: SkipPredictor, predicted: dict
+) -> tuple[list[dict], dict]:
+    """One row per filter query of a skip suite; the notes counts (unparsed, marks_mismatch)."""
+    notes = {"unparsed": 0, "marks_mismatch": 0}
+    totals = {
+        r["table_id"]: r["selected_marks"] for r in rows if r["kind"] == "full_scan"
+    }
+    out, seen = [], set()
+    for r in rows:
+        if r["kind"] != "filter" or r["query_status"] != "ok" or r["query_id"] in seen:
+            continue
+        seen.add(r["query_id"])
+        total = totals.get(r["table_id"])
+        if not total:
+            continue
+        note = None
+        if total != math.ceil(r["rows"] / MARK_ROWS):
+            notes["marks_mismatch"] += 1
+            note = "marks_mismatch"
+        skip = r["skip_index"]
+        v = value_of(r["predicate_sql"], predictor.dtype)
+        if v is None:
+            notes["unparsed"] += 1
+            note = "unparsed"
+        p = predicted.get(skip, {})
+        pred = None if v is None else predictor.skip(skip, v)
+        meas = 1 - r["selected_marks"] / total
+        out.append(
+            {
+                **_keys(entry),
+                "index": skip,
+                "granularity": 0 if skip == "none" else parse_skip(skip)[2],
+                "outcome": p.get("outcome", "rejected"),
+                "value_sql": (r["predicate_sql"] or "")[len("v IN (") : -1],
+                "value_rows": None if v is None else predictor.rows_of(v),
+                "total_marks": total,
+                "predicted_skip": pred,
+                "measured_skip": meas,
+                "skip_error": None if pred is None else pred - meas,
+                "predicted_index_bytes": p.get("index_bytes"),
+                "measured_index_bytes": r["index_compressed_bytes"],
+                "note": note,
+            }
+        )
+    return out, notes
+
+
+def skip_regret(entry: dict, queries: list[dict], predicted: dict) -> dict:
+    by: dict[str, list[dict]] = {}
+    for q in queries:
+        by.setdefault(q["index"], []).append(q)
+
+    def mean(qs: list[dict], weighted: bool) -> float | None:
+        qs = [q for q in qs if not weighted or q["value_rows"]]
+        if not qs:
+            return None
+        w = [q["value_rows"] if weighted else 1 for q in qs]
+        return sum(q["measured_skip"] * x for q, x in zip(qs, w)) / sum(w)
+
+    chosen = next((k for k, p in predicted.items() if p["outcome"] == "chosen"), None)
+    order = list(by)  # the suite's axis order: chosen first
+    out = {**_keys(entry), "chosen_index": chosen}
+    for label, weighted in (("freq", True), ("uniform", False)):
+        means = {k: mean(by[k], weighted) for k in order}
+        ranked = [k for k in order if means[k] is not None]
+        best = max(ranked, key=lambda k: means[k], default=None)
+        c = means.get(chosen)
+        out[f"best_index_{label}"] = best
+        out[f"chosen_skip_{label}"] = c
+        out[f"best_skip_{label}"] = means[best] if best else None
+        out[f"regret_{label}"] = None if c is None or best is None else means[best] - c
+    idx = {k: by[k][0]["measured_index_bytes"] for k in order}
+    out["chosen_index_bytes"] = idx.get(chosen)
+    out["best_index_bytes"] = idx.get(out["best_index_freq"])
+    out["recommender_skip_rows"] = predicted.get(chosen, {}).get("skip_rows")
+    out["measured_skip_rows"] = out["chosen_skip_freq"]
+    return out

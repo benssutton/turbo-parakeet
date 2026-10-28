@@ -138,6 +138,7 @@ class SkipPredictor:
     """Predicted skip shares for one column (in stored order)."""
 
     def __init__(self, col: pl.Series):
+        self.dtype = col.dtype  # the logical dtype, for parsing literals
         self.col = col.cast(pl.UInt8) if col.dtype == pl.Boolean else col
         # temporal columns are compared as integers: no unit or zone mismatch
         if col.dtype.is_temporal():
