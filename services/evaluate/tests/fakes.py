@@ -17,7 +17,7 @@ class Q:
     target_fraction: float | None = None
     marks: int = 0
     status: str = "ok"
-    # one dict per sample: server_ms, memory_bytes, user_us, system_us
+    # a query with status != "ok" writes no samples; else one dict per sample: server_ms, memory_bytes, user_us, system_us
     samples: list[dict] = field(default_factory=lambda: [{}])
 
 
@@ -84,7 +84,7 @@ def make_store(path: Path, suite_name: str, tables: list[T]) -> Path:
                     qcc=False,
                 )
                 s.upsert_query(q.query_id, t.table_id, qv, "", status=q.status)
-                for i, smp in enumerate(q.samples):
+                for i, smp in enumerate(q.samples if q.status == "ok" else []):
                     server_ms = smp.get("server_ms", 1.0)
                     s.insert_sample(
                         q.query_id,
