@@ -1,3 +1,4 @@
+import datetime
 import numpy as np
 import polars as pl
 import pytest
@@ -21,7 +22,8 @@ def test_parse_literal_and_value_of():
     assert parse_literal("42", pl.Int64) == 42
     assert parse_literal("'it\\'s'", pl.String) == "it's"
     assert parse_literal("true", pl.Boolean) == 1
-    assert parse_literal("'2026-01-01'", pl.Date) is None
+    assert parse_literal("'2026-01-01'", pl.Date) == datetime.date(2026, 1, 1)
+    assert parse_literal("'2026-01-01'", pl.Int64) is None
     assert value_of("v IN (7)", pl.Int64) == 7
     assert value_of("v BETWEEN 1 AND 2", pl.Int64) is None
     assert (
@@ -71,3 +73,42 @@ def test_none_skips_nothing_and_counts_rows():
     p = SkipPredictor(pl.Series("v", [1, 1, 2]))
     assert p.skip("none", 1) == 0.0
     assert p.rows_of(1) == 2
+
+
+def test_quoted_number_for_an_integer_column_is_not_parsed():
+    assert value_of("v IN ('-5')", pl.Int64) is None
+    assert value_of("v IN (-5)", pl.Int64) == -5
+    assert value_of("v IN ('-5')", pl.String) == "-5"
+
+
+def _round_trip(col: pl.Series, ch_type: str):
+    from chbench.harness.queries import in_predicate, query_values
+
+    sql, _ = in_predicate(query_values(col.to_arrow()), 0.5, 1, ch_type=ch_type)
+    v = value_of(sql, col.dtype)
+    assert v is not None, sql
+    assert SkipPredictor(col).rows_of(v) > 0, sql
+
+
+def test_chbench_temporal_and_decimal_literals_round_trip():
+    import datetime as dt
+    import decimal
+
+    days = [dt.date(1970, 1, 6), dt.date(2026, 3, 1), dt.date(1970, 1, 6)]
+    _round_trip(pl.Series("v", days), "Date")
+    for unit, ch in (("us", "DateTime64(6)"), ("ms", "DateTime64(3)")):
+        ts = [
+            dt.datetime(1970, 1, 1, 0, 0, 0, 5000),
+            dt.datetime(2026, 3, 1, 4, 5, 6, 7000),
+        ]
+        _round_trip(
+            pl.Series("v", ts, dtype=pl.Datetime(unit)).extend_constant(ts[0], 1), ch
+        )
+    ns = pl.Series("v", [5, 7, 5], dtype=pl.Datetime("ns"))
+    _round_trip(ns, "DateTime64(9)")
+    dec = [
+        decimal.Decimal("1.5000"),
+        decimal.Decimal("-2.2500"),
+        decimal.Decimal("1.5000"),
+    ]
+    _round_trip(pl.Series("v", dec, dtype=pl.Decimal(18, 4)), "Decimal64(4)")
