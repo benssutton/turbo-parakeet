@@ -5,6 +5,7 @@ reads a run directory and writes the files. Metrics only: no thresholds."""
 from __future__ import annotations
 
 import math
+import re
 
 from evaluate.predict import MARK_ROWS, SkipPredictor, parse_skip, value_of
 
@@ -127,7 +128,8 @@ def skip_queries(
         r["table_id"]: r["selected_marks"] for r in rows if r["kind"] == "full_scan"
     }
     out, seen = [], set()
-    for r in rows:
+    # table_id order (Store.table_rows' ORDER BY): the output order, hence skip_regret's ties, is fixed
+    for r in sorted(rows, key=lambda r: r["table_id"]):
         if r["kind"] != "filter" or r["query_status"] != "ok" or r["query_id"] in seen:
             continue
         seen.add(r["query_id"])
@@ -139,6 +141,7 @@ def skip_queries(
             notes["marks_mismatch"] += 1
             note = "marks_mismatch"
         skip = r["skip_index"]
+        m = re.fullmatch(r"v IN \((.*)\)", r["predicate_sql"] or "", re.DOTALL)
         v = value_of(r["predicate_sql"], predictor.dtype)
         if v is None:
             notes["unparsed"] += 1
@@ -152,7 +155,7 @@ def skip_queries(
                 "index": skip,
                 "granularity": 0 if skip == "none" else parse_skip(skip)[2],
                 "outcome": p.get("outcome", "rejected"),
-                "value_sql": (r["predicate_sql"] or "")[len("v IN (") : -1],
+                "value_sql": m.group(1) if m else r["predicate_sql"],
                 "value_rows": None if v is None else predictor.rows_of(v),
                 "total_marks": total,
                 "predicted_skip": pred,
@@ -179,7 +182,9 @@ def skip_regret(entry: dict, queries: list[dict], predicted: dict) -> dict:
         return sum(q["measured_skip"] * x for q, x in zip(qs, w)) / sum(w)
 
     chosen = next((k for k, p in predicted.items() if p["outcome"] == "chosen"), None)
-    order = list(by)  # the suite's axis order: chosen first
+    order = sorted(
+        by, key=lambda k: k != chosen
+    )  # chosen first, then queries' (table_id) order
     out = {**_keys(entry), "chosen_index": chosen}
     for label, weighted in (("freq", True), ("uniform", False)):
         means = {k: mean(by[k], weighted) for k in order}

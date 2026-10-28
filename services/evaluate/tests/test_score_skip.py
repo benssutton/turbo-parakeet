@@ -146,3 +146,21 @@ def test_temporal_literals_parse_against_the_logical_dtype():
     out, notes = skip_queries(ENTRY, rows, SkipPredictor(col), PRED)
     assert notes["unparsed"] == 0 and out[0]["predicted_skip"] == pytest.approx(0.5)
     assert out[0]["value_rows"] == MARK_ROWS
+
+
+def test_ties_go_to_the_chosen_index_whatever_the_row_order():
+    # every index skips the same: the chosen one wins the tie, also when its rows come last
+    rows = [r | {"selected_marks": 4} for r in _rows()]
+    for ordered in (rows, rows[::-1]):
+        out, _ = skip_queries(ENTRY, ordered, _predictor(), PRED)
+        r = skip_regret(ENTRY, out, PRED)
+        assert r["best_index_freq"] == "minmax:1" and r["regret_freq"] == 0
+
+
+def test_non_point_predicate_keeps_its_raw_value_sql():
+    rows = [
+        _row("tm", "minmax:1", "full_scan", 4),
+        _row("tm", "minmax:1", "filter", 1, sql="v BETWEEN 1 AND 2"),
+    ]
+    out, _ = skip_queries(ENTRY, rows, _predictor(), PRED)
+    assert out[0]["value_sql"] == "v BETWEEN 1 AND 2"
