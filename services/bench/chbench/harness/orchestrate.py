@@ -50,8 +50,9 @@ Six decisions here are load-bearing and are not free to change:
    included) or in its EXPLAIN is stored as `error` with the message, takes
    no further samples, and the rounds carry on. Only a `KeyboardInterrupt`
    stops the run, and even then the samples `run_round` delivered are
-   committed, every query short of its samples is marked `interrupted` and
-   the run is finished before it is re-raised.
+   committed, every query short of its samples is marked `interrupted` --
+   whichever phase was running: a load, the warm-up, a round or the final
+   EXPLAINs -- and the run is finished before it is re-raised.
 
 5. **UTF-8 is forced on the console before anything is printed.** The
    `EXPLAIN indexes = 1` output contains box-drawing characters, which raise
@@ -181,6 +182,7 @@ class _Pending:
     status: str = "ok"  # "ok" | "error" | "interrupted"
     error: str | None = None
     taken: int = 0
+    done: bool = False  # its outcome row is written (`_finish_queries`)
 
 
 def force_utf8() -> None:
@@ -466,18 +468,26 @@ def run_suite(
             explain=explain,
             ignore_unfinished=ignore_unfinished,
         )
+        # Every query row written so far, so an interrupt in any phase can close it.
+        pending: list[_Pending] = []
         try:
             # Every table first, then the rounds: module docstring, point 3.
-            pending: list[_Pending] = []
             for variant in variants:
                 pending += _prepare_variant(context, dataset, values, variant)
             _run_rounds(context, pending)
         except KeyboardInterrupt:
             # `run_round` already delivered every completed sample through
             # `on_sample`, and `insert_sample` commits each one as it lands,
-            # so there is nothing left to flush here: say what survived and
-            # let the interrupt through. `finish_run` is
-            # the `finally`'s job, below.
+            # so there is nothing left to flush. Without this write the
+            # pre-run upsert leaves each query's status NULL, and after the
+            # fact an interrupted query looks like one the run never reached;
+            # a row `_finish_queries` already wrote keeps its status.
+            # `finish_run` is the `finally`'s job, below.
+            unfinished = [p for p in pending if not p.done]
+            for p in unfinished:
+                if p.status == "ok" and p.taken < p.want:
+                    p.status = "interrupted"
+            _finish_queries(context, unfinished, explain=False)
             _say(
                 console,
                 f"\ninterrupted: {summary.samples_written} sample(s) "
@@ -661,31 +671,22 @@ def _run_rounds(ctx: RunContext, pending: list[_Pending]) -> None:
         by_key[key].taken += 1
         ctx.summary.samples_written += 1
 
-    try:
-        for i in range(total):
-            due = [p for p in pending if p.status == "ok" and p.want > i]
-            if not due:
-                break
-            r = first + i
-            order = np.random.default_rng([seed, r]).permutation(len(due))
-            result = run_round(
-                ctx.client,
-                [due[k].job for k in order],
-                r,
-                sample_no=i,
-                on_sample=on_sample,
-            )
-            _mark_errors(by_key, result.errors)
-            _warn(console, f"round {r}", result.warnings)
-    except KeyboardInterrupt:
-        # Without this write the pre-run upsert leaves each query's status
-        # NULL, and after the fact an interrupted query looks like one the run
-        # never reached. The samples are already committed by `on_sample`.
-        for p in pending:
-            if p.status == "ok" and p.taken < p.want:
-                p.status = "interrupted"
-        _finish_queries(ctx, pending, explain=False)
-        raise
+    # A Ctrl-C anywhere here is `run_suite`'s to handle: it marks the queries.
+    for i in range(total):
+        due = [p for p in pending if p.status == "ok" and p.want > i]
+        if not due:
+            break
+        r = first + i
+        order = np.random.default_rng([seed, r]).permutation(len(due))
+        result = run_round(
+            ctx.client,
+            [due[k].job for k in order],
+            r,
+            sample_no=i,
+            on_sample=on_sample,
+        )
+        _mark_errors(by_key, result.errors)
+        _warn(console, f"round {r}", result.warnings)
     _finish_queries(ctx, pending, explain=True)
     _quiet(ctx, "after")
 
@@ -706,6 +707,7 @@ def _finish_queries(ctx: RunContext, pending: list[_Pending], *, explain: bool) 
         ctx.store.upsert_query(
             p.job.key, p.tid, p.job.qv, plan, status=p.status, error=p.error
         )
+        p.done = True
         label = f"{p.job.name} {_query_label(p.job.qv)}"
         if p.status == "error":
             _say(ctx.console, f"  error {label}: {p.error}", style="red")

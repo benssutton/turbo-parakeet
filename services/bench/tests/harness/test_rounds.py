@@ -132,6 +132,39 @@ def test_ctrl_c_mid_round_keeps_the_samples_and_marks_the_rest_interrupted(
     assert n == 11 and {st for (st,) in status} == {"interrupted"} and finished
 
 
+def _statuses(tmp_path):
+    with Store(tmp_path / "r.db") as s:
+        status = s.conn.execute("SELECT status FROM queries").fetchall()
+        finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
+    return [st for (st,) in status], finished
+
+
+def test_ctrl_c_in_the_warm_up_marks_every_query_interrupted(fake, tmp_path):
+    fake["client"] = FakeClient(untimed_interrupt_at=3)
+    with pytest.raises(KeyboardInterrupt):
+        _run(tmp_path)
+    status, finished = _statuses(tmp_path)
+    assert status == ["interrupted"] * 8 and finished
+
+
+def test_ctrl_c_while_loading_marks_the_loaded_tables_queries_interrupted(
+    fake, tmp_path, monkeypatch
+):
+    loads = {"n": 0}
+
+    def load(client, name, variant, dataset):
+        loads["n"] += 1
+        if loads["n"] == 3:
+            raise KeyboardInterrupt
+        return _ok_load(client, name, variant, dataset)
+
+    monkeypatch.setattr(orchestrate, "load_table", load)
+    with pytest.raises(KeyboardInterrupt):
+        _run(tmp_path)
+    status, finished = _statuses(tmp_path)
+    assert status == ["interrupted"] * 4 and finished
+
+
 def _unsolved(monkeypatch):
     from synthdata.generate import SolveRecord
 

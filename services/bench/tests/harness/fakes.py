@@ -6,6 +6,8 @@ the call stream into rounds. `ids` holds every timed query id in order.
 
 - fail_sql: a substring; a query whose SQL contains it raises RuntimeError("boom").
 - interrupt_at: the 1-based timed call that raises KeyboardInterrupt instead of running.
+- untimed_interrupt_at: the 1-based untimed query call (a warm-up query, no query id) that
+  raises KeyboardInterrupt instead of running.
 - log_interrupt_at: the 1-based log read that raises KeyboardInterrupt.
 - missing: indices into `ids` whose log row never appears.
 - profile: the ProfileEvents each log row carries.
@@ -28,6 +30,7 @@ class FakeClient:
         *,
         fail_sql=None,
         interrupt_at=None,
+        untimed_interrupt_at=None,
         log_interrupt_at=None,
         missing=(),
         profile=None,
@@ -38,10 +41,12 @@ class FakeClient:
         self.settings: list = []
         self._fail_sql = fail_sql
         self._interrupt_at = interrupt_at
+        self._untimed_interrupt_at = untimed_interrupt_at
         self._log_interrupt_at = log_interrupt_at
         self._missing = set(missing)
         self._profile = dict(PROFILE if profile is None else profile)
         self._timed = 0
+        self._untimed = 0
         self._log_reads = 0
 
     def version(self) -> str:
@@ -73,6 +78,10 @@ class FakeClient:
         if query_id is not None:
             self._timed += 1
             if self._interrupt_at == self._timed:
+                raise KeyboardInterrupt
+        else:
+            self._untimed += 1
+            if self._untimed_interrupt_at == self._untimed:
                 raise KeyboardInterrupt
         if self._fail_sql and self._fail_sql in sql:
             raise RuntimeError("boom")
