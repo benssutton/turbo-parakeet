@@ -431,3 +431,14 @@ def test_an_old_store_still_reads_with_null_new_columns(tmp_path):
     with Store(tmp_path / "old.db") as s:
         (row,) = s.query_rows("A")
     assert row["round_no"] is None and row["cpu_us"] is None and row["server_ms"] == 1.0
+
+
+def test_a_newer_store_is_refused_not_restamped(tmp_path):
+    with Store(tmp_path / "new.db") as s:
+        s.init_schema()
+        s.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+        s.conn.commit()
+    with Store(tmp_path / "new.db") as s:
+        with pytest.raises(StoreVersionError, match="newer chbench"):
+            s.init_schema()
+        assert s.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1

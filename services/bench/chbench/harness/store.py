@@ -282,7 +282,8 @@ class Store:
     def init_schema(self) -> None:
         """Create the schema (idempotent) and stamp `user_version`. A store written by an
         earlier schema raises `StoreVersionError`: its samples were taken without rounds and
-        cannot be paired with new ones, so new samples go to a new store."""
+        cannot be paired with new ones, so new samples go to a new store. A store stamped by
+        a newer chbench raises too, rather than being re-stamped down."""
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         populated = self.conn.execute(
             "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'samples'"
@@ -292,6 +293,11 @@ class Store:
                 f"{self.path} is a schema-{version} store, written before interleaved rounds "
                 f"(ToDo 3); `chbench report` still reads it, but new samples need a new store: "
                 f"pass --store"
+            )
+        if version > SCHEMA_VERSION:
+            raise StoreVersionError(
+                f"{self.path} is a schema-{version} store, written by a newer chbench (this "
+                f"one writes schema {SCHEMA_VERSION}): upgrade chbench, or pass --store"
             )
         self.conn.executescript(_SCHEMA)
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
