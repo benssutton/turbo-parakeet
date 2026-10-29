@@ -3,7 +3,7 @@
 The surface:
 
     chbench run  suites/x.yaml [--force] [--samples-add N] [--dry-run]
-                 [--explain] [--ignore-unfinished]
+                 [--explain] [--ignore-unfinished] [--allow-unsolved]
     chbench report --suite x [--csv out.csv] [--where "codec=T64"]
     chbench datasets [--metrics]
     chbench clean --suite x
@@ -43,12 +43,13 @@ from synthdata.generate import Manifest
 from chbench.harness.client import CHClient, Connection
 from chbench.harness.orchestrate import (
     UnfinishedRunError,
+    UnsolvedDatasetError,
     default_console,
     force_utf8,
     run_suite,
 )
 from chbench.harness.report import filter_where, render_table, summarise, write_csv
-from chbench.harness.store import Store
+from chbench.harness.store import Store, StoreVersionError
 from chbench.harness.suite import SuiteError, load_suite, parse_suite
 
 DEFAULT_STORE = "results.db"
@@ -127,6 +128,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="print the expanded grid and stop; nothing is created",
+    )
+    run.add_argument(
+        "--allow-unsolved",
+        action="store_true",
+        help="run a dataset whose solve could not bracket a target (invalid_bracket)",
     )
     run.add_argument(
         "--explain",
@@ -237,9 +243,10 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
             dry_run=args.dry_run,
             explain=args.explain,
             ignore_unfinished=args.ignore_unfinished,
+            allow_unsolved=args.allow_unsolved,
             console=console,
         )
-    except UnfinishedRunError as e:
+    except (UnfinishedRunError, UnsolvedDatasetError, StoreVersionError) as e:
         return _fail(str(e))
 
     console.print(

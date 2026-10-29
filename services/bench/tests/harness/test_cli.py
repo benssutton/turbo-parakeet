@@ -264,3 +264,22 @@ def test_run_refuses_an_unfinished_run_unless_told_to_ignore_it(ch, tmp_path):
     assert stale in p.stderr and "--ignore-unfinished" in p.stderr
     p = run_cli("run", str(suite_path), "--ignore-unfinished", *common)
     assert p.returncode == 0, p.stderr
+
+
+def test_run_offers_allow_unsolved():
+    assert "--allow-unsolved" in run_cli("run", "--help").stdout
+
+
+def test_run_reports_an_old_schema_store_cleanly(tmp_path):
+    suite_path = tmp_path / "small.yaml"
+    suite_path.write_text(SMALL, encoding="utf-8")
+    old = tmp_path / "old.db"
+    with Store(old) as s:
+        s.init_schema()
+        s.conn.execute("PRAGMA user_version = 0")
+        s.conn.commit()
+    p = run_cli(
+        "run", str(suite_path), "--store", str(old), "--cache-dir", str(tmp_path / "ds")
+    )
+    assert p.returncode == 2
+    assert "--store" in p.stderr and "Traceback" not in p.stderr

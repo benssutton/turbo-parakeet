@@ -117,6 +117,11 @@ class UnfinishedRunError(RuntimeError):
     message names the run and says how to get past it."""
 
 
+class UnsolvedDatasetError(RuntimeError):
+    """The dataset's solve could not bracket a target (`invalid_bracket`); the message names
+    each such metric with its target and says how to run it anyway."""
+
+
 @dataclass
 class RunSummary:
     """What one `run_suite` call did.
@@ -238,6 +243,25 @@ def _warn(console: Console, source: str, warnings) -> None:
         _say(console, f"warning {source}: {warning}", style="yellow")
 
 
+def _check_solves(manifest, allow_unsolved: bool, console: Console) -> None:
+    bad = [
+        (m, rec)
+        for m, rec in manifest.solves.items()
+        if rec.status == "invalid_bracket"
+    ]
+    if not bad:
+        return
+    text = "; ".join(
+        f"{m} (target {manifest.targets.get(m)!r}): {rec.message}" for m, rec in bad
+    )
+    if not allow_unsolved:
+        raise UnsolvedDatasetError(
+            f"the dataset's solve could not bracket {text}. Rerun with --allow-unsolved to "
+            f"run it anyway."
+        )
+    _say(console, f"warning dataset: running unsolved targets: {text}", style="yellow")
+
+
 def _print_grid(console: Console, variants: list[TableVariant]) -> None:
     """One line per grid cell, with its skip reason and its warnings.
 
@@ -332,6 +356,7 @@ def run_suite(
     dry_run: bool = False,
     explain: bool = False,
     ignore_unfinished: bool = False,
+    allow_unsolved: bool = False,
     console: Console | None = None,
 ) -> RunSummary:
     """Run one suite end to end and return what it did.
@@ -357,6 +382,10 @@ def run_suite(
     and two live runs would interleave samples and contend for the file.
     `ignore_unfinished` (`--ignore-unfinished`) is the user's statement
     that the first process is gone.
+
+    A dataset whose solve ended `invalid_bracket` does not hit its target, so the run would
+    measure the wrong data: `UnsolvedDatasetError` stops it (before the grid, so before the
+    store) unless `allow_unsolved`. Clamped and `not_converged` solves stay warnings.
     """
     force_utf8()
     console = console or default_console()
@@ -388,6 +417,7 @@ def run_suite(
         style="bold",
     )
     _warn(console, "dataset", manifest.warnings)
+    _check_solves(manifest, allow_unsolved, console)
 
     # The achieved bounds of the final, rounded, cast array -- the values
     # the server will actually hold.

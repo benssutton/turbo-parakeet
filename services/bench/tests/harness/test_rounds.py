@@ -130,3 +130,35 @@ def test_ctrl_c_mid_round_keeps_the_samples_and_marks_the_rest_interrupted(
         status = s.conn.execute("SELECT status FROM queries").fetchall()
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
     assert n == 11 and {st for (st,) in status} == {"interrupted"} and finished
+
+
+def _unsolved(monkeypatch):
+    from synthdata.generate import SolveRecord
+
+    real = orchestrate.load_or_generate
+
+    def load(spec, cache_dir):
+        ds = real(spec, cache_dir)
+        ds.manifest.solves["entropy_bits"] = SolveRecord(
+            "invalid_bracket", "invalid bracket: guard fails at lo=0.01"
+        )
+        ds.manifest.targets["entropy_bits"] = 3.0
+        return ds
+
+    monkeypatch.setattr(orchestrate, "load_or_generate", load)
+
+
+def test_an_invalid_bracket_is_refused_before_anything_is_loaded(
+    fake, tmp_path, monkeypatch
+):
+    _unsolved(monkeypatch)
+    with pytest.raises(
+        orchestrate.UnsolvedDatasetError, match="entropy_bits.*--allow-unsolved"
+    ):
+        _run(tmp_path)
+    assert not (tmp_path / "r.db").exists()
+
+
+def test_allow_unsolved_runs_it_with_a_warning(fake, tmp_path, monkeypatch):
+    _unsolved(monkeypatch)
+    assert _run(tmp_path, allow_unsolved=True).samples_written == 24
