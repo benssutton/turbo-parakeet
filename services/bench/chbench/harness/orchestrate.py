@@ -5,7 +5,7 @@ order of it: connection -> dataset -> grid -> every table -> rounds of
 samples -> report. Nothing above it exists; everything below it is already tested in
 isolation, so this module contains no numerics and no SQL of its own, only
 the sequence and the bookkeeping. Every read it needs from the store goes
-through a `Store` method (`explain_for`, `samples_held`), never a SELECT
+through a `Store` method (`explain_for`, `samples_held`, `next_round`), never a SELECT
 written here.
 
 `RunContext` carries what every step of the run needs -- the console, the

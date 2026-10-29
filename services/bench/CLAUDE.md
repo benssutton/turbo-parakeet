@@ -17,7 +17,6 @@ this produces evidence instead. Paths below are relative to `services/bench/`.
 - One data column per table, plus `row_id UInt64`. Parts are forced Wide.
 - Invalid grid cells (a codec not applicable, a type that cannot hold the range) are skipped and recorded with the
   server's reason, never coerced. `LowCardinality` is a skip on every type but `String` / `FixedString`.
-- Cache mode is a per-suite axis: `warm` and/or `cold`.
 - Default scale for suites comparing query time: 10 000 000 rows.
 - Spike scripts in `spikes/` are kept permanently; findings and gotchas go in `spikes/FINDINGS.md`.
 
@@ -40,19 +39,24 @@ this produces evidence instead. Paths below are relative to `services/bench/`.
 From `services/bench/`:
 ```
 python -m chbench.cli run suites/float_codecs.yaml [--dry-run] [--force] [--samples-add N] [--explain]
-        [--ignore-unfinished] [--store PATH] [--cache-dir PATH]
+        [--allow-unsolved] [--ignore-unfinished] [--store PATH] [--cache-dir PATH]
 python -m chbench.cli report --suite float_codecs [--csv docs/results/float_codecs.csv]
-        [--where "codec=T64,cache_mode=warm"] [--store PATH]
+        [--where "codec=T64,kind=filter"] [--baseline "codec=none"] [--store PATH]
 python -m chbench.cli datasets [--metrics] [--cache-dir PATH]
 python -m chbench.cli clean --suite float_codecs [--store PATH]
 ```
-`run` generates or loads the dataset, expands the grid (skipped cells printed with their reason), loads each table,
-runs every query and prints the report; `--dry-run` prints the grid and stops. Rerunning resumes: queries already
+`run` generates or loads the dataset, expands the grid (skipped cells printed with their reason), loads every table,
+runs the sampling rounds (Measurement notes) and prints the report; `--dry-run` prints the grid and stops. A dataset
+whose solve reports `invalid_bracket` is refused (`UnsolvedDatasetError`) unless `--allow-unsolved`. Rerunning resumes: queries already
 holding their sample count are skipped, and a table whose queries are all held is neither dropped nor reloaded;
 `--force` or a sample shortfall (`--samples-add`, or a new query) loads it. `report` re-reads SQLite only; `--csv`
-exports the same rows. `clean` drops a suite's tables from `bench` (the store keeps its rows). The `EXPLAIN` plan of
+exports the same rows. `--baseline "axis=value,..."` adds paired per-round ratios (`cpu_ratio`, `server_ratio`, each
+with a 95% interval, `n_rounds`, `clocks_disagree`) against the row matching it within each group of rows equal on
+every other axis and the same query shape; a baseline matching no row is an error. `clean` drops a suite's tables from `bench` (the store keeps its rows). The `EXPLAIN` plan of
 every query is stored; `--explain` only prints it. `run` refuses to start while the store holds an unfinished run of
-the same suite (a process that died without stamping `finished_at`); `--ignore-unfinished` overrides that. A suite
+the same suite (a process that died without stamping `finished_at`); `--ignore-unfinished` overrides that. The store
+carries a schema version (SQLite `user_version`, now 2): `run` refuses an older or newer store (`StoreVersionError`,
+name another `--store`); `report` reads an older one, its missing columns NULL. A suite
 whose dataset type cannot feed its `type` axis (a Decimal axis without `decimal_places`, a `list<T>` dataset, a numeric
 axis over a string or date dataset) is rejected at parse time.
 
@@ -79,8 +83,21 @@ axis over a string or date dataset) is rejected at parse time.
   not by its rows; `minmax` is 16 B and `set` 8 B + 8 B per value per Int64 block (8 B when it overflows).
 
 # Measurement notes
-- Rank by `server_p50` under ≈ 100 ms: client time has a floor of ≈ 50 ms through Docker Desktop's HTTP path.
-- Noise between identical tables reaches 2×; ten samples on a shared laptop cannot resolve smaller differences (ToDo 3).
+- Sampling: every table is loaded first, then one untimed warm-up round, then `samples` timed rounds; a round runs
+  every (table, query) pair once in an order shuffled by `(seed, round_no)`, with `use_query_cache = 0` and
+  `use_query_condition_cache = 0`, and reads `system.query_log` once. `--samples-add N` adds N rounds over every pair,
+  so samples stay paired by `round_no`; a query added later is paired only over the rounds it shares (`run` warns).
+  Ctrl-C marks every query short of its samples `interrupted`.
+- Time metrics: server CPU (`cpu_us` = User + System microseconds from ProfileEvents) is primary, server wall
+  (`server_ms`) beside it; client time has a floor of ≈ 50 ms through Docker Desktop's HTTP path. `report` gives each
+  median a distribution-free 95% interval (order statistics; none below 6 samples, `harness/stats.py`).
+- Compare variants by the paired `--baseline` ratios, not by separate medians: unpaired p50s of identical tables
+  disagreed by up to 2× before interleaving. Quietness (host CPU over 3 s, Docker CPUs and memory, power scheme,
+  ClickHouse `LoadAverage1`, active merges) is recorded on the run row before and after the rounds; `run` warns when
+  host CPU is over 10% or merges are active. `suites/replicates.yaml` (three tables no index can tell apart) checks
+  the protocol: every pairwise ratio interval should contain 1.
+- Retired axes (ToDo 3): `cache_mode` (the column is served from the Docker VM's page cache in both modes) and
+  `query_condition_cache`; a suite naming either fails to parse.
 - The `primary_key` axis changes the physical order (`ORDER BY v` vs `ORDER BY row_id`), and order dominates codec
   (Decimal64 Delta ZSTD: 8.7 MB sorted vs 50.3 MB unsorted): compare codecs within one `primary_key` value.
 - `minmax` / `set` on `LowCardinality(String)` cost ≈ 3.3 ns × rows × insert-block rows / index_granularity at insert
@@ -90,7 +107,7 @@ axis over a string or date dataset) is rejected at parse time.
 # Layout
 ```
 synthdata          (services/datagen) the generator: the column pipeline (spec, multiset, sequence, refine, solve, metrics, wrap, realdata) and its cache
-chbench/harness/   suite, validate, ddl, client, loader, queries, runner, store, report, orchestrate
+chbench/harness/   suite, validate, ddl, client, loader, queries, runner, store, report, orchestrate, stats, quiet
 chbench/cli.py     chbench run | report | datasets | clean
 suites/            YAML suites (example use cases)
 spikes/            feasibility scripts + FINDINGS.md (dated record)
@@ -104,12 +121,14 @@ notebooks/         results_explorer.ipynb
 - Keep hot numeric paths (metrics, refine) as pure numpy functions behind small boundaries.
 
 # State
-- Example suites `float_codecs` and `int_encodings` ran end to end at 10M rows (`docs/results/2026-09-17-first-runs.md`):
-  T64 is the best Decimal64 codec in generation order (37.4 MB vs 57.1 MB LZ4 alone), Delta + ZSTD wins sorted by value;
-  Decimal64 is smaller than Float64 in all twelve matched cells and slower to scan in ten; Float64 at 8 dp is
-  incompressible unsorted.
+- The example suites `replicates`, `int_encodings`, `float_codecs` and `decimal32_codecs` ran at 10M rows under
+  interleaved rounds (`docs/results/2026-10-29-interleaved-rounds.md`; sizes as in `2026-09-17-first-runs.md`, whose
+  timing claims it supersedes). The replicates check passes: every pairwise ratio interval contains 1. T64 is the
+  smallest Decimal64 codec in generation order and the cheapest scan only under ZSTD; ZSTD never costs less CPU than
+  LZ4; Decimal32 scans at 0.56–0.74× Decimal64 (median CPU ratio) but is not always smaller (2.09× sorted under ZSTD with no codec).
 - The evaluation loop (`services/evaluate`) runs its suites here: the ClickHouse size emulator (fixed-width types
   byte-exact, `LowCardinality(String)` median 0.8%, String not yet — ToDo 9) and the skip-index predictions (minmax /
   set skip shares and index bytes exact on non-null columns, Nullable not yet — ToDo 10; bloom within 0.009–0.041 per
   query and 0.5% in bytes).
-- Open: ToDo 3 (noise, inert axes, Decimal32), ToDo 1 (generator items), ToDo 5 (engines).
+- Open: ToDo 3's follow-ups (String full scan, resolution at 10 samples), ToDo 1 (generator items), ToDo 5
+  (engines).

@@ -71,13 +71,17 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
 
 2. **Loop tool — done** (`services/evaluate`, `python -m evaluate run | report | compare`): registry → recommend (cost
    in a child process) → per column a size suite (candidates + the codec × compression grid) and a skip suite (chosen +
-   rejected candidates + none) → chbench, one SQLite store per suite → six Arrow IPC score files (prediction error,
-   regret, query CPU / memory, recommender cost) and a summary. It replaces the two calibration scripts, at parity
+   rejected candidates + none) → chbench, one SQLite store per suite → seven Arrow IPC score files (prediction error,
+   regret, query CPU / memory and query-time regret, recommender cost) and a summary. It replaces the two calibration scripts, at parity
    cell for cell (369 size cells, 99 skip queries; `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`).
    Follow-ups:
    - Decision agreement: re-apply the recommender's rules to measured bytes.
-   - Query-time scoring once ToDo 3 bounds the noise.
    - The streaming recommender in the loop.
+   - Query time in the size decision: 27 of the first run's 32 resolved `query_regret` rows are an LZ4 chain beating
+     the chosen ZSTD level on CPU (`services/evaluate/docs/results/2026-10-29-query-regret.md`); weigh bytes against
+     query CPU, or report the frontier.
+   - Query-time scores on `synth_frame` (50 000 rows) resolve 3 of 356 queries: score query time on ≳ 1M-row frames
+     or more samples.
    - Binary columns are not expressible in chbench's `arrow_type` vocabulary: `to_chbench` emits suites chbench
      rejects, and the loop drops them into `suites/skipped.json` (5 synth_frame columns). Either chbench learns
      `binary` or `to_chbench` skips them with a reason.
@@ -86,22 +90,22 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    - chbench renders a nullable integer column's queried values as floats (`1061684000.0`: numpy has no nullable
      int); exact up to 2^53 only, so a nullable Int64 / UInt64 value above it is queried wrongly. Render from the
      Arrow array instead (`services/bench/chbench/harness/queries.py`).
-3. **Bench measurement quality.**
-   - Noise: single p50s of identical tables disagree by up to 2× (UInt32 Delta, filter 0.05: 58.5–168.0 ms over three
-     identical tables); ten samples on a shared laptop cannot resolve differences under 2× — repeat runs on a quiet
-     machine or `--samples-add`, and a noise bound in the report.
-   - Three axes measured nothing in the example suites: `cache_mode` (a 25 MB column is served from the Docker VM's
-     page cache in both modes — needs the page cache dropped inside the VM or a column larger than memory),
-     `query_condition_cache` (the `IN` predicate is true in every granule, so nothing is cached) and `skip_index`
-     (`in_predicate` picks frequent values present in every granule — needs rare predicate values or sorted data).
-   - Decimal32 in `suites/float_codecs.yaml` (owner decision): one row is clipped to the bound 10.0 and `Decimal32(8)`
-     tops out at 9.99999999, so every Decimal32 cell skips. Either a bound of 9.99999999 or 7 decimal places; then
-     re-measure the Decimal32 vs Decimal64 compression asymmetry (ratio 0.65, not 0.5).
-   - `LowCardinality(String)` with a `minmax` or `set(100)` index inserts ≈ 15× slower (45.7 / 46.5 s against 3.2 s
-     with `bloom_filter`); not investigated.
-   - A dataset whose solve reports `invalid_bracket` still runs (the warning is printed); decide whether `run` should
-     refuse it, like an up-front validation error.
-   - Add the closed form for the −79 runs z-score to FINDINGS §3 (`services/bench/spikes/FINDINGS.md`).
+3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
+   loaded first, then a warm-up and interleaved rounds shuffled per round; server CPU time primary, wall beside it;
+   distribution-free median intervals and paired per-round ratios (`chbench report --baseline`); a quietness record
+   on every run; `cache_mode` and `query_condition_cache` retired; Decimal32 in its own suite (`decimal32_codecs`);
+   `invalid_bracket` refused (`--allow-unsolved`); the LowCardinality insert slowdown traced to the server (FINDINGS
+   §11; the loader batches inserts); FINDINGS §3's closed form. `suites/replicates.yaml`: every pairwise ratio
+   interval contains 1. Follow-ups:
+   - The String full scan `sum(length(v))` reads only the size subcolumn (80 MB at 10M rows), so it does not compare
+     with the other types' scans; read the characters (`services/bench/chbench/harness/queries.py`).
+   - At 10 samples a paired ratio interval is ≈ 0.33 wide (median): differences under ≈ 20% stay unresolved. Raise
+     the example suites' `samples` or document `--samples-add` per question.
+   - `report --baseline` pairs only within one `ch_type`, so `LowCardinality(String)` against `String` (different
+     type and codec) needs a hand pairing; a baseline over two axes at once would cover it.
+   - Decimal32 sorted + ZSTD with no codec is 2.09× the size of Decimal64 (17.1 against 8.2 MB); not investigated.
+   - `python -m evaluate run` defaults to `--workers 3`, which times suites in parallel on one server; query-cost
+     scores need `--workers 1`. Decide the default.
 
 ## Track 3 — adversarial datasets
 
