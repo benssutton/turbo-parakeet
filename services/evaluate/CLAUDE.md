@@ -12,8 +12,9 @@ python -m evaluate compare RUN_A RUN_B     # summary metric changes
 ```
 Datasets: registry names (`evaluate/registry.py`: synth tiers, the planted `gcd` / `delta` / `skip` frames,
 synthdata scenarios), `name:rows` for scalable entries, the groups `calibration` and `query_time` (the calibration
-frames with synth_frame at 1M rows: use it when query time is scored), `--all`, or a path to an Arrow IPC frame.
-`--dry-run` needs no server and prints the table-load count. `--workers N` times N suites in
+frames with synth_frame at 1M rows: use it when query time is scored; `evaluate compare` aggregates across datasets
+and does not check rows, so compare runs of the same group), `--all`, or a path to an Arrow IPC frame. `--dry-run`
+needs no server and prints the table-load count. `--workers N` times N suites in
 parallel: sizes and skip shares are unaffected, but query-cost scores are only valid at 1.
 
 # Design
@@ -32,11 +33,11 @@ parallel: sizes and skip shares are unaffected, but query-cost scores are only v
   `n_alternatives`; `resolved` when the interval lies below 1, `regret_cpu` = 1 − ratio when resolved, else 0.
 - A pruned ClickHouse candidate carries no predicted bytes, by design: pruning is how the recommender avoids
   measuring those chains. `suites.py` fills such a cell from the emulator (`_plugin.clickhouse_profile`); it stays
-  `origin: candidate, outcome: pruned` in size_cells, so a pruned cell's prediction is always the emulator's.
+  `origin: candidate, outcome: pruned` in size_cells, so a pruned cell's prediction is the emulator's, where it has one.
 - `bench.py` is the only module that talks to ClickHouse; `predict.py` (skip shares per queried value) and
   `score.py` need no server.
 - Resume: each step skips what is on disk; chbench skips held samples; scoring always reruns. A suite's
-  ClickHouse tables are dropped once it has run.
+  ClickHouse tables are dropped once it has run. `--resume` refuses a dataset whose rows differ from the run's.
 - Suites chbench cannot load (binary columns: no `arrow_type` for them) are dropped into the dataset's
   `suites/skipped.json` with to_chbench's own skips.
 

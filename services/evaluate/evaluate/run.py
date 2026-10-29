@@ -13,7 +13,7 @@ import yaml
 
 from evaluate import bench
 from evaluate.recommend import recommend
-from evaluate.registry import resolve
+from evaluate.registry import RegistryError, resolve
 from evaluate.rundir import DEFAULT_RUNS, RunDir, versions
 from evaluate.score import score_run
 from evaluate.suites import build
@@ -80,6 +80,13 @@ def run_loop(
     datasets = resolve(args)  # RegistryError before anything is written
     if resume is not None:
         run = RunDir.open(resume)
+        held = run.info()["datasets"]
+        for d in datasets:
+            if d.name in held and held[d.name]["rows"] != d.rows:
+                raise RegistryError(
+                    f"{d.name}: the run holds {held[d.name]['rows']} rows, "
+                    f"the argument asks {d.rows}; start a new run"
+                )
     else:
         run = RunDir.new(root)
         run.write_info(

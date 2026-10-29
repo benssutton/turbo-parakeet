@@ -122,3 +122,13 @@ def test_workers_default_to_one():
 
     args = _parser().parse_args(["run", "gcd"])
     assert args.workers == 1
+
+
+def test_resume_refuses_a_dataset_at_other_rows(tmp_path, capsys):
+    main(["run", "synth_frame:2000", "--dry-run", "--runs-dir", str(tmp_path)])
+    (run_path,) = tmp_path.iterdir()
+    before = sorted(p.name for p in run_path.rglob("*"))
+    code = main(["run", "synth_frame:3000", "--dry-run", "--resume", str(run_path)])
+    assert code == 2
+    assert "synth_frame: the run holds 2000 rows" in capsys.readouterr().err
+    assert sorted(p.name for p in run_path.rglob("*")) == before
