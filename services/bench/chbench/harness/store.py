@@ -572,7 +572,9 @@ class Store:
 
     def next_round(self, suite_name: str) -> int:
         """One past the highest `round_no` among the suite's samples; 0 when there are none.
-        New rounds continue the numbering, so samples added later stay paired by round.
+        New rounds continue the numbering, so samples added by `--samples-add`, which re-runs
+        every query, stay paired by round; a query added later runs only with the other
+        newcomers, so it pairs with them alone.
         """
         row = self.conn.execute(
             "SELECT max(s.round_no) FROM samples s "

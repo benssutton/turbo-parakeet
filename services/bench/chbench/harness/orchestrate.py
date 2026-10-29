@@ -645,7 +645,9 @@ def _run_rounds(ctx: RunContext, pending: list[_Pending]) -> None:
     Round r runs each query still wanting a sample once, in an order shuffled by
     `default_rng([seed, r])`: reproducible, different per round, so drift and load bursts
     spread over every variant instead of landing on one. Rounds continue the store's
-    numbering (`next_round`), so samples added by a later `--samples-add` stay paired.
+    numbering (`next_round`), so samples added by a later `--samples-add` stay paired. A
+    query added to a suite that already holds its samples runs alone, in rounds the others
+    never shared: a warning says so.
     A sample's `sample_no` is its index among this run's samples of the query (0, 1, ...),
     as it always was; `round_no` is what pairs samples across runs."""
     if not pending:
@@ -663,6 +665,15 @@ def _run_rounds(ctx: RunContext, pending: list[_Pending]) -> None:
         f"\n{len(pending)} queries, {total} round(s) from round {first}",
         style="bold",
     )
+    held = ctx.summary.queries_skipped_existing
+    if held and not ctx.samples_add:
+        _say(
+            console,
+            f"warning: {len(pending)} of {len(pending) + held} queries run without the "
+            f"others (the rest already hold their samples): their rounds pair only among "
+            f"themselves; --samples-add K re-runs every query so all stay paired",
+            style="yellow",
+        )
 
     def on_sample(key: str, sample) -> None:
         # No KeyboardInterrupt handling here: `run_round` owns that, and a

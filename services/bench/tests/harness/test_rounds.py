@@ -1,7 +1,10 @@
 """`run_suite`'s round scheduler, without a server: `CHClient`, `load_table` and the quietness
 snapshot are replaced; the dataset, grid, queries, runner and store are real."""
 
+import io
+
 import pytest
+from rich.console import Console
 
 from chbench.harness import orchestrate, quiet
 from chbench.harness.loader import LoadResult, StorageStats
@@ -90,6 +93,32 @@ def test_samples_carry_their_round_and_samples_add_continues_the_numbering(
         ).fetchall()
         assert all(r["cpu_us"] == 150.0 for r in s.query_rows("t_rounds"))
     assert got == [(0, 8), (1, 8), (2, 8), (3, 8), (4, 8)]
+
+
+def _console():
+    return Console(file=io.StringIO(), width=300)
+
+
+def test_queries_added_later_warn_that_they_pair_only_among_themselves(fake, tmp_path):
+    _run(tmp_path)
+    added = parse_suite(
+        SUITE.replace("codec: [none, Delta]", "codec: [none, Delta, Gorilla]")
+    )
+    console = _console()
+    r = run_suite(
+        added, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", console=console
+    )
+    assert r.queries_run == 4 and r.queries_skipped_existing == 8
+    out = " ".join(console.file.getvalue().split())
+    assert "4 of 12 queries run without the others" in out
+    assert "--samples-add" in out
+
+
+def test_samples_add_reruns_every_query_without_that_warning(fake, tmp_path):
+    _run(tmp_path)
+    console = _console()
+    _run(tmp_path, samples_add=1, console=console)
+    assert "without the others" not in console.file.getvalue()
 
 
 def test_quietness_is_recorded_before_and_after(fake, tmp_path):
