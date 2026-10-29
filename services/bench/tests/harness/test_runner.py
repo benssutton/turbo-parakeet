@@ -350,3 +350,18 @@ def test_keyboard_interrupt_inside_log_read_still_warns_every_pending_sample():
     for s in seen:
         named = any(f"sample {s.sample_no}" in w for w in r.warnings)
         assert math.isfinite(s.server_ms) or named
+
+
+@pytest.mark.clickhouse
+def test_a_live_round_records_server_timings_and_cpu(ch, loaded):
+    from chbench.harness.runner import Job, run_round
+
+    name, v, ds = loaded
+    scan, filt = queries_for(v, ds)
+    js = [Job("scan", name, v, scan), Job("filt", name, v, filt)]
+    run_round(ch, js, timed=False)
+    r = run_round(ch, js, 0)
+    assert not r.errors, r.errors
+    s, f = r.samples["scan"], r.samples["filt"]
+    assert s.cpu_us and s.cpu_us > 0 and s.round_no == 0
+    assert f.read_rows < s.read_rows and f.selected_marks < s.selected_marks

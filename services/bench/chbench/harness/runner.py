@@ -78,6 +78,8 @@ class Sample:
     selected_granules: int | float
     profile_events: dict[str, int]
     ran_at: datetime.datetime
+    round_no: int | None = None
+    cpu_us: float | None = None
 
 
 @dataclass
@@ -122,6 +124,16 @@ def _read_query_log(client: CHClient, ids: list[str]) -> dict[str, tuple]:
     return {str(r[0]): r for r in rows}
 
 
+def _cpu_us(profile: dict[str, int]) -> float | None:
+    """User + System CPU microseconds; ClickHouse omits zero counters, so None when neither is present."""
+    parts = [
+        profile[k]
+        for k in ("UserTimeMicroseconds", "SystemTimeMicroseconds")
+        if k in profile
+    ]
+    return float(sum(parts)) if parts else None
+
+
 def _fill_from_log(sample: Sample, row: tuple) -> None:
     _, duration_ms, read_rows, read_bytes, memory, events = row
     profile = {str(k): int(v) for k, v in (events or {}).items()}
@@ -132,6 +144,7 @@ def _fill_from_log(sample: Sample, row: tuple) -> None:
     sample.selected_marks = profile.get("SelectedMarks", 0)
     sample.selected_granules = sample.selected_marks
     sample.profile_events = profile
+    sample.cpu_us = _cpu_us(profile)
 
 
 def run_query(
@@ -284,3 +297,141 @@ def run_query(
         raise
 
     return result
+
+
+@dataclass(frozen=True)
+class Job:
+    """One (table, query) pair of a round; `key` is its store `query_id`."""
+
+    key: str
+    name: str
+    variant: TableVariant
+    qv: QueryVariant
+
+
+@dataclass
+class RoundResult:
+    samples: dict[str, Sample] = field(
+        default_factory=dict
+    )  # job key -> sample, in job order
+    errors: dict[str, str] = field(default_factory=dict)  # job key -> error text
+    warnings: list[str] = field(default_factory=list)
+
+
+def _fill(client: CHClient, pending: dict[str, Sample], warnings: list[str]) -> None:
+    """One `system.query_log` read for every pending id, retried while rows are missing; a
+    sample still missing when the attempts end -- normally or through an exception, Ctrl-C
+    included -- gets a warning naming its id (the `finally`)."""
+    try:
+        for attempt in range(_LOG_READ_ATTEMPTS):
+            if attempt:
+                time.sleep(_LOG_READ_SLEEP_S)
+            client.flush_logs()
+            for qid, row in _read_query_log(client, list(pending)).items():
+                sample = pending.pop(qid, None)
+                if sample is not None:
+                    _fill_from_log(sample, row)
+            if not pending:
+                break
+    finally:
+        for qid, sample in pending.items():
+            warnings.append(
+                f"round {sample.round_no} sample {sample.sample_no}: no QueryFinish row in "
+                f"system.query_log for query_id {qid} after {_LOG_READ_ATTEMPTS} reads"
+            )
+
+
+def run_round(
+    client: CHClient,
+    jobs: list[Job],
+    round_no: int | None = None,
+    *,
+    sample_no: int = 0,
+    timed: bool = True,
+    on_sample: Callable[[str, Sample], None] | None = None,
+) -> RoundResult:
+    """Run every job once, in the order given, then read the round's log rows in one go.
+
+    A job whose query raises is recorded in `errors` and the round carries on. `on_sample(key,
+    sample)` receives each complete sample, in job order. `timed=False` (the warm-up) runs the
+    queries without ids and takes no samples. Ctrl-C: the samples already taken are read and
+    delivered, the partial result is attached as `round_result`, and the interrupt propagates.
+    """
+    result = RoundResult()
+    ids: dict[str, str] = {}  # query id -> job key
+    state = {"filled": False, "delivering": False, "delivered": 0}
+
+    def finish() -> None:
+        if not state["filled"]:
+            state["filled"] = True
+            pending = {qid: result.samples[key] for qid, key in ids.items()}
+            if pending:
+                try:
+                    _fill(client, pending, result.warnings)
+                except (
+                    Exception
+                ) as e:  # noqa: BLE001 - the samples keep nan, named by _fill
+                    result.warnings.append(
+                        f"system.query_log read failed: {_error_text(e)}"
+                    )
+        state["delivering"] = True
+        keys = list(result.samples)
+        while state["delivered"] < len(keys):
+            key = keys[state["delivered"]]
+            state["delivered"] += 1
+            if on_sample is not None:
+                on_sample(key, result.samples[key])
+
+    try:
+        for job in jobs:
+            sql = query_sql(job.name, job.variant, job.qv)
+            if not timed:
+                try:
+                    client.query_rows(sql, settings=_SETTINGS)
+                except Exception as e:  # noqa: BLE001
+                    result.errors[job.key] = _error_text(e)
+                continue
+            qid = str(uuid.uuid4())
+            ran_at = datetime.datetime.now(datetime.timezone.utc)
+            t0 = time.perf_counter()
+            try:
+                client.query_rows(sql, query_id=qid, settings=_SETTINGS)
+            except Exception as e:  # noqa: BLE001
+                result.errors[job.key] = _error_text(e)
+                continue
+            client_ms = (time.perf_counter() - t0) * 1000.0
+            ids[qid] = job.key
+            result.samples[job.key] = Sample(
+                sample_no=sample_no,
+                client_ms=client_ms,
+                server_ms=_NAN,
+                read_rows=_NAN,
+                read_bytes=_NAN,
+                memory_bytes=_NAN,
+                selected_marks=_NAN,
+                selected_granules=_NAN,
+                profile_events={},
+                ran_at=ran_at,
+                round_no=round_no,
+            )
+        finish()
+    except KeyboardInterrupt as e:
+        e.round_result = result  # type: ignore[attr-defined]
+        if not state["delivering"]:
+            try:
+                finish()
+            except KeyboardInterrupt:
+                pass
+        raise
+    return result
+
+
+def explain_query(client: CHClient, job: Job) -> tuple[str, str | None]:
+    """The job's `EXPLAIN indexes = 1` plan and None, or ("", the error text)."""
+    try:
+        rows = client.query_rows(
+            explain_sql(job.name, query_sql(job.name, job.variant, job.qv))
+        )
+    except Exception as e:  # noqa: BLE001
+        return "", _error_text(e)
+    return "\n".join(str(r[0]) for r in rows), None
