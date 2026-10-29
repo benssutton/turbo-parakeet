@@ -343,8 +343,12 @@ def query_cost(entry: dict, rows: list[dict], chosen: str | None = None) -> list
 
 def query_regret(entry: dict, rows: list[dict], chosen: str | None) -> list[dict]:
     """One row per query of the chosen table: the alternative with the lowest CPU ratio against
-    it (paired by round) and its interval. `resolved` is that interval lying below 1;
-    `regret_cpu` is then 1 - ratio (the share of the chosen table's CPU it would save), else 0.
+    it (paired by round) and its interval. Picking the lowest of k ratios is a selection, so each
+    interval is Bonferroni-adjusted, at level 1 - 0.05 / k, k = `n_alternatives`: the
+    alternatives sharing at least one round with the chosen table. Without it the best of a dozen
+    replicates of one table lies below 1 at 95% about a quarter of the time. `resolved` is the
+    adjusted interval lying below 1 (False when n is too small for one); `regret_cpu` is then
+    1 - ratio (the share of the chosen table's CPU it would save), else 0.
     """
     if chosen is None:
         return []
@@ -357,15 +361,18 @@ def query_regret(entry: dict, rows: list[dict], chosen: str | None) -> list[dict
         base = next((s for s in members if s[0]["table_id"] == chosen), None)
         if base is None:
             continue
+        ref = _by_round(base, "cpu")
+        pairs = [
+            (samples[0], _by_round(samples, "cpu"))
+            for samples in members
+            if samples is not base
+        ]
+        k = sum(1 for _, alt in pairs if paired_ratio(alt, ref)[3] > 0)
         best = None
-        for samples in members:
-            if samples is base:
-                continue
-            ratio, lo, hi, n = paired_ratio(
-                _by_round(samples, "cpu"), _by_round(base, "cpu")
-            )
+        for first, alt in pairs:
+            ratio, lo, hi, n = paired_ratio(alt, ref, level=1 - 0.05 / max(k, 1))
             if ratio is not None and (best is None or ratio < best[1]):
-                best = (samples[0], ratio, lo, hi, n)
+                best = (first, ratio, lo, hi, n)
         kind, fraction, sql = key
         row = {
             **_keys(entry),
@@ -378,6 +385,7 @@ def query_regret(entry: dict, rows: list[dict], chosen: str | None) -> list[dict
             "cpu_ratio_lo": None,
             "cpu_ratio_hi": None,
             "n_rounds": None,
+            "n_alternatives": k,
             "resolved": None,
             "regret_cpu": None,
         }
@@ -496,6 +504,7 @@ FILES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("cpu_ratio_lo", _F),
         ("cpu_ratio_hi", _F),
         ("n_rounds", _I),
+        ("n_alternatives", _I),
         ("resolved", _B),
         ("regret_cpu", _F),
     ],

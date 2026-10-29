@@ -79,3 +79,30 @@ def test_a_slower_alternative_gives_no_regret():
 
 def test_no_chosen_table_no_regret_rows():
     assert query_regret(SIZE, rows("t1", "none", 1.0), None) == []
+
+
+def per_round(table_id, codec, factors):
+    """Ten rounds of `rows`, round i's CPU scaled by factors[i] (wall left flat)."""
+    base = rows(table_id, codec, 1.0)[0]
+    return [dict(base, round_no=i, cpu_us=100.0 * f) for i, f in enumerate(factors)]
+
+
+def test_many_replicate_alternatives_resolve_none_after_bonferroni():
+    # Each replicate runs ~3% faster in nine rounds and 10% slower in one: its 95% interval
+    # (ranks 2 and 9 of 10) lies below 1, but the best of twelve needs the adjusted interval.
+    r = per_round("t00", "none", [1.0] * 10)
+    for j in range(1, 13):
+        factors = [0.95 + 0.01 * ((i * 7 + j * 3) % 5) for i in range(10)]
+        factors[j % 10] = 1.1
+        r += per_round(f"t{j:02d}", "none", factors)
+    (q,) = query_regret(SIZE, r, "t00")
+    assert q["n_alternatives"] == 12
+    assert q["cpu_ratio"] < 1 and q["cpu_ratio_hi"] == pytest.approx(1.1)
+    assert q["resolved"] is False and q["regret_cpu"] == 0.0
+
+
+def test_n_alternatives_counts_those_sharing_a_round():
+    r = rows("t1", "none", 1.0) + rows("t2", "Delta", 0.5)
+    r += [dict(x, round_no=x["round_no"] + 100) for x in rows("t3", "T64", 0.4)]
+    (q,) = query_regret(SIZE, r, "t1")
+    assert q["n_alternatives"] == 1 and q["best_variant"] == "Delta, LZ4"
