@@ -99,8 +99,6 @@ CREATE TABLE IF NOT EXISTS queries (
     target_fraction REAL,
     actual_fraction REAL,
     predicate_sql TEXT,
-    cache_mode TEXT,
-    qcc INTEGER,
     explain_plan TEXT,
     status TEXT,
     error TEXT
@@ -171,8 +169,6 @@ SELECT
     q.target_fraction AS target_fraction,
     q.actual_fraction AS actual_fraction,
     q.predicate_sql AS predicate_sql,
-    q.cache_mode AS cache_mode,
-    q.qcc AS qcc,
     q.explain_plan AS explain_plan,
     q.status AS query_status,
     q.error AS query_error,
@@ -456,9 +452,8 @@ class Store:
         self.conn.execute(
             """
             INSERT INTO queries (query_id, table_id, kind, predicate_kind, target_fraction,
-                                  actual_fraction, predicate_sql, cache_mode, qcc,
-                                  explain_plan, status, error)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                                  actual_fraction, predicate_sql, explain_plan, status, error)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(query_id) DO UPDATE SET
                 table_id=excluded.table_id,
                 kind=excluded.kind,
@@ -466,8 +461,6 @@ class Store:
                 target_fraction=excluded.target_fraction,
                 actual_fraction=excluded.actual_fraction,
                 predicate_sql=excluded.predicate_sql,
-                cache_mode=excluded.cache_mode,
-                qcc=excluded.qcc,
                 explain_plan=excluded.explain_plan,
                 status=excluded.status,
                 error=excluded.error
@@ -480,8 +473,6 @@ class Store:
                 qv.target_fraction,
                 qv.actual_fraction,
                 qv.predicate_sql,
-                qv.cache_mode,
-                qv.qcc,
                 explain,
                 status,
                 error,

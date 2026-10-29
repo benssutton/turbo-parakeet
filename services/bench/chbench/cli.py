@@ -149,8 +149,8 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument(
         "--where",
         metavar="EXPR",
-        help='filter, e.g. "codec=T64,cache_mode=warm"; the boolean '
-        "axes nullable, primary_key, projection and qcc are "
+        help='filter, e.g. "codec=T64,kind=filter"; the boolean '
+        "axes nullable, primary_key and projection are "
         "written 1/0, not the y/- the table shows",
     )
     _add_store(report)

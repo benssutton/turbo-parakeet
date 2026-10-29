@@ -44,7 +44,7 @@ def loaded(ch):
     ch.command(f"DROP TABLE IF EXISTS {name}")
 
 
-def queries_for(v, ds, cache_mode, qcc=False):
+def queries_for(v, ds):
     """Seeded deterministically: the range predicate's interval depends on
     the generator, and comparable results across variants need the same
     seed per variant (the orchestrator's job; here it is `default_rng(0)`)."""
@@ -53,8 +53,6 @@ def queries_for(v, ds, cache_mode, qcc=False):
             QueryKind("full_scan", None, None, None),
             QueryKind("filter", 0.1, "range", None),
         ],
-        query_condition_cache=[qcc],
-        cache_mode=[cache_mode],
         samples=3,
     )
     return expand_queries(
@@ -65,7 +63,7 @@ def queries_for(v, ds, cache_mode, qcc=False):
 @pytest.mark.clickhouse
 def test_warm_run_collects_every_sample_with_server_timings(ch, loaded):
     name, v, ds = loaded
-    for qv in queries_for(v, ds, "warm"):
+    for qv in queries_for(v, ds):
         r = run_query(ch, name, v, qv, samples=3)
         assert r.status == "ok", r.error
         assert len(r.samples) == 3
@@ -79,31 +77,11 @@ def test_warm_run_collects_every_sample_with_server_timings(ch, loaded):
 @pytest.mark.clickhouse
 def test_filter_reads_fewer_rows_than_full_scan_on_a_sorted_table(ch, loaded):
     name, v, ds = loaded
-    scan, filt = queries_for(v, ds, "warm")
+    scan, filt = queries_for(v, ds)
     rs = run_query(ch, name, v, scan, samples=1).samples[0]
     rf = run_query(ch, name, v, filt, samples=1).samples[0]
     assert rf.read_rows < rs.read_rows
     assert rf.selected_marks < rs.selected_marks
-
-
-@pytest.mark.clickhouse
-def test_cold_mode_drops_caches_and_still_collects(ch, loaded):
-    name, v, ds = loaded
-    [scan, _] = queries_for(v, ds, "cold")
-    r = run_query(ch, name, v, scan, samples=2)
-    assert r.status == "ok" and len(r.samples) == 2
-
-
-@pytest.mark.clickhouse
-def test_qcc_setting_is_passed_and_hits_are_reported(ch, loaded):
-    """With the query condition cache enabled, the second sample of the same
-    filter should record cache hits in ProfileEvents."""
-    name, v, ds = loaded
-    [_, filt] = queries_for(v, ds, "warm", qcc=True)
-    r = run_query(ch, name, v, filt, samples=3)
-    assert any(
-        s.profile_events.get("QueryConditionCacheHits", 0) > 0 for s in r.samples[1:]
-    )
 
 
 @pytest.mark.clickhouse
@@ -114,7 +92,7 @@ def test_filter_read_rows_covers_the_matched_rows_not_just_boundary_granules(
     (the exact-count projection) and reads only the boundary granules; the
     filter must read the column so `read_rows` is at least the matched rows."""
     name, v, ds = loaded
-    [_, filt] = queries_for(v, ds, "warm")
+    [_, filt] = queries_for(v, ds)
     matched = filt.actual_fraction * len(ds.array)
     s = run_query(ch, name, v, filt, samples=1).samples[0]
     assert s.read_rows >= matched
@@ -123,7 +101,7 @@ def test_filter_read_rows_covers_the_matched_rows_not_just_boundary_granules(
 @pytest.mark.clickhouse
 def test_on_sample_hook_fires_per_sample_with_complete_samples(ch, loaded):
     name, v, ds = loaded
-    [scan, _] = queries_for(v, ds, "warm")
+    [scan, _] = queries_for(v, ds)
     seen = (
         []
     )  # snapshots taken at hook time, so a later in-place fill cannot mask a gap
@@ -163,7 +141,7 @@ def test_keyboard_interrupt_mid_loop_delivers_finished_samples_then_propagates(
     ch, loaded
 ):
     name, v, ds = loaded
-    [scan, _] = queries_for(v, ds, "warm")
+    [scan, _] = queries_for(v, ds)
     seen = []
     with pytest.raises(KeyboardInterrupt) as excinfo:
         run_query(
@@ -186,7 +164,7 @@ def test_keyboard_interrupt_from_hook_delivers_first_complete_then_propagates(
     ch, loaded
 ):
     name, v, ds = loaded
-    [scan, _] = queries_for(v, ds, "warm")
+    [scan, _] = queries_for(v, ds)
     seen = []
 
     def hook(s):
@@ -212,8 +190,6 @@ def test_query_error_is_recorded_not_raised(ch, loaded):
         predicate_kind="range",
         target_fraction=0.1,
         values_n=None,
-        qcc=False,
-        cache_mode="warm",
         predicate_sql="no_such_column > 1",
         actual_fraction=0.1,
     )
@@ -252,19 +228,6 @@ _FULL_SCAN = QueryVariant(
     predicate_kind=None,
     target_fraction=None,
     values_n=None,
-    qcc=False,
-    cache_mode="warm",
-    predicate_sql=None,
-    actual_fraction=None,
-)
-
-_FULL_SCAN_COLD = QueryVariant(
-    kind="full_scan",
-    predicate_kind=None,
-    target_fraction=None,
-    values_n=None,
-    qcc=False,
-    cache_mode="cold",
     predicate_sql=None,
     actual_fraction=None,
 )
@@ -280,8 +243,6 @@ class FakeClient:
       never returned, simulating a row that never lands.
     - `fail_at_index`: a sample index whose timed query raises
       `RuntimeError` instead of succeeding.
-    - `dropped_caches`: the set `drop_caches()` reports as dropped (defaults
-      to all three).
     - `log_read_raises_at`: the 1-based count of the `system.query_log` read
       at which to raise `KeyboardInterrupt` instead of returning rows.
     """
@@ -291,17 +252,11 @@ class FakeClient:
         *,
         missing_indices=(),
         fail_at_index=None,
-        dropped_caches=None,
         log_read_raises_at=None,
     ):
         self.sample_ids: list[str] = []
         self._missing_indices = set(missing_indices)
         self._fail_at_index = fail_at_index
-        self._dropped_caches = (
-            set(dropped_caches)
-            if dropped_caches is not None
-            else {"MARK", "UNCOMPRESSED", "QUERY CONDITION"}
-        )
         self._log_read_raises_at = log_read_raises_at
         self._log_reads = 0
 
@@ -329,9 +284,6 @@ class FakeClient:
 
     def flush_logs(self) -> None:
         pass
-
-    def drop_caches(self):
-        return set(self._dropped_caches)
 
 
 def test_missing_log_row_leaves_nan_fields_with_a_naming_warning():
@@ -373,15 +325,6 @@ def test_exception_on_a_later_sample_still_delivers_the_earlier_ones():
         math.isfinite(s.server_ms) and math.isfinite(s.read_rows) for s in r.samples
     )
     assert [s.sample_no for s in seen] == [0, 1]
-
-
-def test_cold_mode_drop_failure_is_recorded_as_a_warning():
-    client = FakeClient(
-        dropped_caches={"MARK", "UNCOMPRESSED"}
-    )  # QUERY CONDITION missing
-    r = run_query(client, "bench.t", _FAKE_VARIANT, _FULL_SCAN_COLD, samples=1)
-    assert r.status == "ok"
-    assert any("QUERY CONDITION" in w for w in r.warnings)
 
 
 def test_keyboard_interrupt_inside_log_read_still_warns_every_pending_sample():

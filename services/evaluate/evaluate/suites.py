@@ -56,8 +56,6 @@ def _queries(fractions, samples: int) -> dict:
             {"kind": "filter", "target_fraction": f, "predicate": "in", "values": 1}
             for f in fractions
         ],
-        "query_condition_cache": [False],
-        "cache_mode": ["warm"],
         "samples": samples,
     }
 

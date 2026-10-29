@@ -37,13 +37,13 @@ _TABLE_AXES = (
     "skip_index",
     "compression",
 )
-_QUERY_AXES = ("kind", "cache_mode", "qcc", "target_fraction")
+_QUERY_AXES = ("kind", "target_fraction")
 _AXES = _TABLE_AXES + _QUERY_AXES
 
 # Row keys rendered as a tick/blank rather than a bare 0/1 integer, per task
 # brief point 2: SQLite gives these back as ints, and a column of 0s and 1s
 # next to numeric columns reads as data, not a flag.
-_BOOL_AXES = ("nullable", "primary_key", "projection", "qcc")
+_BOOL_AXES = ("nullable", "primary_key", "projection")
 
 
 def _sort_key(s: dict):
@@ -156,8 +156,6 @@ _HEADERS = {
     "skip_index": "skip index",
     "compression": "compression",
     "kind": "kind",
-    "cache_mode": "cache",
-    "qcc": "qcc",
     "target_fraction": "target fraction",
     "n": "n",
     "client_mean": "mean client",
@@ -226,14 +224,14 @@ def write_csv(summary: list[dict], path: str | Path) -> None:
 def filter_where(rows: list[dict], where: str | None) -> list[dict]:
     """Filter `rows` (as `Store.query_rows` returns them, or `summarise`'s
     output -- both are flat dicts) to those matching every `axis=value` pair
-    in `where`, comma-joined (e.g. `"codec=Delta,cache_mode=warm"`).
+    in `where`, comma-joined (e.g. `"codec=Delta,kind=filter"`).
     `where=None` returns `rows` unchanged.
 
     Comparison rule: `where` always arrives as a string (it comes from the
     CLI), while row values are the row's own type (`int`, `float`, `str`,
     `None`). A row matches when `str(row[axis]) == value` -- comparing the
     row value's string form to the filter string -- so `nullable=1`,
-    `qcc=0` and `target_fraction=0.1` all work without the caller needing to
+    `nullable=0` and `target_fraction=0.1` all work without the caller needing to
     know or convert each axis's stored type.
 
     An axis name that is not a key of the rows is almost always a typo, and

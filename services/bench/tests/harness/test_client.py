@@ -55,9 +55,3 @@ def test_query_id_survives_caller_settings(ch):
         parameters={"q": qid},
     )
     assert rows[0][0] == 1
-
-
-@pytest.mark.clickhouse
-def test_drop_caches_reports_each_statement(ch):
-    ok = ch.drop_caches()
-    assert set(ok) == {"MARK", "UNCOMPRESSED", "QUERY CONDITION"}

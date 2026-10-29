@@ -61,8 +61,6 @@ def qv():
         predicate_kind="range",
         target_fraction=0.1,
         values_n=None,
-        qcc=False,
-        cache_mode="warm",
         predicate_sql="v BETWEEN 1 AND 2",
         actual_fraction=0.11,
     )

@@ -202,7 +202,7 @@ def _variant_label(variant: TableVariant) -> str:
 
 
 def _query_label(qv: QueryVariant) -> str:
-    label = f"{qv.kind} cache={qv.cache_mode} qcc={qv.qcc}"
+    label = qv.kind
     if qv.target_fraction is not None:
         label += f" target={qv.target_fraction:g} actual={qv.actual_fraction:.4f}"
     return label

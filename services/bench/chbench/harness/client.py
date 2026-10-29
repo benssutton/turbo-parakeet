@@ -22,8 +22,6 @@ from typing import Any, Mapping
 import clickhouse_connect
 import pyarrow as pa
 
-_CACHES = ("MARK", "UNCOMPRESSED", "QUERY CONDITION")
-
 
 @dataclass(frozen=True)
 class Connection:
@@ -103,21 +101,6 @@ class CHClient:
 
     def version(self) -> str:
         return str(self._client.command("SELECT version()"))
-
-    def drop_caches(self) -> set[str]:
-        """Issue `SYSTEM DROP MARK CACHE`, `SYSTEM DROP UNCOMPRESSED CACHE` and
-        `SYSTEM DROP QUERY CONDITION CACHE`, each in its own try so an
-        unsupported one cannot abort the run. Returns the set of cache names
-        whose statement succeeded: a subset of `{"MARK", "UNCOMPRESSED",
-        "QUERY CONDITION"}`."""
-        ok: set[str] = set()
-        for cache in _CACHES:
-            try:
-                self._client.command(f"SYSTEM DROP {cache} CACHE")
-                ok.add(cache)
-            except Exception:  # noqa: BLE001
-                pass
-        return ok
 
     def flush_logs(self) -> None:
         """`SYSTEM FLUSH LOGS`, so `system.query_log` holds the rows for

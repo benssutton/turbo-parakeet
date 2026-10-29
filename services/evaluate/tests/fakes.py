@@ -80,8 +80,6 @@ def make_store(path: Path, suite_name: str, tables: list[T]) -> Path:
                     target_fraction=q.target_fraction,
                     actual_fraction=None,
                     predicate_sql=q.predicate_sql,
-                    cache_mode="warm",
-                    qcc=False,
                 )
                 s.upsert_query(q.query_id, t.table_id, qv, "", status=q.status)
                 for i, smp in enumerate(q.samples if q.status == "ok" else []):

@@ -30,7 +30,6 @@ from chbench.harness.validate import (
 _TOP_LEVEL_BLOCKS = ("name", "dataset", "clickhouse", "queries", "results")
 _QUERY_KINDS = ("full_scan", "filter")
 _PREDICATES = ("range", "in")
-_CACHE_MODES = {"warm", "cold"}
 _CLICKHOUSE_AXES = (
     "type",
     "nullable",
@@ -43,7 +42,9 @@ _CLICKHOUSE_AXES = (
 _DATASET_FIELDS = {f.name for f in fields(DatasetSpec)}
 _PATH_DATASET_KEYS = {"path", "column", "seed", "decimal_places"}
 _DISTRIBUTION_FIELDS = {f.name for f in fields(Distribution)}
-_QUERIES_KEYS = {"kinds", "query_condition_cache", "cache_mode", "samples"}
+_QUERIES_KEYS = {"kinds", "samples"}
+# Retired by ToDo 3: every sample now runs warm with the query condition cache off.
+_RETIRED_QUERY_KEYS = ("query_condition_cache", "cache_mode")
 _RESULTS_KEYS = {"percentiles"}
 
 
@@ -74,8 +75,6 @@ class ClickHouseAxes:
 @dataclass(frozen=True)
 class QueryAxes:
     kinds: list[QueryKind]
-    query_condition_cache: list[bool]
-    cache_mode: list[str]
     samples: int
 
 
@@ -378,12 +377,17 @@ def _check_dataset_against_type_axis(
 
 
 def _parse_queries(block: dict) -> QueryAxes:
+    for key in _RETIRED_QUERY_KEYS:
+        if key in block:
+            raise SuiteError(
+                f"queries.{key} was retired (ToDo 3): every sample runs warm with the "
+                f"query condition cache off; remove the key"
+            )
     _reject_unknown_keys(block, _QUERIES_KEYS, "queries")
 
-    for axis in ("kinds", "query_condition_cache", "cache_mode"):
-        if axis not in block:
-            raise SuiteError(f"queries block is missing the {axis!r} axis")
-        _require_non_empty_list(block[axis], axis)
+    if "kinds" not in block:
+        raise SuiteError("queries block is missing the 'kinds' axis")
+    _require_non_empty_list(block["kinds"], "kinds")
 
     if "samples" not in block:
         raise SuiteError("queries block is missing 'samples'")
@@ -392,18 +396,8 @@ def _parse_queries(block: dict) -> QueryAxes:
     if not isinstance(samples, int) or isinstance(samples, bool) or samples <= 0:
         raise SuiteError(f"samples must be a positive integer, got {samples!r}")
 
-    kinds = [_parse_query_kind(k) for k in block["kinds"]]
-
-    cache_mode = block["cache_mode"]
-    for mode in cache_mode:
-        if mode not in _CACHE_MODES:
-            raise SuiteError(f"cache_mode must be 'warm' or 'cold', got {mode!r}")
-
     return QueryAxes(
-        kinds=kinds,
-        query_condition_cache=block["query_condition_cache"],
-        cache_mode=cache_mode,
-        samples=samples,
+        kinds=[_parse_query_kind(k) for k in block["kinds"]], samples=samples
     )
 
 

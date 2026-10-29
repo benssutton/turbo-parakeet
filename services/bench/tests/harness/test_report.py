@@ -19,8 +19,6 @@ def rows():
         predicate_kind="range",
         target_fraction=0.1,
         actual_fraction=0.101,
-        cache_mode="warm",
-        qcc=0,
         compressed_bytes=500,
         uncompressed_bytes=1000,
         index_compressed_bytes=30,
@@ -84,7 +82,7 @@ def test_filter_where():
     r = rows()
     assert filter_where(r, "codec=Delta") == r
     assert filter_where(r, "codec=T64") == []
-    assert filter_where(r, "codec=Delta,cache_mode=warm") == r
+    assert filter_where(r, "codec=Delta,kind=filter") == r
     assert filter_where(r, None) == r
 
 
@@ -109,8 +107,6 @@ def test_skipped_table_has_none_compression_ratio():
         predicate_kind=None,
         target_fraction=None,
         actual_fraction=None,
-        cache_mode="warm",
-        qcc=0,
         compressed_bytes=None,
         uncompressed_bytes=None,
         query_id="q",
@@ -126,11 +122,11 @@ def test_filter_where_unknown_axis_raises():
 
 
 def test_filter_where_numeric_value_matches_string_form():
-    """CLI values arrive as strings; row values are ints/floats. `qcc=0`,
+    """CLI values arrive as strings; row values are ints/floats. `nullable=0`,
     `nullable=1` and `target_fraction=0.1` must all match by comparing the
     row value's string form to the filter value."""
     r = rows()
-    assert filter_where(r, "qcc=0") == r
+    assert filter_where(r, "nullable=0") == r
     assert filter_where(r, "target_fraction=0.1") == r
     assert filter_where(r, "nullable=0") == r
     assert filter_where(r, "nullable=1") == []
@@ -150,8 +146,6 @@ def test_summarise_single_sample_group():
         predicate_kind=None,
         target_fraction=None,
         actual_fraction=None,
-        cache_mode="warm",
-        qcc=0,
         compressed_bytes=500,
         uncompressed_bytes=1000,
         query_id="q",
@@ -181,8 +175,6 @@ def test_sort_tolerates_none_vs_float_on_the_same_axis():
         kind="full_scan",
         predicate_kind=None,
         actual_fraction=None,
-        cache_mode="warm",
-        qcc=0,
         compressed_bytes=500,
         uncompressed_bytes=1000,
         sample_no=0,

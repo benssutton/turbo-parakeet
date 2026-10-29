@@ -21,8 +21,6 @@ queries:
     - {kind: full_scan}
     - {kind: filter, target_fraction: 0.10, predicate: range}
     - {kind: filter, target_fraction: 0.20, predicate: range}
-  query_condition_cache: [false]
-  cache_mode: [warm]
   samples: 10
 results:
   percentiles: [50, 90, 99]

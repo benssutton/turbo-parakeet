@@ -2,14 +2,13 @@
 
 The run, step by step:
 
-1. One untimed warm-up run, skipped in `cold` mode.
+1. One untimed warm-up run.
 2. `samples` timed runs. Each has a fresh `uuid4` query id (delivered only
    through `CHClient.query_rows`'s `query_id` argument, which is the sole
    path that reaches the server on clickhouse-connect 1.8.0 — see that
-   module's docstring) and the settings `use_query_condition_cache` from the
-   variant's `qcc` and `use_query_cache = 0`. In `cold` mode
-   `CHClient.drop_caches()` runs before every sample. The client wall clock
-   is measured around the query call alone.
+   module's docstring) and the settings `use_query_condition_cache = 0` and
+   `use_query_cache = 0`. The client wall clock is measured around the query
+   call alone.
 3. `SYSTEM FLUSH LOGS`, then **one** read of `system.query_log` for every
    sample's id at once (`_QUERY_LOG_SQL`), matched back to the samples by
    id. If a row is missing the read is retried up to three times with a
@@ -40,7 +39,6 @@ from chbench.harness.client import CHClient
 from chbench.harness.queries import QueryVariant, filter_sql, full_scan_sql
 from chbench.harness.validate import TableVariant
 
-_EXPECTED_DROPS = frozenset({"MARK", "UNCOMPRESSED", "QUERY CONDITION"})
 _LOG_READ_ATTEMPTS = 3
 _LOG_READ_SLEEP_S = 0.5
 _NAN = float("nan")
@@ -111,8 +109,8 @@ def query_sql(name: str, variant: TableVariant, qv: QueryVariant) -> str:
     return filter_sql(name, variant, qv.predicate_sql)
 
 
-def _query_settings(qv: QueryVariant) -> dict[str, int]:
-    return {"use_query_condition_cache": int(bool(qv.qcc)), "use_query_cache": 0}
+# Every sample runs warm with both result caches off (ToDo 3 retired the cold / qcc axes).
+_SETTINGS = {"use_query_condition_cache": 0, "use_query_cache": 0}
 
 
 def _error_text(e: BaseException) -> str:
@@ -168,11 +166,6 @@ def run_query(
     raised from inside `on_sample` (or during the EXPLAIN) is handled the
     same way except that no further samples are delivered; the samples that
     ran are still in `run_result.samples`, filled.
-
-    In `cold` mode `drop_caches()` runs before every sample; if any of the
-    three caches (`MARK`, `UNCOMPRESSED`, `QUERY CONDITION`) was not dropped
-    a warning naming it is appended to `RunResult.warnings`, because a cold
-    measurement without the mark cache dropped is not cold.
 
     Any other exception during the warm-up, a sample, the flush, the log
     read or the EXPLAIN sets `status = "error"` with the message and
@@ -236,19 +229,9 @@ def run_query(
     try:
         try:
             sql = query_sql(name, variant, qv)
-            settings = _query_settings(qv)
-            cold = qv.cache_mode == "cold"
-            if not cold:
-                client.query_rows(sql, settings=settings)
+            settings = _SETTINGS
+            client.query_rows(sql, settings=settings)
             for i in range(samples):
-                if cold:
-                    dropped = client.drop_caches()
-                    missing = sorted(_EXPECTED_DROPS - dropped)
-                    if missing:
-                        result.warnings.append(
-                            f"sample {i}: cold mode but these caches were not dropped: "
-                            + ", ".join(missing)
-                        )
                 qid = str(uuid.uuid4())
                 ran_at = datetime.datetime.now(datetime.timezone.utc)
                 t0 = time.perf_counter()

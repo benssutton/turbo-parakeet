@@ -286,8 +286,6 @@ def _queries(base: str) -> dict:
         kinds.append({"kind": "filter", "target_fraction": 0.10, "predicate": "range"})
     return {
         "kinds": kinds,
-        "query_condition_cache": [False],
-        "cache_mode": ["warm"],
         "samples": 10,
     }
 

@@ -100,8 +100,6 @@ class QueryVariant:
     predicate_kind: str | None
     target_fraction: float | None
     values_n: int | None
-    qcc: bool
-    cache_mode: str
     predicate_sql: str | None
     actual_fraction: float | None
 
@@ -388,15 +386,8 @@ def filter_sql(name: str, variant: TableVariant, predicate_sql: str) -> str:
 def expand_queries(
     axes: QueryAxes, values: np.ndarray, variant: TableVariant, rng: np.random.Generator
 ) -> list[QueryVariant]:
-    """The cartesian product of `axes.kinds`, `axes.query_condition_cache`
-    and `axes.cache_mode` (not `axes.samples`, which is the runner's repeat
-    count for a single `QueryVariant`, not an axis of distinct queries).
-
-    Each `QueryKind`'s predicate is built exactly once (consuming `rng` for
-    `range`, deterministically for `in`) and shared across every
-    qcc/cache_mode combination for that kind: the underlying query is the
-    same query run under different cache settings, not a different query
-    per setting.
+    """One `QueryVariant` per `axes.kinds` entry, in order (`axes.samples` is the repeat count,
+    not an axis). A `range` predicate consumes `rng`; an `in` predicate is deterministic.
     """
     variants: list[QueryVariant] = []
     for kind in axes.kinds:
@@ -419,20 +410,16 @@ def expand_queries(
             else:
                 raise ValueError(f"unknown predicate kind {predicate_kind!r}")
 
-        for qcc in axes.query_condition_cache:
-            for cache_mode in axes.cache_mode:
-                variants.append(
-                    QueryVariant(
-                        kind=kind.kind,
-                        predicate_kind=predicate_kind,
-                        target_fraction=kind.target_fraction,
-                        values_n=values_n,
-                        qcc=qcc,
-                        cache_mode=cache_mode,
-                        predicate_sql=predicate_sql,
-                        actual_fraction=actual_fraction,
-                    )
-                )
+        variants.append(
+            QueryVariant(
+                kind=kind.kind,
+                predicate_kind=predicate_kind,
+                target_fraction=kind.target_fraction,
+                values_n=values_n,
+                predicate_sql=predicate_sql,
+                actual_fraction=actual_fraction,
+            )
+        )
     return variants
 
 
@@ -447,8 +434,6 @@ def query_id(table_id: str, variant: QueryVariant) -> str:
             str(variant.predicate_kind),
             str(variant.target_fraction),
             str(variant.values_n),
-            str(variant.qcc),
-            variant.cache_mode,
             str(variant.predicate_sql),
             str(variant.actual_fraction),
         ]

@@ -28,8 +28,6 @@ MINIMAL = textwrap.dedent("""
     queries:
       kinds:
         - {kind: full_scan}
-      query_condition_cache: [false]
-      cache_mode: [warm]
       samples: 3
     results:
       percentiles: [50, 90]
@@ -101,9 +99,11 @@ def test_in_predicate_requires_values():
         )
 
 
-def test_cache_mode_must_be_warm_or_cold():
-    with pytest.raises(SuiteError, match="cache_mode"):
-        parse_suite(MINIMAL.replace("cache_mode: [warm]", "cache_mode: [tepid]"))
+@pytest.mark.parametrize("key", ["cache_mode", "query_condition_cache"])
+def test_retired_query_keys_are_rejected_with_the_reason(key):
+    y = MINIMAL.replace("  samples: 3", f"  {key}: [false]\n  samples: 3")
+    with pytest.raises(SuiteError, match=rf"queries.{key} was retired \(ToDo 3\)"):
+        parse_suite(y)
 
 
 def test_every_axis_must_be_a_non_empty_list():
@@ -128,7 +128,6 @@ def test_int_encodings_suite_matches_the_settled_decisions():
     s = load_suite("suites/int_encodings.yaml")
     assert s.dataset.cardinality_ratio == 0.0001  # 1000 distinct at 10M
     assert s.dataset.entropy_bits == 4.0 and s.dataset.runs_z == -0.25
-    assert s.queries.cache_mode == ["warm", "cold"]
 
 
 def test_distribution_typo_key_is_rejected():

@@ -26,8 +26,6 @@ queries:
   kinds:
     - {kind: full_scan}
     - {kind: filter, target_fraction: 0.1, predicate: range}
-  query_condition_cache: [false]
-  cache_mode: [warm]
   samples: 2
 results:
   percentiles: [50]

@@ -87,38 +87,34 @@ def test_filter_sql_reads_the_column_like_full_scan():
     )
 
 
-def test_expand_queries_is_the_product_of_kinds_qcc_and_cache_mode():
+def test_expand_queries_gives_one_variant_per_kind():
     axes = QueryAxes(
         kinds=[
             QueryKind("full_scan", None, None, None),
             QueryKind("filter", 0.1, "range", None),
         ],
-        query_condition_cache=[True, False],
-        cache_mode=["warm", "cold"],
         samples=3,
     )
     vals = np.arange(1000, dtype=float)
-    qs = expand_queries(axes, vals, variant(), np.random.default_rng(0))
-    assert len(qs) == 8
-    scan = [q for q in qs if q.kind == "full_scan"]
-    assert all(q.predicate_sql is None and q.actual_fraction is None for q in scan)
-    filt = [q for q in qs if q.kind == "filter"]
-    assert all(
-        q.predicate_sql and q.actual_fraction == pytest.approx(0.1, abs=0.01)
-        for q in filt
-    )
+    scan, filt = expand_queries(axes, vals, variant(), np.random.default_rng(0))
+    assert scan.kind == "full_scan" and scan.predicate_sql is None
+    assert filt.predicate_sql and filt.actual_fraction == pytest.approx(0.1, abs=0.01)
 
 
-def test_query_id_is_stable_and_distinct_per_axis():
+def test_query_id_is_stable_and_distinct_per_kind():
     axes = QueryAxes(
-        kinds=[QueryKind("full_scan", None, None, None)],
-        query_condition_cache=[True, False],
-        cache_mode=["warm"],
+        kinds=[
+            QueryKind("full_scan", None, None, None),
+            QueryKind("filter", 0.1, "range", None),
+        ],
         samples=1,
     )
-    qs = expand_queries(axes, np.arange(10.0), variant(), np.random.default_rng(0))
-    ids = {query_id("t", q) for q in qs}
-    assert len(ids) == 2 and all(len(i) == 16 for i in ids)
+    vals = np.arange(10.0)
+    qs = expand_queries(axes, vals, variant(), np.random.default_rng(0))
+    again = expand_queries(axes, vals, variant(), np.random.default_rng(0))
+    ids = [query_id("t", q) for q in qs]
+    assert ids == [query_id("t", q) for q in again]
+    assert len(set(ids)) == 2 and all(len(i) == 16 for i in ids)
 
 
 # --- Fix-report regression tests: literal rendering must follow the column

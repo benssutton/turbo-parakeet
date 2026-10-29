@@ -22,8 +22,6 @@ clickhouse:
 queries:
   kinds:
     - {{kind: full_scan}}
-  query_condition_cache: [false]
-  cache_mode: [warm]
   samples: 3
 results:
   percentiles: [50]
