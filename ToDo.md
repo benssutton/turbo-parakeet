@@ -96,8 +96,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    interval contains 1. Follow-ups:
    - At 10 samples a paired ratio interval is ≈ 0.33 wide (median): differences under ≈ 20% stay unresolved. Raise
      the example suites' `samples` or document `--samples-add` per question.
-   - `report --baseline` pairs only within one `ch_type`, so `LowCardinality(String)` against `String` (different
-     type and codec) needs a hand pairing; a baseline over two axes at once would cover it.
    - Decimal32 sorted + ZSTD with no codec is 2.09× the size of Decimal64 (17.1 against 8.2 MB); not investigated.
    - `python -m evaluate run` defaults to `--workers 3`, which times suites in parallel on one server; query-cost
      scores need `--workers 1`. Decide the default.

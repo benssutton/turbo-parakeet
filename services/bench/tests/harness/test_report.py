@@ -263,6 +263,23 @@ def test_baseline_groups_by_the_predicate_shape():
     assert by["jd"]["cpu_ratio"] == pytest.approx(1 / 25)
 
 
+def test_a_two_axis_baseline_pairs_low_cardinality_with_string():
+    cpu = [100.0, 120.0, 90.0, 110.0, 105.0, 95.0]
+    plain = [
+        dict(r, ch_type="String") for r in rounds_rows("s", "none", cpu, [1.0] * 6)
+    ]
+    lc = [
+        dict(r, ch_type="LowCardinality(String)")
+        for r in rounds_rows("lc", "LowCardinality", [c / 4 for c in cpu], [1.0] * 6)
+    ]
+    by = {
+        s["query_id"]: s
+        for s in summarise(plain + lc, [50], baseline="ch_type=String,codec=none")
+    }
+    assert by["lc"]["cpu_ratio"] == pytest.approx(0.25)
+    assert by["lc"]["n_rounds"] == 6
+
+
 @pytest.mark.parametrize(
     "baseline", ["codec=None", "primary_key=true", "target_fraction=0.10", "codec"]
 )
