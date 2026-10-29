@@ -1,3 +1,5 @@
+import uuid
+
 import numpy as np
 import pytest
 import pyarrow as pa
@@ -82,14 +84,16 @@ def test_string_full_scan_reads_the_characters_not_the_size_subcolumn():
     assert full_scan_sql("t", variant("String")).endswith(
         " SETTINGS optimize_functions_to_subcolumns = 0"
     )
+    for ch_type in ("LowCardinality(String)", "Nullable(String)"):
+        assert full_scan_sql("t", variant(ch_type)).endswith(
+            " SETTINGS optimize_functions_to_subcolumns = 0"
+        )
     assert "SETTINGS" not in full_scan_sql("t", variant("Float64"))
     assert "SETTINGS" not in full_scan_sql("t", variant("FixedString(4)"))
 
 
 @pytest.mark.clickhouse
 def test_string_full_scan_reads_the_characters_live(ch):
-    import uuid
-
     t = "bench.test_string_scan"
     ch.command(f"DROP TABLE IF EXISTS {t}")
     ch.command(
