@@ -85,8 +85,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    - Binary columns are not expressible in chbench's `arrow_type` vocabulary: `to_chbench` emits suites chbench
      rejects, and the loop drops them into `suites/skipped.json` (5 synth_frame columns). Either chbench learns
      `binary` or `to_chbench` skips them with a reason.
-   - The recommender's pruned ClickHouse candidates carry no predicted bytes; the loop fills those cells from the
-     emulator (`_plugin.clickhouse_profile`). Decide whether the recommender should report them.
 3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
    loaded first, then a warm-up and interleaved rounds shuffled per round; server CPU time primary, wall beside it;
    distribution-free median intervals and paired per-round ratios (`chbench report --baseline`); a quietness record

@@ -30,6 +30,9 @@ parallel: sizes and skip shares are unaffected, but query-cost scores are only v
   `cpu_ratio` / `server_ratio` with intervals and `n_rounds` (chbench's `harness/stats.py`). `query_regret`, one row
   per (dataset, column, suite, query): the best alternative by `cpu_ratio`, its interval Bonferroni-adjusted over the
   `n_alternatives`; `resolved` when the interval lies below 1, `regret_cpu` = 1 − ratio when resolved, else 0.
+- A pruned ClickHouse candidate carries no predicted bytes, by design: pruning is how the recommender avoids
+  measuring those chains. `suites.py` fills such a cell from the emulator (`_plugin.clickhouse_profile`); it stays
+  `origin: candidate, outcome: pruned` in size_cells, so a pruned cell's prediction is always the emulator's.
 - `bench.py` is the only module that talks to ClickHouse; `predict.py` (skip shares per queried value) and
   `score.py` need no server.
 - Resume: each step skips what is on disk; chbench skips held samples; scoring always reruns. A suite's
