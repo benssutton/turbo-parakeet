@@ -62,9 +62,8 @@ def run_one(yaml_path: Path, store: Path, cache: Path) -> str | None:
     if suite is not None and store.is_file():
         try:
             drop_tables(store, suite.name)
-        except (
-            Exception
-        ) as e:  # noqa: BLE001 - cleanup failure must not mask the run's error
+        except Exception as e:  # noqa: BLE001
+            # Cleanup failure must not mask the run's error.
             drop = f"drop failed: {type(e).__name__}: {e}"
             error = f"{error}; {drop}" if error else drop
     return error
@@ -76,9 +75,8 @@ Runner = Callable[[Path, Path, Path], "str | None"]
 def _result(future) -> str | None:
     try:
         return future.result()
-    except (
-        Exception
-    ) as e:  # noqa: BLE001 - e.g. BrokenProcessPool: keep the other suites
+    except Exception as e:  # noqa: BLE001
+        # E.g. BrokenProcessPool: keep the other suites.
         return f"{type(e).__name__}: {e}"
 
 

@@ -210,9 +210,8 @@ def run_round(
             if pending:
                 try:
                     _fill(client, pending, result.warnings)
-                except (
-                    Exception
-                ) as e:  # noqa: BLE001 - the samples keep nan, named by _fill
+                except Exception as e:  # noqa: BLE001
+                    # The samples keep nan, named by _fill.
                     result.warnings.append(
                         f"system.query_log read failed: {_error_text(e)}"
                     )
