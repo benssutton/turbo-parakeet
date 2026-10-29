@@ -61,7 +61,9 @@ ENTRIES: dict[str, Entry] = {
     "describe_narrow": Entry(describe_narrow, 200_000, True),
 }
 GROUPS: dict[str, tuple[str, ...]] = {
-    "calibration": ("synth_frame", "gcd", "delta", "skip")
+    "calibration": ("synth_frame", "gcd", "delta", "skip"),
+    # query time resolves at >= 1M rows (docs/results/2026-10-29-query-regret.md)
+    "query_time": ("synth_frame:1000000", "gcd", "delta", "skip"),
 }
 
 

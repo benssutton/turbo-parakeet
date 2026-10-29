@@ -63,3 +63,13 @@ def test_duplicates_are_rejected():
 def test_bad_rows_override(arg):
     with pytest.raises(RegistryError, match="rows must be a positive integer"):
         resolve([arg])
+
+
+def test_the_query_time_group_scores_synth_frame_at_a_million_rows():
+    got = [(d.name, d.rows) for d in resolve(["query_time"])]
+    assert got == [
+        ("synth_frame", 1_000_000),
+        ("gcd", 1_000_000),
+        ("delta", 1_000_000),
+        ("skip", 1_000_000),
+    ]

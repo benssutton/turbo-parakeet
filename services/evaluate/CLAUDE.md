@@ -11,8 +11,9 @@ python -m evaluate report RUN_DIR          # re-score, no server
 python -m evaluate compare RUN_A RUN_B     # summary metric changes
 ```
 Datasets: registry names (`evaluate/registry.py`: synth tiers, the planted `gcd` / `delta` / `skip` frames,
-synthdata scenarios), `name:rows` for scalable entries, the group `calibration`, `--all`, or a path to an Arrow IPC
-frame. `--dry-run` needs no server and prints the table-load count. `--workers N` times N suites in
+synthdata scenarios), `name:rows` for scalable entries, the groups `calibration` and `query_time` (the calibration
+frames with synth_frame at 1M rows: use it when query time is scored), `--all`, or a path to an Arrow IPC frame.
+`--dry-run` needs no server and prints the table-load count. `--workers N` times N suites in
 parallel: sizes and skip shares are unaffected, but query-cost scores are only valid at 1.
 
 # Design
