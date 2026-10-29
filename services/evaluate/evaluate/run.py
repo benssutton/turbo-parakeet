@@ -71,7 +71,7 @@ def _prepare(
 def run_loop(
     args: list[str],
     *,
-    workers: int = 3,
+    workers: int = 1,
     samples: int = 3,
     dry_run: bool = False,
     resume: Path | None = None,

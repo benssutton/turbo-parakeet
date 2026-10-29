@@ -6,14 +6,14 @@ recommendation against alternatives on the same data, score. ClickHouse only (Po
 # Running
 From the repository root, with the `chbench-ch` container up (services/bench/CLAUDE.md, Environment):
 ```
-python -m evaluate run <datasets…> [--workers 3] [--samples 10] [--dry-run] [--resume RUN_DIR] [--runs-dir DIR]
+python -m evaluate run <datasets…> [--workers 1] [--samples 10] [--dry-run] [--resume RUN_DIR] [--runs-dir DIR]
 python -m evaluate report RUN_DIR          # re-score, no server
 python -m evaluate compare RUN_A RUN_B     # summary metric changes
 ```
 Datasets: registry names (`evaluate/registry.py`: synth tiers, the planted `gcd` / `delta` / `skip` frames,
 synthdata scenarios), `name:rows` for scalable entries, the group `calibration`, `--all`, or a path to an Arrow IPC
-frame. `--dry-run` needs no server and prints the table-load count. Time a run whose query costs matter with
-`--workers 1`: parallel suites share the server's CPUs.
+frame. `--dry-run` needs no server and prints the table-load count. `--workers N` times N suites in
+parallel: sizes and skip shares are unaffected, but query-cost scores are only valid at 1.
 
 # Design
 - One directory per run, `services/evaluate/runs/<ts>/` (git-ignored): run.json, per dataset frame.arrow,

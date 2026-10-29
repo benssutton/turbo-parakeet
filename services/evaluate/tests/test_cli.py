@@ -115,3 +115,10 @@ def test_missing_run_dir_exits_2(tmp_path, capsys, cmd):
     assert main([a.format(missing=missing) for a in cmd]) == 2
     assert "is not a run directory" in capsys.readouterr().err
     assert not any(tmp_path.iterdir())
+
+
+def test_workers_default_to_one():
+    from evaluate.cli import _parser
+
+    args = _parser().parse_args(["run", "gcd"])
+    assert args.workers == 1

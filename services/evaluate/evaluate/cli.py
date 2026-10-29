@@ -22,7 +22,12 @@ def _parser() -> argparse.ArgumentParser:
         nargs="+",
         help="registry names, groups, name:rows, --all or .arrow paths",
     )
-    r.add_argument("--workers", type=int, default=3)
+    r.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="suites timed in parallel; above 1 the query-cost scores share the server's CPUs",
+    )
     r.add_argument("--samples", type=int, default=10)
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--resume", type=Path)
