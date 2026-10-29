@@ -74,7 +74,43 @@ def test_full_scan_sql_by_type():
     assert (
         full_scan_sql("bench.t", variant("String"))
         == "SELECT count(), sum(length(v)) FROM bench.t"
+        " SETTINGS optimize_functions_to_subcolumns = 0"
     )
+
+
+def test_string_full_scan_reads_the_characters_not_the_size_subcolumn():
+    assert full_scan_sql("t", variant("String")).endswith(
+        " SETTINGS optimize_functions_to_subcolumns = 0"
+    )
+    assert "SETTINGS" not in full_scan_sql("t", variant("Float64"))
+    assert "SETTINGS" not in full_scan_sql("t", variant("FixedString(4)"))
+
+
+@pytest.mark.clickhouse
+def test_string_full_scan_reads_the_characters_live(ch):
+    import uuid
+
+    t = "bench.test_string_scan"
+    ch.command(f"DROP TABLE IF EXISTS {t}")
+    ch.command(
+        f"CREATE TABLE {t} (row_id UInt64, v String) ENGINE = MergeTree ORDER BY row_id "
+        "SETTINGS min_bytes_for_wide_part = 0"
+    )
+    try:
+        ch.command(
+            f"INSERT INTO {t} SELECT number, repeat('x', 50) FROM numbers(100000)"
+        )
+        qid = uuid.uuid4().hex
+        ch.query_rows(full_scan_sql(t, variant("String")), query_id=qid)
+        ch.flush_logs()
+        [(read_bytes,)] = ch.query_rows(
+            "SELECT read_bytes FROM system.query_log "
+            "WHERE query_id = {q:String} AND type = 'QueryFinish'",
+            parameters={"q": qid},
+        )
+        assert read_bytes >= 100_000 * 50  # the characters, not only the 8-byte sizes
+    finally:
+        ch.command(f"DROP TABLE IF EXISTS {t}")
 
 
 def test_filter_sql_reads_the_column_like_full_scan():

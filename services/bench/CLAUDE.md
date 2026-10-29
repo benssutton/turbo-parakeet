@@ -88,6 +88,9 @@ axis over a string or date dataset) is rejected at parse time.
   `use_query_condition_cache = 0`, and reads `system.query_log` once. `--samples-add N` adds N rounds over every pair,
   so samples stay paired by `round_no`; a query added later is paired only over the rounds it shares (`run` warns).
   Ctrl-C marks every query short of its samples `interrupted`.
+- String full scan: it disables `optimize_functions_to_subcolumns` so `sum(length(v))` reads the characters, not just
+  the size subcolumn (FINDINGS §12). A store holding String full-scan samples from before this change must be rerun
+  with `--force` or a fresh `--store`, because `query_id` does not hash the SELECT list.
 - Time metrics: server CPU (`cpu_us` = User + System microseconds from ProfileEvents) is primary, server wall
   (`server_ms`) beside it; client time has a floor of ≈ 50 ms through Docker Desktop's HTTP path. `report` gives each
   median a distribution-free 95% interval (order statistics; none below 6 samples, `harness/stats.py`).

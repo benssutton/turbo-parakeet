@@ -2301,3 +2301,24 @@ is written by a separate `AsyncInsertFlush` row (same `tables`), which holds the
 Scope: one column, one data shape per path (1000 distinct strings), `GRANULARITY 1` in the
 scripted cells, one server version; single runs, no repeats (the effect is 3 to 10x, well
 above the 2x noise of the measurement notes).
+
+## 12. The String full scan (spike_string_scan.py)
+
+2026-10-29. ClickHouse 26.8.31.2. Question (ToDo 3): does `SELECT count(), sum(length(v))` over a
+String column read the characters? 1 000 000 rows of `randomPrintableASCII(20)`, Wide part, one part
+after `OPTIMIZE ... FINAL`; `read_bytes`, `ProfileEvents['ReadCompressedBytes']` and server CPU
+(User + System microseconds) of the second (warm) run, from `system.query_log`. Run from
+`services/bench/`: `python -m spikes.spike_string_scan`.
+
+```
+form	read_bytes	ReadCompressedBytes	cpu_us
+length	8000000	36253	8842
+length_no_subcolumns	23000000	20117943	34179
+lengthUTF8	23000000	20117948	29903
+```
+
+`length(v)` alone is rewritten by `optimize_functions_to_subcolumns` to the `v.size0` subcolumn
+(8 MB, 36 KB compressed); the characters are never read. `SETTINGS optimize_functions_to_subcolumns = 0`
+keeps the expression and reads the characters (23 MB; 20 MB compressed). `lengthUTF8` reads the same
+bytes; over two more runs `length_no_subcolumns` cost 25.3 / 24.0 ms of CPU against 30.5 / 28.6 for
+`lengthUTF8` (single runs, noisy), so the full scan uses `length` with the setting off.

@@ -94,8 +94,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    `invalid_bracket` refused (`--allow-unsolved`); the LowCardinality insert slowdown traced to the server (FINDINGS
    §11; the loader batches inserts); FINDINGS §3's closed form. `suites/replicates.yaml`: every pairwise ratio
    interval contains 1. Follow-ups:
-   - The String full scan `sum(length(v))` reads only the size subcolumn (80 MB at 10M rows), so it does not compare
-     with the other types' scans; read the characters (`services/bench/chbench/harness/queries.py`).
    - At 10 samples a paired ratio interval is ≈ 0.33 wide (median): differences under ≈ 20% stay unresolved. Raise
      the example suites' `samples` or document `--samples-add` per question.
    - `report --baseline` pairs only within one `ch_type`, so `LowCardinality(String)` against `String` (different

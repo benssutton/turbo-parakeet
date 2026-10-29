@@ -365,8 +365,13 @@ def _aggregate_select(variant: TableVariant) -> str:
 def full_scan_sql(name: str, variant: TableVariant) -> str:
     """`SELECT count(), sum(toFloat64(v))` for numeric types (including
     decimals, dates and timestamps), `SELECT count(), sum(length(v))` for
-    strings — every value is read but nothing is shipped to the client."""
-    return f"SELECT {_aggregate_select(variant)} FROM {name}"
+    strings — every value is read but nothing is shipped to the client. A String
+    scan disables `optimize_functions_to_subcolumns`, which would answer
+    `length(v)` from the size subcolumn alone (FINDINGS §12)."""
+    sql = f"SELECT {_aggregate_select(variant)} FROM {name}"
+    if base_type(variant.ch_type) == "String":
+        sql += " SETTINGS optimize_functions_to_subcolumns = 0"
+    return sql
 
 
 def filter_sql(name: str, variant: TableVariant, predicate_sql: str) -> str:
