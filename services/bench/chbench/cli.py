@@ -4,7 +4,7 @@ The surface:
 
     chbench run  suites/x.yaml [--force] [--samples-add N] [--dry-run]
                  [--explain] [--ignore-unfinished] [--allow-unsolved]
-    chbench report --suite x [--csv out.csv] [--where "codec=T64"]
+    chbench report --suite x [--csv out.csv] [--where "codec=T64"] [--baseline EXPR]
     chbench datasets [--metrics]
     chbench clean --suite x
 
@@ -159,6 +159,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "axes nullable, primary_key and projection are "
         "written 1/0, not the y/- the table shows",
     )
+    report.add_argument(
+        "--baseline",
+        metavar="EXPR",
+        help='reference row per group, e.g. "codec=none,compression=LZ4": adds CPU and wall '
+        "ratios paired by round, with intervals",
+    )
     _add_store(report)
     report.set_defaults(handler=_cmd_report)
 
@@ -286,7 +292,10 @@ def _cmd_report(args: argparse.Namespace, console: Console) -> int:
     if not rows:
         return _fail(f"no rows for suite {args.suite!r} match {args.where!r}")
 
-    summary = summarise(rows, percentiles)
+    try:
+        summary = summarise(rows, percentiles, baseline=args.baseline)
+    except ValueError as e:
+        return _fail(str(e))
     console.print(
         f"report: {args.suite} ({len(summary)} queries, {len(rows)} samples)",
         style="bold",

@@ -188,3 +188,52 @@ def test_sort_tolerates_none_vs_float_on_the_same_axis():
     summary = summarise(rows, [50])
     assert {s["query_id"] for s in summary} == {"q_none", "q_half"}
     assert len(summary) == 2
+
+
+def rounds_rows(query_id, codec, cpu, server):
+    base = dict(rows()[0], query_id=query_id, table_id=query_id, codec=codec)
+    return [
+        dict(base, sample_no=i, round_no=i, cpu_us=c, server_ms=s, client_ms=s + 50)
+        for i, (c, s) in enumerate(zip(cpu, server))
+    ]
+
+
+def test_cpu_and_server_intervals():
+    r = rounds_rows("q", "Delta", [float(v) for v in range(10, 0, -1)], [1.0] * 10)
+    [s] = summarise(r, [50])
+    assert (s["cpu_p50"], s["cpu_lo"], s["cpu_hi"]) == (5.5, 2.0, 9.0)
+    assert (s["server_lo"], s["server_hi"]) == (1.0, 1.0)
+
+
+def test_baseline_ratios_pair_by_round():
+    cpu = [100.0, 120.0, 90.0, 110.0, 105.0, 95.0, 100.0, 115.0]
+    base = rounds_rows("qb", "none", cpu, [10.0] * 8)
+    half = rounds_rows("qd", "Delta", [c / 2 for c in cpu], [20.0] * 8)
+    by = {s["codec"]: s for s in summarise(base + half, [50], baseline="codec=none")}
+    d = by["Delta"]
+    assert d["cpu_ratio"] == d["cpu_ratio_lo"] == d["cpu_ratio_hi"] == 0.5
+    assert d["server_ratio"] == 2.0 and d["n_rounds"] == 8
+    assert d["clocks_disagree"] is True  # CPU resolved faster, wall resolved slower
+    assert by["none"]["cpu_ratio"] == 1.0 and by["none"]["clocks_disagree"] is False
+
+
+def test_a_group_without_its_baseline_row_has_no_ratio():
+    [s] = summarise(
+        rounds_rows("q", "Delta", [1.0] * 6, [1.0] * 6), [50], baseline="codec=none"
+    )
+    assert s["cpu_ratio"] is None and s["n_rounds"] == 0
+    assert s["clocks_disagree"] is None
+
+
+def test_an_unknown_baseline_axis_is_named():
+    with pytest.raises(ValueError, match="kodec"):
+        summarise(rows(), [50], baseline="kodec=none")
+
+
+def test_csv_carries_the_ratio_columns_with_a_baseline(tmp_path):
+    p = tmp_path / "o.csv"
+    r = rounds_rows("q", "none", [1.0] * 6, [1.0] * 6)
+    write_csv(summarise(r, [50], baseline="codec=none"), p)
+    with open(p, newline="") as f:
+        [row] = list(csv.DictReader(f))
+    assert row["cpu_ratio"] == "1.0" and row["cpu_p50"] == "1.0"
