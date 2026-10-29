@@ -1,26 +1,29 @@
-"""Run one query variant against one table and collect its samples.
+"""Run one round of (table, query) jobs and collect one sample per job.
 
-The run, step by step:
+A run is rounds, scheduled by the orchestrator; one round, step by step:
 
-1. One untimed warm-up run.
-2. `samples` timed runs. Each has a fresh `uuid4` query id (delivered only
-   through `CHClient.query_rows`'s `query_id` argument, which is the sole
-   path that reaches the server on clickhouse-connect 1.8.0 — see that
-   module's docstring) and the settings `use_query_condition_cache = 0` and
-   `use_query_cache = 0`. The client wall clock is measured around the query
-   call alone.
+1. The warm-up round (`timed=False`) runs every job once without a query id
+   and takes no samples; a job that fails there is reported in `errors`.
+2. A timed round runs every job once, in the order given. Each call has a
+   fresh `uuid4` query id (delivered only through `CHClient.query_rows`'s
+   `query_id` argument, which is the sole path that reaches the server on
+   clickhouse-connect 1.8.0 — see that module's docstring) and the settings
+   `use_query_condition_cache = 0` and `use_query_cache = 0`. The client
+   wall clock is measured around the query call alone. A job whose query
+   raises is recorded in `errors` and the round carries on.
 3. `SYSTEM FLUSH LOGS`, then **one** read of `system.query_log` for every
-   sample's id at once (`_QUERY_LOG_SQL`), matched back to the samples by
-   id. If a row is missing the read is retried up to three times with a
+   id of the round at once (`_QUERY_LOG_SQL`), matched back to the samples
+   by id. If a row is missing the read is retried up to three times with a
    short sleep; a sample still missing after that keeps nan server fields
-   and a warning naming its id.
-4. `EXPLAIN indexes = 1 <sql>` once, joined into one string.
+   and a warning naming its round, sample and id.
+4. `on_sample(key, sample)` receives each complete sample (server fields
+   and `cpu_us` filled), in job order, after that read.
 
-`on_sample` receives only complete samples (server fields filled), so it
-runs after step 3. Ctrl-C (`KeyboardInterrupt`) during the sample loop is
-caught: the samples that finished are flushed, read and delivered, the
-result's status becomes `"interrupted"`, the `RunResult` is attached to the
-exception as `run_result`, and the exception is re-raised.
+Ctrl-C (`KeyboardInterrupt`) during a round delivers what ran: the samples
+already taken are read and delivered, the partial `RoundResult` is attached
+to the exception as `round_result`, and the exception is re-raised.
+`explain_query` gives each job's `EXPLAIN indexes = 1` plan, once per job
+after the rounds.
 
 Nothing here prints: the plan text contains box-drawing characters that
 raise `UnicodeEncodeError` on a cp1252 console, and printing is the
@@ -61,7 +64,7 @@ class Sample:
     `memory_bytes` = `memory_usage`, `selected_marks`, `selected_granules`,
     `profile_events`) come from `system.query_log`, read once after every
     sample has run; they are nan (and `profile_events` empty) only if the
-    log row never appeared, which `RunResult.warnings` then names.
+    log row never appeared, which `RoundResult.warnings` then names.
 
     `selected_granules` is recorded equal to `ProfileEvents['SelectedMarks']`:
     the server does not expose a per-query granule count separately from the
@@ -80,15 +83,6 @@ class Sample:
     ran_at: datetime.datetime
     round_no: int | None = None
     cpu_us: float | None = None
-
-
-@dataclass
-class RunResult:
-    status: str  # "ok" | "error" | "interrupted"
-    error: str | None
-    samples: list[Sample]
-    explain: str
-    warnings: list[str] = field(default_factory=list)
 
 
 def explain_sql(name: str, sql: str) -> str:
@@ -145,158 +139,6 @@ def _fill_from_log(sample: Sample, row: tuple) -> None:
     sample.selected_granules = sample.selected_marks
     sample.profile_events = profile
     sample.cpu_us = _cpu_us(profile)
-
-
-def run_query(
-    client: CHClient,
-    name: str,
-    variant: TableVariant,
-    qv: QueryVariant,
-    samples: int,
-    *,
-    on_sample: Callable[[Sample], None] | None = None,
-) -> RunResult:
-    """Run `qv` against table `name` `samples` times and collect the results.
-
-    The caller is responsible for building `qv` with a deterministically
-    seeded generator: `expand_queries` takes an `rng`, and the range
-    predicate's interval depends on it, so results are only comparable
-    across the table variants of a suite if the orchestrator seeds that
-    generator identically for every variant. This function never calls
-    `expand_queries`.
-
-    `on_sample`, when given, is called once per `Sample`, in order, only
-    once the sample is complete: after the single `system.query_log` read
-    that follows the sample loop has filled its server fields. The caller
-    can persist each one as it is delivered.
-
-    Ctrl-C: a `KeyboardInterrupt` raised while the samples are running is
-    caught after the current sample; the ids collected so far are flushed
-    and read (the same single read), each of those samples is delivered to
-    `on_sample`, `status` is set to `"interrupted"`, the partial
-    `RunResult` is attached to the exception as `run_result`, and the
-    exception is re-raised so the caller still stops. A `KeyboardInterrupt`
-    raised from inside `on_sample` (or during the EXPLAIN) is handled the
-    same way except that no further samples are delivered; the samples that
-    ran are still in `run_result.samples`, filled.
-
-    Any other exception during the warm-up, a sample, the flush, the log
-    read or the EXPLAIN sets `status = "error"` with the message and
-    returns whatever was collected; nothing is raised. Exceptions raised by
-    `on_sample` itself are the caller's and propagate.
-    """
-    result = RunResult(status="ok", error=None, samples=[], explain="")
-    ids: list[str] = []
-    filled = False
-    delivering = False
-    delivered = 0
-
-    def fail(e: BaseException) -> None:
-        if result.status == "ok":
-            result.status = "error"
-            result.error = _error_text(e)
-
-    def fill() -> None:
-        """One `system.query_log` read for every collected id, retried while
-        rows are missing; fills the samples in place.
-
-        The attempt loop runs inside a `try/finally`: whatever is still
-        `pending` when the loop exits -- normally, or via an exception
-        (including `KeyboardInterrupt` raised by `flush_logs()`, the log
-        read, or the sleep between attempts) -- gets its warning appended in
-        the `finally`. That guarantees a sample that reaches `on_sample`
-        with nan server fields always has a warning naming it: the caller
-        cannot observe a `filled = True` fill() that produced no warnings
-        for the ids it never filled.
-        """
-        nonlocal filled
-        pending = dict(zip(ids, result.samples))
-        try:
-            for attempt in range(_LOG_READ_ATTEMPTS):
-                if attempt:
-                    time.sleep(_LOG_READ_SLEEP_S)
-                client.flush_logs()
-                for qid, row in _read_query_log(client, list(pending)).items():
-                    sample = pending.pop(qid, None)
-                    if sample is not None:
-                        _fill_from_log(sample, row)
-                if not pending:
-                    break
-        finally:
-            filled = True
-            for qid, sample in pending.items():
-                result.warnings.append(
-                    f"sample {sample.sample_no}: no QueryFinish row in system.query_log "
-                    f"for query_id {qid} after {_LOG_READ_ATTEMPTS} reads"
-                )
-
-    def deliver() -> None:
-        nonlocal delivering, delivered
-        delivering = True
-        while delivered < len(result.samples):
-            sample = result.samples[delivered]
-            delivered += 1
-            if on_sample is not None:
-                on_sample(sample)
-
-    try:
-        try:
-            sql = query_sql(name, variant, qv)
-            settings = _SETTINGS
-            client.query_rows(sql, settings=settings)
-            for i in range(samples):
-                qid = str(uuid.uuid4())
-                ran_at = datetime.datetime.now(datetime.timezone.utc)
-                t0 = time.perf_counter()
-                client.query_rows(sql, query_id=qid, settings=settings)
-                client_ms = (time.perf_counter() - t0) * 1000.0
-                ids.append(qid)
-                result.samples.append(
-                    Sample(
-                        sample_no=i,
-                        client_ms=client_ms,
-                        server_ms=_NAN,
-                        read_rows=_NAN,
-                        read_bytes=_NAN,
-                        memory_bytes=_NAN,
-                        selected_marks=_NAN,
-                        selected_granules=_NAN,
-                        profile_events={},
-                        ran_at=ran_at,
-                    )
-                )
-        except Exception as e:  # noqa: BLE001
-            fail(e)
-
-        if ids:
-            try:
-                fill()
-            except Exception as e:  # noqa: BLE001
-                fail(e)
-            deliver()
-
-        if result.status == "ok":
-            try:
-                rows = client.query_rows(explain_sql(name, sql))
-                result.explain = "\n".join(str(r[0]) for r in rows)
-            except Exception as e:  # noqa: BLE001
-                fail(e)
-    except KeyboardInterrupt as e:
-        # Attached first: `result` is mutated in place below, so even a
-        # second Ctrl-C during this handler's own fill()/deliver() still
-        # leaves the caller with whatever was filled/delivered by then.
-        e.run_result = result  # type: ignore[attr-defined]
-        result.status = "interrupted"
-        if ids and not filled:
-            try:
-                fill()
-            except Exception as e2:  # noqa: BLE001
-                result.error = _error_text(e2)
-        if ids and not delivering:
-            deliver()
-        raise
-
-    return result
 
 
 @dataclass(frozen=True)

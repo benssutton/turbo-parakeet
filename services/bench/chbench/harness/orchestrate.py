@@ -1,8 +1,8 @@
 """Wire every harness module into one command: `run_suite`.
 
 This is the benchmark's data flow, and the only module that knows the
-order of it: dataset -> connection -> grid -> tables -> queries -> samples ->
-report. Nothing above it exists; everything below it is already tested in
+order of it: connection -> dataset -> grid -> every table -> rounds of
+samples -> report. Nothing above it exists; everything below it is already tested in
 isolation, so this module contains no numerics and no SQL of its own, only
 the sequence and the bookkeeping. Every read it needs from the store goes
 through a `Store` method (`explain_for`, `samples_held`), never a SELECT
@@ -10,11 +10,11 @@ written here.
 
 `RunContext` carries what every step of the run needs -- the console, the
 store, the client, the suite, the server version, the run id, the counters
-and the four flags -- so the two helpers below take a context and the one
+and the four flags -- so the helpers below take a context and the one
 or two things that actually vary between their calls, instead of a dozen
 positional parameters each.
 
-Five decisions here are load-bearing and are not free to change:
+Six decisions here are load-bearing and are not free to change:
 
 1. **`expand_grid` is given explicit achieved values, not the manifest**
    `null_count` comes from the DatasetSpec, where it is exact -- the
@@ -28,30 +28,39 @@ Five decisions here are load-bearing and are not free to change:
 
 2. **Every table variant gets a freshly seeded predicate generator.** The
    range predicate's interval is drawn from the `rng` handed to
-   `expand_queries` (see `run_query`'s docstring), so a single generator
+   `expand_queries`, so a single generator
    reused across variants would give the Delta variant a different interval
    from the Gorilla variant and the two timings would not be comparable.
    Seeding a new `np.random.default_rng(suite.dataset.seed)` inside the
    per-variant loop makes every variant of the suite run the identical
    query. This is the difference between a benchmark and noise.
 
-3. **A failure is recorded, not raised.** `load_table` never raises, so its
-   `status` is checked; a table that failed to load is stored with its error
-   and its queries are skipped. A `RunResult` with `status == "error"` is
-   stored the same way and the loop carries on to the next query. Only a
-   `KeyboardInterrupt` stops the run, and even then the samples the runner
-   already delivered through `on_sample` are committed, the interrupted
-   query's row is marked `interrupted` and the run is
-   finished before it is re-raised.
+3. **Load first, then interleaved rounds.** Every table of the grid is loaded
+   (or reused) before any timed query; then one untimed warm-up round and
+   `samples` timed rounds, each running every query once in a freshly
+   shuffled order. Identical tables sampled back to back disagreed by up to
+   2x (ToDo 3); interleaving spreads drift and load over every variant, and
+   `round_no` pairs them for the report's ratios. A quietness snapshot
+   (`quiet.snapshot`) is stored on the run row before the warm-up and after
+   the last round.
 
-4. **UTF-8 is forced on the console before anything is printed.** The
+4. **A failure is recorded, not raised.** `load_table` never raises, so its
+   `status` is checked; a table that failed to load is stored with its error
+   and its queries are skipped. A query that fails in a round (the warm-up
+   included) or in its EXPLAIN is stored as `error` with the message, takes
+   no further samples, and the rounds carry on. Only a `KeyboardInterrupt`
+   stops the run, and even then the samples `run_round` delivered are
+   committed, every query short of its samples is marked `interrupted` and
+   the run is finished before it is re-raised.
+
+5. **UTF-8 is forced on the console before anything is printed.** The
    `EXPLAIN indexes = 1` output contains box-drawing characters, which raise
    `UnicodeEncodeError` on the default Windows console encoding. Measured in
    the spikes (FINDINGS §5), not a precaution. `force_utf8()` stays
    ahead of the print path whether or not the plan is printed, because a
    skip reason or an error message can carry non-ASCII too.
 
-5. **The EXPLAIN plan is always stored and never printed by default**
+6. **The EXPLAIN plan is always stored and never printed by default**
    It is evidence, so every run records it on the query row;
    it is also ten lines per query, which on a full `int_encodings` grid
    (36 valid cells x 12 query variants) is thousands of lines of console.
@@ -63,11 +72,12 @@ Five decisions here are load-bearing and are not free to change:
 `finished_at` NULL forever. It is called from exactly one place, so it can
 never run twice.
 
-Warnings reach the user from all three sources that produce them: the
+Warnings reach the user from every source that produces them: the
 dataset `Manifest`'s (a metric missed its target), each `TableVariant`'s (the
-cell is degraded, e.g. a projection redundant with the primary key) and each
-`RunResult`'s (a cache drop failed, or a `system.query_log` row never
-appeared). None of them is allowed to vanish into the store unread.
+cell is degraded, e.g. a projection redundant with the primary key), each
+round's (a `system.query_log` row never appeared) and the quietness
+snapshots' (a busy host, active merges). None of them is allowed to vanish
+into the store unread.
 """
 
 from __future__ import annotations
@@ -82,12 +92,13 @@ import pyarrow.compute as pc
 from rich.console import Console
 
 from synthdata.cache import load_or_generate
+from chbench.harness import quiet
 from chbench.harness.client import CHClient, Connection
 from chbench.harness.ddl import table_name
 from chbench.harness.loader import load_table
 from chbench.harness.queries import QueryVariant, expand_queries, query_id, query_values
 from chbench.harness.report import render_table, summarise
-from chbench.harness.runner import run_query
+from chbench.harness.runner import Job, explain_query, run_round
 from chbench.harness.store import Store
 from chbench.harness.suite import Suite
 from chbench.harness.validate import TableVariant, expand_grid, table_id
@@ -116,7 +127,7 @@ class RunSummary:
     `tables_ok` cells that loaded or, on a rerun, were reused without a
     reload because every query already held its samples (in a
     dry run, cells that *would* be loaded). `queries_run` counts query
-    variants `run_query` was called for,
+    variants that took part in the rounds,
     `queries_skipped_existing` those already holding enough samples, and
     `samples_written` rows `insert_sample` committed.
     """
@@ -152,6 +163,19 @@ class RunContext:
     samples_add: int
     explain: bool
     ignore_unfinished: bool
+
+
+@dataclass
+class _Pending:
+    """One query of the grid that takes samples this run, and what the rounds made of it."""
+
+    job: Job
+    tid: str
+    want: int
+    prior_explain: str
+    status: str = "ok"  # "ok" | "error" | "interrupted"
+    error: str | None = None
+    taken: int = 0
 
 
 def force_utf8() -> None:
@@ -268,8 +292,8 @@ def _samples_to_run(held: int, samples: int, force: bool, samples_add: int) -> i
     different `n` -- the report would then be comparing a 5-sample median
     with a 2-sample one.
 
-    Never returns a negative count: `run_query(samples=-2)` would run no
-    samples and report a mean of nan. The CLI rejects a negative
+    Never returns a negative count: a negative want would take no samples
+    and report a mean of nan. The CLI rejects a negative
     `--samples-add` at parse time; this is the guard for a direct caller.
     """
     if force:
@@ -413,10 +437,13 @@ def run_suite(
             ignore_unfinished=ignore_unfinished,
         )
         try:
+            # Every table first, then the rounds: module docstring, point 3.
+            pending: list[_Pending] = []
             for variant in variants:
-                _run_variant(context, dataset, values, variant)
+                pending += _prepare_variant(context, dataset, values, variant)
+            _run_rounds(context, pending)
         except KeyboardInterrupt:
-            # `run_query` already delivered every completed sample through
+            # `run_round` already delivered every completed sample through
             # `on_sample`, and `insert_sample` commits each one as it lands,
             # so there is nothing left to flush here: say what survived and
             # let the interrupt through. `finish_run` is
@@ -443,10 +470,10 @@ def run_suite(
     return summary
 
 
-def _run_variant(
+def _prepare_variant(
     ctx: RunContext, dataset, values: np.ndarray, variant: TableVariant
-) -> None:
-    """Load one table variant and run every query against it.
+) -> list[_Pending]:
+    """Load one table variant (or reuse it) and return its queries that want samples.
 
     `suite_name` goes to `upsert_table` so `clean` can drop this
     table even if the run is interrupted before its first sample lands: the
@@ -463,7 +490,7 @@ def _run_variant(
             tid, dataset_id, variant, None, ctx.version, suite_name=suite.name
         )
         ctx.summary.tables_skipped += 1
-        return
+        return []
 
     # A generator seeded identically for every variant, constructed here and
     # never reused across variants: module docstring, point 2. Two variants
@@ -496,9 +523,7 @@ def _run_variant(
             "  reused: every query already holds its samples; not reloaded",
             style="dim",
         )
-        for qv in query_variants:
-            _run_query_variant(ctx, name, variant, qv, tid)
-        return
+        return _pending_queries(ctx, name, variant, query_variants, tid)
 
     load = load_table(ctx.client, name, variant, dataset)
     store.upsert_table(
@@ -509,7 +534,7 @@ def _run_variant(
         ctx.summary.tables_error += 1
         _say(console, f"\nerror {name} {_variant_label(variant)}", style="red")
         _say(console, f"          -> {load.error}")
-        return
+        return []
 
     ctx.summary.tables_ok += 1
     stats = load.stats
@@ -524,90 +549,138 @@ def _run_variant(
         f"  loaded {stats.rows} rows in {load.insert_ms:.0f} ms, "
         f"{stats.compressed_bytes} compressed bytes, ratio {ratio:.2f}",
     )
-
-    for qv in query_variants:
-        _run_query_variant(ctx, name, variant, qv, tid)
+    return _pending_queries(ctx, name, variant, query_variants, tid)
 
 
-def _run_query_variant(
-    ctx: RunContext, name: str, variant: TableVariant, qv: QueryVariant, tid: str
-) -> None:
+def _pending_queries(
+    ctx: RunContext, name: str, variant: TableVariant, query_variants, tid: str
+) -> list[_Pending]:
+    """The queries of one loaded table that want samples, each with its pre-run query row.
+
+    The row is written before any sample, carrying the EXPLAIN it already had, and rewritten
+    with the fresh one after the rounds. The store joins samples to queries, so a sample
+    committed under a `query_id` with no `queries` row would be invisible to the report --
+    what a Ctrl-C in the first round would otherwise produce."""
     store, console, summary = ctx.store, ctx.console, ctx.summary
-    qid = query_id(tid, qv)
-    held = store.samples_held(qid)
-    want = _samples_to_run(held, ctx.suite.queries.samples, ctx.force, ctx.samples_add)
-
-    if want == 0:
-        summary.queries_skipped_existing += 1
-        _say(
-            console,
-            f"  skip {_query_label(qv)} ({held} sample(s) already held)",
-            style="dim",
+    out = []
+    for qv in query_variants:
+        qid = query_id(tid, qv)
+        held = store.samples_held(qid)
+        want = _samples_to_run(
+            held, ctx.suite.queries.samples, ctx.force, ctx.samples_add
         )
+        if want == 0:
+            summary.queries_skipped_existing += 1
+            _say(
+                console,
+                f"  skip {_query_label(qv)} ({held} sample(s) already held)",
+                style="dim",
+            )
+            continue
+        prior = store.explain_for(qid)
+        store.upsert_query(qid, tid, qv, prior)
+        summary.queries_run += 1
+        _say(console, f"  want {_query_label(qv)} ({want} sample(s), {held} held)")
+        out.append(_Pending(Job(qid, name, variant, qv), tid, want, prior))
+    return out
+
+
+def _mark_errors(by_key: dict[str, _Pending], errors: dict[str, str]) -> None:
+    """A query that failed in a round keeps its first error and takes no more samples."""
+    for key, error in errors.items():
+        p = by_key[key]
+        if p.status == "ok":
+            p.status, p.error = "error", error
+
+
+def _quiet(ctx: RunContext, when: str) -> None:
+    snap = quiet.snapshot(ctx.client)
+    ctx.store.record_quiet(ctx.run_id, when, snap)
+    _warn(ctx.console, f"quietness {when}", quiet.warnings(snap))
+
+
+def _run_rounds(ctx: RunContext, pending: list[_Pending]) -> None:
+    """The warm-up round, then `max(want)` timed rounds over every pending query.
+
+    Round r runs each query still wanting a sample once, in an order shuffled by
+    `default_rng([seed, r])`: reproducible, different per round, so drift and load bursts
+    spread over every variant instead of landing on one. Rounds continue the store's
+    numbering (`next_round`), so samples added by a later `--samples-add` stay paired.
+    A sample's `sample_no` is its index among this run's samples of the query (0, 1, ...),
+    as it always was; `round_no` is what pairs samples across runs."""
+    if not pending:
         return
-
-    # The query row is written before the samples, carrying whatever EXPLAIN
-    # it already had, and rewritten with the fresh one afterwards. The store
-    # joins samples to queries, so a sample committed under a `query_id` with
-    # no `queries` row would be invisible to the report -- which is exactly
-    # what a Ctrl-C between the first sample and the EXPLAIN would produce if
-    # the row were written only at the end.
-    prior_explain = store.explain_for(qid)
-    store.upsert_query(qid, tid, qv, prior_explain)
-
-    _say(console, f"  run  {_query_label(qv)} ({want} sample(s), {held} held)")
-
-    def on_sample(sample) -> None:
-        # No KeyboardInterrupt handling here: `run_query` owns that, and a
-        # second handler would swallow the interrupt it re-raises.
-        store.insert_sample(qid, ctx.run_id, sample)
-        summary.samples_written += 1
-
-    summary.queries_run += 1
-    try:
-        result = run_query(ctx.client, name, variant, qv, want, on_sample=on_sample)
-    except KeyboardInterrupt as e:
-        # `run_query` attaches the partial `RunResult` (status
-        # "interrupted", the samples that completed, the EXPLAIN if it got
-        # that far) to the exception. Without this write the
-        # pre-run upsert above leaves the query's status NULL, and after
-        # the fact the interrupted query looks like one the run never
-        # reached. The samples are already committed by `on_sample`.
-        partial = e.run_result
-        store.upsert_query(
-            qid,
-            tid,
-            qv,
-            partial.explain or prior_explain,
-            status=partial.status,
-            error=partial.error,
-        )
-        raise
-    # The run's own outcome goes on the query row: without
-    # it, a query whose run failed is indistinguishable, after an unattended
-    # run, from one the run never reached.
-    store.upsert_query(
-        qid,
-        tid,
-        qv,
-        result.explain or prior_explain,
-        status=result.status,
-        error=result.error,
-    )
-    _warn(console, _query_label(qv), result.warnings)
-
-    if result.status == "error":
-        _say(console, f"  error {_query_label(qv)}: {result.error}", style="red")
-        return
-
-    client_ms = [s.client_ms for s in result.samples]
+    store, console = ctx.store, ctx.console
+    by_key = {p.job.key: p for p in pending}
+    _quiet(ctx, "before")
+    warm_up = run_round(ctx.client, [p.job for p in pending], timed=False)
+    _mark_errors(by_key, warm_up.errors)
+    first = store.next_round(ctx.suite.name)
+    total = max(p.want for p in pending)
+    seed = ctx.suite.dataset.seed or 0
     _say(
         console,
-        f"       {len(client_ms)} sample(s), "
-        f"client mean {np.mean(client_ms):.1f} ms",
+        f"\n{len(pending)} queries, {total} round(s) from round {first}",
+        style="bold",
     )
-    if ctx.explain and result.explain:
-        # The plan is stored always, printed only on request. UTF-8 was forced at
-        # the top of `run_suite`, which is what makes this box-drawing text
-        # printable at all.
-        _say(console, result.explain, style="dim")
+
+    def on_sample(key: str, sample) -> None:
+        # No KeyboardInterrupt handling here: `run_round` owns that, and a
+        # second handler would swallow the interrupt it re-raises.
+        store.insert_sample(key, ctx.run_id, sample)
+        by_key[key].taken += 1
+        ctx.summary.samples_written += 1
+
+    try:
+        for i in range(total):
+            due = [p for p in pending if p.status == "ok" and p.want > i]
+            if not due:
+                break
+            r = first + i
+            order = np.random.default_rng([seed, r]).permutation(len(due))
+            result = run_round(
+                ctx.client,
+                [due[k].job for k in order],
+                r,
+                sample_no=i,
+                on_sample=on_sample,
+            )
+            _mark_errors(by_key, result.errors)
+            _warn(console, f"round {r}", result.warnings)
+    except KeyboardInterrupt:
+        # Without this write the pre-run upsert leaves each query's status
+        # NULL, and after the fact an interrupted query looks like one the run
+        # never reached. The samples are already committed by `on_sample`.
+        for p in pending:
+            if p.status == "ok" and p.taken < p.want:
+                p.status = "interrupted"
+        _finish_queries(ctx, pending, explain=False)
+        raise
+    _finish_queries(ctx, pending, explain=True)
+    _quiet(ctx, "after")
+
+
+def _finish_queries(ctx: RunContext, pending: list[_Pending], *, explain: bool) -> None:
+    """Each query's EXPLAIN (stored always, printed with --explain) and its outcome row.
+
+    The outcome goes on the query row: without it, a query whose run failed
+    is indistinguishable, after an unattended run, from one the run never
+    reached."""
+    for p in pending:
+        plan = p.prior_explain
+        if explain and p.status == "ok":
+            text, error = explain_query(ctx.client, p.job)
+            if error is not None:
+                p.status, p.error = "error", error
+            plan = text or plan
+        ctx.store.upsert_query(
+            p.job.key, p.tid, p.job.qv, plan, status=p.status, error=p.error
+        )
+        label = f"{p.job.name} {_query_label(p.job.qv)}"
+        if p.status == "error":
+            _say(ctx.console, f"  error {label}: {p.error}", style="red")
+        elif explain and ctx.explain and plan:
+            # UTF-8 was forced at the top of `run_suite`, which is what makes
+            # this box-drawing text printable at all.
+            _say(ctx.console, f"  plan {label}", style="bold")
+            _say(ctx.console, plan, style="dim")

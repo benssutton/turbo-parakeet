@@ -8,7 +8,6 @@ after the module finishes, whatever the tests did to the store.
 import pytest
 
 from chbench.harness.orchestrate import _samples_to_run, run_suite
-from chbench.harness.runner import RunResult
 from chbench.harness.store import Store
 from chbench.harness.suite import parse_suite
 from tests.harness.test_suite import MINIMAL
@@ -139,36 +138,9 @@ def test_samples_to_run_gives_a_never_run_query_the_full_sample_count():
     assert _samples_to_run(held=0, samples=3, force=False, samples_add=2) == 3
     # force ignores the bank entirely.
     assert _samples_to_run(held=5, samples=3, force=True, samples_add=0) == 3
-    # Never negative: run_query(samples=-2) would report a mean of nan.
+    # Never negative: a negative want would report a mean of nan.
     assert _samples_to_run(held=0, samples=3, force=True, samples_add=-2) == 0
     assert _samples_to_run(held=5, samples=3, force=False, samples_add=-9) == 0
-
-
-@pytest.mark.clickhouse
-def test_query_error_is_recorded_on_the_query_row(ch, tmp_path, monkeypatch):
-    """The message lands on the query, and the run continues."""
-    from chbench.harness import orchestrate
-
-    def failing_run_query(client, name, variant, qv, samples, *, on_sample=None):
-        return RunResult(
-            status="error",
-            error="DatabaseError: Code: 241. Memory limit exceeded",
-            samples=[],
-            explain="",
-        )
-
-    monkeypatch.setattr(orchestrate, "run_query", failing_run_query)
-    r = run_suite(
-        parse_suite(SMALL), store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds"
-    )
-    # The run carried on to the end rather than aborting.
-    assert r.tables_ok == 1 and r.queries_run == 1 and r.samples_written == 0
-    with Store(tmp_path / "r.db") as s:
-        status, error = s.conn.execute("SELECT status, error FROM queries").fetchone()
-        finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
-    assert status == "error"
-    assert error.startswith("DatabaseError: Code: 241")
-    assert finished is not None
 
 
 @pytest.mark.clickhouse

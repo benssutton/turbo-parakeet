@@ -14,8 +14,8 @@ Three additions go beyond those five tables as first designed:
   profile_events) is folded into the columns the five tables already have
   (`datasets.achieved_json`, `samples.profile_events_json`) rather than
   given a column of its own; only this one had nowhere to go.
-- `queries.status` and `queries.error`: the `RunResult`'s own outcome and
-  message. An insert or query failure is recorded with its message and the
+- `queries.status` and `queries.error`: the query's own outcome over the run's
+  rounds and its message. An insert or query failure is recorded with its message and the
   run continues; recording it only on `tables` leaves
   a query whose *run* failed indistinguishable from one the run never
   reached, which is exactly the distinction an unattended overnight run
@@ -475,8 +475,8 @@ class Store:
         status: str | None = None,
         error: str | None = None,
     ) -> None:
-        """`status` and `error` carry the `RunResult`'s own outcome ("ok",
-        "error" or "interrupted", with the runner's message).
+        """`status` and `error` carry the query's own outcome over the run's
+        rounds ("ok", "error" or "interrupted", with the runner's message).
 
         A failure is recorded on the *query*,
         not only on the table: without these two columns a query whose run

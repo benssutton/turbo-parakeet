@@ -192,9 +192,9 @@ def _add_cache_dir(parser: argparse.ArgumentParser) -> None:
 
 
 def _non_negative(text: str) -> int:
-    """An argparse type for `--samples-add`. A negative count reaches
-    `run_query(samples=-N)`, which runs nothing and then reports a mean of
-    nan; rejecting it at parse time is the only place it can be caught
+    """An argparse type for `--samples-add`. A negative count would
+    give a query a negative want, which takes nothing and then reports a mean
+    of nan; rejecting it at parse time is the only place it can be caught
     before the run has started."""
     value = int(text)
     if value < 0:

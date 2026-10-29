@@ -152,7 +152,7 @@ def test_datasets_on_an_empty_cache_says_so(tmp_path):
 
 
 def test_negative_samples_add_is_rejected_at_parse_time(tmp_path):
-    """Without the guard this reaches run_query(samples=-2), which runs
+    """Without the guard this reaches a negative want, which takes
     nothing and reports a mean of nan."""
     suite_path = tmp_path / "small.yaml"
     suite_path.write_text(SMALL, encoding="utf-8")
