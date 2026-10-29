@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS queries (
     kind TEXT,
     predicate_kind TEXT,
     target_fraction REAL,
+    values_n INTEGER,
     actual_fraction REAL,
     predicate_sql TEXT,
     explain_plan TEXT,
@@ -190,6 +191,7 @@ _ROW_COLUMNS = (
             "kind",
             "predicate_kind",
             "target_fraction",
+            "values_n",
             "actual_fraction",
             "predicate_sql",
             "explain_plan",
@@ -300,6 +302,10 @@ class Store:
                 f"one writes schema {SCHEMA_VERSION}): upgrade chbench, or pass --store"
             )
         self.conn.executescript(_SCHEMA)
+        # Added to schema 2 after its first stores were written: the IN-list size.
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(queries)")}
+        if "values_n" not in columns:
+            self.conn.execute("ALTER TABLE queries ADD COLUMN values_n INTEGER")
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 
@@ -494,13 +500,15 @@ class Store:
         self.conn.execute(
             """
             INSERT INTO queries (query_id, table_id, kind, predicate_kind, target_fraction,
-                                  actual_fraction, predicate_sql, explain_plan, status, error)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                                  values_n, actual_fraction, predicate_sql, explain_plan,
+                                  status, error)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(query_id) DO UPDATE SET
                 table_id=excluded.table_id,
                 kind=excluded.kind,
                 predicate_kind=excluded.predicate_kind,
                 target_fraction=excluded.target_fraction,
+                values_n=excluded.values_n,
                 actual_fraction=excluded.actual_fraction,
                 predicate_sql=excluded.predicate_sql,
                 explain_plan=excluded.explain_plan,
@@ -513,6 +521,7 @@ class Store:
                 qv.kind,
                 qv.predicate_kind,
                 qv.target_fraction,
+                qv.values_n,
                 qv.actual_fraction,
                 qv.predicate_sql,
                 explain,

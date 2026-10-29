@@ -49,6 +49,10 @@ _TABLE_AXES = (
 )
 _QUERY_AXES = ("kind", "target_fraction")
 _AXES = _TABLE_AXES + _QUERY_AXES
+# What else tells two queries of one kind and fraction apart (`range` vs `in`, the IN-list
+# size): not rendered, but part of the sort and of the `--baseline` grouping, so a query is
+# only ever compared with the same query on another table.
+_SHAPE = ("predicate_kind", "values_n")
 
 # Row keys rendered as a tick/blank rather than a bare 0/1 integer, per task
 # brief point 2: SQLite gives these back as ints, and a column of 0s and 1s
@@ -81,7 +85,7 @@ def _sort_key(s: dict):
     combination -- the report reads back from SQLite, where any column can
     be `NULL` for reasons unrelated to suite validation, e.g. a skipped
     table or a partial run)."""
-    return tuple((v is None, v) for v in (s[a] for a in _AXES))
+    return tuple((v is None, v) for v in (s[a] for a in _AXES + _SHAPE))
 
 
 def summarise(
@@ -118,8 +122,17 @@ def _by_round(group: list[dict], key: str) -> dict:
 
 
 def _parse_baseline(text: str) -> dict[str, str]:
-    """`axis=value,...` over the variant axes; an unknown axis raises ValueError naming it."""
-    pairs = dict(clause.partition("=")[::2] for clause in text.split(","))
+    """`axis=value,...` over the variant axes; a clause without `=` or an unknown axis raises
+    ValueError naming it."""
+    pairs = {}
+    for clause in text.split(","):
+        axis, eq, value = clause.partition("=")
+        if not eq:
+            raise ValueError(
+                f"baseline clause {clause!r} has no '=': write axis=value, e.g. "
+                f"codec=none (booleans as 1/0)"
+            )
+        pairs[axis] = value
     unknown = sorted(set(pairs) - set(_AXES))
     if unknown:
         raise ValueError(
@@ -141,15 +154,23 @@ def _apply_baseline(
     summaries: list[dict], groups: dict, baseline: dict[str, str]
 ) -> None:
     """Within each group of rows sharing every axis not named in `baseline` (the query axes
-    included, so a row is only compared with the same query on another table), the row matching
-    `baseline` is the reference: each row gains its per-round paired ratio against it (CPU and
-    wall), `n_rounds` (the CPU pairing count) and `clocks_disagree` (both resolved, in
-    opposite directions)."""
-    free = [a for a in _AXES if a not in baseline]
+    and the predicate shape included, so a row is only compared with the same query on another
+    table), the row matching `baseline` is the reference: each row gains its per-round paired
+    ratio against it (CPU and wall), `n_rounds` (the CPU pairing count) and `clocks_disagree`
+    (both resolved, in opposite directions). A group without a matching row gets None ratios;
+    a baseline no row matches at all is a misspelling and raises ValueError."""
+    free = [a for a in _AXES if a not in baseline] + list(_SHAPE)
     refs: dict[tuple, dict] = {}
     for s in summaries:
         if all(str(s[a]) == v for a, v in baseline.items()):
             refs.setdefault(tuple(s[a] for a in free), s)
+    if not refs:
+        text = ",".join(f"{a}={v}" for a, v in baseline.items())
+        raise ValueError(
+            f"no row matches --baseline {text!r} (after --where, if given): spell each "
+            f"value as the table shows it, booleans as 1/0 (e.g. primary_key=1, "
+            f"target_fraction=0.1)"
+        )
     for s in summaries:
         ref = refs.get(tuple(s[a] for a in free))
         n = 0
@@ -182,6 +203,8 @@ def _summarise_group(group: list[dict], percentiles: list[int]) -> dict:
     summary = {"query_id": first["query_id"], "table_id": first["table_id"]}
     for axis in _AXES:
         summary[axis] = first[axis]
+    for key in _SHAPE:
+        summary[key] = first.get(key)
 
     summary["n"] = len(group)
     summary["client_mean"] = float(np.mean(client))
@@ -291,8 +314,10 @@ def _header(key: str) -> str:
 
 def _cell(summary: dict, key: str) -> str:
     value = summary[key]
-    if key in _BOOL_AXES or key == "clocks_disagree":
+    if key in _BOOL_AXES:
         return "y" if value else "-"
+    if key == "clocks_disagree":  # None: no ratio to compare
+        return "" if value is None else "y" if value else "-"
     if value is None:
         return "-"
     if isinstance(value, float):

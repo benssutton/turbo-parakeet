@@ -163,7 +163,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--baseline",
         metavar="EXPR",
         help='reference row per group, e.g. "codec=none,compression=LZ4": adds CPU and wall '
-        "ratios paired by round, with intervals",
+        "ratios paired by round, with intervals; values as the table shows them, booleans "
+        "written 1/0 (primary_key=1)",
     )
     _add_store(report)
     report.set_defaults(handler=_cmd_report)

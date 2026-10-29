@@ -78,6 +78,7 @@ def make_store(path: Path, suite_name: str, tables: list[T]) -> Path:
                     kind=q.kind,
                     predicate_kind="in" if q.kind == "filter" else None,
                     target_fraction=q.target_fraction,
+                    values_n=1 if q.kind == "filter" else None,
                     actual_fraction=None,
                     predicate_sql=q.predicate_sql,
                 )

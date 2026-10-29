@@ -442,3 +442,25 @@ def test_a_newer_store_is_refused_not_restamped(tmp_path):
         with pytest.raises(StoreVersionError, match="newer chbench"):
             s.init_schema()
         assert s.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
+
+
+def test_query_rows_carry_the_in_list_size(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        s.upsert_query(
+            "q1", "t1", NS(**dict(vars(qv()), predicate_kind="in", values_n=3)), ""
+        )
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.insert_sample("q1", run, sample(0))
+        (row,) = s.query_rows("A")
+    assert row["predicate_kind"] == "in" and row["values_n"] == 3
+
+
+def test_a_schema_2_store_without_values_n_gains_the_column(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        s.conn.execute("ALTER TABLE queries DROP COLUMN values_n")
+        s.conn.commit()
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        s.upsert_query("q2", "t1", qv(), "")
+        cols = {r[1] for r in s.conn.execute("PRAGMA table_info(queries)")}
+    assert "values_n" in cols

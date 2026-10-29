@@ -2,7 +2,13 @@ import csv
 
 import pytest
 
-from chbench.harness.report import filter_where, render_table, summarise, write_csv
+from chbench.harness.report import (
+    _cell,
+    filter_where,
+    render_table,
+    summarise,
+    write_csv,
+)
 
 
 def rows():
@@ -218,11 +224,58 @@ def test_baseline_ratios_pair_by_round():
 
 
 def test_a_group_without_its_baseline_row_has_no_ratio():
-    [s] = summarise(
-        rounds_rows("q", "Delta", [1.0] * 6, [1.0] * 6), [50], baseline="codec=none"
+    full = [
+        dict(r, kind="full_scan", target_fraction=None, predicate_kind=None)
+        for r in rounds_rows("qf", "Delta", [1.0] * 6, [1.0] * 6)
+    ]
+    rows_ = (
+        rounds_rows("qb", "none", [2.0] * 6, [1.0] * 6)
+        + rounds_rows("qd", "Delta", [1.0] * 6, [1.0] * 6)
+        + full
     )
+    by = {s["query_id"]: s for s in summarise(rows_, [50], baseline="codec=none")}
+    assert by["qd"]["cpu_ratio"] == 0.5
+    s = by["qf"]  # the full_scan group has no codec=none row
     assert s["cpu_ratio"] is None and s["n_rounds"] == 0
     assert s["clocks_disagree"] is None
+
+
+def _shaped(query_id, codec, cpu, predicate_kind, values_n):
+    return [
+        dict(r, predicate_kind=predicate_kind, values_n=values_n)
+        for r in rounds_rows(query_id, codec, cpu, [1.0] * 6)
+    ]
+
+
+def test_baseline_groups_by_the_predicate_shape():
+    cpu = [100.0, 120.0, 90.0, 110.0, 105.0, 95.0]
+    rows_ = (
+        _shaped("rb", "none", cpu, "range", None)
+        + _shaped("rd", "Delta", [c / 2 for c in cpu], "range", None)
+        + _shaped("ib", "none", [c * 3 for c in cpu], "in", 1)
+        + _shaped("id", "Delta", [c / 4 for c in cpu], "in", 1)
+        + _shaped("jb", "none", [c * 5 for c in cpu], "in", 3)
+        + _shaped("jd", "Delta", [c / 5 for c in cpu], "in", 3)
+    )
+    by = {s["query_id"]: s for s in summarise(rows_, [50], baseline="codec=none")}
+    assert by["rd"]["cpu_ratio"] == 0.5
+    assert by["id"]["cpu_ratio"] == pytest.approx(1 / 12)
+    assert by["jd"]["cpu_ratio"] == pytest.approx(1 / 25)
+
+
+@pytest.mark.parametrize(
+    "baseline", ["codec=None", "primary_key=true", "target_fraction=0.10", "codec"]
+)
+def test_a_baseline_matching_no_row_is_refused(baseline):
+    r = rounds_rows("q", "none", [1.0] * 6, [1.0] * 6)
+    with pytest.raises(ValueError, match="1/0"):
+        summarise(r, [50], baseline=baseline)
+
+
+def test_clocks_disagree_renders_true_false_and_none_apart():
+    assert [
+        _cell({"clocks_disagree": v}, "clocks_disagree") for v in (True, False, None)
+    ] == ["y", "-", ""]
 
 
 def test_an_unknown_baseline_axis_is_named():
