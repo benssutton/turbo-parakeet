@@ -3,6 +3,7 @@ import pytest
 import pyarrow as pa
 
 from chbench.harness.queries import (
+    _render_literal,
     expand_queries,
     filter_sql,
     full_scan_sql,
@@ -329,3 +330,14 @@ def test_date_literal_from_a_nullable_integer_dataset():
     value = arr.to_numpy(zero_copy_only=False)[0]  # np.float64(5.0)
     stored = pc.cast(arr, arrow_type_for("Nullable(Date)"))[0].as_py()
     assert _render_literal_typed(value, "Nullable(Date)") == f"'{stored.isoformat()}'"
+
+
+@pytest.mark.parametrize("ch_type", ["Int32", "Nullable(UInt32)", "Nullable(Int64)"])
+def test_integer_column_renders_a_float_value_as_an_integer(ch_type):
+    # a nullable Int32 reaches the renderer as float64 (numpy has no nullable int)
+    assert _render_literal(1061684000.0, ch_type=ch_type) == "1061684000"
+    assert _render_literal(np.float64(-7.0), ch_type=ch_type) == "-7"
+
+
+def test_integer_column_keeps_a_python_int_exact():
+    assert _render_literal(2**63 + 5, ch_type="Nullable(UInt64)") == str(2**63 + 5)

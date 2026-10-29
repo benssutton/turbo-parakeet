@@ -74,6 +74,7 @@ from chbench.harness.validate import TableVariant
 
 _DECIMAL_SCALE_RE = re.compile(r"^Decimal\d+\((\d+)\)$")
 _TIME64_SCALE_RE = re.compile(r"^Time64\((\d)\)$")
+_INTEGER_RE = re.compile(r"^U?Int(8|16|32|64|128|256)$")
 _UNIT_PRECISION = {"s": 0, "ms": 3, "us": 6, "ns": 9}
 
 
@@ -205,6 +206,10 @@ def _render_literal_typed(value, ch_type: str) -> str:
         if t.startswith("DateTime64"):
             return f"toDateTime64({text}, {_UNIT_PRECISION[target.unit]}, 'UTC')"
         return f"toDateTime({text}, 'UTC')"
+    if _INTEGER_RE.match(t) and isinstance(value, (float, np.floating)):
+        # a nullable Int8-Int32 column is float64 here (exact: below 2**53); 64-bit ones stay
+        # Python ints (`query_values`)
+        return str(int(value))
     return str(value)
 
 

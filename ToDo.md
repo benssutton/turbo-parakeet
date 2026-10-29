@@ -87,9 +87,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
      `binary` or `to_chbench` skips them with a reason.
    - The recommender's pruned ClickHouse candidates carry no predicted bytes; the loop fills those cells from the
      emulator (`_plugin.clickhouse_profile`). Decide whether the recommender should report them.
-   - chbench renders a nullable integer column's queried values as floats (`1061684000.0`: numpy has no nullable
-     int); exact up to 2^53 only, so a nullable Int64 / UInt64 value above it is queried wrongly. Render from the
-     Arrow array instead (`services/bench/chbench/harness/queries.py`).
 3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
    loaded first, then a warm-up and interleaved rounds shuffled per round; server CPU time primary, wall beside it;
    distribution-free median intervals and paired per-round ratios (`chbench report --baseline`); a quietness record
