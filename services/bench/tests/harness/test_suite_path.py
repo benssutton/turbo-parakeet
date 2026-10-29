@@ -91,6 +91,15 @@ def test_a_numeric_axis_over_a_string_file_is_rejected_from_the_file_type(tmp_pa
     load_suite(suite_file(tmp_path, axis="String"))
 
 
+def test_a_binary_file_feeds_a_string_axis_and_no_numeric_one(tmp_path):
+    write(tmp_path, pa.array([b"\xff", b"a"] * 50, pa.binary()))
+    with pytest.raises(SuiteError, match="numeric"):
+        load_suite(suite_file(tmp_path, axis="Int32"))
+    assert load_suite(suite_file(tmp_path, axis="String")).dataset.arrow_type == (
+        "binary"
+    )
+
+
 @pytest.mark.parametrize(
     "extra",
     [

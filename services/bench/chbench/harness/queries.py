@@ -131,7 +131,13 @@ def _render_literal_typed(value, ch_type: str) -> str:
     for why this must key off `ch_type` and not the value's runtime type."""
     t = base_type(ch_type)
     if t == "String":
-        if isinstance(value, (str, np.str_)):
+        if isinstance(value, (bytes, bytearray)):
+            # a binary path dataset, loaded as it is (`cast_column`)
+            try:
+                text = bytes(value).decode("utf-8")
+            except UnicodeDecodeError:
+                return f"unhex('{bytes(value).hex()}')"
+        elif isinstance(value, (str, np.str_)):
             text = str(value)
         else:
             # Match the loader's own cast exactly (`cast_column` ->

@@ -64,7 +64,8 @@ axis over a string or date dataset) is rejected at parse time.
 - **Real-data datasets:** `dataset: {path: <file>.arrow, column: <name>}` (path relative to the suite file,
   `decimal_places` optional) reads the column as stored; nothing is generated or cached; `rows`, `arrow_type`,
   `null_count`, `decimal_places`, `value_range` are measured from the file (`synthdata/column/realdata.py`), and `dataset_id`
-  follows the file's content. This is what `turbo_parakeet.recommenders.to_chbench` writes.
+  follows the file's content. This is what `turbo_parakeet.recommenders.to_chbench` writes. `binary` (path datasets
+  only) loads into `String` as it is; its literals are UTF-8 or `unhex`.
 - **Types** (measured on ClickHouse 26.8.31.2, `spikes/spike_ch_vocabulary.py`, FINDINGS §9): `Int8/16/32/64`,
   `UInt8/16/32/64`, `Float32/64`, `Bool`, `Decimal32/64/128`, `Date`, `Date32`, `DateTime`, `DateTime64`,
   `FixedString`, `Enum8/16`, `Time64`, `String`. Parameters come from the dataset (`validate.resolve_type`: decimal

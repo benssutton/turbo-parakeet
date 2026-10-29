@@ -149,6 +149,9 @@ def cast_column(array: pa.Array, ch_type: str) -> pa.Array:
     target = arrow_type_for(ch_type)
     if target is None or array.type == target:
         return array
+    if pa.types.is_binary(array.type) and pa.types.is_string(target):
+        # the server takes Arrow binary into String as it is; a cast needs UTF-8
+        return array
     return pc.cast(array, target)
 
 

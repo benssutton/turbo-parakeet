@@ -1,8 +1,9 @@
+import pyarrow as pa
 import pytest
 
 from synthdata import DatasetSpec, generate
 from chbench.harness.ddl import table_name
-from chbench.harness.loader import load_table, storage_stats
+from chbench.harness.loader import cast_column, load_table, storage_stats
 from chbench.harness.validate import TableVariant
 
 
@@ -21,6 +22,11 @@ def variant(**kw):
     )
     d.update(kw)
     return TableVariant(**d)
+
+
+def test_a_binary_column_goes_into_string_uncast():
+    arr = pa.array([b"\xff\x00", b"ab", None], pa.binary())
+    assert cast_column(arr, "Nullable(String)") is arr
 
 
 @pytest.fixture(scope="module")

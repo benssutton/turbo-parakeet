@@ -5,6 +5,7 @@ import polars as pl
 import yaml
 from turbo_parakeet.recommenders import OneShotRecommender
 
+from evaluate import suites
 from evaluate.suites import (
     GRID_CODECS,
     GRID_COMPRESSIONS,
@@ -138,11 +139,31 @@ def test_skipped_columns_are_recorded(tmp_path):
     assert skipped and skipped[0]["column"] == "l"
 
 
-def test_unexpressible_column_is_skipped_not_indexed(tmp_path):
+def test_a_binary_column_gets_a_string_suite(tmp_path):
+    frame = pl.DataFrame(
+        {"b": [b"\xff", b"cd", b"\xff"] * 1000, "ids": np.arange(3000)}
+    )
+    result = OneShotRecommender().add(frame).result()
+    entries = build("n", result, frame, tmp_path, samples=1)
+    assert {e["column"] for e in entries} == {"b", "ids"}
+    assert {e["base"] for e in entries if e["column"] == "b"} == {"String"}
+    assert json.loads((tmp_path / "skipped.json").read_text()) == []
+
+
+def test_a_suite_chbench_refuses_is_skipped_not_indexed(tmp_path, monkeypatch):
+    real = suites.load_suite
+
+    def refuse_b(path):
+        if path.name.startswith("n__b"):
+            raise ValueError("chbench refuses it")
+        return real(path)
+
+    monkeypatch.setattr(suites, "load_suite", refuse_b)
     frame = pl.DataFrame({"b": [b"ab", b"cd", b"ab"] * 1000, "ids": np.arange(3000)})
     result = OneShotRecommender().add(frame).result()
     entries = build("n", result, frame, tmp_path, samples=1)
     assert {e["column"] for e in entries} == {"ids"}
     skipped = json.loads((tmp_path / "skipped.json").read_text())
-    assert [s["column"] for s in skipped] == ["b"]
+    assert {s["column"] for s in skipped} == {"b"}
+    assert all("chbench refuses it" in s["reason"] for s in skipped)
     assert not list(tmp_path.glob("n__b*"))

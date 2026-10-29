@@ -71,3 +71,59 @@ def test_a_path_suite_runs_end_to_end_and_the_store_records_the_dataset(ch, tmp_
     assert len(ds) == 1 and ds[0][0] == suite.dataset.dataset_id
     assert '"path"' in ds[0][1] and ds[0][2] == suite.dataset.path
     assert n == 8
+
+
+BINARY_SUITE = """
+name: t_orchpath
+dataset: {path: x.arrow, column: v}
+clickhouse:
+  type: [String]
+  nullable: [true]
+  primary_key: [false]
+  projection: [false]
+  codec: [none]
+  skip_index: [none]
+  compression: [LZ4]
+queries:
+  kinds:
+    - {kind: full_scan}
+    - {kind: filter, target_fraction: 0.01, predicate: in, values: 2}
+  samples: 2
+results:
+  percentiles: [50]
+"""
+
+
+@pytest.mark.clickhouse
+def test_a_binary_path_suite_loads_into_string_and_its_unhex_literals_match(
+    ch, tmp_path
+):
+    # every value is non-UTF-8 (a 0xff lead byte), so each literal is `unhex`
+    codes = np.random.default_rng(0).integers(0, 200, 1000)
+    values = [None if i % 97 == 0 else bytes([0xFF, c]) for i, c in enumerate(codes)]
+    batch = pa.record_batch([pa.array(values, pa.binary())], names=["v"])
+    with pa.OSFile(str(tmp_path / "x.arrow"), "wb") as sink:
+        with pa.ipc.new_file(sink, batch.schema) as w:
+            w.write_batch(batch)
+    (tmp_path / "s.yaml").write_text(BINARY_SUITE, encoding="utf-8")
+    suite = load_suite(tmp_path / "s.yaml")
+    assert suite.dataset.arrow_type == "binary"
+
+    r = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
+    assert r.tables_ok == 1 and r.tables_error == 0 and r.queries_run == 2
+
+    with Store(tmp_path / "r.db") as s:
+        rows = s.conn.execute(
+            "SELECT table_id, kind, status, actual_fraction, predicate_sql "
+            "FROM queries"
+        ).fetchall()
+    assert sorted(kind for _, kind, *_ in rows) == ["filter", "full_scan"]
+    assert all(status == "ok" for _, _, status, *_ in rows)
+    table_id, _, _, fraction, predicate = next(q for q in rows if q[1] == "filter")
+    assert fraction > 0 and "unhex(" in predicate
+    # the server, not the client, counts the rows the unhex literals select
+    (stored,) = ch.query_rows(f"SELECT count() FROM bench.t_orchpath_{table_id[:8]}")[0]
+    (matched,) = ch.query_rows(
+        f"SELECT count() FROM bench.t_orchpath_{table_id[:8]} WHERE {predicate}"
+    )[0]
+    assert stored == 1000 and matched == round(fraction * 1000)

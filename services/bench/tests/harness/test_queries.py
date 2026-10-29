@@ -381,3 +381,8 @@ def test_integer_column_renders_a_float_value_as_an_integer(ch_type):
 
 def test_integer_column_keeps_a_python_int_exact():
     assert _render_literal(2**63 + 5, ch_type="Nullable(UInt64)") == str(2**63 + 5)
+
+
+def test_string_column_renders_bytes_as_text_or_unhex():
+    assert _render_literal(b"ab'c", ch_type="String") == "'ab\\'c'"
+    assert _render_literal(b"\xff\x00", ch_type="String") == "unhex('ff00')"

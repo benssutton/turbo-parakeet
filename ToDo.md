@@ -82,9 +82,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
      query CPU, or report the frontier.
    - Query-time scores on `synth_frame` (50 000 rows) resolve 3 of 356 queries: score query time on ≳ 1M-row frames
      or more samples.
-   - Binary columns are not expressible in chbench's `arrow_type` vocabulary: `to_chbench` emits suites chbench
-     rejects, and the loop drops them into `suites/skipped.json` (5 synth_frame columns). Either chbench learns
-     `binary` or `to_chbench` skips them with a reason.
 3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
    loaded first, then a warm-up and interleaved rounds shuffled per round; server CPU time primary, wall beside it;
    distribution-free median intervals and paired per-round ratios (`chbench report --baseline`); a quietness record

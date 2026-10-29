@@ -99,10 +99,11 @@ def widen_decimal(array: pa.Array) -> pa.Array:
 def _value_range(array: pa.Array) -> tuple[float, float] | None:
     """Min and max of the non-null values of a numeric, temporal or boolean
     column, in the generator's units (temporals as integers in their unit's
-    resolution); None for strings or when every value is null."""
+    resolution); None for strings, binaries or when every value is null."""
     t = array.type
     if (
         pa.types.is_string(t)
+        or pa.types.is_binary(t)
         or pa.types.is_fixed_size_binary(t)
         or array.null_count == len(array)
     ):

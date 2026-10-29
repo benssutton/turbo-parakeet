@@ -36,6 +36,7 @@ _SCALARS = {
     "float64": pa.float64,
     "bool": pa.bool_,
     "string": pa.string,
+    "binary": pa.binary,
     "date32": pa.date32,
 }
 _DECIMALS = {
@@ -253,11 +254,13 @@ class DatasetSpec:
         if self.path is not None or self.column is not None:
             self._validate_path_dataset(dtype)
             return
-        if pa.types.is_fixed_size_binary(dtype) or (
-            pa.types.is_timestamp(dtype) and dtype.tz is not None
+        if (
+            pa.types.is_fixed_size_binary(dtype)
+            or pa.types.is_binary(dtype)
+            or (pa.types.is_timestamp(dtype) and dtype.tz is not None)
         ):
             raise SpecError(
-                f"arrow_type {self.arrow_type!r} (a time zone or fixed_size_binary) "
+                f"arrow_type {self.arrow_type!r} (a time zone, binary or fixed_size_binary) "
                 "is only available to a path dataset; the "
                 "generator draws no such values"
             )

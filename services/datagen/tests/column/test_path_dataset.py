@@ -225,6 +225,15 @@ def test_zoned_timestamp_and_fixed_size_binary_files_are_measured(tmp_path):
     assert load_or_generate(spec, tmp_path / "c").array.equals(fixed)
 
 
+def test_a_binary_file_is_measured_and_loaded(tmp_path):
+    binary = pa.array([b"\xff\x00", None, b"ab", b"\xff\x00"], pa.binary())
+    spec = path_spec(write(tmp_path, binary), "v")
+    assert spec.arrow_type == "binary" and spec.value_range is None
+    ds = load_or_generate(spec, tmp_path / "c")
+    assert ds.array.equals(binary)
+    assert ds.manifest.achieved["cardinality_ratio"] == pytest.approx(2 / 3)
+
+
 @pytest.mark.parametrize(
     "bad",
     [

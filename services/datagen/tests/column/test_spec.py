@@ -3,6 +3,7 @@ import json
 import pyarrow as pa
 import pytest
 
+from synthdata.column.realdata import arrow_type_string
 from synthdata.column.spec import (
     DatasetSpec,
     Distribution,
@@ -645,3 +646,13 @@ def test_explicit_sigma_and_a_dispersion_target_are_rejected():
         index_of_dispersion=0.5,
         distribution=Distribution(kind="normal", mean=5.0),
     ).validate()
+
+
+def test_binary_is_an_arrow_type_for_path_datasets():
+    assert parse_arrow_type("binary") == pa.binary()
+    assert arrow_type_string(pa.binary()) == "binary"
+
+
+def test_a_generated_binary_dataset_is_refused():
+    with pytest.raises(SpecError, match="binary"):
+        DatasetSpec(rows=10, arrow_type="binary", null_count=0, seed=0).validate()
