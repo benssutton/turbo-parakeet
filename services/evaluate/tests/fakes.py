@@ -17,7 +17,7 @@ class Q:
     target_fraction: float | None = None
     marks: int = 0
     status: str = "ok"
-    # a query with status != "ok" writes no samples; else one dict per sample: server_ms, memory_bytes, user_us, system_us
+    # a query with status != "ok" writes no samples; else one dict per sample: server_ms, memory_bytes, user_us, system_us, round_no
     samples: list[dict] = field(default_factory=lambda: [{}])
 
 
@@ -89,6 +89,8 @@ def make_store(path: Path, suite_name: str, tables: list[T]) -> Path:
                         run_id,
                         NS(
                             sample_no=i,
+                            round_no=smp.get("round_no", i),
+                            cpu_us=smp.get("user_us", 100) + smp.get("system_us", 10),
                             client_ms=server_ms + 50,
                             server_ms=server_ms,
                             read_rows=100,

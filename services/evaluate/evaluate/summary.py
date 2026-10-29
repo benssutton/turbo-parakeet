@@ -1,4 +1,4 @@
-"""summary.arrow (sections size / size_regret / skip / skip_regret / cost / coverage), the printed
+"""summary.arrow (sections size / size_regret / skip / skip_regret / query_regret / cost / coverage), the printed
 report, and compare. Metrics only: no thresholds, no verdicts. Means / medians skip nulls; the
 `n_null_*` counts say how many rows had one."""
 
@@ -16,6 +16,7 @@ GROUPS = {
     "size_regret": ["recommended_chain"],
     "skip": ["index", "granularity"],
     "skip_regret": ["chosen_index"],
+    "query_regret": ["query_kind"],
 }
 
 
@@ -100,6 +101,17 @@ def summarise(run: RunDir, notes: dict) -> pl.DataFrame:
             regret_uniform_worst=pl.col("regret_uniform").max(),
         )
     )
+    query_regret = (
+        _read(run, "query_regret")
+        .group_by(GROUPS["query_regret"])
+        .agg(
+            n=pl.len(),
+            n_resolved=pl.col("resolved").sum(),
+            n_null_ratio=pl.col("cpu_ratio").null_count(),
+            regret_cpu_median=pl.col("regret_cpu").median(),
+            regret_cpu_worst=pl.col("regret_cpu").max(),
+        )
+    )
     cost = _read(run, "recommend_cost").select(
         n=pl.len(),
         n_missing=(pl.col("status") == "missing").sum(),
@@ -113,6 +125,7 @@ def summarise(run: RunDir, notes: dict) -> pl.DataFrame:
         "size_regret": size_regret,
         "skip": skip,
         "skip_regret": skip_regret,
+        "query_regret": query_regret,
         "cost": cost,
         "coverage": pl.DataFrame([_coverage(run, notes)]),
     }
@@ -132,7 +145,14 @@ def summarise(run: RunDir, notes: dict) -> pl.DataFrame:
 def report(run: RunDir) -> None:
     s = pl.read_ipc(run.path / "summary.arrow")
     with pl.Config(tbl_rows=200, tbl_cols=20, fmt_str_lengths=40):
-        for section in ("size", "size_regret", "skip", "skip_regret", "cost"):
+        for section in (
+            "size",
+            "size_regret",
+            "skip",
+            "skip_regret",
+            "query_regret",
+            "cost",
+        ):
             part = s.filter(pl.col("section") == section)
             if part.is_empty():
                 print(f"\n{section}\n(no rows)")

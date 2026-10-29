@@ -17,6 +17,7 @@ def test_summary_sections(tmp_path):
         "size_regret",
         "skip",
         "skip_regret",
+        "query_regret",
         "cost",
         "coverage",
     }
@@ -88,3 +89,10 @@ def test_compare_count_decrease_is_negative(tmp_path):
         )
     d = compare(tmp_path / "a", tmp_path / "b")
     assert d["n_delta"].to_list() == [-1.0]
+
+
+def test_query_regret_section_counts(tmp_path):
+    run = _run_dir(tmp_path)
+    s = summarise(run, score_run(run))
+    q = s.filter(pl.col("section") == "query_regret")
+    assert q.height > 0 and q["n"].sum() >= 1

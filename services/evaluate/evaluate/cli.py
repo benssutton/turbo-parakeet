@@ -23,7 +23,7 @@ def _parser() -> argparse.ArgumentParser:
         help="registry names, groups, name:rows, --all or .arrow paths",
     )
     r.add_argument("--workers", type=int, default=3)
-    r.add_argument("--samples", type=int, default=3)
+    r.add_argument("--samples", type=int, default=10)
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--resume", type=Path)
     r.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)

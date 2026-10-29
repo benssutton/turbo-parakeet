@@ -164,6 +164,10 @@ def test_score_run_writes_every_file(tmp_path):
     qc = pl.read_ipc(run.path / "query_cost.arrow")
     assert qc.height > 0 and qc["cpu_us_p50"].null_count() == 0
     assert qc["memory_bytes_p50"].null_count() == 0
+    qr = pl.read_ipc(run.path / "query_regret.arrow")
+    # one row per query of a chosen table: the size suite's t1 (scan), the skip suite's tm (scan, filter)
+    assert qr.height == 3
+    assert qc["cpu_us_lo"].null_count() == qc.height  # one sample each: no interval
     meta = pa.ipc.open_file(run.path / "size_cells.arrow").schema.metadata
     assert meta[b"git_sha"] == b"abc" and meta[b"run_id"] == run.run_id.encode()
 

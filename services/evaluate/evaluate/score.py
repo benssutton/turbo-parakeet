@@ -1,4 +1,4 @@
-"""Predicted joined with measured: the six score files of a run (spec, Score files). Pure functions
+"""Predicted joined with measured: the score files of a run (spec, Score files). Pure functions
 over chbench store rows (Store.table_rows / query_rows) and the suites' predictions; `score_run`
 reads a run directory and writes the files. Metrics only: no thresholds."""
 
@@ -11,6 +11,7 @@ import statistics
 
 import polars as pl
 import pyarrow as pa
+from chbench.harness.stats import median_ci, paired_ratio
 from chbench.harness.store import Store
 
 from evaluate.predict import MARK_ROWS, SkipPredictor, parse_skip, value_of
@@ -227,14 +228,89 @@ def _cpu_us(events_json: str | None) -> float | None:
     return sum(parts) if parts else None  # ClickHouse omits zero counters
 
 
-def query_cost(entry: dict, rows: list[dict]) -> list[dict]:
-    """One row per (table variant, query) with the samples' p50s; CPU and memory included."""
+def _sample_cpu(s: dict) -> float | None:
+    """The stored `cpu_us`, or the ProfileEvents sum for a store written before schema 2."""
+    v = s.get("cpu_us")
+    return v if v is not None else _cpu_us(s.get("profile_events_json"))
+
+
+def _by_round(samples: list[dict], clock: str) -> dict:
+    out = {}
+    for s in samples:
+        v = _sample_cpu(s) if clock == "cpu" else s.get("server_ms")
+        if s.get("round_no") is not None and v is not None:
+            out[s["round_no"]] = v
+    return out
+
+
+def _by_query(rows: list[dict]) -> dict[str, list[dict]]:
     by: dict[str, list[dict]] = {}
     for r in rows:
         by.setdefault(r["query_id"], []).append(r)
+    return by
+
+
+def _qkey(r: dict) -> tuple:
+    """The same query on different tables of a suite."""
+    return (r["kind"], r["target_fraction"], r["predicate_sql"])
+
+
+def _variant(entry: dict, r: dict) -> str:
+    return (
+        r["skip_index"]
+        if entry["role"] == "skip"
+        else chain(r["codec"], r["compression"])
+    )
+
+
+def chosen_table(entry: dict, rows: list[dict], predicted: dict) -> str | None:
+    """The table the recommender chose: the recommended chain in a recommended-type size suite,
+    the chosen index in a skip suite; None for an original-type suite."""
+    if entry["role"] == "size":
+        if entry["type_role"] != "recommended":
+            return None
+        want = (entry["rec_codec"], entry["rec_compression"])
+
+        def match(r: dict) -> bool:
+            return (r["codec"], r["compression"]) == want
+
+    else:
+        index = next(
+            (k for k, p in predicted.items() if p["outcome"] == "chosen"), None
+        )
+
+        def match(r: dict) -> bool:
+            return r["skip_index"] == index
+
+    return next(
+        (r["table_id"] for r in sorted(rows, key=lambda r: r["table_id"]) if match(r)),
+        None,
+    )
+
+
+def query_cost(entry: dict, rows: list[dict], chosen: str | None = None) -> list[dict]:
+    """One row per (table variant, query): the samples' p50s, the CPU interval, and the CPU and
+    wall ratios against the chosen table's same query, paired by round."""
+    by = _by_query(rows)
+    ref = {_qkey(s[0]): qid for qid, s in by.items() if s[0]["table_id"] == chosen}
     out = []
-    for _, samples in sorted(by.items()):  # by query_id: byte-stable files
+    for qid, samples in sorted(by.items()):  # by query_id: byte-stable files
         r = samples[0]
+        cpu = [_sample_cpu(s) for s in samples]
+        _, cpu_lo, cpu_hi = median_ci(cpu)
+        base = ref.get(_qkey(r))
+        ratios: dict = {"n_rounds": None}
+        for clock in ("cpu", "server"):
+            v = lo = hi = None
+            if base is not None and base != qid:
+                v, lo, hi, n = paired_ratio(
+                    _by_round(samples, clock), _by_round(by[base], clock)
+                )
+                if clock == "cpu":
+                    ratios["n_rounds"] = n
+            ratios.update(
+                {f"{clock}_ratio": v, f"{clock}_ratio_lo": lo, f"{clock}_ratio_hi": hi}
+            )
         out.append(
             {
                 **_keys(entry),
@@ -256,11 +332,68 @@ def query_cost(entry: dict, rows: list[dict]) -> list[dict]:
                         "read_bytes",
                     )
                 },
-                "cpu_us_p50": _p50(
-                    [_cpu_us(s.get("profile_events_json")) for s in samples]
-                ),
+                "cpu_us_p50": _p50(cpu),
+                "cpu_us_lo": cpu_lo,
+                "cpu_us_hi": cpu_hi,
+                **ratios,
             }
         )
+    return out
+
+
+def query_regret(entry: dict, rows: list[dict], chosen: str | None) -> list[dict]:
+    """One row per query of the chosen table: the alternative with the lowest CPU ratio against
+    it (paired by round) and its interval. `resolved` is that interval lying below 1;
+    `regret_cpu` is then 1 - ratio (the share of the chosen table's CPU it would save), else 0.
+    """
+    if chosen is None:
+        return []
+    groups: dict[tuple, list[list[dict]]] = {}
+    for samples in _by_query(rows).values():
+        groups.setdefault(_qkey(samples[0]), []).append(samples)
+    out = []
+    for key in sorted(groups, key=str):
+        members = sorted(groups[key], key=lambda s: s[0]["table_id"])
+        base = next((s for s in members if s[0]["table_id"] == chosen), None)
+        if base is None:
+            continue
+        best = None
+        for samples in members:
+            if samples is base:
+                continue
+            ratio, lo, hi, n = paired_ratio(
+                _by_round(samples, "cpu"), _by_round(base, "cpu")
+            )
+            if ratio is not None and (best is None or ratio < best[1]):
+                best = (samples[0], ratio, lo, hi, n)
+        kind, fraction, sql = key
+        row = {
+            **_keys(entry),
+            "query_kind": kind,
+            "target_fraction": fraction,
+            "predicate_sql": sql,
+            "chosen_variant": _variant(entry, base[0]),
+            "best_variant": None,
+            "cpu_ratio": None,
+            "cpu_ratio_lo": None,
+            "cpu_ratio_hi": None,
+            "n_rounds": None,
+            "resolved": None,
+            "regret_cpu": None,
+        }
+        if best is not None:
+            r, ratio, lo, hi, n = best
+            resolved = hi is not None and hi < 1
+            row.update(
+                best_variant=_variant(entry, r),
+                cpu_ratio=ratio,
+                cpu_ratio_lo=lo,
+                cpu_ratio_hi=hi,
+                n_rounds=n,
+                resolved=resolved,
+                regret_cpu=1 - ratio if resolved else 0.0,
+            )
+        out.append(row)
     return out
 
 
@@ -343,6 +476,28 @@ FILES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("read_rows_p50", _F),
         ("read_bytes_p50", _F),
         ("cpu_us_p50", _F),
+        ("cpu_us_lo", _F),
+        ("cpu_us_hi", _F),
+        ("cpu_ratio", _F),
+        ("cpu_ratio_lo", _F),
+        ("cpu_ratio_hi", _F),
+        ("server_ratio", _F),
+        ("server_ratio_lo", _F),
+        ("server_ratio_hi", _F),
+        ("n_rounds", _I),
+    ],
+    "query_regret": [
+        ("query_kind", _S),
+        ("target_fraction", _F),
+        ("predicate_sql", _S),
+        ("chosen_variant", _S),
+        ("best_variant", _S),
+        ("cpu_ratio", _F),
+        ("cpu_ratio_lo", _F),
+        ("cpu_ratio_hi", _F),
+        ("n_rounds", _I),
+        ("resolved", _B),
+        ("regret_cpu", _F),
     ],
     "recommend_cost": [
         ("rows", _I),
@@ -371,7 +526,7 @@ def write_scores(run: RunDir, rows: dict[str, list[dict]]) -> None:
 
 
 def score_run(run: RunDir) -> dict:
-    """Score every dataset of `run`; write the six files; return the notes counts."""
+    """Score every dataset of `run`; write the score files; return the notes counts."""
     rows: dict[str, list[dict]] = {n: [] for n in FILES}
     notes = {"unparsed": 0, "marks_mismatch": 0, "missing_stores": 0}
     for name in run.info().get("datasets", {}):
@@ -409,7 +564,9 @@ def score_run(run: RunDir) -> dict:
             )
             with Store(db) as s:
                 tables, qrows = s.table_rows(e["suite"]), s.query_rows(e["suite"])
-            rows["query_cost"] += query_cost(e, qrows)
+            chosen = chosen_table(e, qrows, predicted)
+            rows["query_cost"] += query_cost(e, qrows, chosen)
+            rows["query_regret"] += query_regret(e, qrows, chosen)
             if e["role"] == "size":
                 cells = size_cells(e, tables, predicted)
                 rows["size_cells"] += cells
