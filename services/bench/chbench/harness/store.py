@@ -302,10 +302,6 @@ class Store:
                 f"one writes schema {SCHEMA_VERSION}): upgrade chbench, or pass --store"
             )
         self.conn.executescript(_SCHEMA)
-        # Added to schema 2 after its first stores were written: the IN-list size.
-        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(queries)")}
-        if "values_n" not in columns:
-            self.conn.execute("ALTER TABLE queries ADD COLUMN values_n INTEGER")
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 
