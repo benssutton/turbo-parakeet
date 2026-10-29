@@ -41,6 +41,15 @@ class StorageStats:
     index_marks_bytes: int = 0
 
 
+# Rows per Arrow record batch sent by `load_table`: the server's default
+# insert block (`min_insert_block_size_rows` = 1 048 449, rounded up). The
+# server squashes small batches into blocks of that size but never splits a
+# large one, and a `LowCardinality` column's `minmax` / `set` index costs
+# O(block rows) per granule, so one 10M-row batch made those inserts ~3x
+# slower than this (FINDINGS §11). The stored bytes are the same either way.
+INSERT_BATCH_ROWS = 1_048_576
+
+
 @dataclass(frozen=True)
 class LoadResult:
     status: str  # "ok" | "error"
@@ -183,13 +192,20 @@ def storage_stats(client: CHClient, name: str) -> StorageStats:
 
 
 def load_table(
-    client: CHClient, name: str, variant: TableVariant, dataset: Dataset
+    client: CHClient,
+    name: str,
+    variant: TableVariant,
+    dataset: Dataset,
+    *,
+    insert_batch_rows: int | None = INSERT_BATCH_ROWS,
 ) -> LoadResult:
     """Drop, create, insert, optimise and measure one table variant.
 
     The insert is `insert_arrow` of a two-column table: `row_id UInt64` from
-    0 and `v` cast to the variant's column type (`cast_column`). `insert_ms`
-    times the insert alone. Any exception at any step becomes
+    0 and `v` cast to the variant's column type (`cast_column`), sent as
+    record batches of at most `insert_batch_rows` rows (`None`: one batch;
+    zero-copy slices either way). `insert_ms` times the insert alone, not the
+    `OPTIMIZE TABLE ... FINAL` after it. Any exception at any step becomes
     `status="error"` with its message and `stats=None`, and the table is
     dropped (best effort); nothing is raised, so the run continues. Acceptance at DDL time is not proof that the
     insert works (deferred-findings note), so an insert failure on an
@@ -202,6 +218,10 @@ def load_table(
         v = cast_column(dataset.array, variant.ch_type)
         row_id = pa.array(np.arange(len(v), dtype=np.uint64), pa.uint64())
         batch = pa.table({"row_id": row_id, "v": v})
+        if insert_batch_rows is not None:
+            batch = pa.Table.from_batches(
+                batch.to_batches(max_chunksize=insert_batch_rows), schema=batch.schema
+            )
         t0 = time.perf_counter()
         client.insert_arrow(name, batch)
         insert_ms = (time.perf_counter() - t0) * 1000

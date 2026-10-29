@@ -216,3 +216,48 @@ def test_granularity_and_fpr_tables_create_and_fill(
         parameters={"t": name.split(".")[1]},
     )
     assert [tuple(r) for r in got] == [(gran,)]
+
+
+class _RecordingClient:
+    """Records the Arrow table `load_table` inserts; answers the stats queries."""
+
+    connection = None
+
+    def __init__(self):
+        self.inserted = None
+
+    def command(self, sql):
+        return None
+
+    def insert_arrow(self, table, arrow_table):
+        self.inserted = arrow_table
+
+    def query_rows(self, sql, parameters=None):
+        return [(1, 1, 1, 1, 1)] if "parts_columns" in sql else [(0, 0, 0)]
+
+
+def test_the_insert_is_sent_in_record_batches_of_insert_batch_rows(small_dataset):
+    client = _RecordingClient()
+    r = load_table(
+        client, "bench.x", variant(), small_dataset, insert_batch_rows=20_000
+    )
+    assert r.status == "ok", r.error
+    sizes = [b.num_rows for b in client.inserted.to_batches()]
+    assert sizes == [20_000, 20_000, 10_000]
+
+
+@pytest.mark.clickhouse
+@pytest.mark.parametrize("skip_index", ["minmax", "set(100)"])
+def test_batching_does_not_change_the_stored_bytes(
+    ch, table, small_dataset, skip_index
+):
+    """FINDINGS §11: batching the insert changes its time, not what is stored."""
+    v = variant(
+        ch_type="LowCardinality(String)", codec="LowCardinality", skip_index=skip_index
+    )
+    stats = []
+    for suffix, rows in (("dddddddd00000000", None), ("dddddddd00000001", 4_096)):
+        r = load_table(ch, table(suffix), v, small_dataset, insert_batch_rows=rows)
+        assert r.status == "ok", r.error
+        stats.append(r.stats)
+    assert stats[0] == stats[1]

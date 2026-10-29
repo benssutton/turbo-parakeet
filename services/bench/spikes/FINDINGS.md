@@ -2192,3 +2192,112 @@ Observations only. Scope: Int64 values; the 8-byte value size in the `set`
 row is that of `Int64` and was not varied; the per-block constant of the
 bloom filter's byte count (v(D)) was fitted to D, and was not separated from
 the row count of the block (the `ten` shape fixes D at 10 with 8 192 rows).
+
+## 11. LowCardinality(String) inserts with minmax / set indexes (spike_lc_index_insert.py)
+
+2026-10-29. ClickHouse 26.8.31.2. Question (ToDo 3): in int_encodings at 10M rows,
+`LowCardinality(String)` with a `minmax` or `set(100)` index inserted in 45.7 / 46.5 s
+against 3.2 s with `bloom_filter`. Run from `services/bench/`:
+`python -m spikes.spike_lc_index_insert`; raw cells, with each insert's full ProfileEvents, in
+`spikes/spike_lc_index_insert_results.tsv`.
+
+Two paths. `arrow`: int_encodings' own dataset (1000 distinct values, 1M and 10M rows; the 10M
+one is int_encodings' cached dataset) through the harness's `load_table`, with the whole
+table in one Arrow record batch (the loader as it was) and in batches of 1 048 576 rows.
+`sql`: `INSERT INTO t SELECT number, toString(1000000 + (number * 7919) % 1000) FROM
+numbers(N)` into the same DDL (`row_id UInt64, v <type> CODEC(LZ4), INDEX ix v TYPE <t>
+GRANULARITY 1`, `ORDER BY tuple()`, Wide parts), no Arrow and no harness. "Skip-index CPU" is
+the ProfileEvent `MergeTreeDataWriterSkipIndicesCalculationMicroseconds`, the one event that
+moved with the slowdown (user CPU moved with it by the same amount; system CPU, OS CPU wait,
+bytes written and the `OPTIMIZE ... FINAL` after the insert, 0.4 to 1.0 s, did not).
+
+**arrow path, 10M rows** (insert ms client-timed; parts = parts the insert wrote):
+
+| variant | one batch: insert ms | skip-index CPU s | parts | 1M-row batches: insert ms | skip-index CPU s | parts |
+|---|---|---|---|---|---|---|
+| String / none | 13 195 | 0 | 1 | 13 326 | 0 | 10 |
+| String / minmax | 13 345 | 0.10 | 1 | 12 955 | 0.10 | 10 |
+| String / set(100) | 14 601 | 1.68 | 1 | 13 652 | 0.09 | 10 |
+| String / bloom_filter | 13 749 | 0.07 | 1 | 13 006 | 0.07 | 10 |
+| LC(String) / none | 13 438 | 0 | 1 | 13 029 | 0 | 10 |
+| LC(String) / minmax | **53 874** | **40.59** | 1 | 17 054 | 3.94 | 10 |
+| LC(String) / set(100) | **57 182** | **43.88** | 1 | 16 956 | 4.22 | 10 |
+| LC(String) / bloom_filter | 13 573 | 0.05 | 1 | 12 286 | 0.05 | 10 |
+
+At 1M rows (one block either way) `LC(String)` minmax / set(100) spent 0.39 to 0.44 s in
+skip-index CPU and inserted in 1.5 to 2.0 s against 1.2 to 1.5 s for the rest. The stored
+column bytes were identical between the two batchings in every cell (25 241 654 String,
+11 558 861 LC at 10M). The ≈ 13 s baseline in this run is mostly the transfer
+(`NetworkReceiveElapsedMicroseconds` ≈ 11 s), not the 3.2 s of the suite run: the
+laptop's state, not the variants, moved it.
+
+**sql path, LC(String) / minmax, 10M rows unless stated** (granules = 10M / index_granularity):
+
+| insert block rows | index_granularity | insert ms | skip-index CPU s | µs per granule | ns per granule per block row |
+|---|---|---|---|---|---|
+| 1M rows, default (1 048 449) | 8192 | 486 | 0.39 | 3 207 | 3.2 |
+| default (1 048 449) | 8192 | 4 958 | 4.29 | 3 511 | 3.3 |
+| 8 192 | 8192 | 3 542 | 0.15 | 122 | 15 |
+| 65 536 | 8192 | 1 444 | 0.36 | 292 | 4.5 |
+| 262 144 | 8192 | 1 874 | 1.10 | 900 | 3.4 |
+| default | 1024 | 35 300 | 33.85 | 3 466 | 3.3 |
+| default | 65536 | 1 270 | 0.65 | 4 244 | 4.0 |
+| arrow, one 10M-row block | 8192 | 53 874 | 40.59 | 33 248 | 3.3 |
+
+Same path at the default block, 10M rows: String 515 to 614 ms under every index (skip-index
+CPU 0.09 to 0.10 s); LC(String) none 654 ms, bloom_filter 773 ms (0.09 s), minmax 4 958 ms
+(4.29 s), set(100) 5 241 ms (4.56 s). A probe outside the script (not in the TSV) gave
+4.28 s at 10 distinct values and 5.01 s at 100 000 against 4.06 s at 1000: the dictionary's
+size barely matters.
+
+**Verdict: neither per row nor per granule alone.** At a fixed block size the cost is linear
+in rows (0.39 s at 1M, 4.29 s at 10M); at fixed rows it is linear in granules (index_granularity
+1024 → 33.85 s, 8192 → 4.29 s); and per granule it is linear in the rows of the insert block:
+≈ 3.3 ns per granule per block row from 65 536-row blocks to one 10M-row block (an overhead
+floor shows at 8 192). Total ≈ 3.3 ns × rows × block rows / index_granularity: quadratic in
+the block. Changing GRANULARITY from 1 to 4 did not reduce it (probe: 4.56 s against 4.06 s).
+
+**Cause, as far as shown.** Server-side: the `INSERT ... SELECT` reproduces it with no client,
+Arrow or harness involved. Shown: the time is in the skip-index calculation; it occurs for
+`minmax` and `set` on `LowCardinality(String)` and not for `bloom_filter` or for `String`
+(String / set(100) shows a much smaller block-proportional term, 1.68 s in one 10M-row
+block against 0.09 s in 1M-row blocks); each index granule costs time proportional to the
+whole insert block. Inferred, not checked against the source: the `minmax` / `set`
+aggregators, given a LowCardinality column, do per granule work over the whole block's column
+(a full-column conversion or a pass over all its positions) instead of the granule's slice.
+The harness's part: it sent 10M rows as one record batch, which the server keeps as one block
+(it squashes small blocks up to `min_insert_block_size_rows` = 1 048 449 but does not split a
+large one), so the quadratic term was 10x what a client inserting in ≈ 1M-row blocks pays.
+
+**Fix in the harness.** `loader.load_table` now sends record batches of at most
+`INSERT_BATCH_ROWS` = 1 048 576 rows (`insert_batch_rows=None` restores one batch): at 10M rows
+LC(String) / minmax 53.9 → 17.1 s and set(100) 57.2 → 17.0 s against ≈ 13 s without an index;
+skip-index CPU 40.6 → 3.9 s and 43.9 → 4.2 s; stored column bytes unchanged
+(`tests/harness/test_loader.py::test_batching_does_not_change_the_stored_bytes` checks every
+`storage_stats` field, index bytes included). The insert now writes 10 parts instead of 1;
+`OPTIMIZE ... FINAL` merges them as before. The remaining ≈ 4 s is the server's cost at its
+own default block size; smaller blocks (65 536 rows: 0.36 s) would cut it further but need
+the server's `min_insert_block_size_rows` changed, which the harness does not do.
+
+**Minimal reproduction** (26.8.31.2; `system.query_log`, `query_duration_ms` and
+`ProfileEvents['MergeTreeDataWriterSkipIndicesCalculationMicroseconds']`):
+
+```sql
+CREATE TABLE t (row_id UInt64, v LowCardinality(String) CODEC(LZ4),
+                INDEX ix v TYPE minmax GRANULARITY 1)
+ENGINE = MergeTree ORDER BY tuple()
+SETTINGS min_bytes_for_wide_part = 0, min_rows_for_wide_part = 0;
+INSERT INTO t SELECT number, toString(1000000 + (number * 7919) % 1000) FROM numbers(10000000);
+-- ≈ 5.0 s, 4.3 s of it skip-index; with v String, or without the index, ≈ 0.5 to 0.65 s.
+-- SETTINGS index_granularity = 1024 on the table: ≈ 35 s.
+```
+
+**Gotcha found on the way.** On 26.8 `async_insert` is 1 by default (`wait_for_async_insert`
+1, `async_insert_max_data_size` 10 MiB): an insert under 10 MiB (here the 1M-row ones) runs as
+an async insert, and its `Insert` row in `system.query_log` carries no writer events; the part
+is written by a separate `AsyncInsertFlush` row (same `tables`), which holds them. Over
+10 MiB the insert is synchronous and the `Insert` row has them. The spike sums both kinds.
+
+Scope: one column, one data shape per path (1000 distinct strings), `GRANULARITY 1` in the
+scripted cells, one server version; single runs, no repeats (the effect is 3 to 10x, well
+above the 2x noise of the measurement notes).

@@ -83,6 +83,9 @@ axis over a string or date dataset) is rejected at parse time.
 - Noise between identical tables reaches 2×; ten samples on a shared laptop cannot resolve smaller differences (ToDo 3).
 - The `primary_key` axis changes the physical order (`ORDER BY v` vs `ORDER BY row_id`), and order dominates codec
   (Decimal64 Delta ZSTD: 8.7 MB sorted vs 50.3 MB unsorted): compare codecs within one `primary_key` value.
+- `minmax` / `set` on `LowCardinality(String)` cost ≈ 3.3 ns × rows × insert-block rows / index_granularity at insert
+  (server-side; FINDINGS §11): `load_table` sends ≤ 1 048 576-row batches, leaving ≈ 4 s at 10M rows; compare insert
+  times only within one batching. Inserts under 10 MiB run as async inserts (`AsyncInsertFlush` rows in `query_log`).
 
 # Layout
 ```
