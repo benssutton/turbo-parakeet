@@ -364,6 +364,24 @@ though the block order itself is randomised. This is the same "forced adjacency"
 mechanism that later explains the combined section's run-splitting effect,
 just observed from the other direction.
 
+**Why it sits at about −79: the closed form (added 2026-10-29).** Each block
+of length L lies wholly on one side of the median, so it contributes one unit
+to the binary sequence the Wald–Wolfowitz test counts, not L. The sequence
+therefore behaves like a random arrangement of U = D units (D distinct values:
+the singles plus one block per repeated value; U = `m + S` above), not of n.
+With n1, n2 the post-dichotomy split and the units split in the same
+proportion, E[R] − 1 ≈ 2·n1·n2·U / n², while the test expects
+μ − 1 = 2·n1·n2 / n with σ ≈ 2·n1·n2 / n^{3/2}. Hence
+
+    z ≈ (E[R] − μ) / σ ≈ −(n − U) / √n = −(n − D) / √n = −(1 − c)·√n,
+
+c the cardinality ratio: independent of the split and of the CV target. At
+n = 100 000 and c = 0.75, z ≈ −0.25 · 316.23 = −79.06. The 18 alone rows
+average −78.82 (range −80.41 to −77.83); the residual is the run count's own
+sampling noise (sd about 1 in z units). Any layout that keeps repeats
+contiguous inherits this floor, which is why the combined runs + CV target
+lays out the runs first.
+
 **Combined results.** `runs_z` is essentially undisturbed by the interarrival
 layering: for a given (z, seed), the achieved z is identical to 4 decimal
 places across all three CV targets (e.g. z=-0.25 → achieved -0.2530 for
