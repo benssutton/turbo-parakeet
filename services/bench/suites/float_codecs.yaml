@@ -9,7 +9,7 @@ dataset:
   cardinality_ratio: 0.75
   seed: 42
 clickhouse:
-  type: [Float64, Decimal32, Decimal64]
+  type: [Float64, Decimal64]  # Decimal32: see decimal32_codecs.yaml
   nullable: [false]
   primary_key: [true, false]
   projection: [false]

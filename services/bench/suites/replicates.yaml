@@ -1,0 +1,31 @@
+name: replicates
+# The protocol check (ToDo 3): int_encodings' dataset (near-random order, 1000 distinct values) under
+# three skip indexes and frequent-value filters. Every queried value sits in every granule, so no
+# index can skip and the three tables are near-replicates (each index adds only its own small
+# lookup). Paired CPU ratios between them should sit near 1 with narrow intervals; re-run after any
+# change to the runner or the orchestrator.
+dataset:
+  rows: 10000000
+  arrow_type: int32
+  value_range: [1000000, 9999999]
+  null_count: 0
+  cardinality_ratio: 0.0001      # 1000 distinct values at 10M rows
+  entropy_bits: 4.0
+  runs_z: -0.25
+  seed: 42
+clickhouse:
+  type: [Int32]
+  nullable: [false]
+  primary_key: [false]
+  projection: [false]
+  codec: [none]
+  skip_index: [minmax, bloom_filter, "set(100)"]
+  compression: [LZ4]
+queries:
+  kinds:
+    - {kind: full_scan}
+    - {kind: filter, target_fraction: 0.05, predicate: in, values: 1}
+    - {kind: filter, target_fraction: 0.20, predicate: in, values: 5}
+  samples: 20
+results:
+  percentiles: [50, 90, 99]

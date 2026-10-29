@@ -111,17 +111,29 @@ def test_every_axis_must_be_a_non_empty_list():
         parse_suite(MINIMAL.replace("compression: [LZ4]", "compression: []"))
 
 
-@pytest.mark.parametrize(
-    "path,rows",
-    [
-        ("suites/float_codecs.yaml", 10_000_000),
-        ("suites/int_encodings.yaml", 10_000_000),
-    ],
-)
-def test_the_two_example_suites_load(path, rows):
-    s = load_suite(path)
-    assert s.dataset.rows == rows
-    assert len(s.clickhouse.type) == 3
+SUITES = ("float_codecs", "int_encodings", "decimal32_codecs", "replicates")
+
+
+@pytest.mark.parametrize("name", SUITES)
+def test_the_example_suites_load(name):
+    s = load_suite(f"suites/{name}.yaml")
+    assert s.name == name and s.dataset.rows == 10_000_000
+
+
+def test_decimal32_has_its_own_suite_at_seven_places():
+    s = load_suite("suites/decimal32_codecs.yaml")
+    assert (
+        s.clickhouse.type == ["Decimal32", "Decimal64"]
+        and s.dataset.decimal_places == 7
+    )
+    assert "Decimal32" not in load_suite("suites/float_codecs.yaml").clickhouse.type
+
+
+def test_replicates_are_three_inert_indexes_on_one_table_shape():
+    s = load_suite("suites/replicates.yaml")
+    assert s.clickhouse.skip_index == ["minmax", "bloom_filter", "set(100)"]
+    assert s.clickhouse.codec == ["none"] and s.clickhouse.type == ["Int32"]
+    assert load_suite("suites/int_encodings.yaml").clickhouse.skip_index == ["none"]
 
 
 def test_int_encodings_suite_matches_the_settled_decisions():
@@ -278,13 +290,6 @@ def test_string_axis_on_a_numeric_dataset_stays_legal():
         .replace("type: [Float64]", "type: [Int32, UInt32, String]")
     )
     assert parse_suite(y).clickhouse.type == ["Int32", "UInt32", "String"]
-
-
-def test_both_example_suites_still_parse():
-    from chbench.harness.suite import load_suite
-
-    for name in ("float_codecs", "int_encodings"):
-        assert load_suite(f"suites/{name}.yaml").name == name
 
 
 @pytest.mark.parametrize(

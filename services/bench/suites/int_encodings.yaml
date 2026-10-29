@@ -14,7 +14,7 @@ clickhouse:
   primary_key: [false]
   projection: [false]
   codec: [none, T64, Delta, LowCardinality]
-  skip_index: [minmax, bloom_filter, "set(100)"]
+  skip_index: [none]
   compression: [LZ4]
 queries:
   kinds:

@@ -1,0 +1,29 @@
+name: decimal32_codecs
+# Decimal32 apart from float_codecs (ToDo 3): Decimal32(8) tops out at 9.99999999, below the data's
+# clipped maximum, so every Decimal32(8) cell skipped. At 7 places Decimal32(7) holds 99.9999999.
+# Decimal64 at the same scale measures the 32- vs 64-bit compression ratio like for like.
+dataset:
+  rows: 10000000
+  arrow_type: float64
+  value_range: [-1, 9.9]
+  decimal_places: 7
+  null_count: 0
+  distribution: {kind: lognormal, mean: 4, sigma: 0.25, shift: -1}
+  cardinality_ratio: 0.75
+  seed: 42
+clickhouse:
+  type: [Decimal32, Decimal64]
+  nullable: [false]
+  primary_key: [true, false]
+  projection: [false]
+  codec: [none, T64, Gorilla, Delta, DoubleDelta]
+  skip_index: [none]
+  compression: [LZ4, ZSTD]
+queries:
+  kinds:
+    - {kind: full_scan}
+    - {kind: filter, target_fraction: 0.10, predicate: range}
+    - {kind: filter, target_fraction: 0.20, predicate: range}
+  samples: 10
+results:
+  percentiles: [50, 90, 99]
