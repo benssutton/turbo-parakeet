@@ -3,9 +3,10 @@ import sqlite3
 from types import SimpleNamespace as NS
 
 import numpy as np
+import pytest
 
 from synthdata.generate import SolveRecord
-from chbench.harness.store import Store
+from chbench.harness.store import SCHEMA_VERSION, Store, StoreVersionError
 
 
 def manifest(dataset_id="d1"):
@@ -145,27 +146,6 @@ def test_query_rows_joins_for_the_report(tmp_path):
         r["index_uncompressed_bytes"],
         r["index_marks_bytes"],
     ) == (30, 60, 4)
-
-
-def test_older_store_gains_the_index_size_columns(tmp_path):
-    path = tmp_path / "old.db"
-    with Store(path) as s:
-        s.init_schema()
-        for c in (
-            "index_compressed_bytes",
-            "index_uncompressed_bytes",
-            "index_marks_bytes",
-        ):
-            s.conn.execute(f"ALTER TABLE tables DROP COLUMN {c}")
-        s.conn.commit()
-    with Store(path) as s:
-        s.init_schema()
-        cols = {r[1] for r in s.conn.execute("PRAGMA table_info(tables)")}
-    assert {
-        "index_compressed_bytes",
-        "index_uncompressed_bytes",
-        "index_marks_bytes",
-    } <= cols
 
 
 def test_skipped_table_is_stored_with_its_reason(tmp_path):
@@ -316,33 +296,6 @@ def test_latest_suite_yaml_is_the_most_recent_runs_text(tmp_path):
         assert s.latest_suite_yaml("nosuch") is None
 
 
-def test_init_schema_adds_columns_missing_from_an_older_store(tmp_path):
-    """A results.db created before `queries.status`/`error` existed must gain
-    them, not fail on the next upsert: samples accumulate across runs, so an
-    existing store is the normal case."""
-    path = tmp_path / "old.db"
-    with Store(path) as s:
-        s.init_schema()
-        s.conn.execute("ALTER TABLE queries DROP COLUMN status")
-        s.conn.execute("ALTER TABLE queries DROP COLUMN error")
-        s.conn.commit()
-    with Store(path) as s:
-        s.init_schema()
-        columns = {
-            r[1] for r in s.conn.execute("PRAGMA table_info(queries)").fetchall()
-        }
-        assert {"status", "error"} <= columns
-        s.upsert_dataset(manifest(), "p")
-        s.upsert_table("t1", "d1", variant(), load_result(), "v")
-        s.upsert_query("q1", "t1", qv(), "", status="error", error="boom")
-        assert (
-            s.conn.execute("SELECT error FROM queries WHERE query_id='q1'").fetchone()[
-                0
-            ]
-            == "boom"
-        )
-
-
 def test_query_rows_follows_suite_tables_not_the_run_that_sampled(tmp_path):
     """A sample belongs to the table (and so, through
     `suite_tables`, to every suite that owns that table), not to the suite
@@ -398,3 +351,83 @@ def test_table_rows_lists_skipped_tables_without_samples(tmp_path):
     assert rows["t_skip"]["status"] == "skipped"
     assert rows["t_skip"]["skip_reason"] == "GCD on Float64"
     assert rows["t_skip"]["compressed_bytes"] is None
+
+
+def sample_r(n, round_no, cpu_us):
+    s = sample(n)
+    s.round_no, s.cpu_us = round_no, cpu_us
+    return s
+
+
+def _filled(path):
+    s = Store(path)
+    s.init_schema()
+    s.upsert_dataset(manifest(), "p")
+    s.upsert_table("t1", "d1", variant(), load_result(), "v", suite_name="A")
+    s.upsert_query("q1", "t1", qv(), "")
+    return s
+
+
+def test_samples_carry_round_no_and_cpu_us(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.insert_sample("q1", run, sample_r(0, 4, 150.0))
+        s.insert_sample(
+            "q1", run, sample(1)
+        )  # a duck-typed sample without the new fields
+        rows = s.query_rows("A")
+    assert [(r["round_no"], r["cpu_us"]) for r in rows] == [(4, 150.0), (None, None)]
+
+
+def test_next_round_follows_the_suites_highest_round(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        assert s.next_round("A") == 0
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.insert_sample("q1", run, sample_r(0, 0, 1.0))
+        s.insert_sample("q1", run, sample_r(1, 6, 1.0))
+        assert s.next_round("A") == 7 and s.next_round("B") == 0
+
+
+def test_record_quiet_writes_the_snapshot_on_the_run_row(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.record_quiet(run, "before", {"host_cpu_pct": 3.0})
+        s.record_quiet(run, "after", {"host_cpu_pct": 4.0})
+        before, after = s.conn.execute(
+            "SELECT quiet_before, quiet_after FROM runs WHERE run_id = ?", (run,)
+        ).fetchone()
+    assert json.loads(before) == {"host_cpu_pct": 3.0}
+    assert json.loads(after) == {"host_cpu_pct": 4.0}
+
+
+def test_a_new_store_is_stamped_with_the_schema_version(tmp_path):
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        assert (
+            s.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
+        )
+
+
+def _old_store(path):
+    """A schema-1 store: samples without round_no / cpu_us, user_version 0."""
+    with _filled(path) as s:
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.insert_sample("q1", run, sample(0))
+        s.conn.execute("ALTER TABLE samples DROP COLUMN round_no")
+        s.conn.execute("ALTER TABLE samples DROP COLUMN cpu_us")
+        s.conn.execute("PRAGMA user_version = 0")
+        s.conn.commit()
+
+
+def test_an_old_store_refuses_new_samples_and_names_store(tmp_path):
+    _old_store(tmp_path / "old.db")
+    with Store(tmp_path / "old.db") as s:
+        with pytest.raises(StoreVersionError, match="--store"):
+            s.init_schema()
+
+
+def test_an_old_store_still_reads_with_null_new_columns(tmp_path):
+    _old_store(tmp_path / "old.db")
+    with Store(tmp_path / "old.db") as s:
+        (row,) = s.query_rows("A")
+    assert row["round_no"] is None and row["cpu_us"] is None and row["server_ms"] == 1.0

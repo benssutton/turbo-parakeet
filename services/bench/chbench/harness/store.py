@@ -29,6 +29,10 @@ Three additions go beyond those five tables as first designed:
   run was interrupted before any query produced a sample (the gap the
   runs/samples join used to leave open).
 
+`SCHEMA_VERSION` (stamped in `PRAGMA user_version`) guards the layout: `init_schema` raises
+`StoreVersionError` on a populated older store, whose samples cannot be paired by round, while
+`query_rows` reads it anyway, substituting NULL for the columns it lacks.
+
 Every write to `datasets`, `tables` and `queries` is an `INSERT ... ON
 CONFLICT DO UPDATE`, idempotent on the table's primary key (`created_at` is
 never in the UPDATE's SET list, so a re-run keeps the row's original creation
@@ -108,8 +112,10 @@ CREATE TABLE IF NOT EXISTS samples (
     query_id TEXT NOT NULL,
     sample_no INTEGER NOT NULL,
     run_id TEXT NOT NULL,
+    round_no INTEGER,
     client_ms REAL,
     server_ms REAL,
+    cpu_us REAL,
     read_rows INTEGER,
     read_bytes INTEGER,
     memory_bytes INTEGER,
@@ -124,7 +130,9 @@ CREATE TABLE IF NOT EXISTS runs (
     suite_name TEXT NOT NULL,
     suite_yaml TEXT,
     started_at TEXT NOT NULL,
-    finished_at TEXT
+    finished_at TEXT,
+    quiet_before TEXT,
+    quiet_after TEXT
 );
 
 CREATE TABLE IF NOT EXISTS suite_tables (
@@ -134,73 +142,89 @@ CREATE TABLE IF NOT EXISTS suite_tables (
 );
 """
 
-# Columns returned by query_rows, in this order, mapped to the aliased SELECT
-# below. Only the two join keys (table_id, query_id) are deduplicated: every
-# other column name is unique to the table it comes from (checked against
-# the full column lists of tables/queries/samples above), so nothing else
-# collides.
-_QUERY_ROWS_SQL = """
-SELECT
-    tb.table_id AS table_id,
-    tb.dataset_id AS dataset_id,
-    tb.ch_type AS ch_type,
-    tb.nullable AS nullable,
-    tb.primary_key AS primary_key,
-    tb.projection AS projection,
-    tb.codec AS codec,
-    tb.skip_index AS skip_index,
-    tb.compression AS compression,
-    tb.status AS status,
-    tb.skip_reason AS skip_reason,
-    tb.compressed_bytes AS compressed_bytes,
-    tb.uncompressed_bytes AS uncompressed_bytes,
-    tb.marks_bytes AS marks_bytes,
-    tb.index_compressed_bytes AS index_compressed_bytes,
-    tb.index_uncompressed_bytes AS index_uncompressed_bytes,
-    tb.index_marks_bytes AS index_marks_bytes,
-    tb.rows AS rows,
-    tb.insert_ms AS insert_ms,
-    tb.clickhouse_version AS clickhouse_version,
-    tb.created_at AS created_at,
-    tb.warnings AS table_warnings,
-    q.query_id AS query_id,
-    q.kind AS kind,
-    q.predicate_kind AS predicate_kind,
-    q.target_fraction AS target_fraction,
-    q.actual_fraction AS actual_fraction,
-    q.predicate_sql AS predicate_sql,
-    q.explain_plan AS explain_plan,
-    q.status AS query_status,
-    q.error AS query_error,
-    s.sample_no AS sample_no,
-    s.run_id AS run_id,
-    s.client_ms AS client_ms,
-    s.server_ms AS server_ms,
-    s.read_rows AS read_rows,
-    s.read_bytes AS read_bytes,
-    s.memory_bytes AS memory_bytes,
-    s.selected_marks AS selected_marks,
-    s.selected_granules AS selected_granules,
-    s.profile_events_json AS profile_events_json,
-    s.ran_at AS ran_at
+SCHEMA_VERSION = (
+    2  # 2: interleaved rounds (samples.round_no, samples.cpu_us, runs.quiet_*), ToDo 3
+)
+
+
+class StoreVersionError(RuntimeError):
+    """A store written before the current schema: readable, but new samples need a new store."""
+
+
+# Columns `query_rows` returns, per source table: a name, or (column, alias). A column an older
+# store lacks reads as NULL, so `report` and the evaluation loop can still read it.
+_ROW_COLUMNS = (
+    (
+        "tb",
+        "tables",
+        (
+            "table_id",
+            "dataset_id",
+            "ch_type",
+            "nullable",
+            "primary_key",
+            "projection",
+            "codec",
+            "skip_index",
+            "compression",
+            "status",
+            "skip_reason",
+            "compressed_bytes",
+            "uncompressed_bytes",
+            "marks_bytes",
+            "index_compressed_bytes",
+            "index_uncompressed_bytes",
+            "index_marks_bytes",
+            "rows",
+            "insert_ms",
+            "clickhouse_version",
+            "created_at",
+            ("warnings", "table_warnings"),
+        ),
+    ),
+    (
+        "q",
+        "queries",
+        (
+            "query_id",
+            "kind",
+            "predicate_kind",
+            "target_fraction",
+            "actual_fraction",
+            "predicate_sql",
+            "explain_plan",
+            ("status", "query_status"),
+            ("error", "query_error"),
+        ),
+    ),
+    (
+        "s",
+        "samples",
+        (
+            "sample_no",
+            "run_id",
+            "round_no",
+            "client_ms",
+            "server_ms",
+            "cpu_us",
+            "read_rows",
+            "read_bytes",
+            "memory_bytes",
+            "selected_marks",
+            "selected_granules",
+            "profile_events_json",
+            "ran_at",
+        ),
+    ),
+)
+
+_QUERY_ROWS_FROM = """
 FROM samples s
 JOIN queries q ON q.query_id = s.query_id
 JOIN tables tb ON tb.table_id = q.table_id
 JOIN suite_tables st ON st.table_id = tb.table_id
 WHERE st.suite_name = ?
 """
-
-
-# Columns added to `_SCHEMA` after the first `results.db` files existed.
-# `init_schema` adds each one to a store that predates it; see
-# `Store._add_missing_columns`.
-_ADDED_COLUMNS = (
-    ("queries", "status", "TEXT"),
-    ("queries", "error", "TEXT"),
-    ("tables", "index_compressed_bytes", "INTEGER"),
-    ("tables", "index_uncompressed_bytes", "INTEGER"),
-    ("tables", "index_marks_bytes", "INTEGER"),
-)
 
 
 def _now() -> str:
@@ -256,26 +280,38 @@ class Store:
         return False
 
     def init_schema(self) -> None:
+        """Create the schema (idempotent) and stamp `user_version`. A store written by an
+        earlier schema raises `StoreVersionError`: its samples were taken without rounds and
+        cannot be paired with new ones, so new samples go to a new store."""
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        populated = self.conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'samples'"
+        ).fetchone()[0]
+        if populated and version < SCHEMA_VERSION:
+            raise StoreVersionError(
+                f"{self.path} is a schema-{version} store, written before interleaved rounds "
+                f"(ToDo 3); `chbench report` still reads it, but new samples need a new store: "
+                f"pass --store"
+            )
         self.conn.executescript(_SCHEMA)
-        self._add_missing_columns()
+        self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 
-    def _add_missing_columns(self) -> None:
-        """Add columns that a `results.db` created by an earlier version has
-        not got. `CREATE TABLE IF NOT EXISTS` is a no-op on an existing
-        table, so a new column would otherwise only reach a database created
-        from scratch, and the first `upsert_query` against an older one would
-        fail on `no such column`. Samples accumulate across runs by design,
-        so an existing store is the normal case, not the exception, and
-        losing one to a schema change would throw away measurements.
-        """
-        for table, column, decl in _ADDED_COLUMNS:
-            existing = {
-                row[1]
-                for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+    def _query_rows_sql(self) -> str:
+        parts = []
+        for alias, table, columns in _ROW_COLUMNS:
+            present = {
+                r[1]
+                for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
             }
-            if column not in existing:
-                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            for c in columns:
+                column, name = c if isinstance(c, tuple) else (c, c)
+                parts.append(
+                    f"{alias}.{column} AS {name}"
+                    if column in present
+                    else f"NULL AS {name}"
+                )
+        return "SELECT " + ", ".join(parts) + _QUERY_ROWS_FROM
 
     # -- datasets ---------------------------------------------------------
 
@@ -525,6 +561,28 @@ class Store:
         )
         self.conn.commit()
 
+    def record_quiet(self, run_id: str, when: str, snapshot: dict) -> None:
+        """The quietness snapshot (`quiet.snapshot`) taken `when` ("before" / "after") the rounds."""
+        column = {"before": "quiet_before", "after": "quiet_after"}[when]
+        self.conn.execute(
+            f"UPDATE runs SET {column} = ? WHERE run_id = ?",
+            (json.dumps(snapshot, default=_json_default), run_id),
+        )
+        self.conn.commit()
+
+    def next_round(self, suite_name: str) -> int:
+        """One past the highest `round_no` among the suite's samples; 0 when there are none.
+        New rounds continue the numbering, so samples added later stay paired by round.
+        """
+        row = self.conn.execute(
+            "SELECT max(s.round_no) FROM samples s "
+            "JOIN queries q ON q.query_id = s.query_id "
+            "JOIN suite_tables st ON st.table_id = q.table_id "
+            "WHERE st.suite_name = ?",
+            (suite_name,),
+        ).fetchone()
+        return 0 if row[0] is None else int(row[0]) + 1
+
     def unfinished_runs(self, suite_name: str) -> list[tuple[str, str]]:
         """`(run_id, started_at)` of every run of `suite_name` whose
         `finished_at` is still NULL, oldest first.
@@ -549,17 +607,19 @@ class Store:
         delivered."""
         self.conn.execute(
             """
-            INSERT INTO samples (query_id, sample_no, run_id, client_ms, server_ms,
-                                  read_rows, read_bytes, memory_bytes, selected_marks,
+            INSERT INTO samples (query_id, sample_no, run_id, round_no, client_ms, server_ms,
+                                  cpu_us, read_rows, read_bytes, memory_bytes, selected_marks,
                                   selected_granules, profile_events_json, ran_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 query_id,
                 sample.sample_no,
                 run_id,
+                getattr(sample, "round_no", None),
                 sample.client_ms,
                 sample.server_ms,
+                getattr(sample, "cpu_us", None),
                 sample.read_rows,
                 sample.read_bytes,
                 sample.memory_bytes,
@@ -594,7 +654,7 @@ class Store:
         query as already held, and a filter through `runs.suite_name` would
         then show it nothing, because the samples sit under the first
         suite's run."""
-        cur = self.conn.execute(_QUERY_ROWS_SQL, (suite_name,))
+        cur = self.conn.execute(self._query_rows_sql(), (suite_name,))
         columns = [d[0] for d in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
