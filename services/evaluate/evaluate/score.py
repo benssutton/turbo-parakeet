@@ -614,6 +614,7 @@ FILES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("peak_mb", _F),
         ("frame_mb", _F),
         ("status", _S),
+        ("recommender", _S),
         ("error", _S),
     ],
 }

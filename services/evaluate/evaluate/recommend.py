@@ -1,4 +1,4 @@
-"""The one-shot recommender in a child process per dataset (peak memory is per process), with its
+"""The one-shot or streaming recommender in a child process per dataset (peak memory is per process), with its
 cost: wall_s, cpu_s (user + system, all threads), peak_mb above the loaded frame, frame_mb.
 """
 
@@ -35,18 +35,28 @@ def _memory_mb() -> tuple[float | None, float | None]:
         return current, None
 
 
-def _child(frame_path: Path, out_dir: Path) -> None:
-    from turbo_parakeet.recommenders import OneShotRecommender
+BLOCK_ROWS = 65_536  # StreamingRecommender's block_rows default
+
+
+def _child(frame_path: Path, out_dir: Path, kind: str) -> None:
+    from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 
     frame = pl.read_ipc(frame_path.read_bytes())
     current, _ = _memory_mb()
     wall0, cpu0 = time.perf_counter(), time.process_time()
-    result = OneShotRecommender().add(frame).result()
+    if kind == "streaming":
+        rec = StreamingRecommender()
+        for block in frame.iter_slices(BLOCK_ROWS):
+            rec.add(block)
+        result = rec.result()
+    else:
+        result = OneShotRecommender().add(frame).result()
     wall, cpu = time.perf_counter() - wall0, time.process_time() - cpu0
     _, peak = _memory_mb()
     result.write_ipc(out_dir / "result.arrow")
     cost = {
         "status": "ok",
+        "recommender": kind,
         "rows": frame.height,
         "cols": frame.width,
         "wall_s": wall,
@@ -61,7 +71,7 @@ def _child(frame_path: Path, out_dir: Path) -> None:
     (out_dir / "cost.json").write_text(json.dumps(cost, indent=2), encoding="utf-8")
 
 
-def recommend(frame_path: Path, out_dir: Path) -> dict:
+def recommend(frame_path: Path, out_dir: Path, kind: str = "oneshot") -> dict:
     """Run the recommender on `frame_path` in a child; return (and write) its cost.json.
     A crash is a `failed` cost row with the exit code and the stderr tail."""
     out_dir = Path(out_dir)
@@ -69,7 +79,14 @@ def recommend(frame_path: Path, out_dir: Path) -> dict:
     cost_path.unlink(missing_ok=True)
     (out_dir / "result.arrow").unlink(missing_ok=True)
     run = subprocess.run(
-        [sys.executable, "-m", "evaluate.recommend", str(frame_path), str(out_dir)],
+        [
+            sys.executable,
+            "-m",
+            "evaluate.recommend",
+            str(frame_path),
+            str(out_dir),
+            kind,
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -79,6 +96,7 @@ def recommend(frame_path: Path, out_dir: Path) -> dict:
         return json.loads(cost_path.read_text(encoding="utf-8"))
     cost = {
         "status": "failed",
+        "recommender": kind,
         "rows": None,
         "cols": None,
         "wall_s": None,
@@ -93,4 +111,4 @@ def recommend(frame_path: Path, out_dir: Path) -> dict:
 
 
 if __name__ == "__main__":
-    _child(Path(sys.argv[1]), Path(sys.argv[2]))
+    _child(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3])

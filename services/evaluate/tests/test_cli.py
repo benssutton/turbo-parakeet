@@ -132,3 +132,45 @@ def test_resume_refuses_a_dataset_at_other_rows(tmp_path, capsys):
     assert code == 2
     assert "synth_frame: the run holds 2000 rows" in capsys.readouterr().err
     assert sorted(p.name for p in run_path.rglob("*")) == before
+
+
+def test_recommender_defaults_to_oneshot_and_accepts_streaming():
+    from evaluate.cli import _parser
+
+    assert _parser().parse_args(["run", "gcd"]).recommender == "oneshot"
+    assert (
+        _parser().parse_args(["run", "gcd", "--recommender", "streaming"]).recommender
+        == "streaming"
+    )
+
+
+def test_resume_keeps_the_runs_recommender(tmp_path, monkeypatch, capsys):
+    from evaluate import run as run_mod
+
+    kinds = []
+    real = run_mod.recommend
+
+    def spy(frame_path, out_dir, kind="oneshot"):
+        kinds.append(kind)
+        return real(frame_path, out_dir, kind=kind)
+
+    monkeypatch.setattr(run_mod, "recommend", spy)
+    main(
+        [
+            "run",
+            "synth_frame:2000",
+            "--dry-run",
+            "--recommender",
+            "streaming",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    (run_path,) = tmp_path.iterdir()
+    info = json.loads((run_path / "run.json").read_text())
+    assert info["recommender"] == {"kind": "streaming"}
+    # drop the result so the resume recommends again
+    (run_path / "synth_frame" / "result.arrow").unlink()
+    main(["run", "synth_frame:2000", "--dry-run", "--resume", str(run_path)])
+    assert kinds == ["streaming", "streaming"]
+    assert "using the run's recommender 'streaming'" in capsys.readouterr().out

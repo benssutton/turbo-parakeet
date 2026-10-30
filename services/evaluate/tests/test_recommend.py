@@ -32,3 +32,12 @@ def test_a_crashing_child_is_failed(tmp_path):
     assert cost["exit_code"] != 0 and cost["error"]
     assert (tmp_path / "cost.json").is_file()
     assert not (tmp_path / "result.arrow").exists()
+
+
+def test_the_streaming_child_writes_a_result(tmp_path):
+    frame = pl.DataFrame({"a": list(range(200_000)), "b": ["x", "y"] * 100_000})
+    frame_path = tmp_path / "frame.arrow"
+    frame.write_ipc(frame_path)
+    cost = recommend(frame_path, tmp_path, kind="streaming")
+    assert cost["status"] == "ok" and cost["recommender"] == "streaming"
+    assert set(pl.read_ipc(tmp_path / "result.arrow")["column"]) == {"a", "b"}

@@ -31,6 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--samples", type=int, default=10)
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--resume", type=Path)
+    r.add_argument("--recommender", choices=("oneshot", "streaming"), default="oneshot")
     r.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
     rep = sub.add_parser(
         "report", help="re-score a run and print its report (no server)"
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
                 samples=args.samples,
                 dry_run=args.dry_run,
                 resume=args.resume,
+                recommender=args.recommender,
                 root=args.runs_dir,
             )
         if args.cmd == "report":

@@ -6,10 +6,11 @@ recommendation against alternatives on the same data, score. ClickHouse only (Po
 # Running
 From the repository root, with the `chbench-ch` container up (services/bench/CLAUDE.md, Environment):
 ```
-python -m evaluate run <datasets…> [--workers 1] [--samples 10] [--dry-run] [--resume RUN_DIR] [--runs-dir DIR]
+python -m evaluate run <datasets…> [--workers 1] [--samples 10] [--dry-run] [--resume RUN_DIR] [--recommender oneshot|streaming] [--runs-dir DIR]
 python -m evaluate report RUN_DIR          # re-score, no server
 python -m evaluate compare RUN_A RUN_B     # summary metric changes
 ```
+The streaming recommender gets the frame in 65 536-row blocks; the kind is recorded in run.json and kept on `--resume`, and `evaluate compare` compares a one-shot run with a streaming run.
 Datasets: registry names (`evaluate/registry.py`: synth tiers, the planted `gcd` / `delta` / `skip` frames,
 synthdata scenarios), `name:rows` for scalable entries, the groups `calibration` and `query_time` (the calibration
 frames with synth_frame at 1M rows: use it when query time is scored; `evaluate compare` aggregates across datasets

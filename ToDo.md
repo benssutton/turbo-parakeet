@@ -75,7 +75,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    regret, query CPU / memory and query-time regret, recommender cost) and a summary. It replaces the two calibration scripts, at parity
    cell for cell (369 size cells, 99 skip queries; `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`).
    Follow-ups:
-   - The streaming recommender in the loop.
    - Query time in the size decision: `size_frontier` reports the bytes × full-scan CPU frontier; once a
      `query_time` run has measured it, decide the recommender's objective (bytes only, or a weight on CPU).
    - Query-time scores on `synth_frame` (50 000 rows) resolve 3 of 356 queries: score query time on ≳ 1M-row frames

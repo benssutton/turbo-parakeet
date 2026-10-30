@@ -31,7 +31,7 @@ def _loads(suite_path: Path) -> int:
 
 
 def _prepare(
-    run: RunDir, name: str, rows: int, load, samples: int
+    run: RunDir, name: str, rows: int, load, samples: int, kind: str = "oneshot"
 ) -> list[dict] | None:
     """Steps 2-5 for one dataset; the suites index, or None when the recommender failed."""
     # a dataset added on --resume has no entry yet
@@ -48,7 +48,7 @@ def _prepare(
         for w in info["warnings"]:
             print(f"  {name}: warning: {w}")
     if not (run.result(name).is_file() and run.cost(name).is_file()):
-        cost = recommend(frame_path, run.dataset(name))
+        cost = recommend(frame_path, run.dataset(name), kind=kind)
         if cost["status"] != "ok":
             run.update_dataset(
                 name, **{**info, "status": "failed", "error": cost["error"]}
@@ -75,11 +75,15 @@ def run_loop(
     samples: int = 3,
     dry_run: bool = False,
     resume: Path | None = None,
+    recommender: str = "oneshot",
     root: Path = DEFAULT_RUNS,
 ) -> int:
     datasets = resolve(args)  # RegistryError before anything is written
     if resume is not None:
         run = RunDir.open(resume)
+        kind = run.info().get("recommender", {}).get("kind", "oneshot")
+        if kind != recommender:
+            print(f"resume: using the run's recommender {kind!r}")
         held = run.info()["datasets"]
         for d in datasets:
             if d.name in held and held[d.name]["rows"] != d.rows:
@@ -88,13 +92,14 @@ def run_loop(
                     f"the argument asks {d.rows}; start a new run"
                 )
     else:
+        kind = recommender
         run = RunDir.new(root)
         run.write_info(
             {
                 "versions": versions(),
                 "workers": workers,
                 "samples": samples,
-                "recommender": {},
+                "recommender": {"kind": kind},
                 "datasets": {
                     d.name: {"status": "pending", "rows": d.rows} for d in datasets
                 },
@@ -104,7 +109,7 @@ def run_loop(
     prepared: dict[str, list[dict]] = {}
     for d in datasets:
         try:
-            entries = _prepare(run, d.name, d.rows, d.load, samples)
+            entries = _prepare(run, d.name, d.rows, d.load, samples, kind)
         except (
             Exception
         ) as e:  # noqa: BLE001 - one dataset's failure must not stop the others
