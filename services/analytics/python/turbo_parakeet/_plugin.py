@@ -209,13 +209,24 @@ def clickhouse_profile(table, column: str, codecs: str) -> dict:
     return {"clickhouse_type": row["clickhouse_type"], "bytes": row["bytes"]}
 
 
-def clickhouse_redecide(cells: list[tuple[str, int]], **params) -> str:
+def clickhouse_redecide(
+    cells: list[tuple[str, int]],
+    *,
+    zstd_level_tolerance: float = 0.01,
+    zstd_min_saving: float = 0.10,
+    transform_min_saving: float = 0.01,
+) -> str:
     """The codec chain the ClickHouse recommender's rule picks from `cells`, (chain, bytes) of
-    the chains it compared (pruned chains left out); `params` as the recommender's keywords
-    (zstd_level_tolerance, zstd_min_saving, transform_min_saving). ValueError when the plain
-    LZ4 row is missing. Private: the evaluation loop's decision agreement."""
+    the chains it compared (pruned chains left out); the keywords as the recommender's.
+    ValueError for a missing plain LZ4 row, a family with ZSTD rows but no LZ4 row, a
+    duplicate chain, an unparsable chain, or a keyword outside [0, 1). Private: the
+    evaluation loop's decision agreement."""
     return _rs.clickhouse_redecide(
-        [c for c, _ in cells], [b for _, b in cells], **params
+        [c for c, _ in cells],
+        [b for _, b in cells],
+        zstd_level_tolerance=zstd_level_tolerance,
+        zstd_min_saving=zstd_min_saving,
+        transform_min_saving=transform_min_saving,
     )
 
 

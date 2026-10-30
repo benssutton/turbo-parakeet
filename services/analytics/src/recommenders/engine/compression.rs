@@ -342,11 +342,19 @@ fn winner(picks: &[u64], p: &CompressionParams) -> usize {
     win
 }
 
-/// The chain `decide` picks had its families measured `rows`: (chain, bytes) of every chain it
-/// measured. Pruned chains and shortcut-skipped levels are simply absent; of two rows for one
-/// chain the first counts. Err without the plain LZ4 row, or for a family with ZSTD rows but
-/// no LZ4 row.
+/// The chain `decide` would pick had it measured exactly `rows` — (chain, bytes) of every
+/// chain it compared; pruned chains and shortcut-skipped levels are simply absent. Err without
+/// the plain LZ4 row, for a family with ZSTD rows but no LZ4 row, or for two rows naming one
+/// chain.
 pub(crate) fn redecide(rows: &[(Chain, u64)], p: &CompressionParams) -> Result<Chain, String> {
+    let mut seen = std::collections::HashSet::with_capacity(rows.len());
+    if let Some((c, _)) = rows.iter().find(|(c, _)| !seen.insert(*c)) {
+        return Err(format!("two rows for the chain {}", c.ddl()));
+    }
+    let family = |t: Transform| match t {
+        Transform::None => "the plain chain",
+        t => transform_name(t),
+    };
     let mut picks: Vec<(Transform, (Compression, u64))> = Vec::new();
     for t in [
         Transform::None,
@@ -368,11 +376,11 @@ pub(crate) fn redecide(rows: &[(Chain, u64)], p: &CompressionParams) -> Result<C
         match lz4 {
             Some(lz4) => picks.push((t, choose_compression(lz4, &zstd, p))),
             None if zstd.is_empty() => {}
-            None => return Err(format!("{t:?} has ZSTD rows but no LZ4 row")),
+            None => return Err(format!("no LZ4 row for {}", family(t))),
         }
     }
     if picks.first().map(|(t, _)| *t) != Some(Transform::None) {
-        return Err("no plain LZ4 row".to_string());
+        return Err("no LZ4 row for the plain chain".to_string());
     }
     let bytes: Vec<u64> = picks.iter().map(|(_, (_, b))| *b).collect();
     let (transform, (compression, _)) = picks[winner(&bytes, p)];
@@ -786,5 +794,67 @@ mod tests {
     fn redecide_needs_the_plain_lz4_row() {
         let p = CompressionParams::default();
         assert!(redecide(&[(ch(Transform::Gcd, Compression::Lz4), 9)], &p).is_err());
+    }
+
+    #[test]
+    fn redecide_needs_an_lz4_row_for_a_family_with_zstd_rows() {
+        let p = CompressionParams::default();
+        let rows = [
+            (ch(Transform::None, Compression::Lz4), 1000),
+            (ch(Transform::Gcd, Compression::Zstd(1)), 500),
+        ];
+        assert_eq!(redecide(&rows, &p).unwrap_err(), "no LZ4 row for GCD");
+        let plain = [(ch(Transform::None, Compression::Zstd(1)), 500)];
+        assert_eq!(
+            redecide(&plain, &p).unwrap_err(),
+            "no LZ4 row for the plain chain"
+        );
+    }
+
+    #[test]
+    fn redecide_refuses_a_duplicate_chain() {
+        let p = CompressionParams::default();
+        let rows = [
+            (ch(Transform::None, Compression::Lz4), 1000),
+            (ch(Transform::None, Compression::Lz4), 900),
+        ];
+        assert!(redecide(&rows, &p).is_err());
+    }
+
+    #[test]
+    fn redecide_takes_the_smaller_of_two_qualifying_transforms() {
+        let p = CompressionParams::default();
+        let plain = (ch(Transform::None, Compression::Lz4), 1000);
+        let gcd = (ch(Transform::Gcd, Compression::Lz4), 900);
+        let delta = (ch(Transform::Delta, Compression::Lz4), 800);
+        assert_eq!(
+            redecide(&[plain, gcd, delta], &p).unwrap(),
+            ch(Transform::Delta, Compression::Lz4)
+        );
+        let gcd = (ch(Transform::Gcd, Compression::Lz4), 700);
+        assert_eq!(
+            redecide(&[plain, gcd, delta], &p).unwrap(),
+            ch(Transform::Gcd, Compression::Lz4)
+        );
+    }
+
+    #[test]
+    fn redecide_compares_an_lz4_only_family_with_a_plain_zstd_pick() {
+        let p = CompressionParams::default();
+        let plain = [
+            (ch(Transform::None, Compression::Lz4), 1000),
+            (ch(Transform::None, Compression::Zstd(1)), 800),
+        ];
+        // The shortcut left GCD with LZ4 only; it must beat the plain ZSTD pick (800).
+        let beats = (ch(Transform::Gcd, Compression::Lz4), 700);
+        assert_eq!(
+            redecide(&[plain[0], plain[1], beats], &p).unwrap(),
+            ch(Transform::Gcd, Compression::Lz4)
+        );
+        let loses = (ch(Transform::Gcd, Compression::Lz4), 850);
+        assert_eq!(
+            redecide(&[plain[0], plain[1], loses], &p).unwrap(),
+            ch(Transform::None, Compression::Zstd(1))
+        );
     }
 }

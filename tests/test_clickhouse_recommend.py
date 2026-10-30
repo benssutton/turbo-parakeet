@@ -432,6 +432,10 @@ def test_clickhouse_redecide_binding():
     assert _plugin.clickhouse_redecide(cells, zstd_min_saving=0.5) == "LZ4"
     with pytest.raises(ValueError):
         _plugin.clickhouse_redecide([("GCD, LZ4", 9)])
+    with pytest.raises(ValueError):
+        _plugin.clickhouse_redecide(cells, zstd_min_saving=1.5)
+    with pytest.raises(ValueError):
+        _plugin.clickhouse_redecide(cells + [("LZ4", 1)])
 
 
 def _suite(path, name):

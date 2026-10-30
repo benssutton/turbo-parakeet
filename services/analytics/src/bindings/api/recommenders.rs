@@ -70,6 +70,37 @@ fn compression(
     })
 }
 
+/// The chain the ClickHouse codec rule picks from (chain, bytes) rows (`redecide`): `chains`
+/// in DDL, `bytes` their sizes; the keywords checked as the recommenders check them.
+/// Private: the evaluation loop's decision agreement.
+pub fn clickhouse_redecide(
+    chains: &[String],
+    bytes: &[u64],
+    zstd_level_tolerance: f64,
+    zstd_min_saving: f64,
+    transform_min_saving: f64,
+) -> Result<String> {
+    if chains.len() != bytes.len() {
+        return Err(Error::InvalidInput(
+            "chains and bytes differ in length".into(),
+        ));
+    }
+    let rows = chains
+        .iter()
+        .zip(bytes)
+        .map(|(c, &b)| super::techniques::parse_chain(c).map(|ch| (ch, b)))
+        .collect::<Result<Vec<_>>>()?;
+    let p = compression(
+        CompressionParams::default().zstd_levels,
+        zstd_level_tolerance,
+        zstd_min_saving,
+        transform_min_saving,
+    )?;
+    crate::recommenders::engine::redecide(&rows, &p)
+        .map(|c| c.ddl())
+        .map_err(Error::InvalidInput)
+}
+
 /// The skip-index keywords as engine parameters, checked.
 fn skip_params(
     granularities: Vec<u32>,
