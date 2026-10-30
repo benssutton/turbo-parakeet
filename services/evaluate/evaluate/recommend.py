@@ -1,5 +1,5 @@
-"""The one-shot or streaming recommender in a child process per dataset (peak memory is per process), with its
-cost: wall_s, cpu_s (user + system, all threads), peak_mb above the loaded frame, frame_mb.
+"""The one-shot or streaming recommender in a child process per dataset (peak memory is per process),
+with its cost: wall_s, cpu_s (user + system, all threads), peak_mb above the loaded frame, frame_mb.
 """
 
 from __future__ import annotations
@@ -36,16 +36,24 @@ def _memory_mb() -> tuple[float | None, float | None]:
 
 
 BLOCK_ROWS = 65_536  # StreamingRecommender's block_rows default
+KINDS = ("oneshot", "streaming")
+
+
+def _check_kind(kind: str) -> None:
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}, not {kind!r}")
 
 
 def _child(frame_path: Path, out_dir: Path, kind: str) -> None:
     from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 
+    _check_kind(kind)
+
     frame = pl.read_ipc(frame_path.read_bytes())
     current, _ = _memory_mb()
     wall0, cpu0 = time.perf_counter(), time.process_time()
     if kind == "streaming":
-        rec = StreamingRecommender()
+        rec = StreamingRecommender(block_rows=BLOCK_ROWS)
         for block in frame.iter_slices(BLOCK_ROWS):
             rec.add(block)
         result = rec.result()
@@ -74,6 +82,7 @@ def _child(frame_path: Path, out_dir: Path, kind: str) -> None:
 def recommend(frame_path: Path, out_dir: Path, kind: str = "oneshot") -> dict:
     """Run the recommender on `frame_path` in a child; return (and write) its cost.json.
     A crash is a `failed` cost row with the exit code and the stderr tail."""
+    _check_kind(kind)
     out_dir = Path(out_dir)
     cost_path = out_dir / "cost.json"
     cost_path.unlink(missing_ok=True)

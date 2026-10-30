@@ -41,3 +41,10 @@ def test_the_streaming_child_writes_a_result(tmp_path):
     cost = recommend(frame_path, tmp_path, kind="streaming")
     assert cost["status"] == "ok" and cost["recommender"] == "streaming"
     assert set(pl.read_ipc(tmp_path / "result.arrow")["column"]) == {"a", "b"}
+
+
+def test_an_unknown_kind_is_refused(tmp_path):
+    import pytest
+
+    with pytest.raises(ValueError, match="kind"):
+        recommend(_frame(tmp_path), tmp_path, kind="fast")
