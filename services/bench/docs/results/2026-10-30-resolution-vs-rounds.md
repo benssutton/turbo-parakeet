@@ -5,12 +5,13 @@
 > `services/bench/` on a fresh store `results-resolution.db` (not committed):
 >
 > ```
-> chbench run replicates10.yaml --store results-resolution.db                       # 10 rounds
-> chbench report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep10.csv
-> chbench run replicates10.yaml --store results-resolution.db --samples-add 10      # 20 rounds
-> chbench report ... --csv rep20.csv
-> chbench run replicates10.yaml --store results-resolution.db --samples-add 10      # 30 rounds
-> chbench report ... --csv rep30.csv
+> sed 's/samples: 20/samples: 10/' suites/replicates.yaml > replicates10.yaml
+> python -m chbench.cli run replicates10.yaml --store results-resolution.db                   # 10 rounds
+> python -m chbench.cli chbench report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep10.csv
+> python -m chbench.cli run replicates10.yaml --store results-resolution.db --samples-add 10  # 20 rounds
+> python -m chbench.cli chbench report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep20.csv
+> python -m chbench.cli run replicates10.yaml --store results-resolution.db --samples-add 10  # 30 rounds
+> python -m chbench.cli chbench report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep30.csv
 > ```
 >
 > `replicates10.yaml` is `suites/replicates.yaml` with `samples: 10` (the committed suite has 20). The three runs took
@@ -35,12 +36,14 @@ before; +10 rounds 33% / 34%; +10 rounds 30% / 24%. Every run warned that host C
 *quieted*, not idle runs, like the 2026-10-29 ones.
 
 Reading. The CPU interval narrows from 0.177 to 0.078 to 0.059, and the server-wall interval from 0.327 to 0.161 to
-0.083: about 2.3x and 3x narrower at 20 and 30 rounds for CPU, 2x and 4x for wall, faster than the 1/√n that 20 and 30
-rounds would give by themselves (1.4x and 1.7x). Part of that is the discrete order-statistic ranks (at 10 rounds the
-interval is ranks 2 and 9, at 20 ranks 6 and 15, so the coverage level moves with n), and part is noise (the 10-round
-median has a 0.651 outlier row beside it, and each median is over only 6 rows). Treat the three widths as the
-measured scale on this laptop, not as a law. The 10-round width here (0.177) is well below the 0.33 that 2026-10-29 reported for the codec suites; those
-compare variants whose costs differ, so the figure was not measured on replicates, and it stays the safer one to
-plan with. The server clock is about twice as wide as CPU at every n, so a question that needs a small difference should be
-asked of `cpu_ratio`. All 6 intervals per clock contain 1 at every n: the replicates check holds at 30 rounds too,
-and more rounds did not reveal a hidden difference between the indexes.
+0.083: about 2.3x and 3x narrower at 20 and 30 rounds for CPU, 2x and 4x for wall, faster than the 1/√n that 20 and
+30 rounds would give by themselves (1.4x and 1.7x). The figures are cumulative on one store, so rounds 1-10 are in all
+three. They ran under the highest load (host CPU 36% before, one merge active), so the faster narrowing is at least
+partly those noisy early rounds being diluted by later ones, not independent measurements. The 6 rows behind each
+median are also correlated, because they share the minmax baseline, and the 10-round set holds a 0.651 outlier. Treat
+the three widths as the scale on this laptop for this suite, not as a law. The 10-round width (0.177) is well below the
+0.33 that 2026-10-29 reported for the codec suites. That comparison is confounded: the codec runs used High performance
+power and compared variants whose costs differ, this one used Balanced and near-identical tables. The 0.33 is the
+safer figure to plan with. The server clock is about twice as wide as CPU at every n, so a question that needs a
+small difference should be asked of `cpu_ratio`. All 6 intervals per clock contain 1 at every n: the replicates check
+holds at 30 rounds too.

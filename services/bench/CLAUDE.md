@@ -89,9 +89,10 @@ axis over a string or date dataset) is rejected at parse time.
   `use_query_condition_cache = 0`, and reads `system.query_log` once. `--samples-add N` adds N rounds over every pair,
   so samples stay paired by `round_no`; a query added later is paired only over the rounds it shares (`run` warns).
   Ctrl-C marks every query short of its samples `interrupted`.
-- Resolution: a paired ratio interval is ≈ 0.18 / 0.08 / 0.06 wide in CPU (server wall 0.33 / 0.16 / 0.08) at 10 / 20
-  / 30 rounds (median, replicates; `docs/results/2026-10-30-resolution-vs-rounds.md`); the codec suites' 10-round
-  median was 0.33. Pick `--samples-add` for the smallest difference the question needs (about half the width).
+- Resolution: on replicates (near-identical tables, 6 rows per median, host CPU 24-36%, Balanced power) the median
+  paired CPU-ratio interval was 0.18 / 0.08 / 0.06 wide at 10 / 20 / 30 rounds; the codec suites measured 0.33 at 10
+  rounds (2026-10-29, High performance). Plan with the wider figure, and pick `--samples-add` so that half the width
+  is below the smallest difference the question needs (`docs/results/2026-10-30-resolution-vs-rounds.md`).
 - String full scan: it disables `optimize_functions_to_subcolumns` so `sum(length(v))` reads the characters, not just
   the size subcolumn (FINDINGS §12). A store holding String full-scan samples from before this change must be rerun
   with `--force` or a fresh `--store`, because `query_id` does not hash the SELECT list.
@@ -137,5 +138,5 @@ notebooks/         results_explorer.ipynb
   byte-exact, `LowCardinality(String)` median 0.8%, String not yet — ToDo 9) and the skip-index predictions (minmax /
   set skip shares and index bytes exact on non-null columns, Nullable not yet — ToDo 10; bloom within 0.009–0.041 per
   query and 0.5% in bytes).
-- Open: ToDo 3's follow-ups (String full scan, resolution at 10 samples), ToDo 1 (generator items), ToDo 5
+- Open: ToDo 3's follow-ups, ToDo 1 (generator items), ToDo 5
   (engines).
