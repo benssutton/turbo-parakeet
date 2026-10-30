@@ -2328,15 +2328,22 @@ bytes; over two more runs `length_no_subcolumns` cost 25.3 / 24.0 ms of CPU agai
 2026-10-30. ClickHouse 26.8.31.2. Question (ToDo 3): in decimal32_codecs at 10M rows, sorted
 (`ORDER BY v`, the suite's primary_key cells) `Decimal32(7)` with no codec + ZSTD stored 17.1 MB
 against 8.2 MB for `Decimal64(7)`: 2.09×. Run from `services/bench/`:
-`python -m spikes.spike_decimal32_zstd`; raw cells in `spikes/spike_decimal32_zstd_results.tsv`.
+`python -m spikes.spike_decimal32_zstd` (server cells, `spikes/spike_decimal32_zstd_results.tsv`;
+the ZSTD(13) / (14) / (17) / (18) rows were appended by `--chains ... --orders sorted --append`)
+and `python -m spikes.spike_decimal32_zstd --emulator` (no server:
+`spikes/spike_decimal32_zstd_emulator.tsv`).
+
+Hypothesis tested: sorted 4-byte values share fewer repeated bytes per value than 8-byte values
+with constant high bytes, so ZSTD's matches are shorter or absent and the wider type compresses
+better. If so, `Int32` / `Int64` over the same unscaled values repeat the ratio, and Delta or T64
+removes it.
 
 Setup: decimal32_codecs' own cached dataset (float64, 7 dp, values in [-1, 9.9], 7.5M distinct of
 10M) cast to `Decimal32(7)` and `Decimal64(7)`, and the same unscaled integers (read from the
 decimals' storage, so exact) as `Int32` and `Int64`. Each loaded `ORDER BY v` (sorted) and
 `ORDER BY tuple()` (generation order) under `CODEC(<chain>)`, inserted in `INSERT_BATCH_ROWS`
 batches, `OPTIMIZE ... FINAL` (one part each), column `v`'s compressed bytes from
-`system.parts_columns`. Uncompressed: 40 000 000 bytes for the 4-byte types, 80 000 000 for the
-8-byte ones (4 and 8 bytes per value).
+`system.parts_columns`. Uncompressed: 4 and 8 bytes per value.
 
 **Compressed MB of `v`, 10M rows** (Int32 / Int64 equal Decimal32 / Decimal64 byte for byte in
 every cell but T64 + ZSTD(1), where they differ by 1 and 11 bytes):
@@ -2347,6 +2354,10 @@ every cell but T64 + ZSTD(1), where they differ by 1 and 11 bytes):
 | sorted | ZSTD(1) | 17.09 | 8.18 | **2.09** |
 | sorted | ZSTD(3) | 17.09 | 8.18 | 2.09 |
 | sorted | ZSTD(9) | 17.09 | 8.19 | 2.09 |
+| sorted | ZSTD(13) | 17.06 | 8.59 | 1.99 |
+| sorted | ZSTD(14) | 8.45 | 8.50 | 0.99 |
+| sorted | ZSTD(17) | 8.38 | 8.21 | 1.02 |
+| sorted | ZSTD(18) | 8.38 | 8.21 | 1.02 |
 | sorted | ZSTD(19) | 8.35 | 8.22 | 1.02 |
 | sorted | Delta, ZSTD(1) | 6.11 | 5.57 | 1.10 |
 | sorted | T64, ZSTD(1) | 10.38 | 10.73 | 0.97 |
@@ -2360,33 +2371,63 @@ every cell but T64 + ZSTD(1), where they differ by 1 and 11 bytes):
 
 The 2.09 of the suite run reproduces exactly (17 087 022 against 8 176 348 bytes).
 
-**Reading: the hypothesis holds in its "reverse" form; Decimal plays no part.**
-- The integers repeat every Decimal number: the cause is the byte width and the order.
-- Sorted, 97.5% of adjacent values differ only in their low byte (25% are equal). In the 4-byte
-  stream the bytes an adjacent pair share are 3 (bytes 1–3) at offset 4; in the 8-byte stream they
-  are 7 (bytes 1–3 plus the four constant high bytes, 0x00 or 0xFF) at offset 8. ZSTD's levels 1–9
-  need longer matches than 3 bytes, so the 4-byte stream gets almost none and is coded as Huffman
-  literals (13.7 bits per value); the 8-byte stream is one literal plus one repeat-offset match
+**libzstd controls** (`--emulator`; python-zstandard 0.25.0's bundled libzstd 1.5.7, not
+ClickHouse's build, over the raw sorted bytes in 64 KiB blocks, the block size ClickHouse's block
+split gives both columns here; each level's own parameters for a 64 KiB source, then only
+`min_match` changed; MB):
+
+| level | strategy | min_match | Decimal32 | Decimal64 |
+|---|---|---|---|---|
+| 1 | fast | 6 (own) / 3 | 17.07 / 17.07 | 8.15 / 8.15 |
+| 9 | lazy2 | 4 (own) / 3 | 17.07 / 17.07 | 8.16 / 8.16 |
+| 13 | btopt | 4 (own) / 3 | 17.04 / **8.43** | 8.55 / 8.43 |
+| 14 | btopt | 3 (own) / 4 | 8.43 / **17.04** | 8.47 / 8.56 |
+| 19 | btultra2 | 3 (own) / 4 | 8.34 / **17.07** | 8.19 / 8.27 |
+
+At 64 KiB the level table (libzstd 1.5.7) differs from the one for large inputs: ZSTD(13) is btopt
+with a 4-byte minimum match, (14) btopt with 3, (16)–(18) btultra with 3, (19) btultra2 with 3;
+that is why the server's ZSTD(17) and (18) are identical, and why (13) against (14) is the cell
+pair that varies the minimum match alone.
+
+**Reading: the hypothesis holds, in its "reverse" form, and the trigger is a 3-byte minimum match.**
+- Decimal plays no part: the integers repeat every Decimal number. The cause is the byte width and
+  the order.
+- Sorted, 25.0% of adjacent values are equal and 97.5% agree in every byte above the low byte
+  (computed by `--emulator`). So the bytes an adjacent pair shares are, in the 4-byte stream,
+  3 bytes (bytes 1–3) at offset 4; in the 8-byte stream 7 bytes (bytes 1–3 plus the four constant
+  high bytes, 0x00 or 0xFF) at offset 8.
+- What the evidence supports: the 4-byte column drops from ≈ 17 MB to ≈ 8.4 MB exactly when the
+  minimum match is 3 under an optimal-parsing strategy (btopt or above). On the server, ZSTD(13)
+  → (14), the same strategy in libzstd 1.5.7's table with the minimum match 4 → 3, takes it from
+  17.06 to 8.45 MB. In the libzstd controls, changing `min_match` alone toggles it both ways at
+  btopt (13, 14) and at btultra2 (19): 4 gives ≈ 17.0 MB, 3 gives ≈ 8.4 MB. A stronger strategy
+  with a 4-byte minimum match (btultra2, min_match 4) does not help.
+- The min_match = 3 test at levels 1 (fast) and 9 (lazy2) moves the size by at most 0.0003%:
+  those strategies do not use 3-byte matches even when asked (seen in the bytes, not checked in
+  the source), so the earlier "min_match = 3 at level 1 changes nothing" says nothing against the
+  minimum match. Hence, at these 64 KiB blocks, no ZSTD level below 14 reaches the 4-byte
+  stream's 3-byte repeats, while the 8-byte stream's 7-byte ones fit every level's minimum.
+- Inferred, not traced: below level 14 the 4-byte stream is coded almost wholly as literals
+  (13.7 bits per value), while the 8-byte stream is about one literal plus one repeat-offset match
   per value (6.5 bits per value). The constant high bytes are what make Decimal64 small.
-- Level 19 shows it: at the one level whose minimum match length is 3, the 4-byte column falls to
-  8.35 MB, level with the 8-byte one; ZSTD(1), (3) and (9) leave it at 17.09. The minimum match
-  per level, read from libzstd through `zstandard` 0.25 (`ZstdCompressionParameters.from_level`
-  for a 1 MiB source, ClickHouse's compress block): 7 at level 1, 6 at 2, 5 at 3–16, 4 at 17,
-  3 from 18. Asking for `min_match = 3` at level 1 (fast strategy) did not change the size.
-- Delta removes the gap (6.11 against 5.57 MB; the remaining 1.10 is Delta's 4-byte against 8-byte
+- Delta removes most of the gap (6.11 against 5.57 MB; the rest is Delta's 4-byte against 8-byte
   output, again with constant high bytes) and T64 reverses it (0.97). In generation order the
   widths compress alike under every ZSTD level (0.92–0.98).
 - LZ4 does not show it (0.80 sorted). It finds the 8-byte stream's 7-byte matches too, but has no
-  repeat-offset or entropy stage, so each value still costs a match (token and offset) plus a raw
-  literal: 3.8 bytes per value against 3.0 for the 4-byte stream (inferred from the sizes, not
-  traced).
+  repeat-offset or entropy stage, so each value still costs a match plus a raw literal: 3.8 bytes
+  per value against 3.0 for the 4-byte stream (inferred from the sizes, not traced).
 
-**For the recommender.** Width is codec- and order-dependent: on sorted data under plain ZSTD below
-level 18 the wider type can be the smaller one, so a size ranking must be measured per chain, not
-assumed from the width. The ClickHouse size emulator (`turbo_parakeet._plugin.clickhouse_profile`,
-which runs the real codecs over ClickHouse's blocks) reproduces it byte for byte on the sorted
-arrays: Decimal32 17 087 022 (ZSTD(1)) and 8 353 270 (ZSTD(19)), Decimal64 8 176 348 and
-8 223 702, equal to the measured bytes; so do LZ4, ZSTD(3), ZSTD(9) and Delta + ZSTD(1). A
-recommender that ranks widths by emulated size already gets this right.
+**Emulator.** `turbo_parakeet._plugin.clickhouse_profile` on the sorted Decimal32 / Decimal64
+arrays (libzstd 1.5.7 through the `zstd` crate, ClickHouse's block split) reproduces every server
+cell it supports byte for byte: LZ4, ZSTD(1), (3), (9), (13), (14), (17), (18), (19) and
+Delta + ZSTD(1), e.g. Decimal32 17 087 022 / 8 353 270 and Decimal64 8 176 348 / 8 223 702 at
+ZSTD(1) / (19). T64 + ZSTD(1) is not checked: the emulator has no T64 transform (the chain is
+refused as unparsable).
+
+**For the recommender.** It picks the Decimal width from precision alone
+(`recommenders/engine/clickhouse.rs`, `decimal_type`): `Decimal32` for precision ≤ 9. This case
+shows that choice can cost 1.99–2.09× under ZSTD(1)–(13) when the column is stored sorted. It
+does not rank widths by emulated size; since the emulator reproduces both widths' sizes exactly,
+ranking them by emulated size would catch it (ToDo 11).
 
 Scope: one dataset (7 dp, lognormal), one server version, single runs (sizes are deterministic).

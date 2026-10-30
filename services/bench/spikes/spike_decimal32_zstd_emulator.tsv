@@ -1,0 +1,46 @@
+# sorted adjacent pairs: equal 0.2500, equal above the low byte 0.9749
+type	chain	emulated_bytes
+Decimal32	LZ4	30159352
+Decimal32	ZSTD(1)	17087022
+Decimal32	ZSTD(3)	17087013
+Decimal32	ZSTD(9)	17089609
+Decimal32	ZSTD(13)	17059564
+Decimal32	ZSTD(14)	8446437
+Decimal32	ZSTD(17)	8383335
+Decimal32	ZSTD(18)	8383335
+Decimal32	ZSTD(19)	8353270
+Decimal32	Delta, ZSTD(1)	6111612
+Decimal32	T64, ZSTD(1)	unsupported (ValueError)
+Decimal64	LZ4	37771792
+Decimal64	ZSTD(1)	8176348
+Decimal64	ZSTD(3)	8176310
+Decimal64	ZSTD(9)	8189649
+Decimal64	ZSTD(13)	8585366
+Decimal64	ZSTD(14)	8504750
+Decimal64	ZSTD(17)	8213173
+Decimal64	ZSTD(18)	8213173
+Decimal64	ZSTD(19)	8223702
+Decimal64	Delta, ZSTD(1)	5565233
+Decimal64	T64, ZSTD(1)	unsupported (ValueError)
+# libzstd 1.5.7 (python-zstandard 0.25.0), 64 KiB blocks
+type	level	strategy	min_match	bytes
+Decimal32	1	1	6	17071747
+Decimal32	1	1	3	17071805
+Decimal32	9	5	4	17074334
+Decimal32	9	5	3	17074334
+Decimal32	13	7	4	17044289
+Decimal32	13	7	3	8431162
+Decimal32	14	7	3	8431162
+Decimal32	14	7	4	17044289
+Decimal32	19	9	3	8337995
+Decimal32	19	9	4	17065877
+Decimal64	1	1	6	8145823
+Decimal64	1	1	3	8146152
+Decimal64	9	5	4	8159124
+Decimal64	9	5	3	8159124
+Decimal64	13	7	4	8554841
+Decimal64	13	7	3	8429929
+Decimal64	14	7	3	8474225
+Decimal64	14	7	4	8559057
+Decimal64	19	9	3	8193177
+Decimal64	19	9	4	8270516

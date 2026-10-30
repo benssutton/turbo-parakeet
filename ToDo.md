@@ -85,7 +85,8 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    on every run; `cache_mode` and `query_condition_cache` retired; Decimal32 in its own suite (`decimal32_codecs`);
    `invalid_bracket` refused (`--allow-unsolved`); the LowCardinality insert slowdown traced to the server (FINDINGS
    §11; the loader batches inserts); FINDINGS §3's closed form. `suites/replicates.yaml`: every pairwise ratio
-   interval contains 1. Sorted Decimal32 + ZSTD at 2.09× Decimal64: ZSTD's minimum match length (FINDINGS §13).
+   interval contains 1. Sorted Decimal32 + ZSTD(1)–(13) at 1.99–2.09× Decimal64: below a 3-byte minimum match ZSTD misses
+   Decimal32's 3-byte repeats between adjacent values (FINDINGS §13).
 
 ## Track 3 — adversarial datasets
 
@@ -159,6 +160,9 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
     - Parity across a streaming block boundary is untested: at 73 728 rows with `block_rows` 65 536, LZ4 / IPC sizes
       differ by up to 2.6% on dictionary columns (ZSTD by design); the parity test streams with `block_rows` = the
       frame's height. Decide the multi-block bound and add a test.
+    - ClickHouse Decimal width by precision alone (`recommenders/engine/clickhouse.rs` `decimal_type`: `Decimal32` for
+      precision ≤ 9): sorted under ZSTD(1)–(13) with no codec Decimal32 is 1.99–2.09× Decimal64 (bench FINDINGS §13). The
+      size emulator reproduces both widths exactly; rank the candidate widths by emulated size instead.
 12. **Bloom speed and MinHash containment recall** (prerequisite of 21).
     - `BloomRust` loses to `MembershipExact` (plain `frozenset` intersection) on every benchmarked shape (0.16× total on
       the wide 100-column shape): one binding call per column filter. Batch filter construction across columns in one
