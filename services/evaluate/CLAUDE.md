@@ -36,7 +36,8 @@ parallel: sizes and skip shares are unaffected, but query-cost scores are only v
   `n_alternatives`; `resolved` when the interval lies below 1, `regret_cpu` = 1 − ratio when resolved, else 0.
   size_frontier, one row per measured size cell: its bytes, its full-scan CPU (median, interval, paired ratio
   against the chosen table), whether it is on the bytes × CPU Pareto frontier (on medians) and whether it is the
-  recommended chain.
+  recommended chain (set on recommended-type suites only). Its `cpu_ratio*` is None for the chosen table's own row
+  (the reference) and throughout original-type suites (no chosen table).
 - A pruned ClickHouse candidate carries no predicted bytes, by design: pruning is how the recommender avoids
   measuring those chains. `suites.py` fills such a cell from the emulator (`_plugin.clickhouse_profile`); it stays
   `origin: candidate, outcome: pruned` in size_cells, so a pruned cell's prediction is the emulator's, where it has one.

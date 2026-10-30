@@ -220,6 +220,7 @@ def test_size_frontier_marks_the_pareto_cells_and_the_recommendation():
     }
     assert rows[("none", "ZSTD(1)")]["on_frontier"]
     assert rows[("none", "ZSTD(1)")]["recommended"]
+    assert rows[("none", "ZSTD(1)")]["cpu_ratio"] is None  # the reference table
     assert rows[("none", "LZ4")]["on_frontier"]
     assert rows[("none", "LZ4")]["cpu_ratio"] == 0.66
     assert not rows[("none", "LZ4")]["recommended"]
@@ -252,3 +253,10 @@ def test_size_frontier_ignores_filter_rows():
     ]
     rows = {r["compression"]: r for r in size_frontier(AGREE_ENTRY, cells, costs)}
     assert rows["ZSTD(1)"]["cpu_us_p50"] == 30.0 and rows["ZSTD(1)"]["on_frontier"]
+
+
+def test_size_frontier_flags_no_cell_of_an_original_type_suite():
+    entry = {**AGREE_ENTRY, "type_role": "original"}
+    cells = [agree_cell("none", "ZSTD(1)", 800), agree_cell("none", "LZ4", 1000)]
+    costs = [cost("none", "ZSTD(1)", 30.0), cost("none", "LZ4", 20.0)]
+    assert not any(r["recommended"] for r in size_frontier(entry, cells, costs))

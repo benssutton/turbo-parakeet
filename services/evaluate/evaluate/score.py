@@ -140,8 +140,11 @@ def size_frontier(entry: dict, cells: list[dict], costs: list[dict]) -> list[dic
     """One row per measured cell with a full-scan CPU median: bytes, that CPU (median, interval,
     paired ratio against the chosen table), `on_frontier` (no other cell is at most as large and
     at most as costly, one of the two strictly) and `recommended`. Medians only: the frontier
-    ignores the intervals, which ride along. A size suite holds one type and no skip index, so
+    ignores the intervals, which ride along; `cpu_ratio*` is None for the chosen table's own row
+    (the reference) and throughout original-type suites (no chosen table). `recommended` is only
+    ever set on a recommended-type suite. A size suite holds one type and no skip index, so
     (codec, compression) identifies a cell."""
+    # evaluate's size suites have one full_scan query, so (codec, compression) keys are unique
     scan = {
         (c["codec"], c["compression"]): c
         for c in costs
@@ -181,7 +184,8 @@ def size_frontier(entry: dict, cells: list[dict], costs: list[dict]) -> list[dic
                     )
                 },
                 "on_frontier": not dominated,
-                "recommended": (c["codec"], c["compression"]) == rec,
+                "recommended": entry["type_role"] == "recommended"
+                and (c["codec"], c["compression"]) == rec,
             }
         )
     return out
