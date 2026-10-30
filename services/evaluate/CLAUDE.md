@@ -26,7 +26,8 @@ parallel: sizes and skip shares are unaffected, but query-cost scores are only v
 - Scores (metrics only, no thresholds): size_cells, size_regret, skip_queries, skip_regret, query_cost,
   query_regret, recommend_cost (`evaluate/score.py` holds the schemas), summary.arrow and compare. size_regret's
   `measured_choice` is the recommender's own codec rule (`_plugin.clickhouse_redecide`) re-applied to the measured
-  bytes of the chains it compared (pruned chains left out); `agrees` says whether it picks the recommended chain. CPU and memory are
+  bytes of the chains it compared (pruned chains left out); `agrees` says whether it picks the recommended chain
+  (None for original-type suites (no candidates) and when a compared cell was not measured). CPU and memory are
   captured on every run: the recommender in a child process (wall, CPU, peak memory above the frame) and each
   ClickHouse query (memory_usage, User + System CPU from ProfileEvents). `query_cost` carries each table's CPU median
   with its 95% interval and, against the recommender's chosen table for the same query, the paired per-round

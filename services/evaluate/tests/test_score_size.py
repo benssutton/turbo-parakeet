@@ -174,3 +174,9 @@ def test_agrees_for_a_low_cardinality_recommendation():
         "ZSTD(1)",
         True,
     )
+
+
+def test_agreement_is_none_when_the_rule_refuses_the_rows():
+    cells = [agree_cell("none", "ZSTD(1)", 500, outcome="chosen")]  # no plain LZ4
+    assert measured_choice(cells) is None
+    assert size_regret(AGREE_ENTRY, cells)["agrees"] is None
