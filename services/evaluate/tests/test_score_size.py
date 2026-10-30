@@ -1,6 +1,12 @@
 import pytest
 
-from evaluate.score import measured_choice, size_cells, size_regret, type_gain
+from evaluate.score import (
+    measured_choice,
+    size_cells,
+    size_frontier,
+    size_regret,
+    type_gain,
+)
 
 ENTRY = {
     "dataset": "d",
@@ -180,3 +186,69 @@ def test_agreement_is_none_when_the_rule_refuses_the_rows():
     cells = [agree_cell("none", "ZSTD(1)", 500, outcome="chosen")]  # no plain LZ4
     assert measured_choice(cells) is None
     assert size_regret(AGREE_ENTRY, cells)["agrees"] is None
+
+
+def cost(codec, comp, p50, ratio=None, kind="full_scan"):
+    return {
+        "codec": codec,
+        "compression": comp,
+        "skip_index": "none",
+        "query_kind": kind,
+        "cpu_us_p50": p50,
+        "cpu_us_lo": p50 - 1,
+        "cpu_us_hi": p50 + 1,
+        "cpu_ratio": ratio,
+        "cpu_ratio_lo": ratio,
+        "cpu_ratio_hi": ratio,
+    }
+
+
+def test_size_frontier_marks_the_pareto_cells_and_the_recommendation():
+    cells = [
+        agree_cell("none", "ZSTD(1)", 800, outcome="chosen"),  # smallest, dearest
+        agree_cell("none", "LZ4", 1000),  # larger, cheaper: on the frontier
+        agree_cell("GCD", "LZ4", 1100, origin="grid", outcome="grid"),  # dominated
+    ]
+    costs = [
+        cost("none", "ZSTD(1)", 30.0),
+        cost("none", "LZ4", 20.0, 0.66),
+        cost("GCD", "LZ4", 25.0, 0.83),
+    ]
+    rows = {
+        (r["codec"], r["compression"]): r
+        for r in size_frontier(AGREE_ENTRY, cells, costs)
+    }
+    assert rows[("none", "ZSTD(1)")]["on_frontier"]
+    assert rows[("none", "ZSTD(1)")]["recommended"]
+    assert rows[("none", "LZ4")]["on_frontier"]
+    assert rows[("none", "LZ4")]["cpu_ratio"] == 0.66
+    assert not rows[("none", "LZ4")]["recommended"]
+    assert not rows[("GCD", "LZ4")]["on_frontier"]
+
+
+def test_size_frontier_leaves_out_cells_without_bytes_or_a_scan_cost():
+    cells = [
+        agree_cell("none", "ZSTD(1)", 800, outcome="chosen"),
+        agree_cell("none", "LZ4", None),
+        agree_cell("GCD", "LZ4", 900),
+    ]
+    costs = [cost("none", "ZSTD(1)", 30.0), cost("none", "LZ4", 20.0)]
+    rows = size_frontier(AGREE_ENTRY, cells, costs)
+    assert [(r["codec"], r["compression"]) for r in rows] == [("none", "ZSTD(1)")]
+
+
+def test_size_frontier_keeps_ties_on_the_frontier():
+    cells = [agree_cell("none", "LZ4", 1000), agree_cell("GCD", "LZ4", 1000)]
+    costs = [cost("none", "LZ4", 20.0), cost("GCD", "LZ4", 20.0)]
+    assert all(r["on_frontier"] for r in size_frontier(AGREE_ENTRY, cells, costs))
+
+
+def test_size_frontier_ignores_filter_rows():
+    cells = [agree_cell("none", "ZSTD(1)", 800), agree_cell("none", "LZ4", 1000)]
+    costs = [
+        cost("none", "ZSTD(1)", 30.0),
+        cost("none", "LZ4", 20.0),
+        cost("none", "ZSTD(1)", 1.0, kind="filter"),
+    ]
+    rows = {r["compression"]: r for r in size_frontier(AGREE_ENTRY, cells, costs)}
+    assert rows["ZSTD(1)"]["cpu_us_p50"] == 30.0 and rows["ZSTD(1)"]["on_frontier"]

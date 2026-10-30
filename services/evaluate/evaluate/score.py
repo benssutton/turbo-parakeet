@@ -136,6 +136,57 @@ def size_regret(entry: dict, cells: list[dict]) -> dict:
     }
 
 
+def size_frontier(entry: dict, cells: list[dict], costs: list[dict]) -> list[dict]:
+    """One row per measured cell with a full-scan CPU median: bytes, that CPU (median, interval,
+    paired ratio against the chosen table), `on_frontier` (no other cell is at most as large and
+    at most as costly, one of the two strictly) and `recommended`. Medians only: the frontier
+    ignores the intervals, which ride along. A size suite holds one type and no skip index, so
+    (codec, compression) identifies a cell."""
+    scan = {
+        (c["codec"], c["compression"]): c
+        for c in costs
+        if c["query_kind"] == "full_scan" and c["skip_index"] == "none"
+    }
+    pts = [
+        (c, scan[(c["codec"], c["compression"])])
+        for c in cells
+        if c["measured_bytes"] is not None
+        and scan.get((c["codec"], c["compression"]), {}).get("cpu_us_p50") is not None
+    ]
+    rec = (entry["rec_codec"], entry["rec_compression"])
+    out = []
+    for c, q in pts:
+        b, u = c["measured_bytes"], q["cpu_us_p50"]
+        dominated = any(
+            o["measured_bytes"] <= b
+            and oq["cpu_us_p50"] <= u
+            and (o["measured_bytes"] < b or oq["cpu_us_p50"] < u)
+            for o, oq in pts
+        )
+        out.append(
+            {
+                **_keys(entry),
+                "codec": c["codec"],
+                "compression": c["compression"],
+                "measured_bytes": b,
+                **{
+                    k: q[k]
+                    for k in (
+                        "cpu_us_p50",
+                        "cpu_us_lo",
+                        "cpu_us_hi",
+                        "cpu_ratio",
+                        "cpu_ratio_lo",
+                        "cpu_ratio_hi",
+                    )
+                },
+                "on_frontier": not dominated,
+                "recommended": (c["codec"], c["compression"]) == rec,
+            }
+        )
+    return out
+
+
 def _best(cells: list[dict], key: str) -> int | None:
     vals = [c[key] for c in cells if c[key] is not None]
     return min(vals) if vals else None
@@ -538,6 +589,19 @@ FILES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("resolved", _B),
         ("regret_cpu", _F),
     ],
+    "size_frontier": [
+        ("codec", _S),
+        ("compression", _S),
+        ("measured_bytes", _I),
+        ("cpu_us_p50", _F),
+        ("cpu_us_lo", _F),
+        ("cpu_us_hi", _F),
+        ("cpu_ratio", _F),
+        ("cpu_ratio_lo", _F),
+        ("cpu_ratio_hi", _F),
+        ("on_frontier", _B),
+        ("recommended", _B),
+    ],
     "recommend_cost": [
         ("rows", _I),
         ("cols", _I),
@@ -604,11 +668,13 @@ def score_run(run: RunDir) -> dict:
             with Store(db) as s:
                 tables, qrows = s.table_rows(e["suite"]), s.query_rows(e["suite"])
             chosen = chosen_table(e, qrows, predicted)
-            rows["query_cost"] += query_cost(e, qrows, chosen)
+            costs = query_cost(e, qrows, chosen)
+            rows["query_cost"] += costs
             rows["query_regret"] += query_regret(e, qrows, chosen)
             if e["role"] == "size":
                 cells = size_cells(e, tables, predicted)
                 rows["size_cells"] += cells
+                rows["size_frontier"] += size_frontier(e, cells, costs)
                 by_column.setdefault(e["column"], {})[e["type_role"]] = cells
                 r = size_regret(e, cells)
                 rows["size_regret"].append(r)
