@@ -233,13 +233,8 @@ pub(crate) fn decide(
         )?);
     }
 
-    let plain = &families[0];
-    let mut win = plain;
-    for f in &families[1..] {
-        if qualifies(f, plain, p) && (win.transform == Transform::None || f.pick.1 < win.pick.1) {
-            win = f;
-        }
-    }
+    let picks: Vec<u64> = families.iter().map(|f| f.pick.1).collect();
+    let win = &families[winner(&picks, p)];
     let chain = Chain {
         transform: win.transform,
         compression: win.pick.0,
@@ -330,9 +325,61 @@ fn measure_family(
     })
 }
 
-/// Whether a family's pick saves `transform_min_saving` over the plain pick.
-fn qualifies(f: &Family, plain: &Family, p: &CompressionParams) -> bool {
-    f.pick.1 as f64 <= (1.0 - p.transform_min_saving) * plain.pick.1 as f64
+/// Whether a family's pick (bytes) saves `transform_min_saving` over the plain pick.
+fn qualifies(pick: u64, plain: u64, p: &CompressionParams) -> bool {
+    pick as f64 <= (1.0 - p.transform_min_saving) * plain as f64
+}
+
+/// Index of the winning family among the picks' bytes (plain first): the smallest pick that
+/// saves `transform_min_saving` over the plain pick (ties: the earlier family).
+fn winner(picks: &[u64], p: &CompressionParams) -> usize {
+    let mut win = 0;
+    for (i, &b) in picks.iter().enumerate().skip(1) {
+        if qualifies(b, picks[0], p) && (win == 0 || b < picks[win]) {
+            win = i;
+        }
+    }
+    win
+}
+
+/// The chain `decide` picks had its families measured `rows`: (chain, bytes) of every chain it
+/// measured. Pruned chains and shortcut-skipped levels are simply absent; of two rows for one
+/// chain the first counts. Err without the plain LZ4 row, or for a family with ZSTD rows but
+/// no LZ4 row.
+pub(crate) fn redecide(rows: &[(Chain, u64)], p: &CompressionParams) -> Result<Chain, String> {
+    let mut picks: Vec<(Transform, (Compression, u64))> = Vec::new();
+    for t in [
+        Transform::None,
+        Transform::Gcd,
+        Transform::Delta,
+        Transform::DoubleDelta,
+    ] {
+        let lz4 = rows
+            .iter()
+            .find(|(c, _)| c.transform == t && c.compression == Compression::Lz4)
+            .map(|&(_, b)| b);
+        let zstd: Vec<(i32, u64)> = rows
+            .iter()
+            .filter_map(|&(c, b)| match c.compression {
+                Compression::Zstd(l) if c.transform == t => Some((l, b)),
+                _ => None,
+            })
+            .collect();
+        match lz4 {
+            Some(lz4) => picks.push((t, choose_compression(lz4, &zstd, p))),
+            None if zstd.is_empty() => {}
+            None => return Err(format!("{t:?} has ZSTD rows but no LZ4 row")),
+        }
+    }
+    if picks.first().map(|(t, _)| *t) != Some(Transform::None) {
+        return Err("no plain LZ4 row".to_string());
+    }
+    let bytes: Vec<u64> = picks.iter().map(|(_, (_, b))| *b).collect();
+    let (transform, (compression, _)) = picks[winner(&bytes, p)];
+    Ok(Chain {
+        transform,
+        compression,
+    })
 }
 
 /// One row per measured chain of every family, with the outcome against the winning family.
@@ -380,7 +427,7 @@ fn chain_outcome(
                 transform_name(win.transform)
             ),
         )
-    } else if is_pick && !qualifies(f, plain, p) {
+    } else if is_pick && !qualifies(f.pick.1, plain.pick.1, p) {
         (
             "rejected",
             format!(
@@ -696,5 +743,48 @@ mod tests {
             assert_eq!(r.outcome, "pruned");
             assert_eq!(r.predicted_bytes, None);
         }
+    }
+
+    fn ch(t: Transform, c: Compression) -> Chain {
+        Chain {
+            transform: t,
+            compression: c,
+        }
+    }
+
+    #[test]
+    fn redecide_takes_zstd_when_it_saves_enough_and_the_lowest_level_in_tolerance() {
+        let p = CompressionParams::default(); // tolerance 1%, ZSTD saving 10%, transform 1%
+        let rows = [
+            (ch(Transform::None, Compression::Lz4), 1000),
+            (ch(Transform::None, Compression::Zstd(1)), 801),
+            (ch(Transform::None, Compression::Zstd(3)), 800),
+        ];
+        assert_eq!(
+            redecide(&rows, &p).unwrap(),
+            ch(Transform::None, Compression::Zstd(1))
+        );
+    }
+
+    #[test]
+    fn redecide_takes_a_transform_only_when_it_saves_over_plain() {
+        let p = CompressionParams::default();
+        let plain = (ch(Transform::None, Compression::Lz4), 1000);
+        let close = [plain, (ch(Transform::Gcd, Compression::Lz4), 995)];
+        assert_eq!(
+            redecide(&close, &p).unwrap(),
+            ch(Transform::None, Compression::Lz4)
+        );
+        let far = [plain, (ch(Transform::Delta, Compression::Lz4), 900)];
+        assert_eq!(
+            redecide(&far, &p).unwrap(),
+            ch(Transform::Delta, Compression::Lz4)
+        );
+    }
+
+    #[test]
+    fn redecide_needs_the_plain_lz4_row() {
+        let p = CompressionParams::default();
+        assert!(redecide(&[(ch(Transform::Gcd, Compression::Lz4), 9)], &p).is_err());
     }
 }

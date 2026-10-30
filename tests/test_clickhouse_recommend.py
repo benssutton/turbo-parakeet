@@ -426,6 +426,14 @@ def test_clickhouse_profile_binding():
         _plugin.clickhouse_profile(t, "a", "Gorilla, LZ4")
 
 
+def test_clickhouse_redecide_binding():
+    cells = [("LZ4", 1000), ("ZSTD(1)", 801), ("ZSTD(3)", 800), ("GCD, LZ4", 995)]
+    assert _plugin.clickhouse_redecide(cells) == "ZSTD(1)"
+    assert _plugin.clickhouse_redecide(cells, zstd_min_saving=0.5) == "LZ4"
+    with pytest.raises(ValueError):
+        _plugin.clickhouse_redecide([("GCD, LZ4", 9)])
+
+
 def _suite(path, name):
     import yaml
 

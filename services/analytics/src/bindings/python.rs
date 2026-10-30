@@ -594,6 +594,27 @@ fn clickhouse_profile(
 }
 
 #[pyfunction]
+#[pyo3(signature = (chains, bytes, *, zstd_level_tolerance=0.01, zstd_min_saving=0.10, transform_min_saving=0.01))]
+fn clickhouse_redecide(
+    py: Python<'_>,
+    chains: Vec<String>,
+    bytes: Vec<u64>,
+    zstd_level_tolerance: f64,
+    zstd_min_saving: f64,
+    transform_min_saving: f64,
+) -> PyResult<String> {
+    run(py, || {
+        api::clickhouse_redecide(
+            &chains,
+            &bytes,
+            zstd_level_tolerance,
+            zstd_min_saving,
+            transform_min_saving,
+        )
+    })
+}
+
+#[pyfunction]
 fn render(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<ArrowTable> {
     let batch = read_batch(data)?;
     run(py, || api::render(&batch)).map(ArrowTable)
@@ -637,6 +658,7 @@ fn core_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(column_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(ipc_body_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(clickhouse_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(clickhouse_redecide, m)?)?;
     m.add_function(wrap_pyfunction!(render, m)?)?;
     m.add_function(wrap_pyfunction!(checked_table, m)?)?;
     Ok(())

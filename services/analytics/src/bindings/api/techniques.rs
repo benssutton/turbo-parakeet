@@ -488,6 +488,37 @@ pub fn clickhouse_profile(batch: &RecordBatch, column: &str, codecs: &str) -> Re
     .map_err(|e| Error::Compute(e.to_string()))
 }
 
+/// The chain the ClickHouse codec rule picks from (chain, bytes) rows (`redecide`): `chains`
+/// in DDL, `bytes` their sizes. Private: the evaluation loop's decision agreement.
+pub fn clickhouse_redecide(
+    chains: &[String],
+    bytes: &[u64],
+    zstd_level_tolerance: f64,
+    zstd_min_saving: f64,
+    transform_min_saving: f64,
+) -> Result<String> {
+    use crate::recommenders::engine::{redecide, CompressionParams};
+    if chains.len() != bytes.len() {
+        return Err(Error::InvalidInput(
+            "chains and bytes differ in length".into(),
+        ));
+    }
+    let rows = chains
+        .iter()
+        .zip(bytes)
+        .map(|(c, &b)| parse_chain(c).map(|ch| (ch, b)))
+        .collect::<Result<Vec<_>>>()?;
+    let p = CompressionParams {
+        zstd_level_tolerance,
+        zstd_min_saving,
+        transform_min_saving,
+        ..CompressionParams::default()
+    };
+    redecide(&rows, &p)
+        .map(|c| c.ddl())
+        .map_err(Error::InvalidInput)
+}
+
 /// Every value of every column as text (`recommend::render_value`): the canonical
 /// rendering of `min` / `max`, for the Python reference implementations. Meant for a
 /// few values per column: each value is cast on its own.

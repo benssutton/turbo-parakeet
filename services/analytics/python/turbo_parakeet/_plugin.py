@@ -209,6 +209,16 @@ def clickhouse_profile(table, column: str, codecs: str) -> dict:
     return {"clickhouse_type": row["clickhouse_type"], "bytes": row["bytes"]}
 
 
+def clickhouse_redecide(cells: list[tuple[str, int]], **params) -> str:
+    """The codec chain the ClickHouse recommender's rule picks from `cells`, (chain, bytes) of
+    the chains it compared (pruned chains left out); `params` as the recommender's keywords
+    (zstd_level_tolerance, zstd_min_saving, transform_min_saving). ValueError when the plain
+    LZ4 row is missing. Private: the evaluation loop's decision agreement."""
+    return _rs.clickhouse_redecide(
+        [c for c, _ in cells], [b for _, b in cells], **params
+    )
+
+
 def render(s: pl.Series) -> list[str | None]:
     """`s`'s values as text, rendered by arrow-rs's cast to Utf8 — the one format of
     Describe's / Recommend's min and max (recommend.rs `render_value`)."""
