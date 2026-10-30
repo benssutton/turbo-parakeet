@@ -1,6 +1,6 @@
 import pytest
 
-from evaluate.score import size_cells, size_regret, type_gain
+from evaluate.score import measured_choice, size_cells, size_regret, type_gain
 
 ENTRY = {
     "dataset": "d",
@@ -113,3 +113,64 @@ def test_type_gain():
         pytest.approx(100 / 200 - 1),
     )
     assert type_gain(rec, None) == (0.0, 0.0)
+
+
+AGREE_ENTRY = {
+    **ENTRY,
+    "rec_codec": "none",
+    "rec_compression": "ZSTD(1)",
+}
+
+
+def agree_cell(codec, comp, measured, origin="candidate", outcome="rejected"):
+    return {
+        "codec": codec,
+        "compression": comp,
+        "measured_bytes": measured,
+        "origin": origin,
+        "outcome": outcome,
+    }
+
+
+def test_measured_choice_reapplies_the_rule_to_the_compared_chains():
+    cells = [
+        agree_cell("none", "LZ4", 1000),
+        agree_cell("none", "ZSTD(1)", 950, outcome="chosen"),  # saves only 5%
+        agree_cell("GCD", "LZ4", 10, origin="grid", outcome="grid"),
+        agree_cell("Delta", "LZ4", 5, outcome="pruned"),
+    ]
+    assert measured_choice(cells) == "LZ4"
+    r = size_regret(AGREE_ENTRY, cells)
+    assert (r["measured_choice"], r["agrees"]) == ("LZ4", False)
+
+
+def test_measured_choice_is_none_when_a_compared_cell_was_not_measured():
+    cells = [
+        agree_cell("none", "LZ4", None),
+        agree_cell("none", "ZSTD(1)", 900, outcome="chosen"),
+    ]
+    assert measured_choice(cells) is None
+    assert size_regret(AGREE_ENTRY, cells)["agrees"] is None
+
+
+def test_agrees_when_the_rule_picks_the_recommended_chain():
+    cells = [
+        agree_cell("none", "LZ4", 1000),
+        agree_cell("none", "ZSTD(1)", 500, outcome="chosen"),
+    ]
+    r = size_regret(AGREE_ENTRY, cells)
+    assert (r["measured_choice"], r["agrees"]) == ("ZSTD(1)", True)
+
+
+def test_agrees_for_a_low_cardinality_recommendation():
+    entry = {**ENTRY, "rec_codec": "LowCardinality", "rec_compression": "ZSTD(1)"}
+    cells = [
+        agree_cell("LowCardinality", "LZ4", 1000),
+        agree_cell("LowCardinality", "ZSTD(1)", 500, outcome="chosen"),
+    ]
+    r = size_regret(entry, cells)
+    assert (r["recommended_chain"], r["measured_choice"], r["agrees"]) == (
+        "ZSTD(1)",
+        "ZSTD(1)",
+        True,
+    )

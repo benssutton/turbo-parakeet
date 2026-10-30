@@ -13,6 +13,7 @@ import polars as pl
 import pyarrow as pa
 from chbench.harness.stats import median_ci, paired_ratio
 from chbench.harness.store import Store
+from turbo_parakeet import _plugin
 
 from evaluate.predict import MARK_ROWS, SkipPredictor, parse_skip, value_of
 from evaluate.rundir import RunDir
@@ -67,6 +68,29 @@ def size_cells(entry: dict, tables: list[dict], predicted: dict) -> list[dict]:
     return out
 
 
+def measured_choice(cells: list[dict]) -> str | None:
+    """The chain the recommender's codec rule picks from the measured bytes of the chains it
+    compared (its chosen and rejected candidates; pruned and grid cells left out); None when
+    there are none, one of them was not measured, or the rule refuses the rows (no plain LZ4).
+    """
+    compared = [
+        c
+        for c in cells
+        if c["origin"] == "candidate" and c["outcome"] in ("chosen", "rejected")
+    ]
+    if not compared or any(c["measured_bytes"] is None for c in compared):
+        return None
+    try:
+        return _plugin.clickhouse_redecide(
+            [
+                (chain(c["codec"], c["compression"]), c["measured_bytes"])
+                for c in compared
+            ]
+        )
+    except ValueError:
+        return None
+
+
 def size_regret(entry: dict, cells: list[dict]) -> dict:
     measured = [c for c in cells if c["measured_bytes"] is not None]
     best = min(measured, key=lambda c: c["measured_bytes"], default=None)
@@ -84,10 +108,12 @@ def size_regret(entry: dict, cells: list[dict]) -> dict:
         if rec is None or best is None
         else rec["measured_bytes"] - best["measured_bytes"]
     )
+    rec_chain = chain(entry["rec_codec"], entry["rec_compression"])
+    mc = measured_choice(cells)
     return {
         **_keys(entry),
         "type_role": entry["type_role"],
-        "recommended_chain": chain(entry["rec_codec"], entry["rec_compression"]),
+        "recommended_chain": rec_chain,
         "recommended_measured": rec["measured_bytes"] if rec else None,
         "best_chain": chain(best["codec"], best["compression"]) if best else None,
         "best_measured": best["measured_bytes"] if best else None,
@@ -102,6 +128,8 @@ def size_regret(entry: dict, cells: list[dict]) -> dict:
             if rec is None
             else 1 + sum(c["measured_bytes"] < rec["measured_bytes"] for c in measured)
         ),
+        "measured_choice": mc,
+        "agrees": None if mc is None else mc == rec_chain,
         "n_cells": len(measured),
         "type_gain_predicted": None,
         "type_gain_measured": None,
@@ -436,6 +464,8 @@ FILES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("regret_bytes", _I),
         ("regret_rel", _F),
         ("rank", _I),
+        ("measured_choice", _S),
+        ("agrees", _B),
         ("n_cells", _I),
         ("type_gain_predicted", _F),
         ("type_gain_measured", _F),

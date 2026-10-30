@@ -75,7 +75,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    regret, query CPU / memory and query-time regret, recommender cost) and a summary. It replaces the two calibration scripts, at parity
    cell for cell (369 size cells, 99 skip queries; `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`).
    Follow-ups:
-   - Decision agreement: re-apply the recommender's rules to measured bytes.
    - The streaming recommender in the loop.
    - Query time in the size decision: 27 of the first run's 32 resolved `query_regret` rows are an LZ4 chain beating
      the chosen ZSTD level on CPU (`services/evaluate/docs/results/2026-10-29-query-regret.md`); weigh bytes against
