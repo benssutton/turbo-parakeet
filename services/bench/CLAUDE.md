@@ -89,6 +89,9 @@ axis over a string or date dataset) is rejected at parse time.
   `use_query_condition_cache = 0`, and reads `system.query_log` once. `--samples-add N` adds N rounds over every pair,
   so samples stay paired by `round_no`; a query added later is paired only over the rounds it shares (`run` warns).
   Ctrl-C marks every query short of its samples `interrupted`.
+- Resolution: a paired ratio interval is ≈ 0.18 / 0.08 / 0.06 wide in CPU (server wall 0.33 / 0.16 / 0.08) at 10 / 20
+  / 30 rounds (median, replicates; `docs/results/2026-10-30-resolution-vs-rounds.md`); the codec suites' 10-round
+  median was 0.33. Pick `--samples-add` for the smallest difference the question needs (about half the width).
 - String full scan: it disables `optimize_functions_to_subcolumns` so `sum(length(v))` reads the characters, not just
   the size subcolumn (FINDINGS §12). A store holding String full-scan samples from before this change must be rerun
   with `--force` or a fresh `--store`, because `query_id` does not hash the SELECT list.

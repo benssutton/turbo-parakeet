@@ -86,8 +86,6 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    `invalid_bracket` refused (`--allow-unsolved`); the LowCardinality insert slowdown traced to the server (FINDINGS
    §11; the loader batches inserts); FINDINGS §3's closed form. `suites/replicates.yaml`: every pairwise ratio
    interval contains 1. Follow-ups:
-   - At 10 samples a paired ratio interval is ≈ 0.33 wide (median): differences under ≈ 20% stay unresolved. Raise
-     the example suites' `samples` or document `--samples-add` per question.
    - Decimal32 sorted + ZSTD with no codec is 2.09× the size of Decimal64 (17.1 against 8.2 MB); not investigated.
 
 ## Track 3 — adversarial datasets
