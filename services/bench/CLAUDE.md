@@ -133,10 +133,11 @@ notebooks/         results_explorer.ipynb
   interleaved rounds (`docs/results/2026-10-29-interleaved-rounds.md`; sizes as in `2026-09-17-first-runs.md`, whose
   timing claims it supersedes). The replicates check passes: every pairwise ratio interval contains 1. T64 is the
   smallest Decimal64 codec in generation order and the cheapest scan only under ZSTD; ZSTD never costs less CPU than
-  LZ4; Decimal32 scans at 0.56–0.74× Decimal64 (median CPU ratio) but is not always smaller (2.09× sorted under ZSTD with no codec).
+  LZ4; Decimal32 scans at 0.56–0.74× Decimal64 (median CPU ratio) but is not always smaller: 2.09× sorted under ZSTD with no codec, because
+  ZSTD below level 18 cannot match its 3-byte repeats while Decimal64's constant high bytes make them 7 (FINDINGS §13;
+  the size emulator reproduces it byte for byte).
 - The evaluation loop (`services/evaluate`) runs its suites here: the ClickHouse size emulator (fixed-width types
   byte-exact, `LowCardinality(String)` median 0.8%, String not yet — ToDo 9) and the skip-index predictions (minmax /
   set skip shares and index bytes exact on non-null columns, Nullable not yet — ToDo 10; bloom within 0.009–0.041 per
   query and 0.5% in bytes).
-- Open: ToDo 3's follow-ups, ToDo 1 (generator items), ToDo 5
-  (engines).
+- Open: ToDo 1 (generator items), ToDo 5 (engines).

@@ -85,8 +85,7 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    on every run; `cache_mode` and `query_condition_cache` retired; Decimal32 in its own suite (`decimal32_codecs`);
    `invalid_bracket` refused (`--allow-unsolved`); the LowCardinality insert slowdown traced to the server (FINDINGS
    §11; the loader batches inserts); FINDINGS §3's closed form. `suites/replicates.yaml`: every pairwise ratio
-   interval contains 1. Follow-ups:
-   - Decimal32 sorted + ZSTD with no codec is 2.09× the size of Decimal64 (17.1 against 8.2 MB); not investigated.
+   interval contains 1. Sorted Decimal32 + ZSTD at 2.09× Decimal64: ZSTD's minimum match length (FINDINGS §13).
 
 ## Track 3 — adversarial datasets
 
