@@ -81,13 +81,14 @@ clickhouse:
   nullable: [true]
   primary_key: [false]
   projection: [false]
-  codec: [none]
+  codec: [none, LowCardinality]
   skip_index: [none]
   compression: [LZ4]
 queries:
   kinds:
     - {kind: full_scan}
     - {kind: filter, target_fraction: 0.01, predicate: in, values: 2}
+    - {kind: filter, target_fraction: 0.1, predicate: in, values: 20}
   samples: 2
 results:
   percentiles: [50]
@@ -95,12 +96,16 @@ results:
 
 
 @pytest.mark.clickhouse
-def test_a_binary_path_suite_loads_into_string_and_its_unhex_literals_match(
+def test_a_binary_path_suite_loads_into_string_and_both_literal_forms_match(
     ch, tmp_path
 ):
-    # every value is non-UTF-8 (a 0xff lead byte), so each literal is `unhex`
-    codes = np.random.default_rng(0).integers(0, 200, 1000)
-    values = [None if i % 97 == 0 else bytes([0xFF, c]) for i, c in enumerate(codes)]
+    # half the values are ASCII (quoted literals), half non-UTF-8 behind a 0xff
+    # lead byte (`unhex` literals); every 97th row is null
+    codes = np.random.default_rng(0).integers(0, 100, 1000)
+    values = [
+        None if i % 97 == 0 else bytes([0xFF, c]) if i % 2 else b"a%d" % c
+        for i, c in enumerate(codes)
+    ]
     batch = pa.record_batch([pa.array(values, pa.binary())], names=["v"])
     with pa.OSFile(str(tmp_path / "x.arrow"), "wb") as sink:
         with pa.ipc.new_file(sink, batch.schema) as w:
@@ -110,20 +115,27 @@ def test_a_binary_path_suite_loads_into_string_and_its_unhex_literals_match(
     assert suite.dataset.arrow_type == "binary"
 
     r = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
-    assert r.tables_ok == 1 and r.tables_error == 0 and r.queries_run == 2
+    assert r.tables_ok == 2 and r.tables_error == 0 and r.queries_run == 6
 
     with Store(tmp_path / "r.db") as s:
+        tables = dict(s.conn.execute("SELECT table_id, codec FROM tables").fetchall())
         rows = s.conn.execute(
             "SELECT table_id, kind, status, actual_fraction, predicate_sql "
             "FROM queries"
         ).fetchall()
-    assert sorted(kind for _, kind, *_ in rows) == ["filter", "full_scan"]
-    assert all(status == "ok" for _, _, status, *_ in rows)
-    table_id, _, _, fraction, predicate = next(q for q in rows if q[1] == "filter")
-    assert fraction > 0 and "unhex(" in predicate
-    # the server, not the client, counts the rows the unhex literals select
-    (stored,) = ch.query_rows(f"SELECT count() FROM bench.t_orchpath_{table_id[:8]}")[0]
-    (matched,) = ch.query_rows(
-        f"SELECT count() FROM bench.t_orchpath_{table_id[:8]} WHERE {predicate}"
-    )[0]
-    assert stored == 1000 and matched == round(fraction * 1000)
+    assert sorted(tables.values()) == ["LowCardinality", "none"]
+    for table_id in tables:
+        mine = [q for q in rows if q[0] == table_id]
+        assert sorted(q[1] for q in mine) == ["filter", "filter", "full_scan"]
+        assert all(q[2] == "ok" for q in mine)
+        filters = [q for q in mine if q[1] == "filter"]
+        predicates = " ".join(q[4] for q in filters)
+        assert "unhex(" in predicates and "'a" in predicates
+        name = f"bench.t_orchpath_{table_id[:8]}"
+        assert ch.query_rows(f"SELECT count() FROM {name}")[0][0] == 1000
+        for _, _, _, fraction, predicate in filters:
+            # the server, not the client, counts the rows the literals select
+            (matched,) = ch.query_rows(f"SELECT count() FROM {name} WHERE {predicate}")[
+                0
+            ]
+            assert fraction > 0 and matched == round(fraction * 1000)

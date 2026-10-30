@@ -38,8 +38,7 @@ parallel: sizes and skip shares are unaffected, but query-cost scores are only v
   `score.py` need no server.
 - Resume: each step skips what is on disk; chbench skips held samples; scoring always reruns. A suite's
   ClickHouse tables are dropped once it has run. `--resume` refuses a dataset whose rows differ from the run's.
-- Suites chbench cannot load are dropped into the dataset's
-  `suites/skipped.json` with to_chbench's own skips.
+- Suites chbench cannot load are dropped into the dataset's `suites/skipped.json` with to_chbench's own skips.
 
 # Tests
 `python scripts/check.py test-evaluate` (serial). Unit tests use a fake chbench store (`tests/fakes.py`); the live

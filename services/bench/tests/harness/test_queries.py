@@ -386,3 +386,5 @@ def test_integer_column_keeps_a_python_int_exact():
 def test_string_column_renders_bytes_as_text_or_unhex():
     assert _render_literal(b"ab'c", ch_type="String") == "'ab\\'c'"
     assert _render_literal(b"\xff\x00", ch_type="String") == "unhex('ff00')"
+    # valid UTF-8 with a NUL, a backslash and a newline: only the backslash is escaped
+    assert _render_literal(b"a\x00\\\n", ch_type="String") == "'a\x00\\\\\n'"

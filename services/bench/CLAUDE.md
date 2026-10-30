@@ -70,7 +70,7 @@ axis over a string or date dataset) is rejected at parse time.
   `UInt8/16/32/64`, `Float32/64`, `Bool`, `Decimal32/64/128`, `Date`, `Date32`, `DateTime`, `DateTime64`,
   `FixedString`, `Enum8/16`, `Time64`, `String`. Parameters come from the dataset (`validate.resolve_type`: decimal
   scale, `DateTime64(p, 'tz')` from the timestamp unit and zone, `FixedString(n)`, sorted `Enum` values); `arrow_type`
-  includes `timestamp[unit, tz=zone]` and `fixed_size_binary(n)` for path datasets. Skip rules carry the server's
+  includes `timestamp[unit, tz=zone]`, `fixed_size_binary(n)` and `binary` for path datasets. Skip rules carry the server's
   messages (GCD, Delta / DoubleDelta / Gorilla sizes, T64, FPC, LowCardinality, `bloom_filter` off Decimals, Date32 and
   Time64).
 - **Codecs:** `none`, `T64`, `Delta`, `DoubleDelta`, `Gorilla`, `FPC`, `GCD` and the `LowCardinality` type wrapper
