@@ -472,9 +472,9 @@ def _parse_inproc(block, engine: str) -> InprocAxes:
 
     return InprocAxes(
         type=[str(v) for v in block["type"]],
-        storage=list(block["storage"]),
+        storage=list(dict.fromkeys(block["storage"])),
         compression=compression,
-        threads=list(threads) if threads is not None else None,
+        threads=list(dict.fromkeys(threads)) if threads is not None else None,
         ipc_batch_rows=batch_rows,
     )
 

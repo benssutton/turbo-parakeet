@@ -449,3 +449,22 @@ def test_a_type_the_dataset_cannot_feed_is_refused_at_parse_time():
         SuiteError, match=r"polars\.type value 'Categorical\(UInt8\)'.*numeric"
     ):
         parse_suite(y)
+
+
+@pytest.mark.parametrize(
+    "old,new,field,expected",
+    [
+        (
+            "storage: [memory, ipc]",
+            "storage: [ipc, ipc, memory, ipc]",
+            "storage",
+            ["ipc", "memory"],
+        ),
+        ("storage: [ipc]", "storage: [ipc, ipc]", "storage", ["ipc"]),
+        ("threads: [2, 4]", "threads: [4, 2, 4, 2]", "threads", [4, 2]),
+    ],
+)
+def test_storage_and_threads_are_deduplicated_in_order(old, new, field, expected):
+    s = parse_suite(INPROC.replace(old, new))
+    block = s.polars if field == "storage" and "memory" in expected else s.datafusion
+    assert getattr(block, field) == expected
