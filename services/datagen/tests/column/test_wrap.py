@@ -158,3 +158,15 @@ def test_date_and_timestamp_cast_from_integers(t, pt, v):
         np.random.default_rng(0),
     )
     assert a.type == pt
+
+
+def test_a_large_string_column_is_one_array_not_chunked():
+    # pyarrow converts a big <U numpy array in chunks (4M rows of 12 characters already is)
+    n = 4_000_000
+    values = np.full(n, "abcdefghijkl", dtype="<U12")
+    out = wrap(
+        values,
+        s(rows=n, arrow_type="string", string_length=12),
+        np.random.default_rng(0),
+    )
+    assert isinstance(out, pa.Array) and out.type == pa.string() and len(out) == n

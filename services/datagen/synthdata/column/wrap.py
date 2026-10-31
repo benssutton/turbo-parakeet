@@ -185,4 +185,6 @@ def _cast(values: np.ndarray, dtype: pa.DataType, mask: np.ndarray) -> pa.Array:
         src = pa.array(values, type=int_type, mask=mask)
     else:
         src = pa.array(values, mask=mask)
+        if isinstance(src, pa.ChunkedArray):  # a large <U array converts in chunks
+            src = src.combine_chunks()
     return src.cast(dtype) if src.type != dtype else src

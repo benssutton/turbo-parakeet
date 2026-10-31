@@ -1,6 +1,7 @@
 import textwrap
 import pytest
 
+from chbench.harness.inproc_types import type_label
 from chbench.harness.suite import (
     InprocAxes,
     QueryKind,
@@ -8,6 +9,7 @@ from chbench.harness.suite import (
     load_suite,
     parse_suite,
 )
+from chbench.harness.validate import expand_inproc_grid
 
 MINIMAL = textwrap.dedent("""
     name: t
@@ -468,3 +470,21 @@ def test_storage_and_threads_are_deduplicated_in_order(old, new, field, expected
     s = parse_suite(INPROC.replace(old, new))
     block = s.polars if field == "storage" and "memory" in expected else s.datafusion
     assert getattr(block, field) == expected
+
+
+def test_the_inproc_strings_example_parses_and_expands():
+    s = load_suite("suites/inproc_strings.yaml")
+    assert s.clickhouse is None and s.dataset.rows == 10_000_000
+    assert [type_label("polars", t) for t in s.polars.type] == [
+        "String",
+        "Categorical(UInt8)",
+        "Categorical(UInt16)",
+        "Categorical(UInt32)",
+        "Enum",
+    ]
+    assert s.datafusion.type[1] == "dictionary<values=string, indices=uint8, ordered=0>"
+    assert s.polars.threads is None and s.datafusion.threads is None
+    polars = expand_inproc_grid(s, "polars", default_threads=4)
+    datafusion = expand_inproc_grid(s, "datafusion", default_threads=4)
+    assert (len(polars), sum(v.status == "ok" for v in polars)) == (40, 25)
+    assert (len(datafusion), sum(v.status == "ok" for v in datafusion)) == (32, 20)

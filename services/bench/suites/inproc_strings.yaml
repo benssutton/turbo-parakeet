@@ -1,0 +1,35 @@
+name: inproc_strings
+# Strings in the in-process engines (ToDo 5): Polars String against named Categorical categories at
+# each width and Enum, DataFusion string against the matching dictionary key widths, each held in
+# memory and read from Arrow IPC under each compression. 200 distinct values, so every width holds
+# them (Polars' UInt8 categories hold 255). The engines' thread count defaults to the Docker VM's
+# CPU count, ClickHouse's budget. Results: docs/results/<date>-inproc-first-run.md.
+dataset:
+  rows: 10000000
+  arrow_type: string
+  string_length: 12
+  null_count: 0
+  cardinality_ratio: 0.00002     # 200 distinct values at 10M rows
+  entropy_bits: 6.5
+  seed: 7
+polars:
+  type: [String, Categorical(UInt8), Categorical(UInt16), Categorical(UInt32), Enum]
+  storage: [memory, ipc]
+  compression: [none, LZ4_FRAME, ZSTD(1), ZSTD(3)]
+datafusion:
+  type:
+    - string
+    - "dictionary<values=string, indices=uint8, ordered=0>"
+    - "dictionary<values=string, indices=uint16, ordered=0>"
+    - "dictionary<values=string, indices=uint32, ordered=0>"
+  storage: [memory, ipc]
+  compression: [none, LZ4_FRAME, ZSTD(1), ZSTD(3)]
+queries:
+  kinds:
+    - {kind: full_scan}
+    - {kind: filter, target_fraction: 0.001, predicate: in, values: 1}
+    - {kind: filter, target_fraction: 0.01, predicate: in, values: 1}
+    - {kind: filter, target_fraction: 0.05, predicate: in, values: 1}
+  samples: 20
+results:
+  percentiles: [50, 90, 99]
