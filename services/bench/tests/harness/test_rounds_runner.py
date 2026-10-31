@@ -128,6 +128,26 @@ def test_interrupt_delivers_what_ran():
     rd.run(jobs("a")[0])
     rd.interrupt()
     assert seen == ["a"]
+    assert client.calls.count(("log",)) == 1
+
+
+def test_finish_then_interrupt_and_a_second_interrupt_deliver_nothing_twice():
+    client, seen = FakeClient(), []
+    rd = ChRound(client, 0, on_sample=lambda k, s: seen.append(k))
+    rd.run(jobs("a")[0])
+    rd.finish()
+    rd.interrupt()
+    rd.interrupt()
+    assert seen == ["a"]
+    assert client.calls.count(("log",)) == 1
+
+    client, seen = FakeClient(), []
+    rd = ChRound(client, 0, on_sample=lambda k, s: seen.append(k))
+    rd.run(jobs("a")[0])
+    rd.interrupt()
+    rd.interrupt()
+    assert seen == ["a"]
+    assert client.calls.count(("log",)) == 1
 
 
 def test_a_job_carries_an_optional_payload_and_reference():
