@@ -1,8 +1,18 @@
+import dataclasses
+import hashlib
+
 import pytest
 
 from chbench.harness.suite import ClickHouseAxes, parse_suite
-from chbench.harness.validate import expand_grid, resolve_type, table_id
-from tests.harness.test_suite import MINIMAL
+from chbench.harness.validate import (
+    TableVariant,
+    engine_key,
+    expand_grid,
+    expand_inproc_grid,
+    resolve_type,
+    table_id,
+)
+from tests.harness.test_suite import INPROC, MINIMAL, drop_block
 
 
 def suite_with(**axes):
@@ -415,3 +425,114 @@ def test_applicability_ignores_fpr_and_granularity(index, accepted):
         clickhouse_version="26.8.2.7",
     )
     assert (v.status == "ok") == accepted
+
+
+def test_in_process_grid_crosses_type_storage_compression_threads():
+    s = parse_suite(INPROC)
+    v = expand_inproc_grid(s, "polars", default_threads=8)
+    assert len(v) == 2 * 2 * 3
+    assert {x.engine for x in v} == {"polars"} and {x.threads for x in v} == {8}
+    mem = {(x.compression, x.status) for x in v if x.storage == "memory"}
+    assert mem == {("none", "ok"), ("ZSTD(1)", "skipped"), ("LZ4_FRAME", "skipped")}
+    assert all("ipc only" in x.skip_reason for x in v if x.status == "skipped")
+    assert all(x.status == "ok" for x in v if x.storage == "ipc")
+    assert all(
+        x.nullable is None and x.codec is None and x.skip_index is None for x in v
+    )
+    assert [x.ch_type for x in v[:1]] == ["Float64"] and v[0].type_spec == "Float64"
+    d = expand_inproc_grid(s, "datafusion", default_threads=8)
+    assert [x.threads for x in d] == [2, 4] and d[0].ch_type == "double"
+
+
+def test_no_block_no_variants():
+    s = parse_suite(MINIMAL)
+    assert expand_inproc_grid(s, "polars", default_threads=4) == []
+    no_ch = parse_suite(drop_block(INPROC, "clickhouse"))
+    assert (
+        expand_grid(
+            no_ch, null_count=0, value_min=0, value_max=1, clickhouse_version="x"
+        )
+        == []
+    )
+
+
+def test_engine_key():
+    s = parse_suite(INPROC)
+    [ch] = expand_grid(
+        s, null_count=0, value_min=-1.0, value_max=9.0, clickhouse_version="v"
+    )
+    assert engine_key(ch) == "clickhouse"
+    assert {
+        engine_key(x) for x in expand_inproc_grid(s, "datafusion", default_threads=1)
+    } == {
+        "datafusion:2",
+        "datafusion:4",
+    }
+
+
+def test_the_id_of_a_clickhouse_variant_is_unchanged():
+    v = TableVariant(
+        ch_type="Float64",
+        nullable=False,
+        primary_key=False,
+        projection=False,
+        codec="none",
+        skip_index="none",
+        compression="LZ4",
+        status="ok",
+        skip_reason=None,
+        warnings=(),
+    )
+    key = "\x1f".join(
+        ["Float64", "False", "False", "False", "none", "none", "LZ4", "d1", "26.8.31.2"]
+    )
+    assert (
+        table_id(v, "d1", "26.8.31.2") == hashlib.sha256(key.encode()).hexdigest()[:16]
+    )
+    # Literal id computed with table_id as of 01c4ca0 (before engines existed).
+    assert table_id(v, "d1", "26.8.31.2") == "4780922b48788bf5"
+
+
+def test_in_process_ids_hash_engine_type_storage_compression_threads_version():
+    grid = expand_inproc_grid(parse_suite(INPROC), "polars", default_threads=4)
+    assert len({table_id(v, "d1", "2.0.0") for v in grid}) == len(grid)
+    v = grid[0]
+    same = table_id(v, "d1", "2.0.0")
+    assert same == table_id(v, "d1", "2.0.0")
+    assert same != table_id(dataclasses.replace(v, threads=2), "d1", "2.0.0")
+    assert same != table_id(v, "d1", "2.0.1")
+    assert same != table_id(dataclasses.replace(v, engine="datafusion"), "d1", "2.0.0")
+    assert same != table_id(
+        dataclasses.replace(v, type_spec="Enum(categories=['a'])"), "d1", "2.0.0"
+    )
+    assert same != table_id(
+        dataclasses.replace(v, ipc_batch_rows="65536"), "d1", "2.0.0"
+    )
+
+
+def test_ipc_batch_rows_crosses_the_grid_and_skips_memory():
+    y = INPROC.replace(
+        "  threads: [2, 4]\n", "  threads: [2]\n  ipc_batch_rows: [whole, 1000]\n"
+    )
+    d = expand_inproc_grid(parse_suite(y), "datafusion", default_threads=8)
+    assert [(x.storage, x.ipc_batch_rows, x.status) for x in d] == [
+        ("ipc", "whole", "ok"),
+        ("ipc", "1000", "ok"),
+    ]
+    m = parse_suite(
+        y.replace(
+            "  storage: [ipc]\n", "  storage: [memory]\n  compression: [none]\n", 1
+        ).replace("  compression: [ZSTD(3)]\n", "", 1)
+    )
+    mem = expand_inproc_grid(m, "datafusion", default_threads=8)
+    assert [(x.ipc_batch_rows, x.status) for x in mem] == [
+        ("whole", "ok"),
+        ("1000", "skipped"),
+    ]
+    assert "ipc_batch_rows applies to storage ipc only" in mem[1].skip_reason
+    assert all(
+        x.ipc_batch_rows is None
+        for x in expand_grid(
+            m, null_count=0, value_min=-1.0, value_max=9.0, clickhouse_version="v"
+        )
+    )

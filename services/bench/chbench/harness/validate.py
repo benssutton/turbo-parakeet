@@ -28,6 +28,8 @@ import pyarrow.compute as pc
 
 from synthdata import DatasetSpec
 
+from chbench.harness.inproc_types import type_label
+
 if TYPE_CHECKING:
     # Deferred: chbench.harness.suite imports the vocabulary constants below,
     # so importing Suite here at runtime would be circular. The annotations
@@ -223,16 +225,28 @@ _FIXEDSTRING_RE = re.compile(r"^FixedString\((\d+)\)$")
 
 @dataclass(frozen=True)
 class TableVariant:
+    """One grid cell. ClickHouse cells use every field up to `warnings`; an in-process cell
+    (`engine` polars / datafusion) has `nullable`, `primary_key`, `projection`, `codec` and
+    `skip_index` None, `ch_type` its engine type label, `compression` the IPC compression,
+    `storage` memory / ipc, `threads` its worker's thread count, `type_spec` the `type` axis
+    value as written (an Enum's categories) and `ipc_batch_rows` `whole` or rows per IPC record
+    batch (as text)."""
+
     ch_type: str
-    nullable: bool
-    primary_key: bool
-    projection: bool
-    codec: str
-    skip_index: str
+    nullable: bool | None
+    primary_key: bool | None
+    projection: bool | None
+    codec: str | None
+    skip_index: str | None
     compression: str
     status: str
     skip_reason: str | None
     warnings: tuple[str, ...]
+    engine: str = "clickhouse"
+    storage: str | None = None
+    threads: int | None = None
+    type_spec: str | None = None
+    ipc_batch_rows: str | None = None
 
 
 class TypeResolutionError(ValueError):
@@ -678,8 +692,12 @@ def expand_grid(
     it, once per type (`resolve_type`); a type the dataset cannot parameterise
     makes its cells `skipped` with the reason. Without it those types raise
     `ValueError`.
+
+    A suite without a `clickhouse:` block has no ClickHouse cells (`[]`).
     """
     axes = suite.clickhouse
+    if axes is None:
+        return []
     resolved = {}
     for axis_type in axes.type:
         try:
@@ -723,13 +741,74 @@ def expand_grid(
     return variants
 
 
+MEMORY_COMPRESSED = "storage memory holds the column uncompressed; IPC compression applies to storage ipc only"
+MEMORY_BATCHED = "storage memory holds the column as the engine does; ipc_batch_rows applies to storage ipc only"
+
+
+def expand_inproc_grid(
+    suite: Suite, engine: str, *, default_threads: int
+) -> list[TableVariant]:
+    """`suite.<engine>`'s axes (`polars` / `datafusion`) as the product type x storage x
+    compression x ipc_batch_rows x threads, in that order; [] without the block.
+    `default_threads` stands in for an omitted `threads` axis. `storage: memory` with a
+    compression other than `none` (`MEMORY_COMPRESSED`), or with `ipc_batch_rows` other than
+    `whole` (`MEMORY_BATCHED`), is a skipped cell; a cast the engine refuses or that loses values
+    is found, and skipped, when the worker prepares the cell."""
+    axes = getattr(suite, engine)
+    if axes is None:
+        return []
+    out = []
+    for value, storage, compression, batch_rows, threads in itertools.product(
+        axes.type,
+        axes.storage,
+        axes.compression,
+        axes.ipc_batch_rows,
+        axes.threads or [default_threads],
+    ):
+        reason = None
+        if storage == "memory" and compression != "none":
+            reason = MEMORY_COMPRESSED
+        elif storage == "memory" and batch_rows != "whole":
+            reason = MEMORY_BATCHED
+        out.append(
+            TableVariant(
+                ch_type=type_label(engine, value),
+                nullable=None,
+                primary_key=None,
+                projection=None,
+                codec=None,
+                skip_index=None,
+                compression=compression,
+                status="ok" if reason is None else "skipped",
+                skip_reason=reason,
+                warnings=(),
+                engine=engine,
+                storage=storage,
+                threads=threads,
+                type_spec=str(value),
+                ipc_batch_rows=batch_rows,
+            )
+        )
+    return out
+
+
+def engine_key(variant) -> str:
+    """The engine a variant runs on: `clickhouse`, or `<engine>:<threads>` (one worker process
+    per in-process engine and thread count)."""
+    engine = getattr(variant, "engine", "clickhouse")
+    return engine if engine == "clickhouse" else f"{engine}:{variant.threads}"
+
+
 def table_id(variant: TableVariant, dataset_id: str, clickhouse_version: str) -> str:
-    """A 16-hex hash of the variant's seven axis values (ch_type, nullable,
-    primary_key, projection, codec, skip_index, compression) plus the
-    dataset id and server version. Stable across calls with the same inputs;
+    """A 16-hex hash of the variant plus the dataset id and the engine's version
+    (`clickhouse_version` is the ClickHouse server's for a ClickHouse cell, the in-process
+    engine's otherwise). A ClickHouse cell hashes its seven axis values (ch_type, nullable,
+    primary_key, projection, codec, skip_index, compression), exactly as before engines existed,
+    so ids already in a store stay valid; an in-process cell hashes engine, label, type_spec,
+    storage, compression, threads and ipc_batch_rows. Stable across calls with the same inputs;
     changes if any input changes."""
-    key = "\x1f".join(
-        [
+    if getattr(variant, "engine", "clickhouse") == "clickhouse":
+        parts = [
             variant.ch_type,
             str(variant.nullable),
             str(variant.primary_key),
@@ -737,8 +816,16 @@ def table_id(variant: TableVariant, dataset_id: str, clickhouse_version: str) ->
             variant.codec,
             variant.skip_index,
             variant.compression,
-            dataset_id,
-            clickhouse_version,
         ]
-    )
+    else:
+        parts = [
+            variant.engine,
+            variant.ch_type,
+            str(variant.type_spec),
+            str(variant.storage),
+            variant.compression,
+            str(variant.threads),
+            str(variant.ipc_batch_rows),
+        ]
+    key = "\x1f".join([*parts, dataset_id, clickhouse_version])
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
