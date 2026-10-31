@@ -4,6 +4,7 @@ and the server's own load, recorded on the run row before the first round and af
 
 from __future__ import annotations
 
+import functools
 import re
 import subprocess
 import sys
@@ -33,8 +34,10 @@ def _docker() -> dict:
         return {"docker_cpus": None, "docker_mem_bytes": None}
 
 
+@functools.cache
 def docker_cpus() -> int | None:
-    """The Docker VM's CPU count (`docker info` NCPU); None without Docker."""
+    """The Docker VM's CPU count (`docker info` NCPU); None without Docker. Looked up once per
+    process (`docker info` takes seconds); `snapshot` reads it afresh."""
     return _docker()["docker_cpus"]
 
 

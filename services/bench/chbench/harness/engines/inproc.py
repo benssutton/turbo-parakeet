@@ -12,9 +12,12 @@
   Windows waits a whole ~15 ms timer tick — and the sample's `memory_bytes` is the peak minus the
   RSS just before the query (a per-query peak cannot be reset in process on Windows: `peak_wset`
   is lifetime).
+  A sample whose baseline read (or every peak read) fails has memory None: unknown, not guessed.
 - Failure: the worker's exception comes back as `WorkerError` (that job's error, the round carries
   on); a worker that exits or breaks the pipe raises `WorkerDied`, and every later call to it
-  raises it again, so its pending queries all end `error`.
+  raises it again, so its pending queries all end `error`. A call that outlives its op's timeout
+  (`TIMEOUTS_S`, overridable per engine) terminates the worker and is `WorkerDied` the same way.
+  A failure while starting (before or during the `version` call) closes the pipe and the process.
 - The first answer of each job (the warm-up's) is compared with its pyarrow reference
   (`queries.results_agree`); a mismatch is the job's error, both answers in the message.
 """
@@ -41,7 +44,16 @@ FACTORIES = {
     "polars": "chbench.harness.engines.polars_engine:PolarsWorker",
     "datafusion": "chbench.harness.engines.datafusion_engine:DataFusionWorker",
 }
+_CONTEXT = multiprocessing.get_context("spawn")
 _POLL_S = 0.001
+# Per-op call timeouts (s), generous: they catch a stuck worker (a deadlocked engine, a runaway
+# query), never a slow one. `version` is the spawn plus importing Polars / DataFusion, seconds even
+# on a cold disk under a virus scanner. `load` reads one column of the dataset and `prepare` casts,
+# verifies row by row and writes (ZSTD at a high level) then re-reads an IPC file: at 10M rows tens
+# of seconds, minutes for the slow codecs, so half an hour. `run` is one sample, which Task 5
+# makes a calibrated batch of k <= 1024 repeats of about 250 ms or more; only a single
+# query far slower than any the bench plans reaches 5 minutes.
+TIMEOUTS_S = {"version": 60.0, "load": 1800.0, "prepare": 1800.0, "run": 300.0}
 _CLOSE_WAIT_S = 5.0
 _NAN = float("nan")
 
@@ -68,6 +80,8 @@ def ipc_path(cache_dir, table_id: str) -> Path:
 
 @contextlib.contextmanager
 def _environment(**values: str):
+    """`values` set in `os.environ` for the block (it mutates the process environment: not
+    thread-safe, so engines are started one at a time)."""
     old = {k: os.environ.get(k) for k in values}
     os.environ.update(values)
     try:
@@ -82,26 +96,38 @@ def _environment(**values: str):
 
 class InprocEngine:
     """One worker process of `engine` (`FACTORIES`) at `threads`, started at construction; `info`
-    is its `version()` reply."""
+    is its `version()` reply. `timeouts` overrides `TIMEOUTS_S` per op."""
 
-    def __init__(self, engine: str, threads: int):
+    def __init__(
+        self, engine: str, threads: int, *, timeouts: dict[str, float] | None = None
+    ):
         self.name, self.threads = engine, threads
-        context = multiprocessing.get_context("spawn")
-        self._conn, child = context.Pipe()
-        self._proc = context.Process(
-            target=worker.main,
-            args=(child, FACTORIES[engine], threads),
-            name=f"chbench-{engine}-{threads}",
-            daemon=True,
-        )
-        with _environment(POLARS_MAX_THREADS=str(threads)):
-            self._proc.start()
-        child.close()
-        self._ps = psutil.Process(self._proc.pid)
+        self.timeouts = {**TIMEOUTS_S, **(timeouts or {})}
         self._dead: str | None = None
+        self._proc = None
+        self._conn, child = _CONTEXT.Pipe()
         try:
+            proc = _CONTEXT.Process(
+                target=worker.main,
+                args=(child, FACTORIES[engine], threads),
+                name=f"chbench-{engine}-{threads}",
+                daemon=True,
+            )
+            with _environment(POLARS_MAX_THREADS=str(threads)):
+                proc.start()
+            self._proc = proc
+            child.close()
+            try:
+                self._ps = psutil.Process(proc.pid)
+            except psutil.Error as e:
+                self._dead = (
+                    f"{engine} worker (pid {proc.pid}) died at start: "
+                    f"{type(e).__name__}"
+                )
+                raise WorkerDied(self._dead) from e
             self.info: dict = self.call("version")[0]
         except BaseException:
+            child.close()
             self.close()
             raise
 
@@ -109,36 +135,56 @@ class InprocEngine:
     def pid(self) -> int:
         return self._proc.pid
 
-    def _rss(self) -> int:
+    def _rss(self) -> int | None:
+        """The worker's RSS; None when psutil cannot read it."""
         try:
             return self._ps.memory_info().rss
         except psutil.Error:
-            return 0
+            return None
+
+    def _peak(self, peak: int | None) -> int | None:
+        rss = self._rss()
+        return rss if peak is None or (rss is not None and rss > peak) else peak
 
     def call(self, op: str, *args, sample_memory: bool = False):
         """One request and its reply: (value, the RSS peak above the RSS just before the request
-        when `sample_memory`, else None). `WorkerError` when the worker raised, `WorkerDied` when
-        it is gone."""
+        when `sample_memory` and both were read, else None). `WorkerError` when the worker raised,
+        `WorkerDied` when it is gone or outlived the op's timeout (then it is terminated).
+        """
         if self._dead is not None:
             raise WorkerDied(self._dead)
-        base = peak = self._rss() if sample_memory else 0
+        limit = self.timeouts.get(op, TIMEOUTS_S["run"])
+        base = self._rss() if sample_memory else None
+        peak = None
         try:
             self._conn.send((op, *args))
+            deadline = time.perf_counter() + limit
             while not self._conn.poll():
                 if not self._proc.is_alive():
                     raise EOFError(f"exit code {self._proc.exitcode}")
+                if time.perf_counter() > deadline:
+                    self._dead = (
+                        f"{self.name} worker (pid {self._proc.pid}) timed out after "
+                        f"{limit:g}s in {op}"
+                    )
+                    self._proc.terminate()
+                    self._proc.join(_CLOSE_WAIT_S)
+                    raise WorkerDied(self._dead)
                 if sample_memory:
-                    peak = max(peak, self._rss())
+                    peak = self._peak(peak)
                 time.sleep(_POLL_S)
             status, value = self._conn.recv()
         except (EOFError, OSError) as e:
             self._dead = f"{self.name} worker (pid {self._proc.pid}) died: {e or type(e).__name__}"
             raise WorkerDied(self._dead) from e
+        memory = None
         if sample_memory:
-            peak = max(peak, self._rss())
+            peak = self._peak(peak)
+            if base is not None and peak is not None:
+                memory = max(0, peak - base)
         if status == "error":
             raise WorkerError(value)
-        return value, (max(0, peak - base) if sample_memory else None)
+        return value, memory
 
     def version(self) -> str:
         return str(self.info["version"])
@@ -188,14 +234,17 @@ class InprocEngine:
         )
 
     def close(self) -> None:
-        """Ask the loop to end, wait, then terminate; safe to call twice."""
-        if self._dead is None and self._proc.is_alive():
-            with contextlib.suppress(OSError):
-                self._conn.send(("close",))
-        self._proc.join(_CLOSE_WAIT_S)
-        if self._proc.is_alive():
-            self._proc.terminate()
-            self._proc.join(_CLOSE_WAIT_S)
+        """Ask the loop to end, wait, then terminate; safe to call twice, and on an engine whose
+        process never started."""
+        proc = self._proc
+        if proc is not None:
+            if self._dead is None and proc.is_alive():
+                with contextlib.suppress(OSError):
+                    self._conn.send(("close",))
+            proc.join(_CLOSE_WAIT_S)
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(_CLOSE_WAIT_S)
         self._conn.close()
 
 

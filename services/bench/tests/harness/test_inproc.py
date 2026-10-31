@@ -4,6 +4,10 @@ and death, close."""
 
 import multiprocessing
 import os
+import subprocess
+import types
+
+import psutil
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -53,9 +57,9 @@ def engine(monkeypatch):
     )
     made = []
 
-    def make(threads=2, fake=""):
+    def make(threads=2, fake="", **kw):
         monkeypatch.setenv("CHBENCH_FAKE", fake)
-        e = inproc.InprocEngine("fake", threads)
+        e = inproc.InprocEngine("fake", threads, **kw)
         made.append(e)
         return e
 
@@ -156,6 +160,141 @@ def test_close_ends_the_process(engine):
     e = engine()
     e.close()
     assert not e._proc.is_alive()
+
+
+def test_a_stuck_worker_times_out_is_terminated_and_fails_every_later_call(
+    engine, dataset, tmp_path
+):
+    e = engine(fake="hang=run", timeouts={"run": 0.5})
+    e.load(dataset, "value")
+    e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
+    rd = e.start_round(0)
+    rd.run(job("q1"))
+    rd.run(job("q2"))
+    errors = rd.finish().errors
+    assert set(errors) == {"q1", "q2"}
+    assert all("timed out after 0.5s in run" in t for t in errors.values())
+    assert not e._proc.is_alive()
+    with pytest.raises(inproc.WorkerDied, match="timed out"):
+        e.load(dataset, "value")
+
+
+def test_a_worker_stuck_at_start_times_out_and_leaves_no_process(monkeypatch):
+    monkeypatch.setitem(
+        inproc.FACTORIES, "fake", "tests.harness.fake_worker:FakeWorker"
+    )
+    monkeypatch.setenv("CHBENCH_FAKE", "hang=version")
+    with pytest.raises(inproc.WorkerDied, match="timed out after 1s in version"):
+        inproc.InprocEngine("fake", 1, timeouts={"version": 1})
+    assert multiprocessing.active_children() == []
+
+
+def test_the_default_timeouts_cover_every_op():
+    assert set(inproc.TIMEOUTS_S) == {"version", "load", "prepare", "run"}
+    assert all(t >= 60 for t in inproc.TIMEOUTS_S.values())
+
+
+@pytest.fixture
+def pipes(monkeypatch):
+    """Every Pipe end InprocEngine opens."""
+    opened = []
+    real = inproc._CONTEXT.Pipe
+
+    def pipe(*a, **k):
+        ends = real(*a, **k)
+        opened.extend(ends)
+        return ends
+
+    monkeypatch.setattr(inproc._CONTEXT, "Pipe", pipe)
+    monkeypatch.setitem(
+        inproc.FACTORIES, "fake", "tests.harness.fake_worker:FakeWorker"
+    )
+    monkeypatch.setenv("CHBENCH_FAKE", "")
+    return opened
+
+
+def test_a_start_that_raises_closes_both_pipe_ends(monkeypatch, pipes):
+    class Unstartable(inproc._CONTEXT.Process):
+        def start(self):
+            raise OSError("planted start failure")
+
+    monkeypatch.setattr(inproc._CONTEXT, "Process", Unstartable)
+    with pytest.raises(OSError, match="planted start failure"):
+        inproc.InprocEngine("fake", 1)
+    assert len(pipes) == 2 and all(c.closed for c in pipes)
+    assert multiprocessing.active_children() == []
+
+
+def test_a_child_gone_before_psutil_sees_it_is_worker_died(monkeypatch, pipes):
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(inproc.psutil, "Process", gone)
+    with pytest.raises(inproc.WorkerDied, match="died at start"):
+        inproc.InprocEngine("fake", 1)
+    assert len(pipes) == 2 and all(c.closed for c in pipes)
+    assert multiprocessing.active_children() == []
+
+
+def test_a_worker_that_exits_at_once_is_worker_died(monkeypatch, pipes):
+    monkeypatch.setenv("CHBENCH_FAKE", "exit=start")
+    with pytest.raises(inproc.WorkerDied, match="died"):
+        inproc.InprocEngine("fake", 1)
+    assert len(pipes) == 2 and all(c.closed for c in pipes)
+    assert multiprocessing.active_children() == []
+
+
+class ScriptedRss:
+    """A psutil.Process stand-in: `memory_info()` follows `script` (an int is the RSS, None
+    raises AccessDenied), its last entry repeating."""
+
+    def __init__(self, *script):
+        self.script = list(script)
+
+    def memory_info(self):
+        rss = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+        if rss is None:
+            raise psutil.AccessDenied()
+        return types.SimpleNamespace(rss=rss)
+
+
+@pytest.mark.parametrize(
+    "script", [(None, 500), (100, None)], ids=["baseline", "every-peak"]
+)
+def test_memory_is_unknown_when_rss_reads_fail(engine, dataset, tmp_path, script):
+    e = engine()
+    e.load(dataset, "value")
+    e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
+    e._ps = ScriptedRss(*script)
+    rd = e.start_round(0)
+    rd.run(job())
+    assert rd.finish().samples["q1"].memory_bytes is None
+
+
+def test_memory_is_the_peak_above_the_baseline(engine, dataset, tmp_path):
+    e = engine()
+    e.load(dataset, "value")
+    e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
+    e._ps = ScriptedRss(100, 700, 300)
+    rd = e.start_round(0)
+    rd.run(job())
+    assert rd.finish().samples["q1"].memory_bytes == 600
+
+
+def test_the_docker_cpu_lookup_runs_once_per_process(monkeypatch):
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "6 1000", "")
+
+    monkeypatch.setattr(quiet.subprocess, "run", run)
+    quiet.docker_cpus.cache_clear()
+    try:
+        assert quiet.docker_cpus() == 6 and quiet.docker_cpus() == 6
+        assert inproc.default_threads() == 6 and len(calls) == 1
+    finally:
+        quiet.docker_cpus.cache_clear()
 
 
 def test_default_threads_follow_the_docker_vm(monkeypatch):

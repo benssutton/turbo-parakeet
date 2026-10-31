@@ -2,12 +2,14 @@
 it is and answers every query with the pyarrow reference. `CHBENCH_FAKE` (read when the worker
 starts; comma-joined) plants faults: `skip=<type>` refuses that type at prepare, `wrong=<n>` makes
 the n-th run answer one row too many, `fail=<n>` raises on the n-th run, `die=<n>` exits the
-process on the n-th run. Its thread count is `POLARS_MAX_THREADS` when set (proving the parent's
+process on the n-th run, `hang=<op>` makes that op (`version`, `load`, `prepare`, `run`) sleep for
+an hour, `exit=start` exits the process as the worker is built. Its thread count is `POLARS_MAX_THREADS` when set (proving the parent's
 environment reached the child), else the one it was given."""
 
 from __future__ import annotations
 
 import os
+import time
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -24,6 +26,10 @@ class FakeWorker(BaseWorker):
         text = os.environ.get("CHBENCH_FAKE", "")
         self.faults = dict(f.split("=", 1) for f in text.split(",") if f)
         self.runs = 0
+        if self.faults.get("exit") == "start":
+            os._exit(4)
+        if "hang" in self.faults:
+            setattr(self, self.faults["hang"], lambda *a: time.sleep(3600))
 
     def engine_version(self) -> str:
         return "0.0.0"
