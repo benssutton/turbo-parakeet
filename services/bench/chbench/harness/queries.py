@@ -9,6 +9,14 @@ The two predicate kinds:
   the target fraction (see `in_predicate`'s docstring for the exact
   algorithm).
 
+A filter is built in two steps. The engine-neutral one (`choose_range`, `choose_in`, and
+`choose_queries` for a suite's query axes) chooses the values from the data and computes the
+achieved fraction; one choice serves every engine, so all of them query the same values. The
+renderers write it for one engine: `render_clickhouse` (the ClickHouse SQL this module always
+wrote, byte for byte), `render_datafusion` (typed DataFusion SQL literals) and
+`render_polars_text` (the stored text of the Polars expression the worker builds). The
+in-process engines' answers are checked against `reference_result`, computed with pyarrow.
+
 Both predicate builders record the *actual* achieved selectivity, computed
 from the data, never assumed from the request: duplicate values straddling a
 range boundary, or a target fraction that lands between two IN-list
@@ -248,6 +256,82 @@ def _non_null_mask(v: np.ndarray) -> np.ndarray:
     return np.ones(len(v), dtype=bool)
 
 
+@dataclass(frozen=True)
+class ValueChoice:
+    """The engine-neutral half of a filter: the values its predicate names, chosen from the data,
+    and the achieved fraction. `range`: `values` holds the window's [lo, hi]; `in`: the chosen
+    values in choice order. The values are elements of the numpy array `query_values` gave.
+    """
+
+    predicate_kind: str
+    values: np.ndarray
+    actual_fraction: float
+
+
+def choose_range(
+    values: np.ndarray, target_fraction: float, rng: np.random.Generator
+) -> ValueChoice:
+    """The window of `range_predicate` (see its docstring) as a `ValueChoice`."""
+    v = np.asarray(values)
+    n = len(v)
+    clean = v[_non_null_mask(v)]
+    n_clean = len(clean)
+    if n_clean == 0:
+        raise ValueError(
+            "range_predicate: values are all null; there is no "
+            "non-null value to build a range from"
+        )
+    sorted_v = np.sort(clean)
+    window = min(n_clean, max(1, round(target_fraction * n)))
+    max_start = n_clean - window
+    start = int(rng.integers(0, max_start + 1))
+    lo = sorted_v[start]
+    hi = sorted_v[start + window - 1]
+    matched = np.count_nonzero((clean >= lo) & (clean <= hi))
+    return ValueChoice(
+        "range", sorted_v[[start, start + window - 1]], float(matched) / n
+    )
+
+
+def choose_in(values: np.ndarray, target_fraction: float, n_values: int) -> ValueChoice:
+    """The values of `in_predicate` (see its docstring) as a `ValueChoice`, in choice order."""
+    v = np.asarray(values)
+    n = len(v)
+    clean = v[_non_null_mask(v)]
+    uniq, counts = np.unique(clean, return_counts=True)
+    if len(uniq) == 0:
+        raise ValueError(
+            "in_predicate: values are all null; there is no "
+            "non-null value to build an IN list from"
+        )
+    k = min(n_values, len(uniq))
+    remaining = list(range(len(uniq)))
+    chosen: list[int] = []
+    running = 0
+    for _ in range(k):
+        best = min(
+            remaining,
+            key=lambda idx: (
+                abs((running + counts[idx]) / n - target_fraction),
+                -counts[idx],
+                idx,
+            ),
+        )
+        chosen.append(best)
+        running += counts[best]
+        remaining.remove(best)
+    return ValueChoice("in", uniq[chosen], running / n)
+
+
+def render_clickhouse(choice: ValueChoice, ch_type: str | None = None) -> str:
+    """The ClickHouse predicate of `choice` for a column of `ch_type` (`_render_literal`)."""
+    if choice.predicate_kind == "range":
+        lo, hi = choice.values
+        return f"v BETWEEN {_render_literal(lo, ch_type)} AND {_render_literal(hi, ch_type)}"
+    literals = ", ".join(_render_literal(x, ch_type) for x in choice.values)
+    return f"v IN ({literals})"
+
+
 def range_predicate(
     values: np.ndarray,
     target_fraction: float,
@@ -271,27 +355,10 @@ def range_predicate(
 
     `ch_type` (a `TableVariant.ch_type`) decides literal rendering; see the
     module docstring for why it must, and `_render_literal` for the
-    fallback when it is omitted.
+    fallback when it is omitted. `choose_range` + `render_clickhouse`.
     """
-    v = np.asarray(values)
-    n = len(v)
-    clean = v[_non_null_mask(v)]
-    n_clean = len(clean)
-    if n_clean == 0:
-        raise ValueError(
-            "range_predicate: values are all null; there is no "
-            "non-null value to build a range from"
-        )
-    sorted_v = np.sort(clean)
-    window = min(n_clean, max(1, round(target_fraction * n)))
-    max_start = n_clean - window
-    start = int(rng.integers(0, max_start + 1))
-    lo = sorted_v[start]
-    hi = sorted_v[start + window - 1]
-    matched = np.count_nonzero((clean >= lo) & (clean <= hi))
-    actual = float(matched) / n
-    sql = f"v BETWEEN {_render_literal(lo, ch_type)} AND {_render_literal(hi, ch_type)}"
-    return sql, actual
+    choice = choose_range(values, target_fraction, rng)
+    return render_clickhouse(choice, ch_type), choice.actual_fraction
 
 
 def in_predicate(
@@ -322,36 +389,10 @@ def in_predicate(
 
     `ch_type` (a `TableVariant.ch_type`) decides literal rendering; see the
     module docstring for why it must, and `_render_literal` for the
-    fallback when it is omitted.
+    fallback when it is omitted. `choose_in` + `render_clickhouse`.
     """
-    v = np.asarray(values)
-    n = len(v)
-    clean = v[_non_null_mask(v)]
-    uniq, counts = np.unique(clean, return_counts=True)
-    if len(uniq) == 0:
-        raise ValueError(
-            "in_predicate: values are all null; there is no "
-            "non-null value to build an IN list from"
-        )
-    k = min(n_values, len(uniq))
-    remaining = list(range(len(uniq)))
-    chosen: list[int] = []
-    running = 0
-    for _ in range(k):
-        best = min(
-            remaining,
-            key=lambda idx: (
-                abs((running + counts[idx]) / n - target_fraction),
-                -counts[idx],
-                idx,
-            ),
-        )
-        chosen.append(best)
-        running += counts[best]
-        remaining.remove(best)
-    literals = ", ".join(_render_literal(uniq[i], ch_type) for i in chosen)
-    sql = f"v IN ({literals})"
-    return sql, running / n
+    choice = choose_in(values, target_fraction, n_values)
+    return render_clickhouse(choice, ch_type), choice.actual_fraction
 
 
 def _aggregate_select(variant: TableVariant) -> str:
@@ -399,44 +440,70 @@ def filter_sql(name: str, variant: TableVariant, predicate_sql: str) -> str:
     return f"SELECT {_aggregate_select(variant)} FROM {name} WHERE {predicate_sql}"
 
 
+def choose_queries(
+    axes: QueryAxes, values: np.ndarray, rng: np.random.Generator
+) -> list[ValueChoice | None]:
+    """One entry per `axes.kinds` entry, in order: None for a full scan, the `ValueChoice` of a
+    filter. A `range` consumes `rng`; an `in` is deterministic. Engine-neutral: every engine's
+    queries of a suite are rendered from one call."""
+    out: list[ValueChoice | None] = []
+    for kind in axes.kinds:
+        if kind.kind != "filter":
+            out.append(None)
+        elif kind.predicate == "range":
+            out.append(choose_range(values, kind.target_fraction, rng))
+        elif kind.predicate == "in":
+            out.append(choose_in(values, kind.target_fraction, kind.values))
+        else:
+            raise ValueError(f"unknown predicate kind {kind.predicate!r}")
+    return out
+
+
+def render_predicate(
+    choice: ValueChoice, variant: TableVariant, dataset_type: pa.DataType | None = None
+) -> str:
+    """`choice` written for `variant`'s engine (ClickHouse here; Task 5 adds the others)."""
+    engine = getattr(variant, "engine", "clickhouse")
+    if engine == "clickhouse":
+        return render_clickhouse(choice, variant.ch_type)
+    raise ValueError(f"no predicate renderer for engine {engine!r}")
+
+
+def render_queries(
+    axes: QueryAxes,
+    choices: list[ValueChoice | None],
+    variant: TableVariant,
+    dataset_type: pa.DataType | None = None,
+) -> list[QueryVariant]:
+    """One `QueryVariant` per `axes.kinds` entry and its choice (`choose_queries`), the predicate
+    written for `variant`'s engine (`render_predicate`)."""
+    out: list[QueryVariant] = []
+    for kind, choice in zip(axes.kinds, choices):
+        is_filter = kind.kind == "filter"
+        out.append(
+            QueryVariant(
+                kind=kind.kind,
+                predicate_kind=kind.predicate if is_filter else None,
+                target_fraction=kind.target_fraction,
+                values_n=kind.values if is_filter else None,
+                predicate_sql=(
+                    None
+                    if choice is None
+                    else render_predicate(choice, variant, dataset_type)
+                ),
+                actual_fraction=None if choice is None else choice.actual_fraction,
+            )
+        )
+    return out
+
+
 def expand_queries(
     axes: QueryAxes, values: np.ndarray, variant: TableVariant, rng: np.random.Generator
 ) -> list[QueryVariant]:
     """One `QueryVariant` per `axes.kinds` entry, in order (`axes.samples` is the repeat count,
     not an axis). A `range` predicate consumes `rng`; an `in` predicate is deterministic.
-    """
-    variants: list[QueryVariant] = []
-    for kind in axes.kinds:
-        predicate_kind: str | None = None
-        predicate_sql: str | None = None
-        actual_fraction: float | None = None
-        values_n: int | None = None
-
-        if kind.kind == "filter":
-            predicate_kind = kind.predicate
-            values_n = kind.values
-            if predicate_kind == "range":
-                predicate_sql, actual_fraction = range_predicate(
-                    values, kind.target_fraction, rng, ch_type=variant.ch_type
-                )
-            elif predicate_kind == "in":
-                predicate_sql, actual_fraction = in_predicate(
-                    values, kind.target_fraction, kind.values, ch_type=variant.ch_type
-                )
-            else:
-                raise ValueError(f"unknown predicate kind {predicate_kind!r}")
-
-        variants.append(
-            QueryVariant(
-                kind=kind.kind,
-                predicate_kind=predicate_kind,
-                target_fraction=kind.target_fraction,
-                values_n=values_n,
-                predicate_sql=predicate_sql,
-                actual_fraction=actual_fraction,
-            )
-        )
-    return variants
+    `choose_queries` + `render_queries`."""
+    return render_queries(axes, choose_queries(axes, values, rng), variant)
 
 
 def query_id(table_id: str, variant: QueryVariant) -> str:
