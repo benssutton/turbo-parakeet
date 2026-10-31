@@ -26,7 +26,8 @@ def _read(run: RunDir, name: str) -> pl.DataFrame:
 
 def _coverage(run: RunDir, notes: dict) -> dict:
     columns, skipped = set(), 0
-    datasets = run.info().get("datasets", {})
+    info = run.info()
+    datasets = info.get("datasets", {})
     for name in datasets:
         d = run.suites(name)
         if (d / "suites.json").is_file():
@@ -39,6 +40,8 @@ def _coverage(run: RunDir, notes: dict) -> dict:
     cells = _read(run, "size_cells")
     measured = cells.filter(pl.col("measured_bytes").is_not_null())
     return {
+        # runs made before the recommender kind was recorded are one-shot (run.py)
+        "recommender": info.get("recommender", {}).get("kind", "oneshot"),
         "columns": len(columns),
         "columns_skipped": skipped,
         "cells_measured": measured.height,
@@ -52,7 +55,7 @@ def _coverage(run: RunDir, notes: dict) -> dict:
 
 def coverage_line(c: dict) -> str:
     return (
-        f"columns {c['columns']} (skipped {c['columns_skipped']}) · cells {c['cells_measured']} measured / "
+        f"recommender {c['recommender']} · columns {c['columns']} (skipped {c['columns_skipped']}) · cells {c['cells_measured']} measured / "
         f"{c['cells_total']} ({c['cells_skipped_by_clickhouse']} skipped by ClickHouse) · "
         f"null predictions {c['null_predictions']} · notes {c['notes']} · failed datasets {c['failed_datasets']}"
     )
@@ -80,6 +83,8 @@ def summarise(run: RunDir, notes: dict) -> pl.DataFrame:
         .agg(
             n=pl.len(),
             n_null_regret=pl.col("regret_rel").null_count(),
+            n_agrees=pl.col("agrees").sum(),
+            n_null_agrees=pl.col("agrees").null_count(),
             regret_rel_sum=pl.col("regret_rel").sum(),
             regret_rel_worst=pl.col("regret_rel").max(),
             type_gain_measured_mean=pl.col("type_gain_measured").mean(),
@@ -166,19 +171,20 @@ def report(run: RunDir) -> None:
 
 
 def compare(a: Path, b: Path) -> pl.DataFrame:
-    """b - a for every numeric summary metric, joined on section + group keys."""
+    """b - a for every numeric summary metric, joined on section + group keys; other
+    (string) metrics, such as the recommender kind, side by side as `<m>_a` / `<m>_b`.
+    """
     sa = pl.read_ipc(Path(a) / "summary.arrow")
     sb = pl.read_ipc(Path(b) / "summary.arrow")
     keys = ["section", *dict.fromkeys(k for g in GROUPS.values() for k in g)]
     keys = [k for k in keys if k in sa.columns and k in sb.columns]
-    metrics = [
-        c
-        for c in sa.columns
-        if c not in keys and sa[c].dtype.is_numeric() and c in sb.columns
-    ]
+    shared = [c for c in sa.columns if c not in keys and c in sb.columns]
+    metrics = [c for c in shared if sa[c].dtype.is_numeric()]
+    labels = [c for c in shared if sa[c].dtype == pl.String]
     j = sa.join(sb, on=keys, how="full", coalesce=True, suffix="_b", nulls_equal=True)
     return j.select(
         *keys,
+        *[e for m in labels for e in (pl.col(m).alias(f"{m}_a"), pl.col(f"{m}_b"))],
         *[
             (pl.col(f"{m}_b").cast(pl.Float64) - pl.col(m).cast(pl.Float64)).alias(
                 f"{m}_delta"

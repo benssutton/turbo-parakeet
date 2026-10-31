@@ -29,6 +29,8 @@ unaffected, but query-cost scores are only valid at 1.
   axes as a product, which is why the two are separate.
 - Scores (metrics only, no thresholds): size_cells, size_regret, size_frontier, skip_queries, skip_regret,
   query_cost, query_regret, recommend_cost (`evaluate/score.py` holds the schemas), summary.arrow and compare.
+  summary.arrow's size_regret section counts `agrees` (`n_agrees`, `n_null_agrees`) and its coverage row carries the
+  recommender kind; `evaluate compare` gives the kinds side by side (`recommender_a` / `recommender_b`).
   size_regret's `measured_choice` is the recommender's own codec rule (`_plugin.clickhouse_redecide`) re-applied to
   the measured bytes of the chains it compared (pruned chains left out); `agrees` says whether it picks the
   recommended chain (None for original-type suites (no candidates) and when a compared cell was not measured). CPU and memory are
@@ -58,6 +60,8 @@ unaffected, but query-cost scores are only valid at 1.
 test (`tests/test_live.py`, marked `clickhouse`) skips without a server. TDD.
 
 # State
+- Learnings across runs: `FINDINGS.md` (update it when a run teaches something new). `scripts/faster_chains.py RUN_DIR`
+  lists the columns where a faster chain beats the recommended one on full-scan CPU.
 - Parity with the retired calibration scripts and the first full runs: `docs/results/`.
 - First query-time scores (`docs/results/2026-10-29-query-regret.md`): 32 of 506 queries resolved, nearly all an LZ4
   chain beating the size-chosen ZSTD level on CPU; 50 000-row frames do not resolve.

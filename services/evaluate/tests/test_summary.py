@@ -27,6 +27,7 @@ def test_summary_sections(tmp_path):
         1,
         0.0,
     )
+    assert (reg["n_agrees"], reg["n_null_agrees"]) == (1, 0)
     sk = s.filter(pl.col("section") == "skip_regret").row(0, named=True)
     assert sk["chosen_index"] == "minmax:1"
     assert sk["regret_freq_mean"] == pytest.approx(0.0)
@@ -40,11 +41,14 @@ def test_summary_sections(tmp_path):
     assert size["median_abs_error"] == pytest.approx(0.1)
     cov = s.filter(pl.col("section") == "coverage").row(0, named=True)
     assert (cov["columns"], cov["cells_measured"], cov["failed_datasets"]) == (1, 1, 0)
+    # run.json without a recommender entry predates the field: one-shot
+    assert cov["recommender"] == "oneshot"
     assert (run.path / "summary.arrow").is_file()
 
 
 def test_coverage_line_text():
     cov = {
+        "recommender": "streaming",
         "columns": 77,
         "columns_skipped": 3,
         "cells_measured": 1412,
@@ -55,7 +59,7 @@ def test_coverage_line_text():
         "failed_datasets": 0,
     }
     assert coverage_line(cov) == (
-        "columns 77 (skipped 3) · cells 1412 measured / 1436 (24 skipped by ClickHouse) · "
+        "recommender streaming · columns 77 (skipped 3) · cells 1412 measured / 1436 (24 skipped by ClickHouse) · "
         "null predictions 0 · notes 2 · failed datasets 0"
     )
 
@@ -96,3 +100,16 @@ def test_query_regret_section_counts(tmp_path):
     s = summarise(run, score_run(run))
     q = s.filter(pl.col("section") == "query_regret")
     assert q.height > 0 and q["n"].sum() >= 1
+
+
+def test_compare_carries_both_recommender_kinds(tmp_path):
+    a, b = _run_dir(tmp_path / "a"), _run_dir(tmp_path / "b")
+    info = b.info()
+    b.write_info({**info, "recommender": {"kind": "streaming"}})
+    summarise(a, score_run(a))
+    summarise(b, score_run(b))
+    d = compare(a.path, b.path)
+    cov = d.filter(pl.col("section") == "coverage").row(0, named=True)
+    assert (cov["recommender_a"], cov["recommender_b"]) == ("oneshot", "streaming")
+    reg = d.filter(pl.col("section") == "size_regret").row(0, named=True)
+    assert reg["n_agrees_delta"] == 0.0

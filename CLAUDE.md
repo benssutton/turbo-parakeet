@@ -14,6 +14,8 @@ empirically. As the engines improve, the techniques and recommendations are re-m
    grids; ClickHouse today, Polars and DataFusion planned (ToDo 5). Details: `services/bench/CLAUDE.md`.
 4. **Evaluation loop** — `services/evaluate/` (`evaluate`): steps b–d of the loop for ClickHouse (recommend, benchmark
    against alternatives, score: prediction error, regret, CPU and memory). Details: `services/evaluate/CLAUDE.md`.
+   What the loop has taught us about the recommenders (read it before changing a recommender's decisions or objective):
+   `services/evaluate/FINDINGS.md`.
 
 ## The loop
 a. Design synthetic datasets that try to defeat the analytic techniques. b. Run them through the techniques and

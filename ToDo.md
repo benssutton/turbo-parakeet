@@ -5,7 +5,7 @@ for reference only; CLAUDE.md cites them by number.
 
 **Suggested order:** the five tracks in order — synthetic data (1), the evaluation loop (2–3), adversarial datasets (4),
 engines (5–7), real data (8) — with the analytics items (9–24) taken up as they unblock or as the loop surfaces them.
-Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 and 20 before 21; 13 lands piecemeal with 19–21; 14 under 24.
+Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 5 before 25; 12 and 20 before 21; 13 lands piecemeal with 19–21; 14 under 24.
 
 ---
 
@@ -75,11 +75,9 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    regret and measured agreement, the size frontier, query CPU / memory and query-time regret, recommender cost) and
    a summary. It replaces the two calibration scripts, at parity cell for cell (369 size cells, 99 skip queries;
    `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`). At 1M rows (`query_time`) 103 of 586 queries
-   resolve (`2026-10-31-follow-ups.md`). Follow-ups:
-   - The recommender's objective: on the 1M-row frontier a faster chain (LZ4 in 26 of 33) saves a median 34% of the
-     full-scan CPU for 69% more bytes in 33 of 79 columns. Decide bytes only, or a weight on CPU (a recommender
-     keyword; the frontier and `query_regret` score it).
-   - `summary.arrow` / `evaluate compare` carry neither `agrees` nor the recommender kind; add them.3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
+   resolve (`2026-10-31-follow-ups.md`). Its open follow-up, the recommender's objective, is item 25.
+
+3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
    loaded first, then a warm-up and interleaved rounds shuffled per round; server CPU time primary, wall beside it;
    distribution-free median intervals and paired per-round ratios (`chbench report --baseline`); a quietness record
    on every run; `cache_mode` and `query_condition_cache` retired; Decimal32 in its own suite (`decimal32_codecs`);
@@ -87,6 +85,14 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
    §11; the loader batches inserts); FINDINGS §3's closed form. `suites/replicates.yaml`: every pairwise ratio
    interval contains 1. Sorted Decimal32 + ZSTD(1)–(13) at 1.99–2.09× Decimal64: below a 3-byte minimum match ZSTD misses
    Decimal32's 3-byte repeats between adjacent values (FINDINGS §13).
+
+25. **Revise the optimisation objective: bytes, CPU or wall time.** The recommenders minimise bytes. On the 1M-row
+    ClickHouse frontier, a faster chain (LZ4 in 26 of 33) saves a median 34% of the full-scan CPU for 69% more bytes in
+    33 of 79 columns (`services/evaluate/FINDINGS.md` §6, `services/evaluate/scripts/faster_chains.py`). Decide the
+    objective per engine: bytes only, a weight on query CPU, or wall time (in process, Polars and DataFusion pay
+    decompression in wall time). It would be a recommender keyword, scored by the frontier and `query_regret`.
+    **Blocked on 5:** expand the empirical bench to Polars and DataFusion first, so the objective rests on measured
+    query time for all three engines, not ClickHouse alone.
 
 ## Track 3 — adversarial datasets
 
