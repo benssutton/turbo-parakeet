@@ -44,16 +44,27 @@ FACTORIES = {
     "polars": "chbench.harness.engines.polars_engine:PolarsWorker",
     "datafusion": "chbench.harness.engines.datafusion_engine:DataFusionWorker",
 }
+# A timed sample of an in-process query is a batch of k runs: k is the smallest power of two whose
+# batch lasts TARGET_BATCH_NS of wall time (process_time_ns moves in 15.625 ms steps on Windows),
+# at most MAX_REPEATS, calibrated in the warm-up and fixed for the run's timed rounds.
+TARGET_BATCH_NS = 250_000_000
+MAX_REPEATS = 1024
 _CONTEXT = multiprocessing.get_context("spawn")
 _POLL_S = 0.001
 # Per-op call timeouts (s), generous: they catch a stuck worker (a deadlocked engine, a runaway
 # query), never a slow one. `version` is the spawn plus importing Polars / DataFusion, seconds even
 # on a cold disk under a virus scanner. `load` reads one column of the dataset and `prepare` casts,
 # verifies row by row and writes (ZSTD at a high level) then re-reads an IPC file: at 10M rows tens
-# of seconds, minutes for the slow codecs, so half an hour. `run` is one sample, which Task 5
-# makes a calibrated batch of k <= 1024 repeats of about 250 ms or more; only a single
-# query far slower than any the bench plans reaches 5 minutes.
-TIMEOUTS_S = {"version": 60.0, "load": 1800.0, "prepare": 1800.0, "run": 300.0}
+# of seconds, minutes for the slow codecs, so half an hour. `run` is one sample, a calibrated batch of
+# k <= 1024 repeats of about 250 ms or more, and `calibrate` is the warm-up's batches of 1, 2, 4, ...
+# up to k (about 2 x k runs); only a single query far slower than any the bench plans reaches 5 minutes.
+TIMEOUTS_S = {
+    "version": 60.0,
+    "load": 1800.0,
+    "prepare": 1800.0,
+    "run": 300.0,
+    "calibrate": 300.0,
+}
 _CLOSE_WAIT_S = 5.0
 _NAN = float("nan")
 
@@ -104,6 +115,9 @@ class InprocEngine:
         self.name, self.threads = engine, threads
         self.timeouts = {**TIMEOUTS_S, **(timeouts or {})}
         self._dead: str | None = None
+        self.repeats: dict[str, tuple[int, bool]] = (
+            {}
+        )  # job key -> (k, capped), from the warm-up
         self._proc = None
         self._conn, child = _CONTEXT.Pipe()
         try:
@@ -250,8 +264,11 @@ class InprocEngine:
 
 class InprocRound:
     """One round of an in-process engine's jobs. A timed job's sample is delivered (`on_sample`)
-    as soon as its answer returns; the untimed warm-up compares each answer with the job's
-    reference and records a mismatch as the job's error."""
+    as soon as its answer returns; the untimed warm-up calibrates each job's batch size
+    (`BaseWorker.calibrate`; kept in `engine.repeats` for the run's timed rounds, a capped k a
+    round warning) and compares its first answer with the job's reference, recording a mismatch as
+    the job's error. A Ctrl-C during a batch interrupts `call` as during one query: the batch's
+    sample is not taken, and `close()` waits for the worker to finish the batch."""
 
     def __init__(
         self,
@@ -273,14 +290,26 @@ class InprocRound:
         ran_at = datetime.datetime.now(datetime.timezone.utc)
         t0 = time.perf_counter()
         try:
-            reply, memory = self.engine.call(
-                "run", job.name, job.payload, sample_memory=self.timed
-            )
+            if self.timed:
+                k, capped = self.engine.repeats.get(job.key, (1, False))
+                reply, memory = self.engine.call(
+                    "run", job.name, job.payload, k, sample_memory=True
+                )
+            else:
+                reply, _ = self.engine.call(
+                    "calibrate", job.name, job.payload, TARGET_BATCH_NS, MAX_REPEATS
+                )
         except (WorkerError, WorkerDied) as e:
             self.result.errors[job.key] = f"{type(e).__name__}: {e}"
             return
         client_ms = (time.perf_counter() - t0) * 1000.0
         if not self.timed:
+            self.engine.repeats[job.key] = (reply["repeats"], reply["capped"])
+            if reply["capped"]:
+                self.result.warnings.append(
+                    f"{job.key}: {reply['repeats']} repeats (the cap) last under "
+                    f"{TARGET_BATCH_NS / 1e6:.0f} ms; its samples are recorded as capped"
+                )
             ref = job.reference
             if ref is not None and not results_agree(
                 ref, reply["count"], reply["total"]
@@ -293,8 +322,8 @@ class InprocRound:
             return
         sample = Sample(
             sample_no=self.sample_no,
-            client_ms=client_ms,
-            server_ms=reply["wall_ns"] / 1e6,
+            client_ms=client_ms / k,
+            server_ms=reply["wall_ns"] / k / 1e6,
             read_rows=_NAN,
             read_bytes=_NAN,
             memory_bytes=memory,
@@ -303,7 +332,9 @@ class InprocRound:
             profile_events={},
             ran_at=ran_at,
             round_no=self.round_no,
-            cpu_us=reply["cpu_ns"] / 1e3,
+            cpu_us=reply["cpu_ns"] / k / 1e3,
+            repeats=k,
+            repeats_capped=capped,
         )
         self.result.samples[job.key] = sample
         if self.on_sample is not None:

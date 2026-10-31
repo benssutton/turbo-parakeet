@@ -62,6 +62,9 @@ WHERE type = 'QueryFinish'
 class Sample:
     """One timed run of a query.
 
+    An in-process sample is a batch of `repeats` runs of the query (`engines.inproc`); its
+    clocks are the batch totals divided by `repeats`. Both are None for ClickHouse.
+
     `client_ms` is the wall clock around the client call alone. The server
     fields (`server_ms` = `query_duration_ms`, `read_rows`, `read_bytes`,
     `memory_bytes` = `memory_usage`, `selected_marks`, `selected_granules`,
@@ -79,13 +82,19 @@ class Sample:
     server_ms: float
     read_rows: int | float
     read_bytes: int | float
-    memory_bytes: int | float
+    memory_bytes: int | float | None
     selected_marks: int | float
     selected_granules: int | float
     profile_events: dict[str, int]
     ran_at: datetime.datetime
     round_no: int | None = None
     cpu_us: float | None = None
+    repeats: int | None = (
+        None  # in-process: the batch size k (the fields above are per query)
+    )
+    repeats_capped: bool | None = (
+        None  # in-process: k is MAX_REPEATS and the batch was short
+    )
 
 
 def explain_sql(name: str, sql: str) -> str:

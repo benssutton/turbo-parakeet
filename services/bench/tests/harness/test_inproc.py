@@ -190,7 +190,7 @@ def test_a_worker_stuck_at_start_times_out_and_leaves_no_process(monkeypatch):
 
 
 def test_the_default_timeouts_cover_every_op():
-    assert set(inproc.TIMEOUTS_S) == {"version", "load", "prepare", "run"}
+    assert set(inproc.TIMEOUTS_S) == {"version", "load", "prepare", "run", "calibrate"}
     assert all(t >= 60 for t in inproc.TIMEOUTS_S.values())
 
 
@@ -331,3 +331,52 @@ def test_a_worker_that_cannot_start_leaves_no_process(monkeypatch):
     with pytest.raises(inproc.WorkerDied):
         inproc.InprocEngine("fake", 1)
     assert multiprocessing.active_children() == []
+
+
+class StubEngine:
+    """An engine whose worker answers one fixed reply: the parent-side arithmetic alone."""
+
+    name = "stub"
+
+    def __init__(self, reply):
+        self.reply, self.repeats, self.calls = reply, {}, []
+
+    def call(self, op, *args, sample_memory=False):
+        self.calls.append((op, *args))
+        return dict(self.reply), (100 if sample_memory else None)
+
+
+def test_a_timed_sample_is_the_batch_divided_by_k():
+    e = StubEngine(
+        {"count": 4, "total": 5.0, "wall_ns": 8_000_000, "cpu_ns": 4_000_000}
+    )
+    e.repeats["q1"] = (4, False)
+    rd = inproc.InprocRound(e, 0)
+    rd.run(job())
+    s = rd.finish().samples["q1"]
+    assert (s.server_ms, s.cpu_us, s.repeats, s.repeats_capped) == (
+        2.0,
+        1000.0,
+        4,
+        False,
+    )
+    assert s.memory_bytes == 100 and e.calls == [("run", "t1", PAYLOAD, 4)]
+
+
+def test_the_warm_up_calibrates_and_every_timed_round_reuses_k(
+    engine, dataset, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(inproc, "TARGET_BATCH_NS", 10**15)
+    monkeypatch.setattr(inproc, "MAX_REPEATS", 8)
+    e = engine()
+    e.load(dataset, "value")
+    e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
+    warm = e.start_round(None, timed=False)
+    warm.run(job())
+    assert e.repeats["q1"] == (8, True)
+    assert any("8 repeats (the cap)" in w for w in warm.finish().warnings)
+    for r in (0, 1):
+        rd = e.start_round(r)
+        rd.run(job())
+        s = rd.finish().samples["q1"]
+        assert (s.round_no, s.repeats, s.repeats_capped) == (r, 8, True)

@@ -10,10 +10,11 @@ import pyarrow.ipc as ipc
 import pytest
 
 from chbench.harness.engines import worker as worker_module
-from chbench.harness.engines.worker import mismatch, timed
+from chbench.harness.engines.worker import calibrate_repeats, mismatch, timed
 from tests.harness.fake_worker import FakeWorker
 
 ARRAY = pa.array([1.0, 2.0, 2.0, None])
+PAYLOAD = {"predicate_kind": None, "values": None, "sql": None}
 
 
 def spec(
@@ -210,3 +211,42 @@ def test_eof_ends_the_loop_cleanly(loop):
     parent.close()
     t.join(10)
     assert not t.is_alive()
+
+
+def test_calibration_picks_the_smallest_power_of_two_over_the_target():
+    walls = {1: 30, 2: 60, 4: 120, 8: 240, 16: 480}
+    asked = []
+
+    def wall(k):
+        asked.append(k)
+        return walls[k]
+
+    assert calibrate_repeats(wall, 250, 1024) == (16, False) and asked == [
+        1,
+        2,
+        4,
+        8,
+        16,
+    ]
+    assert calibrate_repeats(lambda k: 10 * k, 250, 8) == (8, True)
+    assert calibrate_repeats(lambda k: 999, 250, 1024) == (1, False)
+
+
+def test_run_repeats_the_query_and_answers_the_first(worker, tmp_path):
+    worker.prepare(spec(tmp_path))
+    out = worker.run("t1", PAYLOAD, 5)
+    assert worker.runs == 5 and (out["count"], out["total"], out["repeats"]) == (
+        4,
+        5.0,
+        5,
+    )
+
+
+def test_calibrate_answers_the_first_run_and_its_batch_size(worker, tmp_path):
+    worker.prepare(spec(tmp_path))
+    out = worker.calibrate("t1", PAYLOAD, 0, 1024)
+    assert out == {"count": 4, "total": 5.0, "repeats": 1, "capped": False}
+    assert worker.runs == 1
+    capped = worker.calibrate("t1", PAYLOAD, 10**15, 4)
+    assert (capped["repeats"], capped["capped"]) == (4, True)
+    assert worker.runs == 1 + 1 + 2 + 4  # batches of 1, 2 and 4

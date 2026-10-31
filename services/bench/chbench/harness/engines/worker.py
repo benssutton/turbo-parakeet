@@ -4,15 +4,16 @@ is `inproc.InprocEngine`).
 Protocol: the parent sends tuples `(op, *args)` over a `multiprocessing` Pipe and reads one reply
 per request, `("ok", value)` or `("error", "<Type>: <message>")`; `("close",)` (or the pipe closing)
 ends the loop. The ops are `BaseWorker`'s public methods: `version()`, `load(path, column)`,
-`prepare(spec)` and `run(table_id, query)`. The worker ignores SIGINT: Ctrl-C is the parent's,
+`prepare(spec)`, `run(table_id, query, repeats)` and
+`calibrate(table_id, query, target_ns, cap)`. The worker ignores SIGINT: Ctrl-C is the parent's,
 which closes the workers and marks the queries.
 
 `BaseWorker` is the engine-independent half: it reads the dataset column once (`load`), prepares
 a table (`prepare`: cast, row-by-row round trip back to the dataset's values, for `ipc` the file
 written once with the cell's compression, reused when its size matches the store's, and its
-values read back and checked) and times a query (`run`: the collector run first and paused,
+values read back and checked) and times a batch of repeats of a query (`run`: the collector run first and paused,
 `perf_counter_ns` wall and `process_time_ns` CPU — User + System over every thread of the worker —
-around the whole query, for `ipc` from opening the file to the collected answer). An engine
+around the whole query, for `ipc` from opening the file to the collected answer; `calibrate` picks the batch size in the warm-up). An engine
 subclass (`polars_engine.PolarsWorker`, `datafusion_engine.DataFusionWorker`) provides `engine`,
 `engine_version()`, `threads_in_use()`, `cast(type_spec, table_id)` (the held object), `values(held)`
 (its column as Arrow), `nbytes(held)`, `write_ipc(held, path, codec, batch_rows)` (record batches of `batch_rows` rows; None: one batch), `read_ipc(path)`,
@@ -71,6 +72,19 @@ def timed(fn):
     finally:
         gc.enable()
     return out, w1 - w0, c1 - c0
+
+
+def calibrate_repeats(batch_wall_ns, target_ns: int, cap: int) -> tuple[int, bool]:
+    """The batch size of a query: the smallest power of two k whose batch of k runs lasts at least
+    `target_ns` of wall time (`batch_wall_ns(k)`), with False; `cap` and True when a batch of `cap`
+    runs is still shorter. `process_time_ns` advances in 15.625 ms steps on Windows, so one run of
+    a fast query cannot be timed on its own."""
+    k = 1
+    while batch_wall_ns(k) < target_ns:
+        if k >= cap:
+            return cap, True
+        k = min(k * 2, cap)
+    return k, False
 
 
 def mismatch(expected: pa.Array, got: pa.Array | pa.ChunkedArray) -> str | None:
@@ -174,7 +188,41 @@ class BaseWorker:
             "rows": len(self.array),
         }
 
-    def run(self, table_id: str, query: dict) -> dict:
+    def run(self, table_id: str, query: dict, repeats: int = 1) -> dict:
+        """`repeats` runs of the query back to back, timed as one batch (`timed`): the first run's
+        answer and the batch's wall and CPU totals."""
         planned = self.plan(table_id, query)
-        (count, total), wall, cpu = timed(lambda: self.execute(table_id, planned))
-        return {"count": count, "total": total, "wall_ns": wall, "cpu_ns": cpu}
+
+        def batch():
+            first = self.execute(table_id, planned)
+            for _ in range(repeats - 1):
+                self.execute(table_id, planned)
+            return first
+
+        (count, total), wall, cpu = timed(batch)
+        return {
+            "count": count,
+            "total": total,
+            "wall_ns": wall,
+            "cpu_ns": cpu,
+            "repeats": repeats,
+        }
+
+    def calibrate(self, table_id: str, query: dict, target_ns: int, cap: int) -> dict:
+        """The warm-up of one query: its first answer (what the equal-results check compares) and
+        its batch size (`calibrate_repeats` over batches of 1, 2, 4, ... runs)."""
+        first = self.run(table_id, query)
+        walls = {1: first["wall_ns"]}
+
+        def batch_wall_ns(k: int) -> int:
+            if k not in walls:
+                walls[k] = self.run(table_id, query, k)["wall_ns"]
+            return walls[k]
+
+        k, capped = calibrate_repeats(batch_wall_ns, target_ns, cap)
+        return {
+            "count": first["count"],
+            "total": first["total"],
+            "repeats": k,
+            "capped": capped,
+        }

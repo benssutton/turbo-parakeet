@@ -598,3 +598,15 @@ def test_a_v2_store_reads_as_clickhouse(tmp_path):
         row["storage"] is None and row["threads"] is None and row["ipc_bytes"] is None
     )
     assert row["ipc_batch_rows"] is None and row["repeats"] is None
+
+
+def test_an_unknown_memory_is_stored_as_null(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        run = s.begin_run(NS(name="suite", source_yaml="name: suite"))
+        smp = sample(0)
+        smp.memory_bytes, smp.repeats, smp.repeats_capped = None, 4, True
+        s.insert_sample("q1", run, smp)
+        row = s.conn.execute(
+            "SELECT memory_bytes, repeats, repeats_capped FROM samples"
+        ).fetchone()
+    assert tuple(row) == (None, 4, 1)
