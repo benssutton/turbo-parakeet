@@ -12,10 +12,26 @@ and a range filter on range-capable types.
 before (also the `skip = none` cells), and for the cells of
 the chosen index `"<type>|<codec>|<compression>|<skip>"` to
 `{"column_bytes": …, "index_bytes": …}` (the chosen candidate's predicted index size).
+
+In-process blocks: the recommended-type suite (`<name>`) also carries `polars:` and `datafusion:`
+blocks, `type: [<recommended>, <original>]` (the recommender's `polars_type` / `datafusion_type`
+and the type of the column as written here; one entry when they are the same type), `storage:
+[memory, ipc]`, `compression: [none, LZ4_FRAME, ZSTD(1), ZSTD(3), ZSTD(9)]` plus the recommended
+compression when not among them; `threads` and `ipc_batch_rows` are left to chbench's defaults
+(record batches of 122 880 rows; the predictions below assume one batch, so the measured files
+carry per-batch overhead they do not model: ToDo 26). `<name>.predicted_inproc.json`
+maps `{"polars": {"<type label>|<compression>": bytes}, "datafusion": {...}}` to predicted IPC body
+bytes: the recommender's `*_ipc_size_bytes` for the recommended cell, `ipc_body_sizes` of the
+column cast to the engine's type in its IPC layout for the others (absent when that cast fails).
+Type labels are chbench's (`Categorical(UInt8)`, `Enum`, `Decimal(p, s)`, `Datetime(unit[, zone])`).
+A type chbench cannot express drops that engine's block, with a `"<engine>: ..."` reason in the
+returned skips. `predicted.json` is unchanged.
 """
 
+import ast
 import json
 import re
+import uuid
 from pathlib import Path
 
 import polars as pl
@@ -162,6 +178,192 @@ def _recommended_table(col: str, arr, datafusion_type: str):
         return None, same, str(e)
 
 
+_INPROC_COMPRESSIONS = ("none", "LZ4_FRAME", "ZSTD(1)", "ZSTD(3)", "ZSTD(9)")
+# chbench's in-process type vocabulary (`chbench.harness.inproc_types`), as the recommenders spell it.
+_POLARS_NAMES = re.compile(
+    r"^(U?Int(8|16|32|64)|Float(32|64)|Boolean|Date|Time|String|Binary"
+    r"|Decimal\(precision=\d+, scale=\d+\)"
+    r"|Datetime\(time_unit='(ms|us|ns)', time_zone=(None|'[^']+')\)"
+    r"|Categorical|Categorical\(Categories\(.*\)\)|Enum\(categories=\[.*\]\))$",
+    re.DOTALL,
+)
+_DATAFUSION_NAMES = re.compile(
+    r"^(bool|u?int(8|16|32|64)|float|double|string|large_string|string_view|binary"
+    r"|large_binary|binary_view|date32\[day\]|decimal(32|64|128)\(\d+, \d+\)"
+    r"|timestamp\[(s|ms|us|ns)(, tz=[^\]]+)?\]|time32\[(s|ms)\]|time64\[(us|ns)\]"
+    r"|fixed_size_binary\[\d+\]"
+    r"|dictionary<values=(string|large_string|binary|large_binary), "
+    r"indices=u?int(8|16|32|64), ordered=[01]>)$"
+)
+_CAT_LONG = re.compile(
+    r'^Categorical\(Categories\(name="[^"]*", namespace="[^"]*", physical=pl\.(UInt8|UInt16|UInt32)\)\)$'
+)
+_CAT_NAMED = re.compile(r'^Categorical\(Categories\("[^"]*"\)\)$')
+
+
+def _polars_label(name: str) -> str:
+    """chbench's label of a Polars type name (`chbench.harness.inproc_types.parse_polars_type`'s
+    `label`), repeated here because the analytics package does not import the bench; a test checks
+    the two agree."""
+    if m := _CAT_LONG.match(name):
+        return f"Categorical({m.group(1)})"
+    if name == "Categorical" or _CAT_NAMED.match(name):
+        return "Categorical(UInt32)"
+    if name.startswith("Enum"):
+        return "Enum"
+    if m := re.fullmatch(r"Decimal\(precision=(\d+), scale=(\d+)\)", name):
+        return f"Decimal({m.group(1)}, {m.group(2)})"
+    if m := re.fullmatch(
+        r"Datetime\(time_unit='(\w+)', time_zone=(None|'([^']+)')\)", name
+    ):
+        return (
+            f"Datetime({m.group(1)}, {m.group(3)})"
+            if m.group(3)
+            else f"Datetime({m.group(1)})"
+        )
+    return name
+
+
+def _label(engine: str, name: str) -> str:
+    return _polars_label(name) if engine == "polars" else name
+
+
+def _recommended_compression(r: dict, engine: str) -> str:
+    """The recommended IPC compression of `engine` in chbench's spelling."""
+    comp = r[f"{engine}_ipc_compression"]
+    if comp == "ZSTD":
+        return f"ZSTD({r[f'{engine}_ipc_zstd_level'] or 1})"
+    return comp or "none"
+
+
+def _exact_arrow_type(name: str):
+    """The pyarrow type of a `datafusion_type` text, dictionaries and large / view types kept."""
+    import pyarrow as pa
+
+    if m := re.fullmatch(
+        r"dictionary<values=(\w+), indices=(\w+), ordered=([01])>", name
+    ):
+        return pa.dictionary(
+            pa.type_for_alias(m.group(2)),
+            pa.type_for_alias(m.group(1)),
+            ordered=m.group(3) == "1",
+        )
+    if m := re.fullmatch(r"fixed_size_binary\[(\d+)\]", name):
+        return pa.binary(int(m.group(1)))
+    if name in ("large_string", "string_view", "large_binary", "binary_view"):
+        return pa.type_for_alias(name)
+    return _arrow_type(name)
+
+
+def _polars_dtype(name: str, values: pl.Series):
+    """The Polars dtype of a `polars_type` text; a Categorical gets categories in a namespace of its
+    own (Polars shares named categories process-wide), a bare Enum the values in first-seen order.
+    """
+    label = _polars_label(name)
+    if m := re.fullmatch(r"Categorical\((UInt8|UInt16|UInt32)\)", label):
+        categories = pl.Categories(
+            "v", namespace=uuid.uuid4().hex, physical=getattr(pl, m.group(1))
+        )
+        return pl.Categorical(categories)
+    if label == "Enum":
+        listed = re.fullmatch(r"Enum\(categories=(\[.*\])\)", name, re.DOTALL)
+        if listed:
+            return pl.Enum(ast.literal_eval(listed.group(1)))
+        return pl.Enum(
+            values.drop_nulls().unique(maintain_order=True).cast(pl.String).to_list()
+        )
+    if m := re.fullmatch(r"Decimal\((\d+), (\d+)\)", label):
+        return pl.Decimal(int(m.group(1)), int(m.group(2)))
+    if m := re.fullmatch(r"Datetime\((\w+)(?:, (.+))?\)", label):
+        return pl.Datetime(m.group(1), m.group(2))
+    return getattr(pl, label)
+
+
+def _layout(engine: str, name: str, values, col: str):
+    """`values` cast to the engine's type, in the layout chbench writes its IPC file in: the Arrow
+    type for DataFusion, Polars' own (`CompatLevel.newest()`) for Polars."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    if engine == "datafusion":
+        return pa.table({col: pc.cast(values, _exact_arrow_type(name))})
+    s = pl.Series(col, values)
+    frame = pl.DataFrame({col: s.cast(_polars_dtype(name, s), strict=True)})
+    return frame.to_arrow(compat_level=pl.CompatLevel.newest())
+
+
+def _ipc_codec(compression: str) -> str:
+    """chbench's compression spelling as `ipc_body_sizes`' codec."""
+    if compression == "none":
+        return "none"
+    if compression == "LZ4_FRAME":
+        return "lz4"
+    return "zstd:" + compression[len("ZSTD(") : -1]
+
+
+def _predicted_inproc(
+    engine: str, types: list[str], comps: list[str], values, col: str, r: dict
+) -> dict:
+    """`{"<label>|<compression>": predicted IPC body bytes}` for one engine's grid."""
+    import pyarrow as pa
+
+    rec_key = (
+        f"{_label(engine, r[f'{engine}_type'])}|{_recommended_compression(r, engine)}"
+    )
+    out = {}
+    for name in types:
+        try:
+            table = _layout(engine, name, values, col)
+        except (pa.ArrowException, pl.exceptions.PolarsError, ValueError, TypeError):
+            table = None
+        for comp in comps:
+            key = f"{_label(engine, name)}|{comp}"
+            if key == rec_key and r[f"{engine}_ipc_size_bytes"] is not None:
+                out[key] = int(r[f"{engine}_ipc_size_bytes"])
+            elif table is not None:
+                try:
+                    out[key] = int(_plugin.ipc_body_sizes(table, _ipc_codec(comp))[col])
+                except ValueError:
+                    pass
+    return out
+
+
+def _inproc(col: str, source, one, r: dict) -> tuple[dict, dict, list[tuple[str, str]]]:
+    """The recommended suite's `polars:` / `datafusion:` blocks, its `predicted_inproc.json`, and
+    `(column, "<engine>: reason")` for an engine whose types chbench cannot express. `source` is
+    the column as written for the original suite, `one` the recommended suite's dataset.
+    """
+    values = one[col].combine_chunks()
+    originals = {"polars": str(pl.Series(source).dtype), "datafusion": str(source.type)}
+    vocab = {"polars": _POLARS_NAMES, "datafusion": _DATAFUSION_NAMES}
+    blocks, predicted, skips = {}, {}, []
+    for engine in ("polars", "datafusion"):
+        rec = r[f"{engine}_type"]
+        if rec is None:
+            skips.append((col, f"{engine}: no recommended type"))
+            continue
+        types: list[str] = []
+        for name in (rec, originals[engine]):
+            if all(_label(engine, name) != _label(engine, t) for t in types):
+                types.append(name)
+        bad = [t for t in types if not vocab[engine].match(t)]
+        if bad:
+            skips.append(
+                (col, f"{engine}: type {bad[0]!r} is outside chbench's vocabulary")
+            )
+            continue
+        comps = list(
+            dict.fromkeys([*_INPROC_COMPRESSIONS, _recommended_compression(r, engine)])
+        )
+        blocks[engine] = {
+            "type": types,
+            "storage": ["memory", "ipc"],
+            "compression": comps,
+        }
+        predicted[engine] = _predicted_inproc(engine, types, comps, values, col, r)
+    return blocks, predicted, skips
+
+
 def to_chbench(
     result: pl.DataFrame,
     frame,
@@ -209,7 +411,12 @@ def to_chbench(
                 )
             )
         else:
-            _write(out, name, col, rec_one, r, orig, original=False)
+            blocks, predicted_inproc, engine_skips = _inproc(col, arr, rec_one, r)
+            skipped.extend(engine_skips)
+            _write(out, name, col, rec_one, r, orig, original=False, inproc=blocks)
+            (out / f"{name}.predicted_inproc.json").write_text(
+                json.dumps(predicted_inproc, indent=2), encoding="utf-8"
+            )
         if not same:
             _write(out, f"{name}_original", col, orig_one, r, orig, original=True)
     return skipped
@@ -300,10 +507,19 @@ def _write_arrow(path: Path, one) -> None:
 
 
 def _write(
-    out: Path, name: str, col: str, one, r: dict, orig: dict, *, original: bool
+    out: Path,
+    name: str,
+    col: str,
+    one,
+    r: dict,
+    orig: dict,
+    *,
+    original: bool,
+    inproc=None,
 ) -> None:
     """One suite over the dataset `one`: the recommended type (predictions from the result's
     candidates) or, with `original`, the original type (predictions from the emulator).
+    `inproc` (recommended suites): the `polars:` / `datafusion:` blocks, placed after `clickhouse`.
     """
     import pyarrow as pa
     import yaml
@@ -334,6 +550,7 @@ def _write(
             "skip_index": [skip, "none"] if skip else ["none"],
             "compression": comps,
         },
+        **(inproc or {}),
         "queries": _queries(base),
         "results": {"percentiles": [50, 90, 99]},
     }

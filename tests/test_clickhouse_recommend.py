@@ -272,7 +272,7 @@ def chbench_frame(n: int = 50_000) -> pl.DataFrame:
 
 
 @pytest.fixture(scope="module")
-def chbench_out(tmp_path_factory):
+def chbench_run(tmp_path_factory):
     import yaml
 
     from turbo_parakeet.recommenders import to_chbench
@@ -282,7 +282,12 @@ def chbench_out(tmp_path_factory):
     out = tmp_path_factory.mktemp("chbench")
     skipped = to_chbench(result, frame, out)
     suites = {p.stem: yaml.safe_load(p.read_text()) for p in out.glob("*.yaml")}
-    return out, skipped, suites
+    return out, skipped, suites, result
+
+
+@pytest.fixture(scope="module")
+def chbench_out(chbench_run):
+    return chbench_run[:3]
 
 
 def test_to_chbench_files_and_skips(chbench_out):
@@ -317,6 +322,8 @@ def test_to_chbench_yaml_axes(chbench_out):
         "name",
         "dataset",
         "clickhouse",
+        "polars",
+        "datafusion",
         "queries",
         "results",
     ]
@@ -409,6 +416,108 @@ def test_to_chbench_suites_parse_in_chbench(chbench_out, monkeypatch):
     out, _, suites = chbench_out
     for name in suites:
         load_suite(out / f"{name}.yaml")
+
+    from chbench.harness.inproc_types import type_label
+
+    from turbo_parakeet.recommenders.chbench import _polars_label
+
+    for suite in suites.values():
+        for name in suite.get("polars", {}).get("type", []):
+            assert _polars_label(name) == type_label("polars", name)
+
+
+def test_to_chbench_in_process_blocks(chbench_out):
+    _, _, suites = chbench_out
+    tag = suites["tag"]
+    assert tag["polars"]["type"][0].startswith("Categorical(Categories(")
+    assert tag["polars"]["type"][1] == "String"
+    assert tag["datafusion"]["type"][0].startswith(
+        "dictionary<values=string, indices=uint8"
+    )
+    assert tag["datafusion"]["type"][1] == "string"
+    for engine in ("polars", "datafusion"):
+        block = tag[engine]
+        assert block["storage"] == ["memory", "ipc"]
+        assert (
+            "threads" not in block and "ipc_batch_rows" not in block
+        )  # chbench's defaults
+        assert block["compression"][:5] == [
+            "none",
+            "LZ4_FRAME",
+            "ZSTD(1)",
+            "ZSTD(3)",
+            "ZSTD(9)",
+        ]
+    assert suites["id"]["polars"]["type"] == ["UInt8", "Int64"]
+    assert suites["id"]["datafusion"]["type"] == ["uint8", "int64"]
+    for name, suite in suites.items():
+        if name.endswith("_original"):
+            assert "polars" not in suite and "datafusion" not in suite
+
+
+def test_to_chbench_lists_the_recommended_compression(chbench_run):
+    from turbo_parakeet.recommenders.chbench import _recommended_compression
+
+    _, _, suites, result = chbench_run
+    for row in result.iter_rows(named=True):
+        suite = (
+            suites.get(row["column"])
+            if row["column"] in ("id", "price", "tag", "maybe")
+            else None
+        )
+        if suite is None:
+            continue
+        for engine in ("polars", "datafusion"):
+            assert _recommended_compression(row, engine) in suite[engine]["compression"]
+
+
+def test_to_chbench_predicted_inproc_keys_match_the_grid(chbench_run):
+    import json
+
+    from turbo_parakeet.recommenders.chbench import (
+        _polars_label,
+        _recommended_compression,
+    )
+
+    out, _, suites, result = chbench_run
+    for name, suite in suites.items():
+        path = out / f"{name}.predicted_inproc.json"
+        if name.endswith("_original"):
+            assert not path.exists()
+            continue
+        predicted = json.loads(path.read_text())
+        for engine in ("polars", "datafusion"):
+            block = suite[engine]
+            label = _polars_label if engine == "polars" else str
+            cells = {
+                f"{label(t)}|{c}" for t in block["type"] for c in block["compression"]
+            }
+            assert set(predicted[engine]) <= cells
+            assert all(isinstance(v, int) and v > 0 for v in predicted[engine].values())
+    row = result.filter(pl.col("column") == "tag").row(0, named=True)
+    tag = json.loads((out / "tag.predicted_inproc.json").read_text())
+    for engine in ("polars", "datafusion"):
+        label = _polars_label if engine == "polars" else str
+        key = f"{label(row[f'{engine}_type'])}|{_recommended_compression(row, engine)}"
+        assert tag[engine][key] == row[f"{engine}_ipc_size_bytes"]
+        block = suites["tag"][engine]
+        assert len(tag[engine]) == len(block["type"]) * len(block["compression"])
+
+
+def test_to_chbench_drops_an_engine_block_it_cannot_express(tmp_path):
+    from turbo_parakeet.recommenders import to_chbench
+
+    frame = pl.DataFrame({"t": ["a", "b", "a"] * 100})
+    result = (
+        OneShotRecommender()
+        .add(frame)
+        .result()
+        .with_columns(pl.lit("Duration(time_unit='us')").alias("polars_type"))
+    )
+    skipped = dict(to_chbench(result, frame, tmp_path))
+    suite = _suite(tmp_path, "t")
+    assert "polars" not in suite and "datafusion" in suite
+    assert skipped["t"].startswith("polars: ") and "Duration" in skipped["t"]
 
 
 def test_clickhouse_profile_binding():
