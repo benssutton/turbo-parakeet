@@ -5,6 +5,7 @@ the FakeClient. Every worker the run starts is checked closed at the end of each
 
 import io
 import json
+import sqlite3
 
 import pytest
 from rich.console import Console
@@ -197,6 +198,29 @@ def test_a_mixed_suite_runs_both_engines_in_every_round(fake, tmp_path):
     assert got == [(e, n) for n in range(3) for e in ("clickhouse", "polars")]
 
 
+def test_a_failure_escaping_the_rounds_marks_the_open_queries_error(
+    fake, tmp_path, monkeypatch
+):
+    # The store breaks on the third sample (a second run sharing results.db, say): every query
+    # still short of its samples, ClickHouse and Polars alike, ends `error` with the exception.
+    real, n = Store.insert_sample, {"n": 0}
+
+    def insert_sample(self, *a):
+        n["n"] += 1
+        if n["n"] == 3:
+            raise sqlite3.OperationalError("database is locked")
+        return real(self, *a)
+
+    monkeypatch.setattr(Store, "insert_sample", insert_sample)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        _run(tmp_path, MIXED)
+    statuses = _queries(tmp_path)
+    assert len(statuses) == 2
+    assert set(statuses) == {("error", "OperationalError: database is locked")}
+    with Store(tmp_path / "r.db") as s:
+        assert s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
+
+
 def test_the_banner_names_each_engine_and_its_threads(fake, tmp_path):
     console = Console(file=io.StringIO(), width=400)
     _run(tmp_path, dry_run=True, console=console)
@@ -346,7 +370,7 @@ def test_a_failure_while_preparing_still_closes_the_workers(
         assert s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
 
 
-TWO_WORKERS = SUITE.replace("threads: [2]", "threads: [1, 2]")
+TWO_WORKERS = ONE_QUERY.replace("threads: [2]", "threads: [1, 2]")
 
 
 def _failing_close(monkeypatch):

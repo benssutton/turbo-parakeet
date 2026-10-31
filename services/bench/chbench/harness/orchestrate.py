@@ -54,7 +54,9 @@ Seven decisions here are load-bearing and are not free to change:
    stops the run, and even then the samples `run_round` delivered are
    committed, every query short of its samples is marked `interrupted` --
    whichever phase was running: a load, the warm-up, a round or the final
-   EXPLAINs -- and the run is finished before it is re-raised.
+   EXPLAINs -- and the run is finished before it is re-raised. Any other
+   exception that escapes (a `database is locked` from a sample's insert)
+   marks the same queries `error` with its text, then is re-raised the same way.
 
 5. **UTF-8 is forced on the console before anything is printed.** The
    `EXPLAIN indexes = 1` output contains box-drawing characters, which raise
@@ -698,17 +700,25 @@ def _run(
             # like any other short of their samples.
             # `finish_run` is the `finally`'s job, below; closing the workers
             # is `run_suite`'s.
-            unfinished = [p for p in pending if not p.done]
-            for p in unfinished:
-                if p.status == "ok" and p.taken < p.want:
-                    p.status = "interrupted"
-            _finish_queries(context, unfinished, explain=False)
+            _close_open_queries(context, pending, "interrupted", None)
             _say(
                 console,
                 f"\ninterrupted: {summary.samples_written} sample(s) "
                 f"written and committed",
                 style="yellow",
             )
+            raise
+        except Exception as err:
+            # Anything else escaping (a `database is locked` from `on_sample`, say) marks the
+            # queries short of their samples `error` with its text, as a Ctrl-C marks them
+            # `interrupted`. When the store is what broke, marking fails too: that second
+            # failure becomes a note on the first rather than masking it.
+            try:
+                _close_open_queries(
+                    context, pending, "error", f"{type(err).__name__}: {err}"
+                )
+            except Exception as again:  # noqa: BLE001
+                err.add_note(f"marking the open queries failed too: {again!r}")
             raise
         finally:
             # The only call: a run row must never keep `finished_at` NULL
@@ -1038,6 +1048,19 @@ def _run_rounds(ctx: RunContext, pending: list[_Pending]) -> None:
         _warn(console, f"round {r}", result.warnings)
     _finish_queries(ctx, pending, explain=True)
     _quiet(ctx, "after")
+
+
+def _close_open_queries(
+    ctx: RunContext, pending: list[_Pending], status: str, error: str | None
+) -> None:
+    """The query rows of a run that stopped early not yet written: each one short of its samples
+    (still `ok`) takes `status` and `error`; one already `error`, or one holding all its samples,
+    keeps its own outcome. No EXPLAIN."""
+    open_queries = [p for p in pending if not p.done]
+    for p in open_queries:
+        if p.status == "ok" and p.taken < p.want:
+            p.status, p.error = status, error
+    _finish_queries(ctx, open_queries, explain=False)
 
 
 def _finish_queries(ctx: RunContext, pending: list[_Pending], *, explain: bool) -> None:
