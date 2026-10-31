@@ -1,7 +1,9 @@
 """to_chbench, then each suite extended for the loop: a size suite per type (the codec x
 compression grid plus the recommender's candidates) and a skip suite (the chosen and rejected skip
 candidates plus none, on the recommended chain). Writes predicted.json per suite, suites.json (the
-index the later steps read) and skipped.json."""
+index the later steps read) and skipped.json. The loop's suites are ClickHouse-only: to_chbench's
+`polars` / `datafusion` blocks are removed (their scores: ToDo 26), and its engine skips are not
+column skips."""
 
 from __future__ import annotations
 
@@ -23,6 +25,8 @@ GRID_CODECS = ("none", "GCD", "Delta", "DoubleDelta")
 GRID_COMPRESSIONS = ("LZ4", "ZSTD(1)", "ZSTD(3)")
 SIZE_FRACTIONS = (0.001, 0.01, 0.05)
 SKIP_FRACTIONS = (0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2)
+# The loop scores ClickHouse only; Polars and DataFusion scores are ToDo 26.
+_IN_PROCESS = ("polars", "datafusion")
 
 
 def skip_value(c: dict) -> str:
@@ -163,7 +167,12 @@ def build(
     out = Path(out)
     handoff = out / "handoff"
     shutil.rmtree(handoff, ignore_errors=True)
-    skipped = to_chbench(result, frame, handoff)
+    # An engine skip ("polars: ...") drops an in-process block, not the column.
+    skipped = [
+        (c, r)
+        for c, r in to_chbench(result, frame, handoff)
+        if not r.startswith(tuple(f"{e}: " for e in _IN_PROCESS))
+    ]
     (out / "skipped.json").write_text(
         json.dumps([{"column": c, "reason": r} for c, r in skipped], indent=2),
         encoding="utf-8",
@@ -174,6 +183,8 @@ def build(
     dropped: list[dict] = []
     for yp in sorted(handoff.glob("*.yaml")):
         base_suite = yaml.safe_load(yp.read_text(encoding="utf-8"))
+        for engine in _IN_PROCESS:
+            base_suite.pop(engine, None)
         col = base_suite["dataset"]["column"]
         row = rows[col]
         original = yp.stem.endswith("_original")

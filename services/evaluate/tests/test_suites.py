@@ -167,3 +167,27 @@ def test_a_suite_chbench_refuses_is_skipped_not_indexed(tmp_path, monkeypatch):
     assert {s["column"] for s in skipped} == {"b"}
     assert all("chbench refuses it" in s["reason"] for s in skipped)
     assert not list(tmp_path.glob("n__b*"))
+
+
+def test_the_loops_suites_stay_clickhouse_only(tmp_path):
+    _, _, entries = _build(tmp_path)
+    assert entries
+    for e in entries:
+        suite = yaml.safe_load((tmp_path / e["yaml"]).read_text())
+        assert "polars" not in suite and "datafusion" not in suite
+    assert not list(tmp_path.glob("*.predicted_inproc.json"))
+
+
+def test_engine_skips_are_not_column_skips(tmp_path, monkeypatch):
+    real = suites.to_chbench
+    monkeypatch.setattr(
+        suites,
+        "to_chbench",
+        lambda *a, **k: real(*a, **k)
+        + [("ids", "polars: planted"), ("s", "datafusion: no predicted size for x")],
+    )
+    _build(tmp_path)
+    skipped = json.loads((tmp_path / "skipped.json").read_text())
+    assert not any(
+        s["reason"].startswith(("polars: ", "datafusion: ")) for s in skipped
+    )
