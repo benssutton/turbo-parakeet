@@ -4,6 +4,8 @@ refusal: the store records the actual versions either way (ToDo 6)."""
 
 from __future__ import annotations
 
+import importlib.metadata
+import platform
 from pathlib import Path
 
 import yaml
@@ -39,4 +41,19 @@ def drift(pinned: dict, actual: dict[str, str | None]) -> list[str]:
         if want is None or version is None or str(version) == want:
             continue
         out.append(f"{engine} {version} differs from the pinned {want} {_HINT}")
+    return out
+
+
+def installed() -> dict[str, str | None]:
+    """The installed Polars, DataFusion and pyarrow versions (None for one not installed) and
+    Python's, read from the distributions' metadata: neither engine is imported, so a run can
+    record and compare them before its worker processes start (each with its thread count).
+    """
+    out: dict[str, str | None] = {}
+    for package in ("polars", "datafusion", "pyarrow"):
+        try:
+            out[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            out[package] = None
+    out["python"] = platform.python_version()
     return out

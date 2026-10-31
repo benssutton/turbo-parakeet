@@ -73,3 +73,29 @@ def test_load_pinned_without_a_path_reads_pinned_path_at_call_time(
     p.write_text(PIN, encoding="utf-8")
     monkeypatch.setattr(versions, "PINNED_PATH", p)
     assert versions.load_pinned()["polars"] == "2.0.0"
+
+
+def test_installed_versions_come_from_the_distributions():
+    import platform
+
+    import pyarrow as pa
+
+    got = versions.installed()
+    assert set(got) == {"polars", "datafusion", "pyarrow", "python"}
+    assert got["pyarrow"] == pa.__version__
+    assert got["python"] == platform.python_version()
+    assert got["polars"] and got["datafusion"]
+
+
+def test_an_engine_that_is_not_installed_is_none(monkeypatch):
+    import importlib.metadata
+
+    real = importlib.metadata.version
+
+    def version(package):
+        if package == "datafusion":
+            raise importlib.metadata.PackageNotFoundError(package)
+        return real(package)
+
+    monkeypatch.setattr(importlib.metadata, "version", version)
+    assert versions.installed()["datafusion"] is None
