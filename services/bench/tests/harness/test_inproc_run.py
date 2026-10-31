@@ -344,3 +344,47 @@ def test_a_failure_while_preparing_still_closes_the_workers(
         _run(tmp_path)
     with Store(tmp_path / "r.db") as s:
         assert s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
+
+
+TWO_WORKERS = SUITE.replace("threads: [2]", "threads: [1, 2]")
+
+
+def _failing_close(monkeypatch):
+    """Every engine's first close() runs for real, then raises (the fixture's own later close
+    must not); returns the list of engines it saw."""
+    real, seen = inproc.InprocEngine.close, []
+
+    def close(self):
+        real(self)
+        if self not in seen:
+            seen.append(self)
+            raise OSError("broken pipe")
+
+    monkeypatch.setattr(inproc.InprocEngine, "close", close)
+    return seen
+
+
+def test_one_close_failing_does_not_skip_the_others_or_mask_the_error(
+    fake, tmp_path, monkeypatch
+):
+    def boom(self, *a):
+        raise RuntimeError("prepare blew up")
+
+    monkeypatch.setattr(inproc.InprocEngine, "prepare", boom)
+    seen = _failing_close(monkeypatch)
+    with pytest.raises(RuntimeError, match="prepare blew up") as info:
+        _run(tmp_path, TWO_WORKERS)
+    assert (
+        len(seen) == 2
+    )  # the second worker was closed although the first close raised
+    assert any("broken pipe" in n for n in info.value.__notes__)
+
+
+def test_a_close_failing_after_a_good_run_is_a_printed_warning(
+    fake, tmp_path, monkeypatch
+):
+    seen = _failing_close(monkeypatch)
+    out = io.StringIO()
+    summary = _run(tmp_path, TWO_WORKERS, console=Console(file=out, width=400))
+    assert len(seen) == 2 and summary.samples_written > 0
+    assert out.getvalue().count("broken pipe") == 2

@@ -33,3 +33,8 @@ def test_warnings_name_a_busy_host_and_active_merges():
     assert quiet.warnings({"host_cpu_pct": 3.0, "ch_active_merges": 0}) == []
     w = quiet.warnings({"host_cpu_pct": 25.0, "ch_active_merges": 2})
     assert len(w) == 2 and "25%" in w[0] and "2 ClickHouse merge" in w[1]
+
+
+def test_snapshot_without_a_client_has_no_server_fields():
+    snap = quiet.snapshot(None, cpu_interval_s=0)
+    assert snap["ch_load_average_1"] is None and snap["ch_active_merges"] is None

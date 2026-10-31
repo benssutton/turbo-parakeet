@@ -33,7 +33,9 @@ Seven decisions here are load-bearing and are not free to change:
    from the Gorilla variant and the two timings would not be comparable.
    Seeding a new `np.random.default_rng(suite.dataset.seed)` inside the
    per-variant loop makes every variant of the suite run the identical
-   query. This is the difference between a benchmark and noise.
+   query. The in-process tables use the same seed once, through `choose_queries` (equivalent
+   draws), so every variant and engine queries the same values. This is the difference between a
+   benchmark and noise.
 
 3. **Load first, then interleaved rounds.** Every table of the grid, on every engine, is
    loaded or prepared (or reused) before any timed query; then one untimed warm-up round and
@@ -479,6 +481,7 @@ def run_suite(
     console = console or default_console()
     summary = RunSummary()
     engines: dict = {}
+    failure: BaseException | None = None
     try:
         _run(
             suite,
@@ -494,10 +497,26 @@ def run_suite(
             ignore_unfinished=ignore_unfinished,
             allow_unsolved=allow_unsolved,
         )
+    except BaseException as err:
+        failure = err
+        raise
     finally:
-        for engine in engines.values():
-            engine.close()
+        _close_all(engines, failure, console)
     return summary
+
+
+def _close_all(engines: dict, failure: BaseException | None, console: Console) -> None:
+    """Close every engine; one whose `close()` raises (a broken pipe, a second Ctrl-C) must not
+    skip the others or mask `failure`: it becomes a note on `failure`, or, when the run itself
+    succeeded, a printed warning."""
+    for key, engine in engines.items():
+        try:
+            engine.close()
+        except BaseException as err:  # noqa: BLE001
+            if failure is not None:
+                failure.add_note(f"{key}: close() also failed: {err!r}")
+            else:
+                console.print(f"warning: closing {key} failed: {err!r}")
 
 
 def _inproc_pairs(suite: Suite, default: int | None) -> list[tuple[str, int]]:

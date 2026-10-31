@@ -15,8 +15,8 @@ dependencies = [
     "clickhouse-connect",
     "rich",
     "psutil",
-    "polars",
-    "datafusion",
+    "polars>=2",
+    "datafusion>=55",
 ]
 
 [project.scripts]

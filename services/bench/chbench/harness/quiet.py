@@ -50,6 +50,8 @@ def _power_scheme() -> str | None:
 
 
 def _server(client) -> dict:
+    if client is None:  # a suite without ClickHouse
+        return {"ch_load_average_1": None, "ch_active_merges": None}
     try:
         load = client.query_rows(
             "SELECT value FROM system.asynchronous_metrics WHERE metric = 'LoadAverage1'"
