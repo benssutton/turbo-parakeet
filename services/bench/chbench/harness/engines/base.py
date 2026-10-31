@@ -71,12 +71,28 @@ def job_engine(job: Job) -> str:
 
 
 def _merge(rounds) -> RoundResult:
+    """The rounds' results as one, in engine-start order. Sample and error keys are job keys,
+    each job on one engine, so no key is in two rounds (asserted: an update would drop one);
+    warnings are concatenated in the same order."""
     out = RoundResult()
     for rd in rounds:
-        out.samples.update(rd.result.samples)
-        out.errors.update(rd.result.errors)
-        out.warnings.extend(rd.result.warnings)
+        r = rd.result
+        assert not (out.samples.keys() & r.samples.keys()), "a sample key in two rounds"
+        assert not (out.errors.keys() & r.errors.keys()), "an error key in two rounds"
+        out.samples.update(r.samples)
+        out.errors.update(r.errors)
+        out.warnings.extend(r.warnings)
     return out
+
+
+def _interrupt_all(rounds: dict[str, Round], exc: BaseException) -> None:
+    """`interrupt()` on every started round; one that raises (a second Ctrl-C, a dead worker)
+    is noted on `exc` and the others still run, so `exc` is what propagates."""
+    for key, rd in rounds.items():
+        try:
+            rd.interrupt()
+        except BaseException as err:  # noqa: BLE001
+            exc.add_note(f"{key}: interrupt() also failed: {err!r}")
 
 
 def run_round(
@@ -89,10 +105,20 @@ def run_round(
     on_sample: Callable[[str, Sample], None] | None = None,
 ) -> RoundResult:
     """Every job once, in the order given, each on `engines[job_engine(job)]`; an engine is started
-    on its first job and finished after the last job of the round. Ctrl-C: every started round
-    delivers what ran (`interrupt`), the merged partial result is attached as `round_result`, and
-    the interrupt propagates."""
+    on its first job and finished after the last job of the round. A job whose engine is not in
+    `engines` is refused (ValueError) before any job runs.
+
+    Any exception, Ctrl-C included, while the jobs run (or a Ctrl-C while the rounds finish):
+    every started round delivers what ran (`interrupt`; one that raises is noted on the original
+    exception and the rest still run), the merged partial result is attached as `round_result`,
+    and the original exception propagates. A `finish()` that raises anything else does not stop
+    the others finishing: the first such exception propagates once all are done, with the later
+    ones as notes and the merged result as `round_result`."""
+    missing = {job_engine(j) for j in jobs} - engines.keys()
+    if missing:
+        raise ValueError(f"no engine started for {sorted(missing)}")
     rounds: dict[str, Round] = {}
+    first: Exception | None = None
     try:
         for job in jobs:
             key = job_engine(job)
@@ -101,11 +127,21 @@ def run_round(
                     round_no, sample_no=sample_no, timed=timed, on_sample=on_sample
                 )
             rounds[key].run(job)
-        for rd in rounds.values():
-            rd.finish()
-    except KeyboardInterrupt as e:
-        for rd in rounds.values():
-            rd.interrupt()
+        for key, rd in rounds.items():
+            try:
+                rd.finish()
+            except Exception as err:  # noqa: BLE001
+                if first is None:
+                    first = err
+                else:
+                    first.add_note(f"{key}: finish() also failed: {err!r}")
+    except BaseException as e:
+        if first is not None:
+            e.add_note(f"after a finish() failed: {first!r}")
+        _interrupt_all(rounds, e)
         e.round_result = _merge(rounds.values())  # type: ignore[attr-defined]
         raise
+    if first is not None:
+        first.round_result = _merge(rounds.values())  # type: ignore[attr-defined]
+        raise first
     return _merge(rounds.values())
