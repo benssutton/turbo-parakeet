@@ -307,3 +307,105 @@ def test_csv_carries_the_ratio_columns_with_a_baseline(tmp_path):
     with open(p, newline="") as f:
         [row] = list(csv.DictReader(f))
     assert row["cpu_ratio"] == "1.0" and row["cpu_p50"] == "1.0"
+
+
+def engine_rows(qid, engine, ch_type, cpu):
+    return [
+        dict(
+            r,
+            engine=engine,
+            ch_type=ch_type,
+            storage=None if engine == "clickhouse" else "ipc",
+            threads=None if engine == "clickhouse" else 4,
+            ipc_batch_rows=None if engine == "clickhouse" else "whole",
+            codec=None if engine != "clickhouse" else r["codec"],
+            ipc_bytes=None if engine == "clickhouse" else 900,
+            table_memory_bytes=None if engine == "clickhouse" else 4000,
+        )
+        for r in rounds_rows(qid, "none", cpu, [1.0] * len(cpu))
+    ]
+
+
+def with_repeats(rows_, k=4):
+    return [dict(r, repeats=k, repeats_capped=0) for r in rows_]
+
+
+def test_engine_storage_threads_are_axes():
+    rows = engine_rows("qc", "clickhouse", "String", [2.0] * 6) + engine_rows(
+        "qp", "polars", "String", [1.0] * 6
+    )
+    by = {s["query_id"]: s for s in summarise(rows, [50])}
+    assert by["qp"]["engine"] == "polars" and by["qp"]["storage"] == "ipc"
+    assert by["qp"]["threads"] == 4 and by["qp"]["ipc_bytes"] == 900
+    assert (
+        by["qp"]["table_memory_bytes"] == 4000 and by["qp"]["ipc_batch_rows"] == "whole"
+    )
+    assert by["qc"]["engine"] == "clickhouse"
+    assert [s["engine"] for s in summarise(rows, [50])] == ["clickhouse", "polars"]
+
+
+def test_rows_without_an_engine_are_clickhouse():
+    [s] = summarise(rows(), [50])
+    assert s["engine"] == "clickhouse" and s["storage"] is None
+
+
+def test_a_baseline_pairs_within_one_engine():
+    rows_ = (
+        engine_rows("qc", "clickhouse", "String", [2.0] * 6)
+        + engine_rows("qp", "polars", "String", [1.0] * 6)
+        + engine_rows("qq", "polars", "Categorical(UInt8)", [0.5] * 6)
+    )
+    by = {s["query_id"]: s for s in summarise(rows_, [50], baseline="ch_type=String")}
+    assert by["qq"]["cpu_ratio"] == 0.5  # against polars String, not ClickHouse String
+    assert by["qc"]["cpu_ratio"] == 1.0 and by["qp"]["cpu_ratio"] == 1.0
+
+
+def test_a_baseline_naming_the_engine_is_refused():
+    with pytest.raises(ValueError, match="within one engine"):
+        summarise(rows(), [50], baseline="engine=polars")
+
+
+def test_csv_carries_the_engine_columns(tmp_path):
+    path = tmp_path / "e.csv"
+    write_csv(
+        summarise(with_repeats(engine_rows("qp", "polars", "String", [1.0] * 6)), [50]),
+        path,
+    )
+    with open(path, newline="") as f:
+        [row] = list(csv.DictReader(f))
+    assert (row["engine"], row["storage"], row["threads"], row["ipc_bytes"]) == (
+        "polars",
+        "ipc",
+        "4",
+        "900",
+    )
+    assert row["table_memory_bytes"] == "4000" and row["ipc_batch_rows"] == "whole"
+    assert (row["repeats"], row["repeats_capped"]) == ("4", "False")
+
+
+def test_repeats_summarise_as_the_largest_k_and_whether_any_was_capped():
+    r = [
+        dict(x, repeats=k, repeats_capped=c)
+        for x, k, c in zip(
+            engine_rows("qp", "polars", "String", [1.0] * 3), (4, 8, 4), (0, 1, 0)
+        )
+    ]
+    [s] = summarise(r, [50])
+    assert s["repeats"] == 8 and s["repeats_capped"] is True
+    [ch] = summarise(engine_rows("qc", "clickhouse", "String", [1.0] * 3), [50])
+    assert ch["repeats"] is None and ch["repeats_capped"] is None
+
+
+def test_where_and_baseline_take_the_batch_axis():
+    rows_ = engine_rows("qa", "polars", "String", [2.0] * 6) + [
+        dict(x, ipc_batch_rows="65536")
+        for x in engine_rows("qb", "polars", "String", [1.0] * 6)
+    ]
+    assert {x["query_id"] for x in filter_where(rows_, "ipc_batch_rows=65536")} == {
+        "qb"
+    }
+    by = {
+        s["query_id"]: s
+        for s in summarise(rows_, [50], baseline="ipc_batch_rows=whole")
+    }
+    assert by["qb"]["cpu_ratio"] == 0.5

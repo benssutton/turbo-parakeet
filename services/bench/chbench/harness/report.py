@@ -21,6 +21,11 @@ axis the matching row is the reference, and every row gains CPU and wall ratios
 against it, paired by round (`stats.paired_ratio`), with their intervals;
 `clocks_disagree` only records whether the two ratio intervals exclude 1 in
 opposite directions -- a metric, not a verdict.
+
+The table axes start with `engine`, `storage`, `threads` and `ipc_batch_rows` (in-process
+engines; None for ClickHouse); `repeats` / `repeats_capped` give an in-process query's batch
+size. A baseline pairs rows within one engine: naming `engine` in it is refused, as
+cross-engine ratios are out of scope.
 """
 
 from __future__ import annotations
@@ -39,7 +44,11 @@ from chbench.harness.stats import median_ci, paired_ratio
 # share every coarser axis). This is also the column order `render_table`
 # and `write_csv` use.
 _TABLE_AXES = (
+    "engine",
     "ch_type",
+    "storage",
+    "threads",
+    "ipc_batch_rows",
     "nullable",
     "primary_key",
     "projection",
@@ -138,6 +147,11 @@ def _parse_baseline(text: str) -> dict[str, str]:
         raise ValueError(
             f"unknown baseline axis {unknown[0]!r}; valid axes are {list(_AXES)!r}"
         )
+    if "engine" in pairs:
+        raise ValueError(
+            "a baseline pairs rows within one engine (their axes differ), so it cannot name "
+            "the engine axis; filter one engine with --where engine=<name> instead"
+        )
     return pairs
 
 
@@ -202,7 +216,9 @@ def _summarise_group(group: list[dict], percentiles: list[int]) -> dict:
 
     summary = {"query_id": first["query_id"], "table_id": first["table_id"]}
     for axis in _AXES:
-        summary[axis] = first[axis]
+        summary[axis] = first.get(axis)
+    if summary["engine"] is None:  # rows from before engines (or built by hand)
+        summary["engine"] = "clickhouse"
     for key in _SHAPE:
         summary[key] = first.get(key)
 
@@ -226,6 +242,16 @@ def _summarise_group(group: list[dict], percentiles: list[int]) -> dict:
     )
     summary["index_compressed_bytes"] = first.get("index_compressed_bytes")
     summary["index_uncompressed_bytes"] = first.get("index_uncompressed_bytes")
+    summary["ipc_bytes"] = first.get("ipc_bytes")
+    summary["table_memory_bytes"] = first.get("table_memory_bytes")
+    # In-process samples are batches of k repeats (k fixed within a run, recalibrated per run):
+    # the largest k of the group, and whether any batch's calibration hit the cap.
+    ks = [r.get("repeats") for r in group if r.get("repeats") is not None]
+    summary["repeats"] = max(ks) if ks else None
+    capped = [
+        r.get("repeats_capped") for r in group if r.get("repeats_capped") is not None
+    ]
+    summary["repeats_capped"] = any(capped) if capped else None
     summary["actual_fraction"] = first["actual_fraction"]
 
     return summary
@@ -260,6 +286,10 @@ def _column_order(percentiles: list[int], ratios: bool = False) -> list[str]:
         + [
             "compressed_bytes",
             "compression_ratio",
+            "ipc_bytes",
+            "table_memory_bytes",
+            "repeats",
+            "repeats_capped",
             "index_compressed_bytes",
             "index_uncompressed_bytes",
             "actual_fraction",
@@ -269,6 +299,14 @@ def _column_order(percentiles: list[int], ratios: bool = False) -> list[str]:
 
 _HEADERS = {
     "query_id": "query id",
+    "engine": "engine",
+    "storage": "storage",
+    "threads": "threads",
+    "ipc_batch_rows": "ipc batch",
+    "ipc_bytes": "ipc bytes",
+    "table_memory_bytes": "memory bytes",
+    "repeats": "repeats",
+    "repeats_capped": "capped",
     "ch_type": "type",
     "nullable": "nullable",
     "primary_key": "primary key",
@@ -316,7 +354,7 @@ def _cell(summary: dict, key: str) -> str:
     value = summary[key]
     if key in _BOOL_AXES:
         return "y" if value else "-"
-    if key == "clocks_disagree":  # None: no ratio to compare
+    if key in ("clocks_disagree", "repeats_capped"):  # None: no ratio to compare
         return "" if value is None else "y" if value else "-"
     if value is None:
         return "-"

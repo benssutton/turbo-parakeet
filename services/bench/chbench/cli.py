@@ -155,7 +155,8 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument(
         "--where",
         metavar="EXPR",
-        help='filter, e.g. "codec=T64,kind=filter"; the boolean '
+        help='filter, e.g. "codec=T64,kind=filter" or '
+        '"engine=polars,storage=ipc,ipc_batch_rows=whole"; the boolean '
         "axes nullable, primary_key and projection are "
         "written 1/0, not the y/- the table shows",
     )
@@ -164,7 +165,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="EXPR",
         help='reference row per group, e.g. "codec=none,compression=LZ4": adds CPU and wall '
         "ratios paired by round, with intervals; values as the table shows them, booleans "
-        "written 1/0 (primary_key=1)",
+        "written 1/0 (primary_key=1); pairs within one engine (it cannot name engine)",
     )
     _add_store(report)
     report.set_defaults(handler=_cmd_report)
