@@ -600,6 +600,15 @@ def test_a_v2_store_reads_as_clickhouse(tmp_path):
     assert row["ipc_batch_rows"] is None and row["repeats"] is None
 
 
+def test_a_v2_store_suite_tables_are_clickhouse(tmp_path):
+    from chbench.harness.ddl import table_name
+
+    _v2_store(tmp_path / "v2.db")
+    with Store(tmp_path / "v2.db") as s:
+        assert s.suite_tables("A") == [("t1", "clickhouse")]
+        assert s.tables_for_suite("A") == [table_name("A", "t1")]
+
+
 def test_an_unknown_memory_is_stored_as_null(tmp_path):
     with _filled(tmp_path / "r.db") as s:
         run = s.begin_run(NS(name="suite", source_yaml="name: suite"))

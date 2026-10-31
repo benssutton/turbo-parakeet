@@ -20,12 +20,16 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace as NS
 
 import pytest
 
 from synthdata import DatasetSpec
 from synthdata.cache import load_or_generate
+from chbench import cli
+from chbench.cli import main
 from chbench.harness.store import Store
+from tests.harness.test_store import _v2_store
 from tests.harness.test_orchestrate import SMALL
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -283,3 +287,120 @@ def test_run_reports_an_old_schema_store_cleanly(tmp_path):
     )
     assert p.returncode == 2
     assert "--store" in p.stderr and "Traceback" not in p.stderr
+
+
+def _inproc_variant():
+    return NS(
+        ch_type="String",
+        nullable=None,
+        primary_key=None,
+        projection=None,
+        codec=None,
+        skip_index=None,
+        compression="none",
+        status="ok",
+        skip_reason=None,
+        warnings=(),
+        engine="polars",
+        storage="ipc",
+        threads=2,
+        type_spec="String",
+    )
+
+
+_PREPARED = NS(
+    status="ok",
+    error=None,
+    insert_ms=1.0,
+    stats=None,
+    ipc_bytes=3,
+    memory_bytes=9,
+    rows=1,
+)
+
+
+def _inproc_store(db, *ids):
+    with Store(db) as s:
+        s.init_schema()
+        for tid in ids:
+            s.upsert_table(
+                tid, "d1", _inproc_variant(), _PREPARED, "2.0.0", suite_name="p"
+            )
+
+
+def _clean(db, cache):
+    return main(
+        ["clean", "--suite", "p", "--store", str(db), "--cache-dir", str(cache)]
+    )
+
+
+def test_clean_deletes_the_ipc_files_without_a_server(tmp_path, capsys):
+    db = tmp_path / "r.db"
+    _inproc_store(db, "abc123")
+    ipc_file = tmp_path / "ds" / "ipc" / "abc123.arrow"
+    ipc_file.parent.mkdir(parents=True)
+    ipc_file.write_bytes(b"abc")
+    other = ipc_file.with_name("other.arrow")
+    other.write_bytes(b"x")
+    code = _clean(db, tmp_path / "ds")
+    assert code == 0 and not ipc_file.exists() and other.exists()
+    assert "deleted 1 IPC file(s) for suite p" in capsys.readouterr().out
+
+
+def test_clean_with_a_missing_file_is_fine(tmp_path, capsys):
+    db = tmp_path / "r.db"
+    _inproc_store(db, "abc123")
+    assert _clean(db, tmp_path / "ds") == 0
+    assert "deleted 0 IPC file(s) for suite p" in capsys.readouterr().out
+
+
+def test_clean_reports_an_undeletable_file_and_goes_on(tmp_path, capsys, monkeypatch):
+    db = tmp_path / "r.db"
+    _inproc_store(db, "aaa111", "bbb222")
+    ipc = tmp_path / "ds" / "ipc"
+    ipc.mkdir(parents=True)
+    for tid in ("aaa111", "bbb222"):
+        (ipc / f"{tid}.arrow").write_bytes(b"x")
+    real_unlink = Path.unlink
+
+    def locked(self, *a, **k):
+        if self.name == "aaa111.arrow":
+            raise PermissionError("locked")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", locked)
+    code = _clean(db, tmp_path / "ds")
+    out = capsys.readouterr()
+    assert code == 1
+    assert (ipc / "aaa111.arrow").exists() and not (ipc / "bbb222.arrow").exists()
+    assert "aaa111.arrow" in out.out + out.err and "deleted 1 IPC file(s)" in out.out
+
+
+class _FakeClient:
+    def __init__(self):
+        self.commands = []
+        self.connection = NS(database="bench")
+
+    def command(self, sql, *a, **k):
+        self.commands.append(sql)
+
+    def query_rows(self, *a, **k):
+        return []
+
+
+def test_clean_on_a_v2_store_drops_its_tables_and_touches_no_files(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "v2.db"
+    _v2_store(db)
+    fake = _FakeClient()
+    monkeypatch.setattr(cli, "CHClient", lambda conn: fake)
+    monkeypatch.setattr(cli.Connection, "from_env", staticmethod(lambda: None))
+    cache = tmp_path / "ds"
+    code = main(
+        ["clean", "--suite", "A", "--store", str(db), "--cache-dir", str(cache)]
+    )
+    assert code == 0 and not cache.exists()
+    with Store(db) as s:
+        (name,) = s.tables_for_suite("A")
+    assert fake.commands == [f"DROP TABLE IF EXISTS {name}"]

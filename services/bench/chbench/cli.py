@@ -6,7 +6,7 @@ The surface:
                  [--explain] [--ignore-unfinished] [--allow-unsolved]
     chbench report --suite x [--csv out.csv] [--where "codec=T64"] [--baseline EXPR]
     chbench datasets [--metrics]
-    chbench clean --suite x
+    chbench clean --suite x [--cache-dir datasets/]
 
 Two options beyond these are added to every command that needs
 them: `--store` (default `results.db`) and `--cache-dir` (default
@@ -41,6 +41,8 @@ from rich.table import Table
 
 from synthdata.generate import Manifest
 from chbench.harness.client import CHClient, Connection
+from chbench.harness.ddl import drop_table_sql
+from chbench.harness.engines.inproc import ipc_path
 from chbench.harness.orchestrate import (
     UnfinishedRunError,
     UnsolvedDatasetError,
@@ -179,9 +181,12 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_cache_dir(datasets)
     datasets.set_defaults(handler=_cmd_datasets)
 
-    clean = sub.add_parser("clean", help="drop a suite's ClickHouse tables")
+    clean = sub.add_parser(
+        "clean", help="drop a suite's ClickHouse tables and delete its IPC files"
+    )
     clean.add_argument("--suite", required=True, help="suite name")
     _add_store(clean)
+    _add_cache_dir(clean)
     clean.set_defaults(handler=_cmd_clean)
 
     return parser
@@ -426,9 +431,41 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
 
     with Store(store_path) as store:
         known = store.tables_for_suite(args.suite)
+        inproc = [
+            tid
+            for tid, engine in store.suite_tables(args.suite)
+            if engine != "clickhouse"
+        ]
 
-    if not known:
+    if not known and not inproc:
         return _fail(f"no tables recorded for suite {args.suite!r} in {args.store}")
+
+    # Failures never stop the rest: IPC files first (only the recorded table
+    # ids, never a glob), then the ClickHouse tables; each failure is reported
+    # and the exit code is 1 if there was any.
+    failed = 0
+    if inproc:
+        deleted = 0
+        for tid in inproc:
+            path = ipc_path(args.cache_dir, tid)
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+            except OSError as exc:
+                failed += 1
+                _warn(console, f"error: could not delete {path}: {exc}")
+                continue
+            deleted += 1
+            console.print(f"deleted {path}", markup=False, highlight=False)
+        console.print(
+            f"deleted {deleted} IPC file(s) for suite {args.suite}",
+            style="bold",
+            markup=False,
+            highlight=False,
+        )
+    if not known:
+        return 1 if failed else 0
 
     client = CHClient(Connection.from_env())
     present = _present_tables(client, args.suite)
@@ -440,8 +477,14 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
     # table was ever created for it, and reporting it as dropped would
     # overstate what happened.
     dropped = 0
+    failed_before = failed
     for name in known:
-        client.command(f"DROP TABLE IF EXISTS {name}")
+        try:
+            client.command(drop_table_sql(name))
+        except Exception as exc:  # noqa: BLE001 -- report, go on with the rest
+            failed += 1
+            _warn(console, f"error: could not drop {name}: {exc}")
+            continue
         if name in present:
             dropped += 1
             console.print(f"dropped {name}", markup=False, highlight=False)
@@ -456,7 +499,7 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
             soft_wrap=True,
         )
 
-    never_created = len(known) - dropped
+    never_created = len(known) - dropped - (failed - failed_before)
     tail = f" ({never_created} recorded but never created)" if never_created else ""
     console.print(
         f"dropped {dropped} table(s) for suite {args.suite}{tail}",
@@ -464,7 +507,11 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
         markup=False,
         highlight=False,
     )
-    return 0
+    return 1 if failed else 0
+
+
+def _warn(console: Console, message: str) -> None:
+    console.print(message, style="red", markup=False, highlight=False, soft_wrap=True)
 
 
 def _present_tables(client: CHClient, suite_name: str) -> set[str]:
