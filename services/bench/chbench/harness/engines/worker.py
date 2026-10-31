@@ -191,6 +191,8 @@ class BaseWorker:
     def run(self, table_id: str, query: dict, repeats: int = 1) -> dict:
         """`repeats` runs of the query back to back, timed as one batch (`timed`): the first run's
         answer and the batch's wall and CPU totals."""
+        if repeats < 1:
+            raise ValueError(f"repeats must be at least 1, got {repeats}")
         planned = self.plan(table_id, query)
 
         def batch():
@@ -210,7 +212,10 @@ class BaseWorker:
 
     def calibrate(self, table_id: str, query: dict, target_ns: int, cap: int) -> dict:
         """The warm-up of one query: its first answer (what the equal-results check compares) and
-        its batch size (`calibrate_repeats` over batches of 1, 2, 4, ... runs)."""
+        its batch size (`calibrate_repeats` over batches of 1, 2, 4, ... runs). One run, untimed
+        and discarded, comes first: the first run of a query is cold (caches, lazy initialisation),
+        and a query slow only then must not be calibrated as a slow one."""
+        self.execute(table_id, self.plan(table_id, query))
         first = self.run(table_id, query)
         walls = {1: first["wall_ns"]}
 

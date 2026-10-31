@@ -112,7 +112,7 @@ def test_ipc_prepare_writes_the_file(engine, dataset, tmp_path):
 
 
 def test_the_warm_up_checks_the_first_answer(engine, dataset, tmp_path):
-    e = engine(fake="wrong=1")
+    e = engine(fake="wrong=2")  # run 1 is the discarded cold run
     e.load(dataset, "value")
     e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
     rd = e.start_round(None, timed=False)
@@ -380,3 +380,18 @@ def test_the_warm_up_calibrates_and_every_timed_round_reuses_k(
         rd.run(job())
         s = rd.finish().samples["q1"]
         assert (s.round_no, s.repeats, s.repeats_capped) == (r, 8, True)
+
+
+def test_a_job_never_calibrated_runs_at_k_1_and_warns():
+    e = StubEngine(
+        {"count": 4, "total": 5.0, "wall_ns": 8_000_000, "cpu_ns": 4_000_000}
+    )
+    rd = inproc.InprocRound(e, 0)
+    rd.run(job())
+    r = rd.finish()
+    assert r.samples["q1"].repeats == 1 and e.calls == [("run", "t1", PAYLOAD, 1)]
+    assert (
+        len(r.warnings) == 1
+        and "q1" in r.warnings[0]
+        and "not calibrated" in r.warnings[0]
+    )

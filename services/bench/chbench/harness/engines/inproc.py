@@ -115,9 +115,8 @@ class InprocEngine:
         self.name, self.threads = engine, threads
         self.timeouts = {**TIMEOUTS_S, **(timeouts or {})}
         self._dead: str | None = None
-        self.repeats: dict[str, tuple[int, bool]] = (
-            {}
-        )  # job key -> (k, capped), from the warm-up
+        # job key -> (k, capped), from the warm-up; k is per run: the next run's warm-up calibrates again
+        self.repeats: dict[str, tuple[int, bool]] = {}
         self._proc = None
         self._conn, child = _CONTEXT.Pipe()
         try:
@@ -267,7 +266,7 @@ class InprocRound:
     as soon as its answer returns; the untimed warm-up calibrates each job's batch size
     (`BaseWorker.calibrate`; kept in `engine.repeats` for the run's timed rounds, a capped k a
     round warning) and compares its first answer with the job's reference, recording a mismatch as
-    the job's error. A Ctrl-C during a batch interrupts `call` as during one query: the batch's
+    the job's error. A sample's `client_ms` / k includes one pipe round trip per batch. A Ctrl-C during a batch interrupts `call` as during one query: the batch's
     sample is not taken, and `close()` waits for the worker to finish the batch."""
 
     def __init__(
@@ -291,6 +290,10 @@ class InprocRound:
         t0 = time.perf_counter()
         try:
             if self.timed:
+                if job.key not in self.engine.repeats:
+                    self.result.warnings.append(
+                        f"{job.key}: not calibrated (no warm-up ran); sampled at 1 repeat"
+                    )
                 k, capped = self.engine.repeats.get(job.key, (1, False))
                 reply, memory = self.engine.call(
                     "run", job.name, job.payload, k, sample_memory=True

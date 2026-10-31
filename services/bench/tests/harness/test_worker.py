@@ -246,7 +246,17 @@ def test_calibrate_answers_the_first_run_and_its_batch_size(worker, tmp_path):
     worker.prepare(spec(tmp_path))
     out = worker.calibrate("t1", PAYLOAD, 0, 1024)
     assert out == {"count": 4, "total": 5.0, "repeats": 1, "capped": False}
-    assert worker.runs == 1
+    assert worker.runs == 1 + 1  # the discarded cold run, then the batch of 1
+    worker.runs = 0
     capped = worker.calibrate("t1", PAYLOAD, 10**15, 4)
     assert (capped["repeats"], capped["capped"]) == (4, True)
-    assert worker.runs == 1 + 1 + 2 + 4  # batches of 1, 2 and 4
+    # the discarded cold run, then batches of 1, 2 and 4: it does not change the k sequence
+    assert worker.runs == 1 + 1 + 2 + 4
+
+
+def test_run_rejects_fewer_than_one_repeat(worker, tmp_path):
+    worker.prepare(spec(tmp_path))
+    for bad in (0, -3):
+        with pytest.raises(ValueError, match="repeats"):
+            worker.run("t1", PAYLOAD, bad)
+    assert worker.runs == 0
