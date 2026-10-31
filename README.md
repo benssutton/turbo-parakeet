@@ -8,8 +8,8 @@ those recommendations empirically. Four components:
    planted relations, pairwise covering datasets and named scenarios.
 2. **Analytics** — `services/analytics/`: techniques and recommenders; Python API over a Rust extension (pyo3, Arrow at
    the FFI boundary), with a Java binding over the same C ABI.
-3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of ClickHouse table variants,
-   runs query grids and reports sizes and timings.
+3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of table variants on
+   ClickHouse, Polars and DataFusion, runs query grids and reports sizes and timings.
 4. **Evaluation loop** — `services/evaluate/` (`evaluate`): recommends, benchmarks the ClickHouse recommendations
    against alternatives with chbench and scores prediction error, regret, CPU and memory.
 
