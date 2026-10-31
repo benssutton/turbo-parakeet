@@ -5,8 +5,12 @@ of the suite name below), so the autouse fixture can drop the lot by prefix
 after the module finishes, whatever the tests did to the store.
 """
 
-import pytest
+import io
 
+import pytest
+from rich.console import Console
+
+from chbench.harness import versions
 from chbench.harness.orchestrate import _samples_to_run, run_suite
 from chbench.harness.store import Store
 from chbench.harness.suite import parse_suite
@@ -252,3 +256,19 @@ def test_ctrl_c_mid_query_records_the_interrupted_query_and_finishes_the_run(
     status, error, explain = queries[0]
     assert status == "interrupted" and error is None
     assert finished is not None
+
+
+def test_a_clickhouse_version_off_its_pin_warns(ch, tmp_path, monkeypatch):
+    pin = tmp_path / "versions.yaml"
+    pin.write_text('clickhouse: {image: "x", version: "0.0.0.0"}\n', encoding="utf-8")
+    monkeypatch.setattr(versions, "PINNED_PATH", pin)
+    out = io.StringIO()
+    run_suite(
+        parse_suite(SMALL),
+        store_path=tmp_path / "r.db",
+        cache_dir=tmp_path / "ds",
+        dry_run=True,
+        console=Console(file=out, width=320),
+    )
+    assert "warning versions: clickhouse" in out.getvalue()
+    assert "differs from the pinned 0.0.0.0" in out.getvalue()

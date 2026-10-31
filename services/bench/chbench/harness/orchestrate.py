@@ -77,7 +77,8 @@ Warnings reach the user from every source that produces them: the
 dataset `Manifest`'s (a metric missed its target), each `TableVariant`'s (the
 cell is degraded, e.g. a projection redundant with the primary key), each
 round's (a `system.query_log` row never appeared) and the quietness
-snapshots' (a busy host, active merges). None of them is allowed to vanish
+snapshots' (a busy host, active merges) and the version pin's (the server is not the
+ClickHouse in `docs/engines/versions.yaml`). None of them is allowed to vanish
 into the store unread.
 """
 
@@ -93,7 +94,7 @@ import pyarrow.compute as pc
 from rich.console import Console
 
 from synthdata.cache import load_or_generate
-from chbench.harness import quiet
+from chbench.harness import quiet, versions
 from chbench.harness.client import CHClient, Connection
 from chbench.harness.ddl import table_name
 from chbench.harness.loader import load_table
@@ -400,6 +401,11 @@ def run_suite(
         f"clickhouse {version} at "
         f"{client.connection.host}:{client.connection.port}",
         style="bold",
+    )
+    _warn(
+        console,
+        "versions",
+        versions.drift(versions.load_pinned(), {"clickhouse": version}),
     )
 
     dataset = load_or_generate(suite.dataset, Path(cache_dir))
