@@ -32,7 +32,7 @@ the committed ones, so `git diff` is the comparison):
 - `python scripts/check.py check`: the recommender tests, streaming parity included (the recommenders measure sizes in
   Polars' and Arrow's layouts).
 - `python -m evaluate run calibration`: predicted sizes against the new layouts.
-- The in-process bench suites (ToDo 5), once they exist.
+- The in-process bench suite from `services/bench/`: `python -m chbench.cli run suites/inproc_strings.yaml` (≈ 30–45 min at 10M rows).
 
 **Comparing.** `python -m evaluate compare <previous run> <new run>` for the loop; `chbench report --baseline` within
 one store; `git diff` of a spike's committed TSV after re-running it.
