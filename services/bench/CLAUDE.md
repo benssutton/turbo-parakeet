@@ -141,5 +141,7 @@ notebooks/         results_explorer.ipynb
 - The evaluation loop (`services/evaluate`) runs its suites here: the ClickHouse size emulator (fixed-width types
   byte-exact, `LowCardinality(String)` median 0.8%, String not yet — ToDo 9) and the skip-index predictions (minmax /
   set skip shares and index bytes exact on non-null columns, Nullable not yet — ToDo 10; bloom within 0.009–0.041 per
-  query and 0.5% in bytes).
+  query and 0.5% in bytes). Binary columns load as String (UTF-8 literals quoted, others `unhex`). At 1M rows the
+  paired, Bonferroni-adjusted CPU ratios resolve 103 of the loop's 586 queries
+  (`services/evaluate/docs/results/2026-10-31-follow-ups.md`).
 - Open: ToDo 1 (generator items), ToDo 5 (engines).

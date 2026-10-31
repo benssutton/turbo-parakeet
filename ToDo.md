@@ -72,14 +72,14 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
 2. **Loop tool — done** (`services/evaluate`, `python -m evaluate run | report | compare`): registry → recommend (cost
    in a child process) → per column a size suite (candidates + the codec × compression grid) and a skip suite (chosen +
    rejected candidates + none) → chbench, one SQLite store per suite → eight Arrow IPC score files (prediction error,
-   regret and measured agreement, the size frontier, query CPU / memory and query-time regret, recommender cost) and a summary. It replaces the two calibration scripts, at parity
-   cell for cell (369 size cells, 99 skip queries; `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`).
-   Follow-ups:
-   - Query time in the size decision: `size_frontier` reports the bytes × full-scan CPU frontier; once a
-     `query_time` run has measured it, decide the recommender's objective (bytes only, or a weight on CPU).
-   - Query-time scores on `synth_frame` (50 000 rows) resolve 3 of 356 queries: score query time on ≳ 1M-row frames
-     or more samples.
-3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
+   regret and measured agreement, the size frontier, query CPU / memory and query-time regret, recommender cost) and
+   a summary. It replaces the two calibration scripts, at parity cell for cell (369 size cells, 99 skip queries;
+   `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`). At 1M rows (`query_time`) 103 of 586 queries
+   resolve (`2026-10-31-follow-ups.md`). Follow-ups:
+   - The recommender's objective: on the 1M-row frontier a faster chain (LZ4 in 26 of 33) saves a median 34% of the
+     full-scan CPU for 69% more bytes in 33 of 79 columns. Decide bytes only, or a weight on CPU (a recommender
+     keyword; the frontier and `query_regret` score it).
+   - `summary.arrow` / `evaluate compare` carry neither `agrees` nor the recommender kind; add them.3. **Bench measurement quality — done** (`services/bench/docs/results/2026-10-29-interleaved-rounds.md`): tables
    loaded first, then a warm-up and interleaved rounds shuffled per round; server CPU time primary, wall beside it;
    distribution-free median intervals and paired per-round ratios (`chbench report --baseline`); a quietness record
    on every run; `cache_mode` and `query_condition_cache` retired; Decimal32 in its own suite (`decimal32_codecs`);
@@ -121,6 +121,9 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
 
 9. **ClickHouse size-emulator gaps** (`services/analytics/src/common/clickhouse_sizes.rs`).
    - String layout: LZ4 over-predicts (median +19%), small ZSTD(1) columns under-predict (up to 78%); calibrate.
+     Extreme case: a constant 8-byte String / binary column at 1M rows is predicted 6 640 B at every ZSTD level but
+     measures 263 898 B at ZSTD(1) and 12 545 B at ZSTD(3), so the level tolerance picks ZSTD(1) (20.9× size regret,
+     `c58_bin_const_na_none_na_na`; `services/evaluate/docs/results/2026-10-31-follow-ups.md`).
    - Sparse serialization: ClickHouse stores a part with ≥ 93.75% default values sparsely
      (`ratio_of_defaults_for_sparse_serialization`); not modelled, so near-constant default columns are over-predicted
      (925 vs 46 bytes; on the server 50 000 zeros and 5% non-zeros are `Sparse`, 50% is `Default`).

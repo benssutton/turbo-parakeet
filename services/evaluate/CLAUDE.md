@@ -29,9 +29,9 @@ unaffected, but query-cost scores are only valid at 1.
   axes as a product, which is why the two are separate.
 - Scores (metrics only, no thresholds): size_cells, size_regret, size_frontier, skip_queries, skip_regret,
   query_cost, query_regret, recommend_cost (`evaluate/score.py` holds the schemas), summary.arrow and compare.
-  size_regret's `measured_choice` is the recommender's own codec rule (`_plugin.clickhouse_redecide`) re-applied to the measured
-  bytes of the chains it compared (pruned chains left out); `agrees` says whether it picks the recommended chain
-  (None for original-type suites (no candidates) and when a compared cell was not measured). CPU and memory are
+  size_regret's `measured_choice` is the recommender's own codec rule (`_plugin.clickhouse_redecide`) re-applied to
+  the measured bytes of the chains it compared (pruned chains left out); `agrees` says whether it picks the
+  recommended chain (None for original-type suites (no candidates) and when a compared cell was not measured). CPU and memory are
   captured on every run: the recommender in a child process (wall, CPU, peak memory above the frame) and each
   ClickHouse query (memory_usage, User + System CPU from ProfileEvents). `query_cost` carries each table's CPU median
   with its 95% interval and, against the recommender's chosen table for the same query, the paired per-round
@@ -61,3 +61,7 @@ test (`tests/test_live.py`, marked `clickhouse`) skips without a server. TDD.
 - Parity with the retired calibration scripts and the first full runs: `docs/results/`.
 - First query-time scores (`docs/results/2026-10-29-query-regret.md`): 32 of 506 queries resolved, nearly all an LZ4
   chain beating the size-chosen ZSTD level on CPU; 50 000-row frames do not resolve.
+- The follow-ups run (`docs/results/2026-10-31-follow-ups.md`): at 1M rows (`query_time`) 103 of 586 queries
+  resolve. The recommended chain is on the bytes × CPU frontier for 66 of 79 columns, and in 33 a faster chain
+  (mostly LZ4) saves a median 34% CPU for 69% more bytes. `agrees` holds for 71 of 79; the miss is a constant binary
+  column at ZSTD(1) (ToDo 9). Streaming against one-shot: one chain and one skip index differ.
