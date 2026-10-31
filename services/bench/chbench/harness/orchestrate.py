@@ -9,12 +9,12 @@ through a `Store` method (`explain_for`, `samples_held`, `next_round`), never a 
 written here.
 
 `RunContext` carries what every step of the run needs -- the console, the
-store, the client, the suite, the server version, the run id, the counters
-and the four flags -- so the helpers below take a context and the one
+store, the client, the suite, the server version, the run id, the counters,
+the four flags and the engines -- so the helpers below take a context and the one
 or two things that actually vary between their calls, instead of a dozen
 positional parameters each.
 
-Six decisions here are load-bearing and are not free to change:
+Seven decisions here are load-bearing and are not free to change:
 
 1. **`expand_grid` is given explicit achieved values, not the manifest**
    `null_count` comes from the DatasetSpec, where it is exact -- the
@@ -35,8 +35,8 @@ Six decisions here are load-bearing and are not free to change:
    per-variant loop makes every variant of the suite run the identical
    query. This is the difference between a benchmark and noise.
 
-3. **Load first, then interleaved rounds.** Every table of the grid is loaded
-   (or reused) before any timed query; then one untimed warm-up round and
+3. **Load first, then interleaved rounds.** Every table of the grid, on every engine, is
+   loaded or prepared (or reused) before any timed query; then one untimed warm-up round and
    `samples` timed rounds, each running every query once in a freshly
    shuffled order. Identical tables sampled back to back disagreed by up to
    2x (ToDo 3); interleaving spreads drift and load over every variant, and
@@ -67,11 +67,25 @@ Six decisions here are load-bearing and are not free to change:
    (36 valid cells x 12 query variants) is thousands of lines of console.
    `explain=True` (`chbench run --explain`) prints it.
 
-7. **Engine versions are recorded, in-process blocks are refused or flagged**
-   `begin_run` receives the ClickHouse server version plus `versions.installed()`
-   (Polars, DataFusion, pyarrow, Python), so a result names the engines that made it.
-   A suite with no `clickhouse:` block is refused before anything else; a
-   `polars:` / `datafusion:` block beside one only warns that it is not run yet.
+7. **Engine versions are recorded; drift is checked for the engines the suite uses.**
+   `begin_run` receives the ClickHouse server version when the suite has a `clickhouse:` block
+   (the key is omitted otherwise, not set to None) plus `versions.installed()` (Polars,
+   DataFusion, pyarrow, Python); `versions.drift` compares the ClickHouse server and the
+   installed versions of the in-process engines the suite uses (and pyarrow) with the pins.
+
+Engines (ToDo 5). A suite runs on ClickHouse, Polars and DataFusion (`engines/`): ClickHouse
+through `CHClient` as always, each in-process engine in one worker process per thread count
+(`engines.inproc.InprocEngine`). The workers start before the dataset is generated (after the
+ClickHouse connection, when there is one), read the dataset column once, and prepare their tables
+in the grid's order; a round runs every (table, query) pair of every engine in one shuffled order
+(`engines.base.run_round`). The in-process queries are chosen once from the data
+(`queries.choose_queries`, the same values ClickHouse's are rendered from), and each one's first
+answer, in the warm-up every sampled query gets in every run, is checked against a pyarrow
+reference: a mismatch is that query's error and it stores no samples. Without a `clickhouse:` block
+there is no connection at all. A Ctrl-C ends every query short of its samples `interrupted`,
+in-process ones included (their rounds deliver samples as they land, so the orchestrator marks
+them). `default_threads()` is resolved once per run. The workers are closed in a `finally` on
+every path.
 
 `finish_run` is in a `finally`, not on the success path: a
 `sqlite3.OperationalError` from a second run sharing `results.db`, or an
@@ -90,8 +104,9 @@ into the store unread.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -100,16 +115,38 @@ import pyarrow.compute as pc
 from rich.console import Console
 
 from synthdata.cache import load_or_generate
+from synthdata.generate import COLUMN_NAME
 from chbench.harness import quiet, versions
 from chbench.harness.client import CHClient, Connection
 from chbench.harness.ddl import table_name
+from chbench.harness.engines.base import job_engine, run_round
+from chbench.harness.engines.clickhouse import ClickHouseEngine
+from chbench.harness.engines.inproc import InprocEngine, default_threads, ipc_path
+from chbench.harness.inproc_types import column_family, parse_datafusion_type
 from chbench.harness.loader import load_table
-from chbench.harness.queries import QueryVariant, expand_queries, query_id, query_values
+from chbench.harness.queries import (
+    QueryVariant,
+    choice_values_arrow,
+    choose_queries,
+    datafusion_sql,
+    datafusion_table,
+    expand_queries,
+    query_id,
+    query_values,
+    reference_result,
+    render_queries,
+)
 from chbench.harness.report import render_table, summarise
-from chbench.harness.runner import Job, explain_query, run_round
+from chbench.harness.runner import Job, explain_query
 from chbench.harness.store import Store
 from chbench.harness.suite import Suite
-from chbench.harness.validate import TableVariant, expand_grid, table_id
+from chbench.harness.validate import (
+    TableVariant,
+    engine_key,
+    expand_grid,
+    expand_inproc_grid,
+    table_id,
+)
 
 # Rich falls back to 80 columns when stdout is not a terminal (a pipe, a log
 # file, a test subprocess) and truncates every cell of the report's two dozen
@@ -155,28 +192,59 @@ class RunSummary:
     samples_written: int = 0
 
 
+@dataclass
+class _InprocQueries:
+    """The in-process half of the suite's queries, computed once per run: the engine-neutral
+    choices, their values as Arrow arrays of the dataset's type, and the pyarrow references, per
+    query and column family (`queries.reference_result`), cached."""
+
+    array: pa.Array
+    choices: list
+    values: list
+    _references: dict = field(default_factory=dict)
+
+    def reference(self, k: int, family: str | None):
+        key = (k, family)
+        if key not in self._references:
+            c = self.choices[k]
+            self._references[key] = reference_result(
+                self.array,
+                None if c is None else c.predicate_kind,
+                self.values[k],
+                family,
+            )
+        return self._references[key]
+
+
 @dataclass(frozen=True)
 class RunContext:
     """Everything one run's steps share, gathered once.
 
     Frozen because none of it changes during a run -- `summary` is a mutable
     dataclass held by reference, and is the only thing the steps write to.
-    The alternative, threading these twelve values positionally through each
+    The alternative, threading these values positionally through each
     helper, made adding a single flag a change to every signature and every
-    call site between here and the flag's one use.
+    call site between here and the flag's one use. `client` and `version` are
+    None for a suite without a `clickhouse:` block; `engines` maps an engine key
+    (`validate.engine_key`) to its engine, `versions` an engine name to the
+    version its table ids hash.
     """
 
     console: Console
     store: Store
-    client: CHClient
+    client: CHClient | None
     suite: Suite
-    version: str
+    version: str | None
     run_id: str
     summary: RunSummary
     force: bool
     samples_add: int
     explain: bool
     ignore_unfinished: bool
+    engines: dict = field(default_factory=dict)
+    versions: dict = field(default_factory=dict)
+    cache_dir: Path | None = None
+    inproc: _InprocQueries | None = None
 
 
 @dataclass
@@ -233,6 +301,12 @@ def _say(console: Console, text: str, style: str | None = None) -> None:
 
 
 def _variant_label(variant: TableVariant) -> str:
+    if variant.engine != "clickhouse":
+        return (
+            f"{variant.engine} {variant.ch_type} storage={variant.storage} "
+            f"comp={variant.compression} batch={variant.ipc_batch_rows} "
+            f"threads={variant.threads}"
+        )
     return (
         f"{variant.ch_type} codec={variant.codec} pk={variant.primary_key} "
         f"proj={variant.projection} idx={variant.skip_index} "
@@ -373,10 +447,12 @@ def run_suite(
 
     The order is fixed by three constraints.
 
-    The **connection comes first**, before the dataset: it is the cheapest
-    thing that can fail and the likeliest to be misconfigured, and generating
-    first would spend seconds (use case 1) or minutes (an `interarrival_cv`
-    suite) before reporting a wrong `CH_PORT`.
+    The **connection comes first** when the suite has a `clickhouse:` block,
+    before the dataset: it is the cheapest thing that can fail and the
+    likeliest to be misconfigured, and generating first would spend seconds
+    (use case 1) or minutes (an `interarrival_cv` suite) before reporting a
+    wrong `CH_PORT`. Without one, the in-process workers start first (a dry
+    run starts none: it measures nothing).
 
     The dataset is loaded or generated before the grid, because the grid's
     validity rules need the achieved value range (module docstring, point 1);
@@ -393,47 +469,104 @@ def run_suite(
     `ignore_unfinished` (`--ignore-unfinished`) is the user's statement
     that the first process is gone.
 
-    A suite without a `clickhouse:` block is refused first thing (`NotImplementedError`,
-    also under `dry_run`): before the connection, the dataset, the store and any run row,
-    so nothing is left behind. The in-process engines arrive with ToDo 5.
-
     A dataset whose solve ended `invalid_bracket` does not hit its target, so the run would
     measure the wrong data: `UnsolvedDatasetError` stops it (before the grid, so before the
     store) unless `allow_unsolved`. Clamped and `not_converged` solves stay warnings.
+
+    Every worker process is closed when the run ends, on every path.
     """
     force_utf8()
     console = console or default_console()
     summary = RunSummary()
-    if suite.clickhouse is None:
-        raise NotImplementedError(
-            "the in-process engines (polars / datafusion blocks) do not run yet (ToDo 5): this "
-            "suite has no clickhouse block to run"
+    engines: dict = {}
+    try:
+        _run(
+            suite,
+            engines,
+            summary,
+            console,
+            store_path=store_path,
+            cache_dir=Path(cache_dir),
+            force=force,
+            samples_add=samples_add,
+            dry_run=dry_run,
+            explain=explain,
+            ignore_unfinished=ignore_unfinished,
+            allow_unsolved=allow_unsolved,
         )
+    finally:
+        for engine in engines.values():
+            engine.close()
+    return summary
 
-    client = CHClient(Connection.from_env())
-    version = client.version()
-    _say(
-        console,
-        f"clickhouse {version} at "
-        f"{client.connection.host}:{client.connection.port}",
-        style="bold",
-    )
-    _warn(
-        console,
-        "versions",
-        versions.drift(versions.load_pinned(), {"clickhouse": version}),
-    )
-    _warn(
-        console,
-        "suite",
-        [
-            f"the {engine} block is parsed but not run yet (ToDo 5)"
-            for engine in ("polars", "datafusion")
-            if getattr(suite, engine) is not None
-        ],
-    )
 
-    dataset = load_or_generate(suite.dataset, Path(cache_dir))
+def _inproc_pairs(suite: Suite, default: int | None) -> list[tuple[str, int]]:
+    """`(engine, threads)` of every worker the suite needs, in suite order."""
+    pairs = []
+    for engine in ("polars", "datafusion"):
+        axes = getattr(suite, engine)
+        if axes is not None:
+            pairs += [(engine, t) for t in (axes.threads or [default])]
+    return list(dict.fromkeys(pairs))
+
+
+def _run(
+    suite: Suite,
+    engines: dict,
+    summary: RunSummary,
+    console: Console,
+    *,
+    store_path,
+    cache_dir: Path,
+    force: bool,
+    samples_add: int,
+    dry_run: bool,
+    explain: bool,
+    ignore_unfinished: bool,
+    allow_unsolved: bool,
+) -> None:
+    """`run_suite`'s body; `engines` is filled here and closed by the caller."""
+    client, version = None, None
+    actual: dict[str, str | None] = {}
+    if suite.clickhouse is not None:
+        client = CHClient(Connection.from_env())
+        version = client.version()
+        _say(
+            console,
+            f"clickhouse {version} at "
+            f"{client.connection.host}:{client.connection.port}",
+            style="bold",
+        )
+        actual["clickhouse"] = version
+        engines["clickhouse"] = ClickHouseEngine(client)
+
+    installed = versions.installed()
+    needs_default = any(
+        axes is not None and axes.threads is None
+        for axes in (suite.polars, suite.datafusion)
+    )
+    default = default_threads() if needs_default else None
+    pairs = _inproc_pairs(suite, default)
+    for engine in dict.fromkeys(e for e, _ in pairs):
+        threads = [t for e, t in pairs if e == engine]
+        _say(console, f"{engine} {installed[engine]}, threads {threads}", style="bold")
+        actual[engine] = installed[engine]
+    if pairs:
+        actual["pyarrow"] = installed["pyarrow"]
+    _warn(console, "versions", versions.drift(versions.load_pinned(), actual))
+    if not dry_run:
+        for engine, threads in pairs:
+            started = InprocEngine(engine, threads)
+            engines[f"{engine}:{threads}"] = started
+            ran = started.info.get("threads")
+            if ran != threads:
+                _warn(
+                    console,
+                    f"{engine}:{threads}",
+                    [f"asked for {threads} thread(s), the worker runs {ran}"],
+                )
+
+    dataset = load_or_generate(suite.dataset, cache_dir)
     manifest = dataset.manifest
     # `cache.save` writes `<cache_dir>/<dataset_id>.arrow`; the store records
     # that path so a result can be traced back to the exact bytes loaded.
@@ -441,7 +574,7 @@ def run_suite(
     arrow_path = (
         Path(suite.dataset.path)
         if suite.dataset.path is not None
-        else Path(cache_dir) / f"{manifest.dataset_id}.arrow"
+        else cache_dir / f"{manifest.dataset_id}.arrow"
     )
     _say(
         console,
@@ -460,18 +593,38 @@ def run_suite(
         null_count=suite.dataset.null_count,
         value_min=value_min,
         value_max=value_max,
-        clickhouse_version=version,
+        clickhouse_version=version or "",
         array=dataset.array,
     )
+    for engine in ("polars", "datafusion"):
+        variants += expand_inproc_grid(suite, engine, default_threads=default)
     _print_grid(console, variants)
 
     if dry_run:
         summary.tables_ok = sum(1 for v in variants if v.status == "ok")
         summary.tables_skipped = len(variants) - summary.tables_ok
         _say(console, "\ndry run: nothing loaded, nothing stored", style="bold")
-        return summary
+        return
+
+    column = suite.dataset.column if suite.dataset.path is not None else COLUMN_NAME
+    for key, engine in engines.items():
+        if key != "clickhouse":
+            engine.load(arrow_path, column)
 
     values = query_values(dataset.array)
+    inproc = None
+    if pairs:
+        choices = choose_queries(
+            suite.queries, values, np.random.default_rng(suite.dataset.seed)
+        )
+        inproc = _InprocQueries(
+            array=dataset.array,
+            choices=choices,
+            values=[
+                None if c is None else choice_values_arrow(c, dataset.array.type)
+                for c in choices
+            ],
+        )
 
     with Store(store_path) as store:
         store.init_schema()
@@ -484,9 +637,8 @@ def run_suite(
                 f"running, rerun with --ignore-unfinished."
             )
         store.upsert_dataset(manifest, str(arrow_path))
-        run_id = store.begin_run(
-            suite, engine_versions={"clickhouse": version, **versions.installed()}
-        )
+        run_versions = {**({"clickhouse": version} if version else {}), **installed}
+        run_id = store.begin_run(suite, engine_versions=run_versions)
         summary.run_id = run_id
         context = RunContext(
             console=console,
@@ -500,13 +652,20 @@ def run_suite(
             samples_add=samples_add,
             explain=explain,
             ignore_unfinished=ignore_unfinished,
+            engines=engines,
+            versions={**installed, "clickhouse": version},
+            cache_dir=cache_dir,
+            inproc=inproc,
         )
         # Every query row written so far, so an interrupt in any phase can close it.
         pending: list[_Pending] = []
         try:
             # Every table first, then the rounds: module docstring, point 3.
             for variant in variants:
-                pending += _prepare_variant(context, dataset, values, variant)
+                if variant.engine == "clickhouse":
+                    pending += _prepare_variant(context, dataset, values, variant)
+                else:
+                    pending += _prepare_inproc_variant(context, dataset, variant)
             _run_rounds(context, pending)
         except KeyboardInterrupt:
             # `run_round` already delivered every completed sample through
@@ -514,8 +673,12 @@ def run_suite(
             # so there is nothing left to flush. Without this write the
             # pre-run upsert leaves each query's status NULL, and after the
             # fact an interrupted query looks like one the run never reached;
-            # a row `_finish_queries` already wrote keeps its status.
-            # `finish_run` is the `finally`'s job, below.
+            # a row `_finish_queries` already wrote keeps its status. An
+            # in-process round's `interrupt()` is a no-op (its samples land
+            # as they are taken), so the queries it never ran are marked here
+            # like any other short of their samples.
+            # `finish_run` is the `finally`'s job, below; closing the workers
+            # is `run_suite`'s.
             unfinished = [p for p in pending if not p.done]
             for p in unfinished:
                 if p.status == "ok" and p.taken < p.want:
@@ -540,7 +703,115 @@ def run_suite(
         # broke. `chbench report` shows the bank in that case.
         _print_report(console, store, suite)
 
-    return summary
+
+def _inproc_jobs(
+    ctx: RunContext, variant: TableVariant, tid: str, query_variants
+) -> list:
+    """`(payload, reference)` per query of one in-process table: what its worker runs (the
+    predicate's kind and values; DataFusion's full SQL) and the pyarrow answer its first result
+    must equal."""
+    family = column_family(variant.engine, variant.type_spec)
+    out = []
+    for k, qv in enumerate(query_variants):
+        sql = None
+        if variant.engine == "datafusion":
+            sql = datafusion_sql(
+                datafusion_table(tid),
+                parse_datafusion_type(variant.type_spec),
+                qv.predicate_sql,
+            )
+        payload = {
+            "predicate_kind": qv.predicate_kind,
+            "values": ctx.inproc.values[k],
+            "sql": sql,
+        }
+        out.append((payload, ctx.inproc.reference(k, family)))
+    return out
+
+
+def _prepare_inproc_variant(
+    ctx: RunContext, dataset, variant: TableVariant
+) -> list[_Pending]:
+    """Prepare one in-process table on its worker (or reuse it) and return its queries that want
+    samples.
+
+    As for ClickHouse (`_prepare_variant`): a cell the grid skipped is recorded with its reason;
+    the queries are rendered first, so a table whose queries all hold their samples is not
+    prepared again; a cast the worker refuses, or one that does not survive the round trip, is
+    recorded as skipped with the worker's reason; an IPC file whose byte count matches the store's
+    is reused."""
+    suite, store, console = ctx.suite, ctx.store, ctx.console
+    dataset_id = dataset.manifest.dataset_id
+    version = ctx.versions[variant.engine]
+    tid = table_id(variant, dataset_id, str(version))
+    label = f"{tid[:8]} {_variant_label(variant)}"
+
+    def skipped(v: TableVariant, reason: str | None) -> list[_Pending]:
+        store.upsert_table(tid, dataset_id, v, None, version, suite_name=suite.name)
+        ctx.summary.tables_skipped += 1
+        if reason is not None:
+            _say(console, f"\nskipped {label}", style="yellow")
+            _say(console, f"          -> {reason}")
+        return []
+
+    if variant.status == "skipped":
+        return skipped(variant, None)
+    try:
+        query_variants = render_queries(
+            suite.queries, ctx.inproc.choices, variant, dataset.array.type
+        )
+    except (ValueError, pa.ArrowException) as e:
+        reason = (
+            f"the queried values cannot be written as {variant.ch_type}: "
+            f"{type(e).__name__}: {e}"
+        )
+        v = dataclasses.replace(variant, status="skipped", skip_reason=reason)
+        return skipped(v, reason)
+    extras = _inproc_jobs(ctx, variant, tid, query_variants)
+
+    if not ctx.force and all(
+        _samples_to_run(
+            store.samples_held(query_id(tid, qv)),
+            suite.queries.samples,
+            ctx.force,
+            ctx.samples_add,
+        )
+        == 0
+        for qv in query_variants
+    ):
+        ctx.summary.tables_ok += 1
+        _say(console, f"\n{label}", style="bold")
+        _say(
+            console,
+            "  reused: every query already holds its samples; not prepared",
+            style="dim",
+        )
+        return _pending_queries(ctx, tid, variant, query_variants, tid, extras)
+
+    engine = ctx.engines[engine_key(variant)]
+    result = engine.prepare(
+        variant, tid, ipc_path(ctx.cache_dir, tid), store.table_ipc_bytes(tid)
+    )
+    store.upsert_table(tid, dataset_id, variant, result, version, suite_name=suite.name)
+    if result.status == "skipped":
+        ctx.summary.tables_skipped += 1
+        _say(console, f"\nskipped {label}", style="yellow")
+        _say(console, f"          -> {result.error}")
+        return []
+    if result.status == "error":
+        ctx.summary.tables_error += 1
+        _say(console, f"\nerror {label}", style="red")
+        _say(console, f"          -> {result.error}")
+        return []
+    ctx.summary.tables_ok += 1
+    ipc = "" if result.ipc_bytes is None else f", {result.ipc_bytes} IPC bytes"
+    _say(console, f"\n{label}", style="bold")
+    _say(
+        console,
+        f"  prepared {result.rows} rows in {result.insert_ms:.0f} ms{ipc}, "
+        f"{result.memory_bytes} bytes resident",
+    )
+    return _pending_queries(ctx, tid, variant, query_variants, tid, extras)
 
 
 def _prepare_variant(
@@ -626,17 +897,24 @@ def _prepare_variant(
 
 
 def _pending_queries(
-    ctx: RunContext, name: str, variant: TableVariant, query_variants, tid: str
+    ctx: RunContext,
+    name: str,
+    variant: TableVariant,
+    query_variants,
+    tid: str,
+    extras: list | None = None,
 ) -> list[_Pending]:
     """The queries of one loaded table that want samples, each with its pre-run query row.
 
     The row is written before any sample, carrying the EXPLAIN it already had, and rewritten
     with the fresh one after the rounds. The store joins samples to queries, so a sample
     committed under a `query_id` with no `queries` row would be invisible to the report --
-    what a Ctrl-C in the first round would otherwise produce."""
+    what a Ctrl-C in the first round would otherwise produce. `extras` (in-process tables) gives
+    each query's `(payload, reference)` (`_inproc_jobs`); `name` is then the table id.
+    """
     store, console, summary = ctx.store, ctx.console, ctx.summary
     out = []
-    for qv in query_variants:
+    for i, qv in enumerate(query_variants):
         qid = query_id(tid, qv)
         held = store.samples_held(qid)
         want = _samples_to_run(
@@ -654,7 +932,10 @@ def _pending_queries(
         store.upsert_query(qid, tid, qv, prior)
         summary.queries_run += 1
         _say(console, f"  want {_query_label(qv)} ({want} sample(s), {held} held)")
-        out.append(_Pending(Job(qid, name, variant, qv), tid, want, prior))
+        payload, reference = extras[i] if extras else (None, None)
+        out.append(
+            _Pending(Job(qid, name, variant, qv, payload, reference), tid, want, prior)
+        )
     return out
 
 
@@ -682,14 +963,19 @@ def _run_rounds(ctx: RunContext, pending: list[_Pending]) -> None:
     query added to a suite that already holds its samples runs alone, in rounds the others
     never shared: a warning says so.
     A sample's `sample_no` is its index among this run's samples of the query (0, 1, ...),
-    as it always was; `round_no` is what pairs samples across runs."""
+    as it always was; `round_no` is what pairs samples across runs.
+
+    Every round runs on every engine (`engines.base.run_round`); an in-process job's warm-up
+    calibrates its batch size and its first answer is checked against its reference there, and a
+    mismatch is that query's error."""
     if not pending:
         return
     store, console = ctx.store, ctx.console
     by_key = {p.job.key: p for p in pending}
     _quiet(ctx, "before")
-    warm_up = run_round(ctx.client, [p.job for p in pending], timed=False)
+    warm_up = run_round(ctx.engines, [p.job for p in pending], timed=False)
     _mark_errors(by_key, warm_up.errors)
+    _warn(console, "warm-up", warm_up.warnings)
     first = store.next_round(ctx.suite.name)
     total = max(p.want for p in pending)
     seed = ctx.suite.dataset.seed or 0
@@ -723,7 +1009,7 @@ def _run_rounds(ctx: RunContext, pending: list[_Pending]) -> None:
         r = first + i
         order = np.random.default_rng([seed, r]).permutation(len(due))
         result = run_round(
-            ctx.client,
+            ctx.engines,
             [due[k].job for k in order],
             r,
             sample_no=i,
@@ -740,10 +1026,11 @@ def _finish_queries(ctx: RunContext, pending: list[_Pending], *, explain: bool) 
 
     The outcome goes on the query row: without it, a query whose run failed
     is indistinguishable, after an unattended run, from one the run never
-    reached."""
+    reached. Only ClickHouse queries have an EXPLAIN plan; an in-process query's row keeps an
+    empty one."""
     for p in pending:
         plan = p.prior_explain
-        if explain and p.status == "ok":
+        if explain and p.status == "ok" and job_engine(p.job) == "clickhouse":
             text, error = explain_query(ctx.client, p.job)
             if error is not None:
                 p.status, p.error = "error", error
