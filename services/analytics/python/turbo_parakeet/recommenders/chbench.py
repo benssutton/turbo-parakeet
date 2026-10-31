@@ -303,29 +303,40 @@ def _ipc_codec(compression: str) -> str:
 
 def _predicted_inproc(
     engine: str, types: list[str], comps: list[str], values, col: str, r: dict
-) -> dict:
-    """`{"<label>|<compression>": predicted IPC body bytes}` for one engine's grid."""
+) -> tuple[dict, list[tuple[str, str]]]:
+    """(`{"<label>|<compression>": predicted IPC body bytes}` for one engine's grid, skip notes
+    `(column, "<engine>: no predicted size for <cell>: <reason>")` for the cells left out).
+    """
     import pyarrow as pa
 
     rec_key = (
         f"{_label(engine, r[f'{engine}_type'])}|{_recommended_compression(r, engine)}"
     )
-    out = {}
+    out, notes = {}, []
     for name in types:
+        reason = None
         try:
             table = _layout(engine, name, values, col)
-        except (pa.ArrowException, pl.exceptions.PolarsError, ValueError, TypeError):
-            table = None
+        except (
+            pa.ArrowException,
+            pl.exceptions.PolarsError,
+            ValueError,
+            TypeError,
+        ) as e:
+            table, reason = None, e
         for comp in comps:
             key = f"{_label(engine, name)}|{comp}"
             if key == rec_key and r[f"{engine}_ipc_size_bytes"] is not None:
                 out[key] = int(r[f"{engine}_ipc_size_bytes"])
-            elif table is not None:
+                continue
+            if table is not None:
                 try:
                     out[key] = int(_plugin.ipc_body_sizes(table, _ipc_codec(comp))[col])
-                except ValueError:
-                    pass
-    return out
+                    continue
+                except ValueError as e:
+                    reason = e
+            notes.append((col, f"{engine}: no predicted size for {key}: {reason}"))
+    return out, notes
 
 
 def _inproc(col: str, source, one, r: dict) -> tuple[dict, dict, list[tuple[str, str]]]:
@@ -360,7 +371,10 @@ def _inproc(col: str, source, one, r: dict) -> tuple[dict, dict, list[tuple[str,
             "storage": ["memory", "ipc"],
             "compression": comps,
         }
-        predicted[engine] = _predicted_inproc(engine, types, comps, values, col, r)
+        predicted[engine], notes = _predicted_inproc(
+            engine, types, comps, values, col, r
+        )
+        skips.extend(notes)
     return blocks, predicted, skips
 
 

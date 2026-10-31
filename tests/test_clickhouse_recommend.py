@@ -419,11 +419,13 @@ def test_to_chbench_suites_parse_in_chbench(chbench_out, monkeypatch):
 
     from chbench.harness.inproc_types import type_label
 
-    from turbo_parakeet.recommenders.chbench import _polars_label
+    from turbo_parakeet.recommenders.chbench import _label, _polars_label
 
     for suite in suites.values():
         for name in suite.get("polars", {}).get("type", []):
             assert _polars_label(name) == type_label("polars", name)
+        for name in suite.get("datafusion", {}).get("type", []):
+            assert _label("datafusion", name) == type_label("datafusion", name)
 
 
 def test_to_chbench_in_process_blocks(chbench_out):
@@ -460,15 +462,15 @@ def test_to_chbench_lists_the_recommended_compression(chbench_run):
 
     _, _, suites, result = chbench_run
     for row in result.iter_rows(named=True):
-        suite = (
-            suites.get(row["column"])
-            if row["column"] in ("id", "price", "tag", "maybe")
-            else None
-        )
+        suite = suites.get(row["column"])
         if suite is None:
             continue
         for engine in ("polars", "datafusion"):
-            assert _recommended_compression(row, engine) in suite[engine]["compression"]
+            if engine in suite:
+                assert (
+                    _recommended_compression(row, engine)
+                    in suite[engine]["compression"]
+                )
 
 
 def test_to_chbench_predicted_inproc_keys_match_the_grid(chbench_run):
@@ -641,6 +643,35 @@ def test_to_chbench_skips_unreproducible_recommended_type(tmp_path, monkeypatch)
     )
     assert not (tmp_path / "small.yaml").exists()
     assert (tmp_path / "small_original.yaml").exists()
+
+
+def test_to_chbench_an_unsized_cell_is_a_skip_note(tmp_path, monkeypatch):
+    import json
+
+    from turbo_parakeet.recommenders import chbench, to_chbench
+
+    frame = pl.DataFrame({"tag": ["a", "b", "c", "d"] * 500})
+    result = OneShotRecommender().add(frame).result()
+    real = chbench._layout
+
+    def failing(engine, name, values, col):
+        if engine == "polars" and name == "String":
+            raise ValueError("planted cast failure")
+        return real(engine, name, values, col)
+
+    monkeypatch.setattr(chbench, "_layout", failing)
+    skipped = to_chbench(result, frame, tmp_path)
+    notes = [r for c, r in skipped if c == "tag" and r.startswith("polars: ")]
+    assert notes
+    assert all(
+        n.startswith("polars: no predicted size for String|")
+        and n.endswith("planted cast failure")
+        for n in notes
+    )
+    predicted = json.loads((tmp_path / "tag.predicted_inproc.json").read_text())
+    assert not any(k.startswith("String|") for k in predicted["polars"])
+    assert any(k.startswith("Categorical") for k in predicted["polars"])
+    assert (tmp_path / "tag.yaml").exists()
 
 
 def test_to_chbench_skips_a_row_without_a_sample(tmp_path):
