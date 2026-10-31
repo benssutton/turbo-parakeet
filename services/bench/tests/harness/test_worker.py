@@ -2,11 +2,14 @@
 (the FakeWorker; real processes are test_inproc.py's)."""
 
 import gc
+import multiprocessing
+import threading
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 
+from chbench.harness.engines import worker as worker_module
 from chbench.harness.engines.worker import mismatch, timed
 from tests.harness.fake_worker import FakeWorker
 
@@ -113,3 +116,97 @@ def test_timed_pauses_the_collector():
     seen = []
     out, wall, cpu = timed(lambda: seen.append(gc.isenabled()) or 7)
     assert out == 7 and seen == [False] and gc.isenabled() and wall > 0 and cpu >= 0
+
+
+def test_mismatch_accepts_a_chunked_array():
+    chunked = pa.chunked_array([[1, 2], [3]])
+    assert mismatch(pa.array([1, 2, 3]), chunked) is None
+    assert mismatch(pa.array([1, 2, 4]), chunked) == "row 2: 4 became 3"
+    empty = pa.chunked_array([pa.array([], pa.int64())])
+    assert mismatch(pa.array([1, 2, 3]), empty) == "0 row(s), the dataset has 3"
+
+
+def test_a_cast_that_changes_values_is_a_skip(worker, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        FakeWorker, "values", lambda self, held: pa.array([1.0, 9.0, 2.0, None])
+    )
+    r = worker.prepare(spec(tmp_path))
+    assert (
+        r["status"] == "skipped" and "does not hold the dataset's values" in r["reason"]
+    )
+    assert "row 1: 2.0 became 9.0" in r["reason"] and "t1" not in worker.tables
+
+
+def test_an_ipc_file_of_the_wrong_size_is_rewritten(worker, tmp_path):
+    path = tmp_path / "ipc" / "t1.arrow"
+    path.parent.mkdir()
+    path.write_bytes(b"not an arrow file")
+    r = worker.prepare(spec(tmp_path, storage="ipc", expect=999_999))
+    assert r["status"] == "ok" and r["ipc_bytes"] == path.stat().st_size != 17
+    assert mismatch(ARRAY, worker.read_ipc(path)) is None
+    assert not list(path.parent.glob("*.tmp"))
+
+
+def test_timed_enables_the_collector_again_after_the_function_raises():
+    def boom():
+        raise ValueError("x")
+
+    with pytest.raises(ValueError):
+        timed(boom)
+    assert gc.isenabled()
+
+
+@pytest.fixture
+def loop(monkeypatch):
+    """worker.main over a real Pipe, on a thread (SIGINT handling is the main thread's)."""
+    monkeypatch.setattr(worker_module.signal, "signal", lambda *a: None)
+    monkeypatch.delenv("CHBENCH_FAKE", raising=False)
+    parent, child = multiprocessing.Pipe()
+    t = threading.Thread(
+        target=worker_module.main,
+        args=(child, "tests.harness.fake_worker:FakeWorker", 1),
+        daemon=True,
+    )
+    t.start()
+    yield parent, t
+    parent.close()
+    t.join(10)
+    assert not t.is_alive()
+
+
+def ask(parent, *msg):
+    parent.send(msg)
+    assert parent.poll(10)
+    return parent.recv()
+
+
+def test_the_loop_answers_ok_and_reports_a_raising_op_and_carries_on(loop):
+    parent, t = loop
+    assert ask(parent, "version") == (
+        "ok",
+        {"engine": "fake", "version": "0.0.0", "threads": 1},
+    )
+    status, text = ask(parent, "load", "/no/such/file.arrow", "value")
+    assert status == "error" and ": " in text
+    assert ask(parent, "version")[0] == "ok" and t.is_alive()
+
+
+def test_an_unknown_op_is_an_error_and_the_loop_carries_on(loop):
+    parent, t = loop
+    status, text = ask(parent, "no_such_op")
+    assert status == "error" and text.startswith("AttributeError")
+    assert ask(parent, "version")[0] == "ok"
+
+
+def test_close_ends_the_loop(loop):
+    parent, t = loop
+    parent.send(("close",))
+    t.join(10)
+    assert not t.is_alive()
+
+
+def test_eof_ends_the_loop_cleanly(loop):
+    parent, t = loop
+    parent.close()
+    t.join(10)
+    assert not t.is_alive()

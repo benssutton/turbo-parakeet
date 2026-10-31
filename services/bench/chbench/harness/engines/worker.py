@@ -50,9 +50,8 @@ def main(conn, factory: str, threads: int) -> None:
                 return
             try:
                 reply = ("ok", getattr(impl, msg[0])(*msg[1:]))
-            except (
-                Exception
-            ) as e:  # noqa: BLE001 - reported to the parent; the loop carries on
+            # any failure of an op is reported to the parent; the loop carries on
+            except Exception as e:
                 reply = ("error", f"{type(e).__name__}: {e}")
             conn.send(reply)
     finally:
@@ -74,9 +73,11 @@ def timed(fn):
     return out, w1 - w0, c1 - c0
 
 
-def mismatch(expected: pa.Array, got: pa.Array) -> str | None:
+def mismatch(expected: pa.Array, got: pa.Array | pa.ChunkedArray) -> str | None:
     """None when `got` holds `expected`'s values row by row (after a cast back to its type; NaN
-    equal to NaN); else what differs first."""
+    equal to NaN); else what differs first. `got` may be chunked."""
+    if isinstance(got, pa.ChunkedArray):
+        got = got.combine_chunks()
     if got.type != expected.type:
         try:
             got = got.cast(expected.type)
@@ -135,9 +136,8 @@ class BaseWorker:
         tid, type_spec = spec["table_id"], spec["type_spec"]
         try:
             held = self.cast(type_spec, tid)
-        except (
-            Exception
-        ) as e:  # noqa: BLE001 - a cast the engine refuses is a skipped cell
+        # a cast the engine refuses, however it fails, is a skipped cell
+        except Exception as e:
             return _skipped(f"cast to {type_spec} failed: {type(e).__name__}: {e}")
         why = mismatch(self.array, self.values(held))
         if why is not None:
