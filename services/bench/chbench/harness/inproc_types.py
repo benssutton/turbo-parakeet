@@ -33,7 +33,7 @@ import pyarrow as pa
 
 STORAGES = ("memory", "ipc")
 
-_ZSTD_RE = re.compile(r"^ZSTD\((\d+)\)$")
+_ZSTD_RE = re.compile(r"ZSTD\(([0-9]+)\)")
 _COMPRESSION_HELP = "none, LZ4_FRAME, ZSTD or ZSTD(N) for N from 1 to 22"
 
 
@@ -44,7 +44,7 @@ def normalise_ipc_compression(value) -> str:
         return value
     if value == "ZSTD":
         return "ZSTD(1)"
-    m = _ZSTD_RE.match(value) if isinstance(value, str) else None
+    m = _ZSTD_RE.fullmatch(value) if isinstance(value, str) else None
     if m and 1 <= int(m.group(1)) <= 22:
         return f"ZSTD({int(m.group(1))})"
     raise ValueError(f"IPC compression {value!r} is not one of {_COMPRESSION_HELP}")
@@ -74,7 +74,7 @@ def ipc_codec(compression: str) -> pa.Codec | None:
         return None
     if compression == "LZ4_FRAME":
         return pa.Codec("lz4")
-    return pa.Codec("zstd", int(_ZSTD_RE.match(compression).group(1)))
+    return pa.Codec("zstd", int(_ZSTD_RE.fullmatch(compression).group(1)))
 
 
 @dataclass(frozen=True)
@@ -113,17 +113,17 @@ _POLARS_SCALARS = frozenset(
     }
 )
 _WIDTH = r"(UInt8|UInt16|UInt32)"
-_CAT_SHORT = re.compile(rf"^Categorical(?:\({_WIDTH}\))?$")
+_CAT_SHORT = re.compile(rf"Categorical(?:\({_WIDTH}\))?")
 _CAT_LONG = re.compile(
-    rf'^Categorical\(Categories\(name="[^"]*", namespace="[^"]*", physical=pl\.{_WIDTH}\)\)$'
+    rf'Categorical\(Categories\(name="[^"]*", namespace="[^"]*", physical=pl\.{_WIDTH}\)\)'
 )
-_CAT_NAMED = re.compile(r'^Categorical\(Categories\("[^"]*"\)\)$')
-_DECIMAL = re.compile(r"^Decimal\((?:precision=)?(\d+), (?:scale=)?(\d+)\)$")
-_DATETIME_SHORT = re.compile(r"^Datetime\((ms|us|ns)(?:, ([^)]+))?\)$")
+_CAT_NAMED = re.compile(r'Categorical\(Categories\("[^"]*"\)\)')
+_DECIMAL = re.compile(r"Decimal\((?:precision=)?([0-9]+), (?:scale=)?([0-9]+)\)")
+_DATETIME_SHORT = re.compile(r"Datetime\((ms|us|ns)(?:, ([^)]+))?\)")
 _DATETIME_LONG = re.compile(
-    r"^Datetime\(time_unit='(ms|us|ns)', time_zone=(None|'[^']+')\)$"
+    r"Datetime\(time_unit='(ms|us|ns)', time_zone=(None|'[^']+')\)"
 )
-_ENUM = re.compile(r"^Enum(?:\(categories=(\[.*\])\))?$", re.DOTALL)
+_ENUM = re.compile(r"Enum(?:\(categories=(\[.*\])\))?", re.DOTALL)
 _POLARS_HELP = (
     "Int8-Int64, UInt8-UInt64, Float32, Float64, Boolean, Date, Time, String, Binary, "
     "Decimal(p, s), Datetime(ms|us|ns[, zone]), Categorical[(UInt8|UInt16|UInt32)], Enum, "
@@ -161,13 +161,13 @@ def parse_polars_type(name) -> PolarsType:
     text = str(name).strip()
     if text in _POLARS_SCALARS:
         return PolarsType(text, text)
-    m = _CAT_SHORT.match(text) or _CAT_LONG.match(text)
+    m = _CAT_SHORT.fullmatch(text) or _CAT_LONG.fullmatch(text)
     if m:
         width = m.group(1) or "UInt32"
         return PolarsType(f"Categorical({width})", "Categorical", width=width)
-    if _CAT_NAMED.match(text):
+    if _CAT_NAMED.fullmatch(text):
         return PolarsType("Categorical(UInt32)", "Categorical", width="UInt32")
-    m = _DECIMAL.match(text)
+    m = _DECIMAL.fullmatch(text)
     if m:
         p, s = int(m.group(1)), int(m.group(2))
         if not (1 <= p <= 38 and 0 <= s <= p):
@@ -176,23 +176,23 @@ def parse_polars_type(name) -> PolarsType:
                 f"1-38 and scale 0 to the precision"
             )
         return PolarsType(f"Decimal({p}, {s})", "Decimal", precision=p, scale=s)
-    m = _DATETIME_SHORT.match(text)
+    m = _DATETIME_SHORT.fullmatch(text)
     if m:
         return _datetime(m.group(1), m.group(2))
-    m = _DATETIME_LONG.match(text)
+    m = _DATETIME_LONG.fullmatch(text)
     if m:
         return _datetime(m.group(1), None if m.group(2) == "None" else m.group(2)[1:-1])
-    m = _ENUM.match(text)
+    m = _ENUM.fullmatch(text)
     if m:
         return _enum(text, m.group(1))
     raise ValueError(f"{name!r} is not a polars type the bench reads ({_POLARS_HELP})")
 
 
-_DICT_RE = re.compile(r"^dictionary<values=(\w+), indices=(\w+), ordered=([01])>$")
-_DEC_RE = re.compile(r"^decimal(32|64|128)\((\d+), (\d+)\)$")
-_TS_RE = re.compile(r"^timestamp\[(s|ms|us|ns)(?:, tz=([^\]]+))?\]$")
-_TIME_RE = re.compile(r"^(time32|time64)\[(s|ms|us|ns)\]$")
-_FSB_RE = re.compile(r"^fixed_size_binary\[(\d+)\]$")
+_DICT_RE = re.compile(r"dictionary<values=(\w+), indices=(\w+), ordered=([01])>")
+_DEC_RE = re.compile(r"decimal(32|64|128)\(([0-9]+), ([0-9]+)\)")
+_TS_RE = re.compile(r"timestamp\[(s|ms|us|ns)(?:, tz=([^\]]+))?\]")
+_TIME_RE = re.compile(r"(time32|time64)\[(s|ms|us|ns)\]")
+_FSB_RE = re.compile(r"fixed_size_binary\[([0-9]+)\]")
 _ARROW_SCALARS = frozenset(
     {
         "bool",
@@ -229,7 +229,7 @@ _DATAFUSION_HELP = (
 
 
 def _datafusion(text: str) -> pa.DataType:
-    m = _DICT_RE.match(text)
+    m = _DICT_RE.fullmatch(text)
     if m:
         values, indices, ordered = m.groups()
         if values not in _DICT_VALUES or indices not in _DICT_INDICES:
@@ -241,16 +241,16 @@ def _datafusion(text: str) -> pa.DataType:
             pa.type_for_alias(values),
             ordered=ordered == "1",
         )
-    m = _DEC_RE.match(text)
+    m = _DEC_RE.fullmatch(text)
     if m:
         return getattr(pa, f"decimal{m.group(1)}")(int(m.group(2)), int(m.group(3)))
-    m = _TS_RE.match(text)
+    m = _TS_RE.fullmatch(text)
     if m:
         return pa.timestamp(m.group(1), m.group(2))
-    m = _TIME_RE.match(text)
+    m = _TIME_RE.fullmatch(text)
     if m:
         return getattr(pa, m.group(1))(m.group(2))
-    m = _FSB_RE.match(text)
+    m = _FSB_RE.fullmatch(text)
     if m:
         return pa.binary(int(m.group(1)))
     if text in _ARROW_SCALARS:

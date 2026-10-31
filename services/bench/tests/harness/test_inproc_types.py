@@ -32,7 +32,10 @@ def test_compression_is_stored_in_one_spelling(value, stored):
     assert normalise_ipc_compression(value) == stored
 
 
-@pytest.mark.parametrize("value", ["LZ4", "ZSTD(0)", "ZSTD(23)", "zstd", "ZSTD(3", 3])
+@pytest.mark.parametrize(
+    "value",
+    ["LZ4", "ZSTD(0)", "ZSTD(23)", "zstd", "ZSTD(3", 3, "ZSTD(1)\n", "ZSTD(\u0663)"],
+)
 def test_unknown_compression_is_refused(value):
     with pytest.raises(ValueError, match="none, LZ4_FRAME, ZSTD"):
         normalise_ipc_compression(value)
@@ -74,6 +77,7 @@ def test_ipc_codec():
         ('Categorical(Categories("v"))', "Categorical(UInt32)"),
         ("Decimal(precision=5, scale=2)", "Decimal(5, 2)"),
         ("Decimal(18, 0)", "Decimal(18, 0)"),
+        ("Decimal(38, 38)", "Decimal(38, 38)"),
         ("Datetime(time_unit='us', time_zone=None)", "Datetime(us)"),
         ("Datetime(time_unit='ns', time_zone='UTC')", "Datetime(ns, UTC)"),
         ("Datetime(ms, Europe/London)", "Datetime(ms, Europe/London)"),
@@ -101,6 +105,8 @@ def test_polars_type_parameters():
     "name",
     [
         "Categorical(UInt64)",
+        'Categorical(Categories(name="v", namespace="", physical=pl.UInt64))',
+        "Decimal(\u0663, 2)",
         "Float16",
         "Datetime(s)",
         "Decimal(40, 2)",
@@ -171,6 +177,8 @@ def test_run_end_encoding_is_refused_with_the_reason():
         "duration[us]",
         "date64[ms]",
         "timestamp[us, tz=UTC",
+        "decimal128(\u0663, 2)",
+        "fixed_size_binary[\u0663]",
     ],
 )
 def test_names_outside_the_datafusion_vocabulary_are_refused(name):
