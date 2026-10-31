@@ -11,7 +11,8 @@ empirically. As the engines improve, the techniques and recommendations are re-m
 2. **Analytics** — `services/analytics/`: techniques (metrics), recommenders and detectors (decisions); Rust core,
    Python API `turbo_parakeet`, Java binding. Details: `services/analytics/CLAUDE.md`.
 3. **Empirical benchmark** — `services/bench/` (`chbench`): loads a dataset under a grid of table variants and runs query
-   grids; ClickHouse today, Polars and DataFusion planned (ToDo 5). Details: `services/bench/CLAUDE.md`.
+   grids on ClickHouse, Polars and DataFusion (the in-process engines in worker
+   processes, in memory and as Arrow IPC). Details: `services/bench/CLAUDE.md`.
 4. **Evaluation loop** — `services/evaluate/` (`evaluate`): steps b–d of the loop for ClickHouse (recommend, benchmark
    against alternatives, score: prediction error, regret, CPU and memory). Details: `services/evaluate/CLAUDE.md`.
    What the loop has taught us about the recommenders (read it before changing a recommender's decisions or objective):
@@ -43,7 +44,8 @@ quality; improve, and repeat b–d. Last: run the loop on (a sample of) real dat
 - **Queries.** Point-equality queries `col = v`, weighted by row frequency or uniformly over distinct values. Range
   queries are on hold (ToDo 10).
 - **Validation.** DataFusion and Polars recommendations are proven in process: cast, verified row by row and measured
-  as IPC; their empirical query bench is ToDo 5. ClickHouse recommendations carry predicted metrics and are validated
+  as IPC, and benchmarked empirically by the bench's in-process engines (`to_chbench` writes their `polars:` /
+  `datafusion:` blocks and `<name>.predicted_inproc.json`); the loop's scores for them are ToDo 26. ClickHouse recommendations carry predicted metrics and are validated
   empirically by the bench: `turbo_parakeet.recommenders.to_chbench` writes the recommender's Arrow result as IPC plus a
   chbench suite, and the evaluation loop (`services/evaluate`) compares predicted with measured and scores regret.
 - **Deliverables.** Analytics: every recommender and detector ships one-shot and streaming versions (streaming tested

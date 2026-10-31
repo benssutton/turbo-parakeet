@@ -4,8 +4,8 @@ The objectives these items serve are in [CLAUDE.md, Project Objectives](CLAUDE.m
 for reference only; CLAUDE.md cites them by number.
 
 **Suggested order:** the five tracks in order — synthetic data (1), the evaluation loop (2–3), adversarial datasets (4),
-engines (5–7), real data (8) — with the analytics items (9–24) taken up as they unblock or as the loop surfaces them.
-Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 5 before 25; 12 and 20 before 21; 13 lands piecemeal with 19–21; 14 under 24.
+engines (5–7, 26–27), real data (8) — with the analytics items (9–24) taken up as they unblock or as the loop surfaces them.
+Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 26 before 25; 12 and 20 before 21; 13 lands piecemeal with 19–21; 14 under 24.
 
 ---
 
@@ -91,7 +91,7 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 5 b
     33 of 79 columns (`services/evaluate/FINDINGS.md` §6, `services/evaluate/scripts/faster_chains.py`). Decide the
     objective per engine: bytes only, a weight on query CPU, or wall time (in process, Polars and DataFusion pay
     decompression in wall time). It would be a recommender keyword, scored by the frontier and `query_regret`.
-    **Blocked on 5:** expand the empirical bench to Polars and DataFusion first, so the objective rests on measured
+    **Blocked on 26:** the loop's Polars and DataFusion scores first, so the objective rests on measured
     query time for all three engines, not ClickHouse alone.
 
 ## Track 3 — adversarial datasets
@@ -104,17 +104,36 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 5 b
 
 ## Track 4 — engines
 
-5. **Polars and DataFusion in the empirical bench.** An engine axis in the suites; query time and size for the
-   in-process recommendations (Arrow / Polars types, dictionary encoding, IPC compression), over in-memory data and
-   Arrow IPC. Point-equality and full-scan queries first, as for ClickHouse.
+5. **Polars and DataFusion in the empirical bench — done; the first 10M-row run is open.** chbench suites take
+   `polars:` / `datafusion:` blocks (types as the recommenders emit them, `memory` / `ipc`, IPC compression, threads);
+   each engine runs in worker processes; a sample is a calibrated batch of k repeats (Windows' 15.625 ms CPU step); IPC
+   files take an `ipc_batch_rows` axis (default 122 880 rows per batch, `whole` = one; ipc cells only); queries are
+   chosen once for every engine and checked against a pyarrow reference; store schema 3 records engine, storage,
+   threads, IPC batching, IPC and resident bytes, per-sample repeats and the engine versions; `to_chbench` writes the
+   blocks and `<name>.predicted_inproc.json` (`services/bench/CLAUDE.md`, In-process engines). **Open follow-up:** run
+   `suites/inproc_strings.yaml` at 10M rows (`python -m chbench.cli run suites/inproc_strings.yaml` from
+   `services/bench/`, on a quiet machine, ≈ 30–45 min: 45 cells × 4 queries × 20 samples at ≥ 250 ms per batch, plus
+   calibration and IPC writes) and record a dated results note under `services/bench/docs/results/`.
 6. **Engine-upgrade watch — in place.** `docs/engines/versions.yaml` pins the ClickHouse image (tag + digest) and
-   records the Polars / DataFusion / pyarrow versions of the last calibration; `chbench run` warns on a ClickHouse
-   drift. After a release: `docs/engines/README.md`, "After an engine upgrade". Open: run-end encoding is not
+   records the Polars / DataFusion / pyarrow versions of the last calibration; `chbench run` warns on a drift of ClickHouse or
+   of an in-process engine a suite uses. After a release: `docs/engines/README.md`, "After an engine upgrade". Open: run-end encoding is not
    recommended because DataFusion 54 and 55 reject MIN / MAX over REE columns. The canary
    `tests/test_engine_canaries.py` (xfails while they are rejected) fails CI once they work: then re-run
    `tests/performance/spike_datafusion_ree.py` and add REE (sizes and a recommendation).
 7. **ClickHouse in CI** (optional): a service container so the `clickhouse`-marked bench tests run in CI, weighed
    against the Actions minutes (private repo; see the cost-control notes in `.github/workflows/ci-cd.yml`).
+26. **Loop scores for Polars and DataFusion** (unblocks 25). `services/evaluate` builds per-engine suites from the
+    recommender's output (`to_chbench`'s `polars:` / `datafusion:` blocks, today removed by `evaluate/suites.py`) and
+    adds per-engine rows to `size_cells` (IPC bytes predicted, `<name>.predicted_inproc.json`, vs measured
+    `ipc_bytes`: body vs whole file, and first-seen vs frequency-ordered dictionaries; the bench writes 122 880-row
+    batches by default while `polars_ipc_size_bytes` / `datafusion_ipc_size_bytes` predict one batch, so the item
+    must model the per-batch IPC size overhead — record-batch metadata + per-batch compression framing — in the
+    predicted sizes or as a correction; until then `size_cells` shows it as prediction error), `size_regret` (the
+    recommended type / level against the measured grid), `size_frontier` (IPC bytes × query CPU / wall) and
+    `query_regret` — no new score files; `engine` becomes a key column in each.
+27. **Evaluate an engine-neutral bench core.** Analyse refactoring chbench into an engine-neutral core with three equal
+    adapters (ClickHouse's DDL, loader and `query_log` behind the same protocol as the in-process engines) and a
+    package rename; weigh it against the diff and the loop's dependence on the ClickHouse paths.
 
 ## Track 5 — real data
 

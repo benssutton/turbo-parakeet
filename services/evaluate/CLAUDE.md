@@ -1,7 +1,8 @@
 # Evaluation loop (`services/evaluate`, package `evaluate`)
 
 Component 4 of the toolkit (objectives: the root CLAUDE.md): steps b–d of the loop — recommend, benchmark the
-recommendation against alternatives on the same data, score. ClickHouse only (Polars / DataFusion: ToDo 5).
+recommendation against alternatives on the same data, score. ClickHouse only (Polars / DataFusion scores:
+ToDo 26; `suites.py` removes `to_chbench`'s in-process blocks).
 
 # Running
 From the repository root, with the `chbench-ch` container up (services/bench/CLAUDE.md, Environment):
@@ -53,6 +54,8 @@ unaffected, but query-cost scores are only valid at 1.
   ClickHouse tables are dropped once it has run. `--resume` refuses a dataset whose rows differ from the run's.
   Resuming a run made before b9a5326 mixes two String full-scan definitions (chbench now reads the characters), so
   its String query costs are comparable only within one definition: start a fresh run instead.
+  A run whose stores were written by chbench schema 2 (before the in-process engines) cannot be resumed
+  (`StoreVersionError`, recorded as each suite's error): start a fresh run.
 - Suites chbench cannot load are dropped into the dataset's `suites/skipped.json` with to_chbench's own skips.
 
 # Tests
