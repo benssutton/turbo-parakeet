@@ -107,11 +107,11 @@ from chbench.harness.validate import TableVariant, expand_grid, table_id
 
 # Rich falls back to 80 columns when stdout is not a terminal (a pipe, a log
 # file, a test subprocess) and truncates every cell of the report's two dozen
-# columns to a few characters. 320 is what the widest report (eleven table
+# columns to a few characters. 520 is what the widest report (eleven table
 # axes, four query axes, three percentiles of both clocks) needs to render
 # untruncated. A terminal keeps its real width; `--csv` is the way out when
 # that terminal is narrower than the table.
-_PIPED_WIDTH = 400
+_PIPED_WIDTH = 520
 
 
 class UnfinishedRunError(RuntimeError):
