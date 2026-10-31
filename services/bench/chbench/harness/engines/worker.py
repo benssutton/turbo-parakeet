@@ -163,13 +163,19 @@ class BaseWorker:
             if not (path.is_file() and path.stat().st_size == spec["expect_ipc_bytes"]):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = path.with_suffix(".tmp")
-                self.write_ipc(
-                    held,
-                    tmp,
-                    ipc_codec(spec["compression"]),
-                    ipc_batch_rows(spec["ipc_batch_rows"]),
-                )
-                tmp.replace(path)
+                try:
+                    self.write_ipc(
+                        held,
+                        tmp,
+                        ipc_codec(spec["compression"]),
+                        ipc_batch_rows(spec["ipc_batch_rows"]),
+                    )
+                    tmp.replace(path)
+                except BaseException:
+                    # a half-written file must not linger; `chbench clean` also removes one a
+                    # killed worker left behind
+                    tmp.unlink(missing_ok=True)
+                    raise
             ipc_bytes = path.stat().st_size
             why = mismatch(self.array, self.read_ipc(path))
             if why is not None:

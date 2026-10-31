@@ -305,6 +305,7 @@ def _inproc_variant():
         storage="ipc",
         threads=2,
         type_spec="String",
+        ipc_batch_rows=None,
     )
 
 
@@ -344,6 +345,20 @@ def test_clean_deletes_the_ipc_files_without_a_server(tmp_path, capsys):
     other.write_bytes(b"x")
     code = _clean(db, tmp_path / "ds")
     assert code == 0 and not ipc_file.exists() and other.exists()
+    assert "deleted 1 IPC file(s) for suite p" in capsys.readouterr().out
+
+
+def test_clean_deletes_a_left_over_tmp_of_a_recorded_table_only(tmp_path, capsys):
+    db = tmp_path / "r.db"
+    _inproc_store(db, "abc123")
+    ipc = tmp_path / "ds" / "ipc"
+    ipc.mkdir(parents=True)
+    tmp = ipc / "abc123.tmp"  # a prepare that died mid-write
+    tmp.write_bytes(b"half")
+    other = ipc / "other.tmp"
+    other.write_bytes(b"x")
+    assert _clean(db, tmp_path / "ds") == 0
+    assert not tmp.exists() and other.exists()
     assert "deleted 1 IPC file(s) for suite p" in capsys.readouterr().out
 
 

@@ -52,6 +52,10 @@ def make_store(path: Path, suite_name: str, tables: list[T]) -> Path:
                 status="skipped" if t.status == "skipped" else "ok",
                 skip_reason=t.skip_reason,
                 warnings=(),
+                engine="clickhouse",
+                storage=None,
+                threads=None,
+                ipc_batch_rows=None,
             )
             load = None
             if t.status != "skipped":
@@ -104,6 +108,8 @@ def make_store(path: Path, suite_name: str, tables: list[T]) -> Path:
                                 "SystemTimeMicroseconds": smp.get("system_us", 10),
                             },
                             ran_at="2026-10-28T00:00:00",
+                            repeats=None,
+                            repeats_capped=None,
                         ),
                     )
         s.finish_run(run_id)

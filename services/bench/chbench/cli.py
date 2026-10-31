@@ -447,17 +447,19 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
     if inproc:
         deleted = 0
         for tid in inproc:
-            path = ipc_path(args.cache_dir, tid)
-            if not path.is_file():
-                continue
-            try:
-                path.unlink()
-            except OSError as exc:
-                failed += 1
-                _warn(console, f"error: could not delete {path}: {exc}")
-                continue
-            deleted += 1
-            console.print(f"deleted {path}", markup=False, highlight=False)
+            # the file, and the `.tmp` a worker killed mid-write leaves beside it
+            target = ipc_path(args.cache_dir, tid)
+            for path in (target, target.with_suffix(".tmp")):
+                if not path.is_file():
+                    continue
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    failed += 1
+                    _warn(console, f"error: could not delete {path}: {exc}")
+                    continue
+                deleted += 1
+                console.print(f"deleted {path}", markup=False, highlight=False)
         console.print(
             f"deleted {deleted} IPC file(s) for suite {args.suite}",
             style="bold",

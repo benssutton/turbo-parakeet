@@ -260,3 +260,14 @@ def test_run_rejects_fewer_than_one_repeat(worker, tmp_path):
         with pytest.raises(ValueError, match="repeats"):
             worker.run("t1", PAYLOAD, bad)
     assert worker.runs == 0
+
+
+def test_a_write_that_raises_leaves_no_tmp_and_no_file(worker, tmp_path, monkeypatch):
+    def half_written(held, path, codec, batch_rows):
+        path.write_bytes(b"half")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(worker, "write_ipc", half_written)
+    with pytest.raises(OSError, match="disk full"):
+        worker.prepare(spec(tmp_path, storage="ipc"))
+    assert not list((tmp_path / "ipc").iterdir())

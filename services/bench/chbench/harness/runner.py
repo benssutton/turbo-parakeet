@@ -64,7 +64,9 @@ class Sample:
 
     An in-process sample is a batch of `repeats` runs of the query (`engines.inproc`); its
     clocks are the batch totals divided by `repeats` (`client_ms` includes one pipe round trip to
-    the worker per batch, so it is divided by `repeats` too). Both are None for ClickHouse.
+    the worker per batch, so it is divided by `repeats` too). Both are None for ClickHouse. Its
+    `memory_bytes` is the worker's RSS growth over the batch, not the query's allocation: it can
+    read 0 when the allocator reuses pages the worker already holds (`engines.inproc`).
 
     `client_ms` is the wall clock around the client call alone. The server
     fields (`server_ms` = `query_duration_ms`, `read_rows`, `read_bytes`,

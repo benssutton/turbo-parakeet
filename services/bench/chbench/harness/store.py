@@ -419,8 +419,7 @@ class Store:
 
         An in-process table's `load_result` (`engines.base.PrepareResult`) has no `stats` but
         its own `ipc_bytes`, `memory_bytes` and `rows`; a ClickHouse `LoadResult` has neither,
-        and its row gets NULL there. `engine` / `storage` / `threads` are read with defaults,
-        so a duck-typed variant without them is a ClickHouse table."""
+        and its row gets NULL there."""
         sizes = {"ipc_bytes": None, "memory_bytes": None, "rows": None}
         if variant.status == "skipped":
             status, reason, stats, insert_ms = (
@@ -432,6 +431,7 @@ class Store:
         elif load_result is not None:
             status, reason = load_result.status, load_result.error
             stats, insert_ms = load_result.stats, load_result.insert_ms
+            # getattr: a ClickHouse `LoadResult` has no ipc_bytes / memory_bytes / rows fields
             sizes = {k: getattr(load_result, k, None) for k in sizes}
         else:
             status, reason, stats, insert_ms = (
@@ -503,10 +503,10 @@ class Store:
                 clickhouse_version,
                 _now(),
                 json.dumps(list(variant.warnings), default=_json_default),
-                getattr(variant, "engine", "clickhouse"),
-                getattr(variant, "storage", None),
-                getattr(variant, "threads", None),
-                getattr(variant, "ipc_batch_rows", None),
+                variant.engine,
+                variant.storage,
+                variant.threads,
+                variant.ipc_batch_rows,
                 sizes["ipc_bytes"],
                 sizes["memory_bytes"],
             ),
@@ -676,8 +676,8 @@ class Store:
         """The runner's `on_sample` hook: one row per sample, committed
         immediately so a Ctrl-C between samples never loses one already
         delivered. `repeats` / `repeats_capped` (in-process samples: the batch size and whether
-        its calibration hit the cap) are read with defaults, NULL for ClickHouse."""
-        capped = getattr(sample, "repeats_capped", None)
+        its calibration hit the cap) are NULL for ClickHouse."""
+        capped = sample.repeats_capped
         self.conn.execute(
             """
             INSERT INTO samples (query_id, sample_no, run_id, round_no, client_ms, server_ms,
@@ -690,10 +690,10 @@ class Store:
                 query_id,
                 sample.sample_no,
                 run_id,
-                getattr(sample, "round_no", None),
+                sample.round_no,
                 sample.client_ms,
                 sample.server_ms,
-                getattr(sample, "cpu_us", None),
+                sample.cpu_us,
                 sample.read_rows,
                 sample.read_bytes,
                 sample.memory_bytes,
@@ -701,7 +701,7 @@ class Store:
                 sample.selected_granules,
                 json.dumps(dict(sample.profile_events), default=_json_default),
                 _ran_at_text(sample.ran_at),
-                getattr(sample, "repeats", None),
+                sample.repeats,
                 None if capped is None else int(bool(capped)),
             ),
         )
@@ -750,6 +750,9 @@ class Store:
     def suite_tables(self, suite_name: str) -> list[tuple[str, str]]:
         """`(table_id, engine)` of every table recorded against `suite_name`, by table id; a table
         of a store from before engines is `clickhouse`."""
+        # Not dead: `init_schema` refuses a v2 store only for `run`; `chbench clean` (and
+        # `report`) open a store without it, so a v2 `tables` with no `engine` column reaches
+        # here (test_cli.py::test_clean_on_a_v2_store_drops_its_tables_and_touches_no_files).
         present = {r[1] for r in self.conn.execute("PRAGMA table_info(tables)")}
         engine = (
             "COALESCE(tb.engine, 'clickhouse')"

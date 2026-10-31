@@ -35,6 +35,10 @@ def variant():
         status="ok",
         skip_reason=None,
         warnings=(),
+        engine="clickhouse",
+        storage=None,
+        threads=None,
+        ipc_batch_rows=None,
     )
 
 
@@ -79,6 +83,10 @@ def sample(n):
         selected_granules=2,
         profile_events={"SelectedParts": 1},
         ran_at="2026-09-15T00:00:00",
+        round_no=None,
+        cpu_us=None,
+        repeats=None,
+        repeats_capped=None,
     )
 
 
@@ -534,7 +542,7 @@ def test_query_rows_carry_the_engine_axes(tmp_path):
         s.upsert_query("q9", "t9", qv(), "")
         run = s.begin_run(NS(name="A", source_yaml=""))
         s.insert_sample(
-            "q9", run, NS(**vars(sample(0)), repeats=64, repeats_capped=True)
+            "q9", run, NS(**{**vars(sample(0)), "repeats": 64, "repeats_capped": True})
         )
         (row,) = s.query_rows("A")
     assert (row["engine"], row["storage"], row["threads"]) == ("polars", "ipc", 4)

@@ -13,6 +13,10 @@
   RSS just before the query (a per-query peak cannot be reset in process on Windows: `peak_wset`
   is lifetime).
   A sample whose baseline read (or every peak read) fails has memory None: unknown, not guessed.
+  A sample can read 0 (`max(0, peak - base)`): after the warm-up the allocator often reuses pages
+  the worker already holds, so a query that allocates and frees within them adds no RSS. A 0 is
+  indistinguishable from a query that allocated nothing; it is the growth of resident memory, not
+  the query's allocation.
 - Failure: the worker's exception comes back as `WorkerError` (that job's error, the round carries
   on); a worker that exits or breaks the pipe raises `WorkerDied`, and every later call to it
   raises it again, so its pending queries all end `error`. A call that outlives its op's timeout
