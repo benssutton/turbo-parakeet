@@ -57,3 +57,19 @@ def test_drift_names_the_engine_and_both_versions(tmp_path):
 def test_drift_ignores_engines_without_a_pin_or_an_actual_version():
     assert versions.drift({}, {"clickhouse": "26.9.1.1"}) == []
     assert versions.drift({"polars": "2.0.0"}, {"clickhouse": None}) == []
+
+
+def test_load_pinned_of_a_non_mapping_file_is_empty(tmp_path):
+    for text in ("- a\n- b\n", ""):
+        p = tmp_path / "versions.yaml"
+        p.write_text(text, encoding="utf-8")
+        assert versions.load_pinned(p) == {}
+
+
+def test_load_pinned_without_a_path_reads_pinned_path_at_call_time(
+    tmp_path, monkeypatch
+):
+    p = tmp_path / "versions.yaml"
+    p.write_text(PIN, encoding="utf-8")
+    monkeypatch.setattr(versions, "PINNED_PATH", p)
+    assert versions.load_pinned()["polars"] == "2.0.0"
