@@ -30,6 +30,6 @@ scikit-learn>=1.9.1,<2   # AdjustedRandSklearn, adjusted_rand's reference
 datasketch>=2.0.0,<3     # MinHashDatasketch (similarity)
 polars-ds>=0.13.0,<1     # ChiSquaredPolarsDS (chi_squared)
 fastbloom-rs>=0.5.10,<1  # BloomFastbloom (membership)
-statsmodels>=0.14,<1     # tests/test_runs_test.py: binary runs-test cross-check
+statsmodels>=0.15.0,<1     # tests/test_runs_test.py: binary runs-test cross-check
 zstandard>=0.25,<1       # services/bench/spikes/spike_decimal32_zstd.py --emulator: raw libzstd cross-check
 # (datafusion, above, is also DescribeDataFusion and tests/performance/spike_datafusion_ree.py)
