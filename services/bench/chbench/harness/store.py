@@ -29,6 +29,16 @@ Three additions go beyond those five tables as first designed:
   run was interrupted before any query produced a sample (the gap the
   runs/samples join used to leave open).
 
+- `tables.engine` / `storage` / `threads` / `ipc_batch_rows` / `ipc_bytes` / `memory_bytes`
+  (schema 3, ToDo 5): an in-process table (Polars, DataFusion) has its engine type label in
+  `ch_type`, its IPC compression in `compression`, its engine's version in `clickhouse_version`,
+  its IPC record-batch size (`whole` or rows, as text), the IPC file's bytes and its resident size
+  (informational: Polars' process-global categorical mapping can inflate it, ToDo 11);
+  `runs.engine_versions` (JSON) the versions a run used. An in-process sample is a batch of
+  `samples.repeats` runs of the query (`repeats_capped` 1 when the calibration hit its cap);
+  its `server_ms` (the engine's own wall time) and `cpu_us` (its worker's User + System CPU) are
+  per query, the batch totals divided by `repeats`. Both are NULL for ClickHouse.
+
 `SCHEMA_VERSION` (stamped in `PRAGMA user_version`) guards the layout: `init_schema` raises
 `StoreVersionError` on a populated older store, whose samples cannot be paired by round, while
 `query_rows` reads it anyway, substituting NULL for the columns it lacks.
@@ -92,7 +102,13 @@ CREATE TABLE IF NOT EXISTS tables (
     insert_ms REAL,
     clickhouse_version TEXT,
     created_at TEXT NOT NULL,
-    warnings TEXT
+    warnings TEXT,
+    engine TEXT,
+    storage TEXT,
+    threads INTEGER,
+    ipc_batch_rows TEXT,
+    ipc_bytes INTEGER,
+    memory_bytes INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS queries (
@@ -123,7 +139,9 @@ CREATE TABLE IF NOT EXISTS samples (
     selected_marks INTEGER,
     selected_granules INTEGER,
     profile_events_json TEXT,
-    ran_at TEXT
+    ran_at TEXT,
+    repeats INTEGER,
+    repeats_capped INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -133,7 +151,8 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT NOT NULL,
     finished_at TEXT,
     quiet_before TEXT,
-    quiet_after TEXT
+    quiet_after TEXT,
+    engine_versions TEXT
 );
 
 CREATE TABLE IF NOT EXISTS suite_tables (
@@ -143,23 +162,23 @@ CREATE TABLE IF NOT EXISTS suite_tables (
 );
 """
 
-SCHEMA_VERSION = (
-    2  # 2: interleaved rounds (samples.round_no, samples.cpu_us, runs.quiet_*), ToDo 3
-)
+SCHEMA_VERSION = 3  # 2: interleaved rounds (ToDo 3); 3: in-process engines (ToDo 5)
 
 
 class StoreVersionError(RuntimeError):
     """A store written before the current schema: readable, but new samples need a new store."""
 
 
-# Columns `query_rows` returns, per source table: a name, or (column, alias). A column an older
-# store lacks reads as NULL, so `report` and the evaluation loop can still read it.
+# Columns `query_rows` returns, per source table: a name, (column, alias) or (column, alias,
+# default SQL). A column an older store lacks reads as NULL, or as its default, so `report` and the
+# evaluation loop can still read it: a schema-2 table is a ClickHouse table.
 _ROW_COLUMNS = (
     (
         "tb",
         "tables",
         (
             "table_id",
+            ("engine", "engine", "'clickhouse'"),
             "dataset_id",
             "ch_type",
             "nullable",
@@ -181,6 +200,11 @@ _ROW_COLUMNS = (
             "clickhouse_version",
             "created_at",
             ("warnings", "table_warnings"),
+            "storage",
+            "threads",
+            "ipc_batch_rows",
+            "ipc_bytes",
+            ("memory_bytes", "table_memory_bytes"),
         ),
     ),
     (
@@ -216,6 +240,8 @@ _ROW_COLUMNS = (
             "selected_granules",
             "profile_events_json",
             "ran_at",
+            "repeats",
+            "repeats_capped",
         ),
     ),
 )
@@ -283,8 +309,7 @@ class Store:
 
     def init_schema(self) -> None:
         """Create the schema (idempotent) and stamp `user_version`. A store written by an
-        earlier schema raises `StoreVersionError`: its samples were taken without rounds and
-        cannot be paired with new ones, so new samples go to a new store. A store stamped by
+        earlier schema raises `StoreVersionError`: new samples go to a new store. A store stamped by
         a newer chbench raises too, rather than being re-stamped down."""
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         populated = self.conn.execute(
@@ -292,9 +317,9 @@ class Store:
         ).fetchone()[0]
         if populated and version < SCHEMA_VERSION:
             raise StoreVersionError(
-                f"{self.path} is a schema-{version} store, written before interleaved rounds "
-                f"(ToDo 3); `chbench report` still reads it, but new samples need a new store: "
-                f"pass --store"
+                f"{self.path} is a schema-{version} store, written by an older chbench (schema 2 "
+                f"added interleaved rounds, ToDo 3; schema 3 the in-process engines, ToDo 5); "
+                f"`chbench report` still reads it, but new samples need a new store: pass --store"
             )
         if version > SCHEMA_VERSION:
             raise StoreVersionError(
@@ -313,12 +338,16 @@ class Store:
                 for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
             }
             for c in columns:
-                column, name = c if isinstance(c, tuple) else (c, c)
-                parts.append(
-                    f"{alias}.{column} AS {name}"
-                    if column in present
-                    else f"NULL AS {name}"
+                column, name, default = (
+                    (c, c, None) if isinstance(c, str) else (*c, None)[:3]
                 )
+                if column in present:
+                    value = f"{alias}.{column}"
+                    if default is not None:
+                        value = f"COALESCE({value}, {default})"
+                else:
+                    value = default or "NULL"
+                parts.append(f"{value} AS {name}")
         return "SELECT " + ", ".join(parts) + _QUERY_ROWS_FROM
 
     # -- datasets ---------------------------------------------------------
@@ -385,7 +414,13 @@ class Store:
         callers that only need the table row are unaffected; when given, the
         `(suite_name, table_id)` pair is also upserted into `suite_tables`,
         which is how `tables_for_suite` finds this table even
-        before any query against it has produced a sample."""
+        before any query against it has produced a sample.
+
+        An in-process table's `load_result` (`engines.base.PrepareResult`) has no `stats` but
+        its own `ipc_bytes`, `memory_bytes` and `rows`; a ClickHouse `LoadResult` has neither,
+        and its row gets NULL there. `engine` / `storage` / `threads` are read with defaults,
+        so a duck-typed variant without them is a ClickHouse table."""
+        sizes = {"ipc_bytes": None, "memory_bytes": None, "rows": None}
         if variant.status == "skipped":
             status, reason, stats, insert_ms = (
                 "skipped",
@@ -396,6 +431,7 @@ class Store:
         elif load_result is not None:
             status, reason = load_result.status, load_result.error
             stats, insert_ms = load_result.stats, load_result.insert_ms
+            sizes = {k: getattr(load_result, k, None) for k in sizes}
         else:
             status, reason, stats, insert_ms = (
                 variant.status,
@@ -412,8 +448,9 @@ class Store:
                                  marks_bytes, index_compressed_bytes,
                                  index_uncompressed_bytes, index_marks_bytes,
                                  rows, insert_ms, clickhouse_version,
-                                 created_at, warnings)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                 created_at, warnings, engine, storage, threads,
+                                 ipc_batch_rows, ipc_bytes, memory_bytes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(table_id) DO UPDATE SET
                 dataset_id=excluded.dataset_id,
                 ch_type=excluded.ch_type,
@@ -434,7 +471,13 @@ class Store:
                 rows=excluded.rows,
                 insert_ms=excluded.insert_ms,
                 clickhouse_version=excluded.clickhouse_version,
-                warnings=excluded.warnings
+                warnings=excluded.warnings,
+                engine=excluded.engine,
+                storage=excluded.storage,
+                threads=excluded.threads,
+                ipc_batch_rows=excluded.ipc_batch_rows,
+                ipc_bytes=excluded.ipc_bytes,
+                memory_bytes=excluded.memory_bytes
             """,
             (
                 table_id,
@@ -454,11 +497,17 @@ class Store:
                 stats.index_compressed_bytes if stats else None,
                 stats.index_uncompressed_bytes if stats else None,
                 stats.index_marks_bytes if stats else None,
-                stats.rows if stats else None,
+                stats.rows if stats else sizes["rows"],
                 insert_ms,
                 clickhouse_version,
                 _now(),
                 json.dumps(list(variant.warnings), default=_json_default),
+                getattr(variant, "engine", "clickhouse"),
+                getattr(variant, "storage", None),
+                getattr(variant, "threads", None),
+                getattr(variant, "ipc_batch_rows", None),
+                sizes["ipc_bytes"],
+                sizes["memory_bytes"],
             ),
         )
         if suite_name is not None:
@@ -556,12 +605,20 @@ class Store:
 
     # -- runs -------------------------------------------------------------
 
-    def begin_run(self, suite) -> str:
+    def begin_run(self, suite, engine_versions: dict | None = None) -> str:
+        """A new `runs` row; `engine_versions` (ClickHouse server when used, Polars, DataFusion,
+        pyarrow, Python) is stored as JSON, NULL when not given."""
         run_id = uuid.uuid4().hex
         self.conn.execute(
-            "INSERT INTO runs (run_id, suite_name, suite_yaml, started_at, finished_at) "
-            "VALUES (?, ?, ?, ?, NULL)",
-            (run_id, suite.name, suite.source_yaml, _now()),
+            "INSERT INTO runs (run_id, suite_name, suite_yaml, started_at, finished_at, "
+            "engine_versions) VALUES (?, ?, ?, ?, NULL, ?)",
+            (
+                run_id,
+                suite.name,
+                suite.source_yaml,
+                _now(),
+                None if engine_versions is None else json.dumps(engine_versions),
+            ),
         )
         self.conn.commit()
         return run_id
@@ -617,13 +674,16 @@ class Store:
     def insert_sample(self, query_id: str, run_id: str, sample) -> None:
         """The runner's `on_sample` hook: one row per sample, committed
         immediately so a Ctrl-C between samples never loses one already
-        delivered."""
+        delivered. `repeats` / `repeats_capped` (in-process samples: the batch size and whether
+        its calibration hit the cap) are read with defaults, NULL for ClickHouse."""
+        capped = getattr(sample, "repeats_capped", None)
         self.conn.execute(
             """
             INSERT INTO samples (query_id, sample_no, run_id, round_no, client_ms, server_ms,
                                   cpu_us, read_rows, read_bytes, memory_bytes, selected_marks,
-                                  selected_granules, profile_events_json, ran_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                  selected_granules, profile_events_json, ran_at, repeats,
+                                  repeats_capped)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 query_id,
@@ -640,6 +700,8 @@ class Store:
                 sample.selected_granules,
                 json.dumps(dict(sample.profile_events), default=_json_default),
                 _ran_at_text(sample.ran_at),
+                getattr(sample, "repeats", None),
+                None if capped is None else int(bool(capped)),
             ),
         )
         self.conn.commit()

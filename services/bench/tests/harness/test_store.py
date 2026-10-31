@@ -404,7 +404,7 @@ def test_a_new_store_is_stamped_with_the_schema_version(tmp_path):
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
         assert (
-            s.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
+            s.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 3
         )
 
 
@@ -453,3 +453,148 @@ def test_query_rows_carry_the_in_list_size(tmp_path):
         s.insert_sample("q1", run, sample(0))
         (row,) = s.query_rows("A")
     assert row["predicate_kind"] == "in" and row["values_n"] == 3
+
+
+def inproc_variant():
+    return NS(
+        ch_type="Categorical(UInt8)",
+        nullable=None,
+        primary_key=None,
+        projection=None,
+        codec=None,
+        skip_index=None,
+        compression="ZSTD(3)",
+        status="ok",
+        skip_reason=None,
+        warnings=(),
+        engine="polars",
+        storage="ipc",
+        threads=4,
+        type_spec="Categorical(UInt8)",
+        ipc_batch_rows="65536",
+    )
+
+
+def prepared():
+    return NS(
+        status="ok",
+        error=None,
+        insert_ms=3.5,
+        stats=None,
+        ipc_bytes=1234,
+        memory_bytes=5678,
+        rows=50,
+    )
+
+
+def test_an_in_process_table_stores_engine_storage_threads_and_sizes(tmp_path):
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        s.upsert_table(
+            "t9", "d1", inproc_variant(), prepared(), "2.0.0", suite_name="A"
+        )
+        row = s.conn.execute(
+            "SELECT engine, storage, threads, ipc_batch_rows, ipc_bytes, memory_bytes, rows, "
+            "ch_type, compression, clickhouse_version, compressed_bytes FROM tables"
+        ).fetchone()
+    assert row == (
+        "polars",
+        "ipc",
+        4,
+        "65536",
+        1234,
+        5678,
+        50,
+        "Categorical(UInt8)",
+        "ZSTD(3)",
+        "2.0.0",
+        None,
+    )
+
+
+def test_a_clickhouse_table_is_engine_clickhouse(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        row = s.conn.execute(
+            "SELECT engine, storage, threads, ipc_batch_rows, ipc_bytes FROM tables"
+        ).fetchone()
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.insert_sample("q1", run, sample(0))
+        repeats = s.conn.execute(
+            "SELECT repeats, repeats_capped FROM samples"
+        ).fetchone()
+    assert row == ("clickhouse", None, None, None, None) and repeats == (None, None)
+
+
+def test_query_rows_carry_the_engine_axes(tmp_path):
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        s.upsert_table(
+            "t9", "d1", inproc_variant(), prepared(), "2.0.0", suite_name="A"
+        )
+        s.upsert_query("q9", "t9", qv(), "")
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.insert_sample(
+            "q9", run, NS(**vars(sample(0)), repeats=64, repeats_capped=True)
+        )
+        (row,) = s.query_rows("A")
+    assert (row["engine"], row["storage"], row["threads"]) == ("polars", "ipc", 4)
+    assert row["ipc_batch_rows"] == "65536"
+    assert row["ipc_bytes"] == 1234 and row["table_memory_bytes"] == 5678
+    assert row["memory_bytes"] == 1000  # the sample's, unshadowed
+    assert (row["repeats"], row["repeats_capped"]) == (64, 1)
+
+
+def test_a_run_records_its_engine_versions(tmp_path):
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        run = s.begin_run(
+            NS(name="A", source_yaml=""),
+            engine_versions={"polars": "2.0.0", "python": "3.12"},
+        )
+        (text,) = s.conn.execute(
+            "SELECT engine_versions FROM runs WHERE run_id = ?", (run,)
+        ).fetchone()
+        bare = s.begin_run(NS(name="A", source_yaml=""))
+        (none,) = s.conn.execute(
+            "SELECT engine_versions FROM runs WHERE run_id = ?", (bare,)
+        ).fetchone()
+    assert json.loads(text) == {"polars": "2.0.0", "python": "3.12"} and none is None
+
+
+def _v2_store(path):
+    """A schema-2 store: no engine columns, user_version 2."""
+    with _filled(path) as s:
+        run = s.begin_run(NS(name="A", source_yaml=""))
+        s.insert_sample("q1", run, sample(0))
+        for column in (
+            "engine",
+            "storage",
+            "threads",
+            "ipc_batch_rows",
+            "ipc_bytes",
+            "memory_bytes",
+        ):
+            s.conn.execute(f"ALTER TABLE tables DROP COLUMN {column}")
+        s.conn.execute("ALTER TABLE runs DROP COLUMN engine_versions")
+        for column in ("repeats", "repeats_capped"):
+            s.conn.execute(f"ALTER TABLE samples DROP COLUMN {column}")
+        s.conn.execute("PRAGMA user_version = 2")
+        s.conn.commit()
+
+
+def test_a_v2_store_refuses_new_samples(tmp_path):
+    _v2_store(tmp_path / "v2.db")
+    with Store(tmp_path / "v2.db") as s:
+        with pytest.raises(StoreVersionError, match="schema-2.*--store"):
+            s.init_schema()
+
+
+def test_a_v2_store_reads_as_clickhouse(tmp_path):
+    _v2_store(tmp_path / "v2.db")
+    with Store(tmp_path / "v2.db") as s:
+        (row,) = s.query_rows("A")
+    assert row["engine"] == "clickhouse"
+    assert (
+        row["storage"] is None and row["threads"] is None and row["ipc_bytes"] is None
+    )
+    assert row["ipc_batch_rows"] is None and row["repeats"] is None
