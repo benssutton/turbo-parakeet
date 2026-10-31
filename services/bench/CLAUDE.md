@@ -52,9 +52,10 @@ holding their sample count are skipped, and a table whose queries are all held i
 `--force` or a sample shortfall (`--samples-add`, or a new query) loads it. `report` re-reads SQLite only; `--csv`
 exports the same rows. `--baseline "axis=value,..."` adds paired per-round ratios (`cpu_ratio`, `server_ratio`, each
 with a 95% interval, `n_rounds`, `clocks_disagree`) against the row matching it within each group of rows equal on
-every other axis and the same query shape; a baseline matching no row is an error. A baseline over several axes frees each of them: `--baseline "ch_type=String,codec=none"` pairs `LowCardinality(String)` with `String`. `clean` drops a suite's tables from `bench` (the store keeps its rows). The `EXPLAIN` plan of
-every query is stored; `--explain` only prints it. `run` refuses to start while the store holds an unfinished run of
-the same suite (a process that died without stamping `finished_at`); `--ignore-unfinished` overrides that. The store
+every other axis and the same query shape; a baseline matching no row is an error. A baseline over several axes frees
+each of them: `--baseline "ch_type=String,codec=none"` pairs `LowCardinality(String)` with `String`. `clean` drops a
+suite's tables from `bench` (the store keeps its rows). The `EXPLAIN` plan of every query is stored; `--explain` only
+prints it. `run` refuses to start while the store holds an unfinished run of the same suite (a process that died without stamping `finished_at`); `--ignore-unfinished` overrides that. The store
 carries a schema version (SQLite `user_version`, now 2): `run` refuses an older or newer store (`StoreVersionError`,
 name another `--store`); `report` reads an older one, its missing columns NULL. A suite
 whose dataset type cannot feed its `type` axis (a Decimal axis without `decimal_places`, a `list<T>` dataset, a numeric

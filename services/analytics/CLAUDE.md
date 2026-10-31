@@ -151,7 +151,8 @@ Private — reached only through `turbo_parakeet._plugin`, only by the `*Rust` c
 `ams_marginal_entropy` (`marginal_entropy` / `ams_marginal_entropy` are also used by `MarginalEntropyRust` / `MarginalEntropyAmsRust`), `ams_pairwise_joint_entropy`, `ams_threeway_joint_entropy`,
 `space_saving_top_k`, `heavy_keeper_top_k`, `hll_distinct`, `population_cardinality`,
 `bloom_filter_bits` + `membership_ratio` (the bit array crosses as `bytes`), `minhash` + `lsh_candidates`,
-`describe_columns` + `column_sizes`; `ipc_body_sizes` + `clickhouse_profile` (used by `turbo_parakeet.recommenders.chbench` and tests); `render` (arrow-rs text of min / max, used by
+`describe_columns` + `column_sizes`; `ipc_body_sizes` + `clickhouse_profile` (used by `turbo_parakeet.recommenders.chbench`, `services/evaluate` and tests); `clickhouse_redecide` (the codec decision re-run on
+measured sizes, used by `services/evaluate`'s `score.py`); `render` (arrow-rs text of min / max, used by
 `turbo_parakeet.techniques.describe.base` and `turbo_parakeet.techniques.top_k.base`); `checked_table` (the checked Arrow import, used by
 `turbo_parakeet.techniques.base` before py-polars reads Arrow input — handed over as a pyarrow Table when pyarrow is installed);
 `StreamingRecommender` / `OneShotRecommender` (via `_plugin.streaming_recommender` / `_plugin.oneshot_recommender`, used only by `turbo_parakeet.recommenders`).

@@ -18,8 +18,8 @@ Datasets: registry names (`evaluate/registry.py`: synth tiers, the planted `gcd`
 synthdata scenarios), `name:rows` for scalable entries, the groups `calibration` and `query_time` (the calibration
 frames with synth_frame at 1M rows: use it when query time is scored; `evaluate compare` aggregates across datasets
 and does not check rows, so compare runs of the same group), `--all`, or a path to an Arrow IPC frame. `--dry-run`
-needs no server and prints the table-load count. `--workers N` times N suites in
-parallel: sizes and skip shares are unaffected, but query-cost scores are only valid at 1.
+needs no server and prints the table-load count. `--workers N` times N suites in parallel: sizes and skip shares are
+unaffected, but query-cost scores are only valid at 1.
 
 # Design
 - One directory per run, `services/evaluate/runs/<ts>/` (git-ignored): run.json, per dataset frame.arrow,
@@ -28,8 +28,8 @@ parallel: sizes and skip shares are unaffected, but query-cost scores are only v
   ZSTD(3)}) and a skip suite (chosen + rejected skip candidates + none, on the recommended chain). chbench expands
   axes as a product, which is why the two are separate.
 - Scores (metrics only, no thresholds): size_cells, size_regret, size_frontier, skip_queries, skip_regret,
-  query_cost, query_regret, recommend_cost (`evaluate/score.py` holds the schemas), summary.arrow and compare. size_regret's
-  `measured_choice` is the recommender's own codec rule (`_plugin.clickhouse_redecide`) re-applied to the measured
+  query_cost, query_regret, recommend_cost (`evaluate/score.py` holds the schemas), summary.arrow and compare.
+  size_regret's `measured_choice` is the recommender's own codec rule (`_plugin.clickhouse_redecide`) re-applied to the measured
   bytes of the chains it compared (pruned chains left out); `agrees` says whether it picks the recommended chain
   (None for original-type suites (no candidates) and when a compared cell was not measured). CPU and memory are
   captured on every run: the recommender in a child process (wall, CPU, peak memory above the frame) and each
@@ -49,6 +49,8 @@ parallel: sizes and skip shares are unaffected, but query-cost scores are only v
   `score.py` need no server.
 - Resume: each step skips what is on disk; chbench skips held samples; scoring always reruns. A suite's
   ClickHouse tables are dropped once it has run. `--resume` refuses a dataset whose rows differ from the run's.
+  Resuming a run made before b9a5326 mixes two String full-scan definitions (chbench now reads the characters), so
+  its String query costs are comparable only within one definition: start a fresh run instead.
 - Suites chbench cannot load are dropped into the dataset's `suites/skipped.json` with to_chbench's own skips.
 
 # Tests

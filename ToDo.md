@@ -71,8 +71,8 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 12 
 
 2. **Loop tool — done** (`services/evaluate`, `python -m evaluate run | report | compare`): registry → recommend (cost
    in a child process) → per column a size suite (candidates + the codec × compression grid) and a skip suite (chosen +
-   rejected candidates + none) → chbench, one SQLite store per suite → seven Arrow IPC score files (prediction error,
-   regret, query CPU / memory and query-time regret, recommender cost) and a summary. It replaces the two calibration scripts, at parity
+   rejected candidates + none) → chbench, one SQLite store per suite → eight Arrow IPC score files (prediction error,
+   regret and measured agreement, the size frontier, query CPU / memory and query-time regret, recommender cost) and a summary. It replaces the two calibration scripts, at parity
    cell for cell (369 size cells, 99 skip queries; `services/evaluate/docs/results/2026-10-28-parity-and-first-run.md`).
    Follow-ups:
    - Query time in the size decision: `size_frontier` reports the bytes × full-scan CPU frontier; once a

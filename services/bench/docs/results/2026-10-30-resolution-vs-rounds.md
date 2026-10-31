@@ -7,11 +7,11 @@
 > ```
 > sed 's/samples: 20/samples: 10/' suites/replicates.yaml > replicates10.yaml
 > python -m chbench.cli run replicates10.yaml --store results-resolution.db                   # 10 rounds
-> python -m chbench.cli chbench report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep10.csv
+> python -m chbench.cli report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep10.csv
 > python -m chbench.cli run replicates10.yaml --store results-resolution.db --samples-add 10  # 20 rounds
-> python -m chbench.cli chbench report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep20.csv
+> python -m chbench.cli report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep20.csv
 > python -m chbench.cli run replicates10.yaml --store results-resolution.db --samples-add 10  # 30 rounds
-> python -m chbench.cli chbench report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep30.csv
+> python -m chbench.cli report --suite replicates --store results-resolution.db --baseline skip_index=minmax --csv rep30.csv
 > ```
 >
 > `replicates10.yaml` is `suites/replicates.yaml` with `samples: 10` (the committed suite has 20). The three runs took

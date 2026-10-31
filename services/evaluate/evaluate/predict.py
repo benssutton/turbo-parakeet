@@ -20,6 +20,7 @@ _STRING = re.compile(r"'(?:[^'\\]|\\.)*'", re.DOTALL)
 _WRAPPED = re.compile(
     r"toDateTime(?:64)?\(('(?:[^'\\]|\\.)*')(?:, \d+)?, 'UTC'\)", re.DOTALL
 )
+_UNHEX = re.compile(r"unhex\('([0-9a-f]*)'\)")
 
 
 def parse_skip(skip: str) -> tuple[str, float | None, int]:
@@ -54,7 +55,8 @@ def _temporal(text: str, dtype: pl.DataType) -> int:
 def parse_literal(lit: str, dtype: pl.DataType):
     """The Python value of a ClickHouse literal for a column of `dtype`; None when not parsed
     (a list, durations, ...). chbench renders by the ClickHouse type, so strings, dates,
-    datetimes, times and decimals arrive quoted; a quoted number for a numeric dtype is not parsed.
+    datetimes, times, decimals and UTF-8 binary arrive quoted (other binary as unhex('<hex>')); a
+    quoted number for a numeric dtype is not parsed.
     """
     lit = lit.strip()
     # toDateTime64('..', p, 'UTC') / toDateTime('..', 'UTC')
@@ -62,8 +64,14 @@ def parse_literal(lit: str, dtype: pl.DataType):
     if wrapped:
         lit = wrapped.group(1)
     try:
+        # chbench renders binary bytes that are not UTF-8 as unhex('<hex>')
+        hexed = _UNHEX.fullmatch(lit)
+        if hexed:
+            return bytes.fromhex(hexed.group(1)) if dtype == pl.Binary else None
         if _STRING.fullmatch(lit):
             text = re.sub(r"\\(.)", r"\1", lit[1:-1], flags=re.DOTALL)
+            if dtype == pl.Binary:
+                return text.encode("utf-8")
             if dtype in (pl.String, pl.Categorical) or isinstance(
                 dtype, (pl.Enum, pl.Categorical)
             ):
@@ -76,7 +84,7 @@ def parse_literal(lit: str, dtype: pl.DataType):
         if lit.lower() in ("true", "false"):
             return int(lit.lower() == "true")
         if dtype.is_integer():
-            # chbench renders a nullable integer column's values as floats ("7.0")
+            # stores written before 4868d68 hold a nullable integer column's values as floats ("7.0")
             d = decimal.Decimal(lit)
             return int(d) if d == d.to_integral_value() else None
         if dtype.is_float():
@@ -92,6 +100,12 @@ def value_of(predicate_sql: str | None, dtype: pl.DataType):
     """The single value of chbench's point predicate `v IN (<literal>)`, or None."""
     m = re.fullmatch(r"v IN \((.*)\)", predicate_sql or "", re.DOTALL)
     return parse_literal(m.group(1), dtype) if m else None
+
+
+def _scalar(v):
+    """`v` as a Series comparison operand: polars reads a bare `bytes` operand as Int64, so a
+    binary value becomes a one-element Binary Series (it broadcasts)."""
+    return pl.Series([v], dtype=pl.Binary) if isinstance(v, bytes) else v
 
 
 class _Blocks:
@@ -151,6 +165,7 @@ class SkipPredictor:
     def skip(self, skip: str, v) -> float:
         if skip == "none":
             return 0.0
+        v = _scalar(v)
         kind, arg, g = parse_skip(skip)
         if (kind, g) not in self._blocks:
             self._blocks[kind, g] = _Blocks(self.col, g, kind)
@@ -161,4 +176,4 @@ class SkipPredictor:
         return share * (1 - arg) if kind == "bloom_filter" else share
 
     def rows_of(self, v) -> int:
-        return int((self.col == v).sum())
+        return int((self.col == _scalar(v)).sum())

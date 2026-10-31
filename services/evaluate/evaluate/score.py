@@ -80,6 +80,7 @@ def measured_choice(cells: list[dict]) -> str | None:
     ]
     if not compared or any(c["measured_bytes"] is None for c in compared):
         return None
+    # redecided with the recommender's default keywords, which the loop runs it with
     try:
         return _plugin.clickhouse_redecide(
             [

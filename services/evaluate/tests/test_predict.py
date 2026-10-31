@@ -32,6 +32,12 @@ def test_parse_literal_and_value_of():
     # a multi-value list is not a point query
     assert value_of("v IN (1, 2)", pl.Int64) is None
     assert value_of("v IN ('a', 'b')", pl.String) is None
+    # a binary column: UTF-8 bytes arrive quoted, other bytes as unhex('<hex>')
+    assert parse_literal("'it\\'s'", pl.Binary) == b"it's"
+    assert parse_literal("unhex('00ff')", pl.Binary) == b"\x00\xff"
+    assert parse_literal("unhex('')", pl.Binary) == b""
+    assert value_of("v IN (unhex('c328'))", pl.Binary) == b"\xc3\x28"
+    assert parse_literal("unhex('0g')", pl.Binary) is None
 
 
 def test_minmax_on_sorted_values_skips_all_other_blocks():
@@ -67,6 +73,15 @@ def test_bloom_is_discounted_by_fpr():
     )
     p = SkipPredictor(pl.Series("v", v))
     assert p.skip("bloom_filter(0.025):1", 0) == pytest.approx(0.5 * 0.975)
+
+
+def test_binary_column_skips_and_counts():
+    # block 0 holds b"\x00", block 1 holds b"\xff"
+    p = SkipPredictor(pl.Series("v", [b"\x00"] * MARK_ROWS + [b"\xff"] * MARK_ROWS))
+    assert p.skip("minmax:1", b"\x00") == pytest.approx(0.5)
+    assert p.skip("set(125):1", b"\xff") == pytest.approx(0.5)
+    assert p.skip("bloom_filter(0.025):1", b"\x00") == pytest.approx(0.5 * 0.975)
+    assert p.rows_of(b"\xff") == MARK_ROWS
 
 
 def test_none_skips_nothing_and_counts_rows():
@@ -121,3 +136,6 @@ def test_chbench_literals_round_trip_with_exact_counts():
     _round_trip(pa.array(t, pa.time64("ns")), "Time64(9)")
     dec = [decimal.Decimal(x) for x in ("1.5000", "-2.2500", "1.5000", "0.0001")]
     _round_trip(pa.array(dec, pa.decimal128(18, 4)), "Decimal64(4)")
+    # binary: UTF-8 bytes render quoted, other bytes as unhex('<hex>')
+    _round_trip(pa.array([b"it's", b"b", b"it's", b"c"], pa.binary()), "String")
+    _round_trip(pa.array([b"\x00\xff", b"b", b"\x00\xff", b"c"], pa.binary()), "String")
