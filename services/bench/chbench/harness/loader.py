@@ -17,15 +17,20 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from synthdata import Dataset
-from chbench.harness.client import CHClient
 from chbench.harness.ddl import create_table_sql, drop_table_sql, optimize_sql
 from chbench.harness.validate import TableVariant
+
+# Annotations only: an in-process worker imports this module (via queries) and has no use for
+# the ClickHouse client.
+if TYPE_CHECKING:
+    from synthdata import Dataset
+    from chbench.harness.client import CHClient
 
 
 @dataclass(frozen=True)

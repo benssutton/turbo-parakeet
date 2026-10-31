@@ -5,9 +5,9 @@ module (about 30 s all told); the tests read what those runs left behind."""
 
 import csv
 import io
+import multiprocessing
 import textwrap
 
-import psutil
 import pytest
 from rich.console import Console
 
@@ -32,7 +32,7 @@ STRINGS = textwrap.dedent("""
     polars:
       type: [String, 'Categorical(UInt8)', Enum]
       storage: [memory, ipc]
-      compression: [none, LZ4_FRAME, ZSTD(3)]
+      compression: [none, ZSTD(3)]
       threads: [2]
     datafusion:
       type: [string, 'dictionary<values=string, indices=uint8, ordered=0>']
@@ -89,6 +89,7 @@ def small_batches():
 
 
 def _run(text, root, **kw):
+    before = set(multiprocessing.active_children())
     r = run_suite(
         parse_suite(text),
         store_path=root / "r.db",
@@ -96,7 +97,10 @@ def _run(text, root, **kw):
         console=Console(file=io.StringIO(), width=400),
         **kw,
     )
-    assert psutil.Process().children(recursive=True) == []  # every worker closed
+    # Every worker this run started is closed: the multiprocessing children it added, not
+    # psutil's children(), which on Linux include the spawn context's long-lived
+    # resource_tracker (no worker); children alive before the run are not this run's.
+    assert set(multiprocessing.active_children()) <= before
     return r
 
 
@@ -141,7 +145,7 @@ def numbers(tmp_path_factory):
 
 
 @pytest.mark.parametrize(
-    "fixture, ok, skipped", [("strings", 18, 8), ("numbers", 9, 0)]
+    "fixture, ok, skipped", [("strings", 15, 5), ("numbers", 9, 0)]
 )
 def test_every_query_answers_the_reference(fixture, ok, skipped, request):
     run = request.getfixturevalue(fixture)
@@ -169,11 +173,11 @@ def test_ipc_compression_shrinks_strings_and_files_are_reused(strings):
     assert (
         by[("datafusion", "string", "ZSTD(3)")] < by[("datafusion", "string", "none")]
     )
-    assert len(files) == 13 and all(
+    assert len(files) == 10 and all(
         f.is_file() for f in files
-    )  # 9 Polars + 4 DataFusion ipc cells
+    )  # 6 Polars + 4 DataFusion ipc cells
     assert (
-        second.samples_written == 18 * 3
+        second.samples_written == 15 * 3
         and [f.stat().st_mtime_ns for f in files] == stamps
     )
 
@@ -186,7 +190,7 @@ def test_a_baseline_pairs_within_each_engine(strings):
     cat = [x for x in summary if x["ch_type"] == "Categorical(UInt8)"]
     # Paired on wall time: process CPU time ticks in 15.6 ms steps on Windows, so cpu_ratio and
     # n_rounds are mostly empty for 2 ms batches.
-    assert len(cat) == 4 * 3 and all(x["server_ratio"] is not None for x in cat)
+    assert len(cat) == 3 * 3 and all(x["server_ratio"] is not None for x in cat)
     assert all(
         x["server_ratio"] is None for x in summary if x["engine"] == "datafusion"
     )

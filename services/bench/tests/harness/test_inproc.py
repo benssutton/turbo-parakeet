@@ -277,6 +277,8 @@ def test_a_child_gone_before_psutil_sees_it_is_worker_died(monkeypatch, pipes):
         raise psutil.NoSuchProcess(pid)
 
     monkeypatch.setattr(inproc.psutil, "Process", gone)
+    # the engine is dead before it sent `close`, so close() waits out a join on a live child
+    monkeypatch.setattr(inproc, "_CLOSE_WAIT_S", 0.2)
     with pytest.raises(inproc.WorkerDied, match="died at start"):
         inproc.InprocEngine("fake", 1)
     assert len(pipes) == 2 and all(c.closed for c in pipes)
