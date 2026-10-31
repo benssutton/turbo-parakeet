@@ -1,7 +1,8 @@
 """Parse a YAML suite file into typed, validated dataclasses.
 
 This is the harness's entry point: everything a run needs (the dataset spec,
-the ClickHouse table axes, the query axes, the results config) is parsed and
+the ClickHouse table axes, the in-process engines' blocks (`polars:` / `datafusion:`, at
+least one engine block per suite), the query axes, the results config) is parsed and
 validated up front, so a malformed suite fails before anything touches the
 generator or the database. `suites/` holds example suite files.
 """
@@ -9,7 +10,7 @@ generator or the database. `suites/` holds example suite files.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,13 @@ import yaml
 
 from synthdata import DatasetSpec, Distribution, SpecError
 from synthdata.column.realdata import path_spec
+from chbench.harness.inproc_types import (
+    STORAGES,
+    feed_error,
+    normalise_ipc_batch_rows,
+    normalise_ipc_compression,
+    type_label,
+)
 from chbench.harness.validate import (
     BLOOM_FPRS,
     KNOWN_CODECS,
@@ -27,7 +35,11 @@ from chbench.harness.validate import (
     is_known_skip_index,
 )
 
-_TOP_LEVEL_BLOCKS = ("name", "dataset", "clickhouse", "queries", "results")
+_REQUIRED_BLOCKS = ("name", "dataset", "queries", "results")
+_ENGINE_BLOCKS = ("clickhouse", "polars", "datafusion")
+_TOP_LEVEL_BLOCKS = _REQUIRED_BLOCKS + _ENGINE_BLOCKS
+_INPROC_AXES = ("type", "storage", "compression")
+_INPROC_KEYS = set(_INPROC_AXES) | {"threads", "ipc_batch_rows"}
 _QUERY_KINDS = ("full_scan", "filter")
 _PREDICATES = ("range", "in")
 _CLICKHOUSE_AXES = (
@@ -73,6 +85,19 @@ class ClickHouseAxes:
 
 
 @dataclass(frozen=True)
+class InprocAxes:
+    """A `polars:` or `datafusion:` block. `type` keeps the axis values as written (their labels:
+    `inproc_types.type_label`), `compression` the stored spelling (`none`, `LZ4_FRAME`, `ZSTD(N)`),
+    `threads` None for the default (the Docker VM's CPU count, else the host's)."""
+
+    type: list[str]
+    storage: list[str]
+    compression: list[str]
+    threads: list[int] | None
+    ipc_batch_rows: list[str] = field(default_factory=lambda: ["whole"])
+
+
+@dataclass(frozen=True)
 class QueryAxes:
     kinds: list[QueryKind]
     samples: int
@@ -87,10 +112,12 @@ class ResultsConfig:
 class Suite:
     name: str
     dataset: DatasetSpec
-    clickhouse: ClickHouseAxes
+    clickhouse: ClickHouseAxes | None
     queries: QueryAxes
     results: ResultsConfig
     source_yaml: str
+    polars: InprocAxes | None = None
+    datafusion: InprocAxes | None = None
 
 
 def load_suite(path: str | Path) -> Suite:
@@ -109,16 +136,27 @@ def parse_suite(text: str, base_dir: str | Path | None = None) -> Suite:
             "suite must be a YAML mapping with top-level blocks " f"{_TOP_LEVEL_BLOCKS}"
         )
 
-    for block in _TOP_LEVEL_BLOCKS:
+    for block in _REQUIRED_BLOCKS:
         if block not in doc:
             raise SuiteError(f"suite is missing the required top-level block {block!r}")
     _reject_unknown_keys(doc, set(_TOP_LEVEL_BLOCKS), "suite")
+    if not any(block in doc for block in _ENGINE_BLOCKS):
+        raise SuiteError(
+            f"suite names no engine: give at least one of the blocks {list(_ENGINE_BLOCKS)}"
+        )
 
     name = doc["name"]
 
     dataset = _parse_dataset(doc["dataset"], base_dir)
-    clickhouse = _parse_clickhouse(doc["clickhouse"])
-    _check_dataset_against_type_axis(dataset, clickhouse)
+    clickhouse = None
+    if "clickhouse" in doc:
+        clickhouse = _parse_clickhouse(doc["clickhouse"])
+        _check_dataset_against_type_axis(dataset, clickhouse)
+    inproc = {}
+    for engine in ("polars", "datafusion"):
+        if engine in doc:
+            inproc[engine] = _parse_inproc(doc[engine], engine)
+            _check_dataset_against_inproc_axis(dataset, engine, inproc[engine])
     queries = _parse_queries(doc["queries"])
     results = _parse_results(doc["results"])
 
@@ -129,6 +167,8 @@ def parse_suite(text: str, base_dir: str | Path | None = None) -> Suite:
         queries=queries,
         results=results,
         source_yaml=text,
+        polars=inproc.get("polars"),
+        datafusion=inproc.get("datafusion"),
     )
 
 
@@ -374,6 +414,82 @@ def _check_dataset_against_type_axis(
                     f"clickhouse.type value {value!r} needs {need}, but "
                     f"dataset.arrow_type is {dataset.arrow_type!r}"
                 )
+
+
+def _parse_inproc(block, engine: str) -> InprocAxes:
+    """A `polars:` / `datafusion:` block: `type`, `storage`, `compression` (non-empty lists) and an
+    optional `threads` (positive integers) and `ipc_batch_rows` (`whole`, the default, or positive
+    integers). Every error names `<engine>.<axis>`."""
+    if not isinstance(block, dict):
+        raise SuiteError(f"{engine} block must be a mapping, got {block!r}")
+    _reject_unknown_keys(block, _INPROC_KEYS, engine)
+    for axis in _INPROC_AXES:
+        if axis not in block:
+            raise SuiteError(f"{engine} block is missing the {axis!r} axis")
+        _require_non_empty_list(block[axis], f"{engine}.{axis}")
+
+    labels = []
+    for value in block["type"]:
+        try:
+            labels.append(type_label(engine, value))
+        except ValueError as e:
+            raise SuiteError(f"{engine}.type: {e}") from e
+    if len(set(labels)) != len(labels):
+        raise SuiteError(
+            f"{engine}.type names one type twice (as labelled: {labels!r}); give each once"
+        )
+
+    for value in block["storage"]:
+        if value not in STORAGES:
+            raise SuiteError(
+                f"{engine}.storage has unknown value {value!r}; must be one of {list(STORAGES)}"
+            )
+
+    try:
+        compression = list(
+            dict.fromkeys(normalise_ipc_compression(v) for v in block["compression"])
+        )
+    except ValueError as e:
+        raise SuiteError(f"{engine}.compression: {e}") from e
+
+    threads = block.get("threads")
+    if threads is not None:
+        _require_non_empty_list(threads, f"{engine}.threads")
+        for t in threads:
+            if not isinstance(t, int) or isinstance(t, bool) or t <= 0:
+                raise SuiteError(
+                    f"{engine}.threads must hold positive integers, got {t!r}"
+                )
+
+    batch_rows = block.get("ipc_batch_rows", ["whole"])
+    _require_non_empty_list(batch_rows, f"{engine}.ipc_batch_rows")
+    try:
+        batch_rows = list(
+            dict.fromkeys(normalise_ipc_batch_rows(v) for v in batch_rows)
+        )
+    except ValueError as e:
+        raise SuiteError(f"{engine}.ipc_batch_rows: {e}") from e
+
+    return InprocAxes(
+        type=[str(v) for v in block["type"]],
+        storage=list(block["storage"]),
+        compression=compression,
+        threads=list(threads) if threads is not None else None,
+        ipc_batch_rows=batch_rows,
+    )
+
+
+def _check_dataset_against_inproc_axis(
+    dataset: DatasetSpec, engine: str, axes: InprocAxes
+) -> None:
+    """Reject at parse time an in-process `type` value the dataset cannot feed
+    (`inproc_types.FEEDS`: a list dataset, a Categorical over numbers, a number over strings). A cast
+    that is allowed but fails, or does not survive the round trip, is a skipped cell at run time.
+    """
+    for value in axes.type:
+        error = feed_error(dataset.arrow_dtype, engine, value)
+        if error is not None:
+            raise SuiteError(error)
 
 
 def _parse_queries(block: dict) -> QueryAxes:

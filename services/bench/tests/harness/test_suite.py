@@ -2,6 +2,7 @@ import textwrap
 import pytest
 
 from chbench.harness.suite import (
+    InprocAxes,
     QueryKind,
     SuiteError,
     load_suite,
@@ -325,4 +326,126 @@ def test_granularity_and_fpr_skip_indexes_are_accepted(value):
 def test_bad_skip_index_grammar_is_rejected(value):
     y = MINIMAL.replace("skip_index: [none]", f'skip_index: ["{value}"]')
     with pytest.raises(SuiteError, match="skip_index"):
+        parse_suite(y)
+
+
+INPROC = MINIMAL.replace(
+    "queries:",
+    "polars:\n"
+    "  type: [Float64, Float32]\n"
+    "  storage: [memory, ipc]\n"
+    "  compression: [none, ZSTD, LZ4_FRAME]\n"
+    "datafusion:\n"
+    "  type: [double]\n"
+    "  storage: [ipc]\n"
+    "  compression: [ZSTD(3)]\n"
+    "  threads: [2, 4]\n"
+    "queries:",
+)
+
+
+def drop_block(text: str, block: str) -> str:
+    """`text` without the top-level `block` (its header line and indented body)."""
+    out, skipping = [], False
+    for line in text.splitlines(keepends=True):
+        if line.startswith(f"{block}:"):
+            skipping = True
+            continue
+        if skipping and not line.startswith(" "):
+            skipping = False
+        if not skipping:
+            out.append(line)
+    return "".join(out)
+
+
+def test_in_process_blocks_parse_with_their_defaults():
+    s = parse_suite(INPROC)
+    assert s.polars == InprocAxes(
+        type=["Float64", "Float32"],
+        storage=["memory", "ipc"],
+        compression=["none", "ZSTD(1)", "LZ4_FRAME"],
+        threads=None,
+        ipc_batch_rows=["whole"],
+    )
+    assert s.datafusion.threads == [2, 4] and s.datafusion.compression == ["ZSTD(3)"]
+    assert s.source_yaml == INPROC
+
+
+def test_ipc_batch_rows_is_an_axis():
+    y = INPROC.replace(
+        "  threads: [2, 4]\n",
+        "  threads: [2, 4]\n  ipc_batch_rows: [whole, 65536, whole]\n",
+    )
+    assert parse_suite(y).datafusion.ipc_batch_rows == ["whole", "65536"]
+    for bad in ("[0]", "[big]", "[]"):
+        z = INPROC.replace(
+            "  threads: [2, 4]\n", f"  threads: [2, 4]\n  ipc_batch_rows: {bad}\n"
+        )
+        with pytest.raises(SuiteError, match=r"datafusion\.ipc_batch_rows"):
+            parse_suite(z)
+
+
+def test_a_suite_may_omit_clickhouse():
+    s = parse_suite(drop_block(INPROC, "clickhouse"))
+    assert s.clickhouse is None and s.polars is not None
+
+
+def test_a_clickhouse_only_suite_has_no_in_process_blocks():
+    s = parse_suite(MINIMAL)
+    assert s.polars is None and s.datafusion is None
+
+
+def test_a_suite_names_at_least_one_engine():
+    with pytest.raises(SuiteError, match="names no engine"):
+        parse_suite(drop_block(MINIMAL, "clickhouse"))
+
+
+@pytest.mark.parametrize(
+    "old, new, match",
+    [
+        (
+            "storage: [memory, ipc]",
+            "storage: [memory, ipc]\n  codec: [none]",
+            r"polars has unknown key",
+        ),
+        (
+            "  storage: [memory, ipc]\n",
+            "",
+            r"polars block is missing the 'storage' axis",
+        ),
+        ("storage: [memory, ipc]", "storage: [disk]", r"polars\.storage"),
+        (
+            "compression: [none, ZSTD, LZ4_FRAME]",
+            "compression: [LZ4]",
+            r"polars\.compression",
+        ),
+        ("type: [Float64, Float32]", "type: [Float16]", r"polars\.type"),
+        (
+            "type: [Float64, Float32]",
+            "type: [Float64, Float64]",
+            r"names one type twice",
+        ),
+        ("threads: [2, 4]", "threads: [0]", r"datafusion\.threads"),
+        ("threads: [2, 4]", "threads: ['4']", r"datafusion\.threads"),
+        ("type: [double]", "type: [float64]", r"datafusion\.type.*'double'"),
+    ],
+)
+def test_in_process_block_errors_name_the_field(old, new, match):
+    with pytest.raises(SuiteError, match=match):
+        parse_suite(INPROC.replace(old, new))
+
+
+def test_two_spellings_of_one_categorical_are_one_type():
+    y = INPROC.replace(
+        "type: [Float64, Float32]", "type: [Categorical, 'Categorical(UInt32)']"
+    )
+    with pytest.raises(SuiteError, match="names one type twice"):
+        parse_suite(y)
+
+
+def test_a_type_the_dataset_cannot_feed_is_refused_at_parse_time():
+    y = INPROC.replace("type: [Float64, Float32]", "type: ['Categorical(UInt8)']")
+    with pytest.raises(
+        SuiteError, match=r"polars\.type value 'Categorical\(UInt8\)'.*numeric"
+    ):
         parse_suite(y)
