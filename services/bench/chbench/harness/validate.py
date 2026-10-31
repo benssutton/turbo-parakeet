@@ -229,8 +229,8 @@ class TableVariant:
     (`engine` polars / datafusion) has `nullable`, `primary_key`, `projection`, `codec` and
     `skip_index` None, `ch_type` its engine type label, `compression` the IPC compression,
     `storage` memory / ipc, `threads` its worker's thread count, `type_spec` the `type` axis
-    value as written (an Enum's categories) and `ipc_batch_rows` `whole` or rows per IPC record
-    batch (as text)."""
+    value as written (an Enum's categories) and `ipc_batch_rows` rows per IPC record batch (as
+    text) or `whole` for an `ipc` cell, None for a `memory` cell."""
 
     ch_type: str
     nullable: bool | None
@@ -742,7 +742,6 @@ def expand_grid(
 
 
 MEMORY_COMPRESSED = "storage memory holds the column uncompressed; IPC compression applies to storage ipc only"
-MEMORY_BATCHED = "storage memory holds the column as the engine does; ipc_batch_rows applies to storage ipc only"
 
 
 def expand_inproc_grid(
@@ -750,26 +749,27 @@ def expand_inproc_grid(
 ) -> list[TableVariant]:
     """`suite.<engine>`'s axes (`polars` / `datafusion`) as the product type x storage x
     compression x ipc_batch_rows x threads, in that order; [] without the block.
-    `default_threads` stands in for an omitted `threads` axis. `storage: memory` with a
-    compression other than `none` (`MEMORY_COMPRESSED`), or with `ipc_batch_rows` other than
-    `whole` (`MEMORY_BATCHED`), is a skipped cell; a cast the engine refuses or that loses values
-    is found, and skipped, when the worker prepares the cell."""
+    `default_threads` stands in for an omitted `threads` axis. `ipc_batch_rows` crosses the
+    `storage: ipc` cells only: a memory cell holds the column as the engine does and carries
+    `ipc_batch_rows` None. `storage: memory` with a compression other than `none` is a skipped
+    cell (`MEMORY_COMPRESSED`); a cast the engine refuses or that loses values is found, and
+    skipped, when the worker prepares the cell."""
     axes = getattr(suite, engine)
     if axes is None:
         return []
     out = []
-    for value, storage, compression, batch_rows, threads in itertools.product(
-        axes.type,
-        axes.storage,
-        axes.compression,
-        axes.ipc_batch_rows,
-        axes.threads or [default_threads],
-    ):
+    cells = (
+        (value, storage, compression, batch_rows, threads)
+        for value, storage, compression in itertools.product(
+            axes.type, axes.storage, axes.compression
+        )
+        for batch_rows in (axes.ipc_batch_rows if storage == "ipc" else [None])
+        for threads in axes.threads or [default_threads]
+    )
+    for value, storage, compression, batch_rows, threads in cells:
         reason = None
         if storage == "memory" and compression != "none":
             reason = MEMORY_COMPRESSED
-        elif storage == "memory" and batch_rows != "whole":
-            reason = MEMORY_BATCHED
         out.append(
             TableVariant(
                 ch_type=type_label(engine, value),
@@ -805,8 +805,8 @@ def table_id(variant: TableVariant, dataset_id: str, clickhouse_version: str) ->
     engine's otherwise). A ClickHouse cell hashes its seven axis values (ch_type, nullable,
     primary_key, projection, codec, skip_index, compression), exactly as before engines existed,
     so ids already in a store stay valid; an in-process cell hashes engine, label, type_spec,
-    storage, compression, threads and ipc_batch_rows. Stable across calls with the same inputs;
-    changes if any input changes."""
+    storage, compression and threads, and an `ipc` cell its ipc_batch_rows too. Stable across
+    calls with the same inputs; changes if any input changes."""
     if getattr(variant, "engine", "clickhouse") == "clickhouse":
         parts = [
             variant.ch_type,
@@ -825,7 +825,8 @@ def table_id(variant: TableVariant, dataset_id: str, clickhouse_version: str) ->
             str(variant.storage),
             variant.compression,
             str(variant.threads),
-            str(variant.ipc_batch_rows),
         ]
+        if variant.storage == "ipc":
+            parts.append(str(variant.ipc_batch_rows))
     key = "\x1f".join([*parts, dataset_id, clickhouse_version])
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]

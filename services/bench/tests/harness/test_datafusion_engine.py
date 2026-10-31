@@ -28,14 +28,14 @@ _IDS = [f"{a.type}->{t}" for a, ts in DF_CASES for t in ts]
 
 
 def spec(
-    tid, type_spec, tmp_path, storage="memory", compression="none", batch_rows="whole"
+    tid, type_spec, tmp_path, storage="memory", compression="none", batch_rows="122880"
 ):
     return {
         "table_id": tid,
         "type_spec": type_spec,
         "storage": storage,
         "compression": compression,
-        "ipc_batch_rows": batch_rows,
+        "ipc_batch_rows": batch_rows if storage == "ipc" else None,
         "ipc_path": str(tmp_path / f"{tid}.arrow"),
         "expect_ipc_bytes": None,
     }
@@ -82,6 +82,16 @@ def test_a_memory_table_has_one_partition_per_thread(tmp_path):
         f"EXPLAIN SELECT sum(v) FROM {datafusion_table('t1')}"
     ).to_arrow_table()
     assert "partitions=3" in "\n".join(plan.column("plan").to_pylist())
+
+
+def test_a_small_memory_table_still_has_one_partition_per_thread(tmp_path):
+    # 1 000 rows in 65 536-row batches would be one partition, scanned on one thread.
+    w = worker_over(pa.array(np.arange(1_000, dtype=np.int64)), threads=4)
+    w.prepare(spec("t1", "int64", tmp_path))
+    plan = w.ctx.sql(
+        f"EXPLAIN SELECT sum(v) FROM {datafusion_table('t1')}"
+    ).to_arrow_table()
+    assert "partitions=4" in "\n".join(plan.column("plan").to_pylist())
 
 
 def test_dictionary_indices_too_narrow_are_skipped(tmp_path):

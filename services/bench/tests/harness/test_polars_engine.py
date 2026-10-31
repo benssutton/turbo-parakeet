@@ -75,14 +75,14 @@ _IDS = [f"{a.type}->{t}" for a, ts in PL_CASES for t in ts]
 
 
 def spec(
-    tid, type_spec, tmp_path, storage="memory", compression="none", batch_rows="whole"
+    tid, type_spec, tmp_path, storage="memory", compression="none", batch_rows="122880"
 ):
     return {
         "table_id": tid,
         "type_spec": type_spec,
         "storage": storage,
         "compression": compression,
-        "ipc_batch_rows": batch_rows,
+        "ipc_batch_rows": batch_rows if storage == "ipc" else None,
         "ipc_path": str(tmp_path / f"{tid}.arrow"),
         "expect_ipc_bytes": None,
     }

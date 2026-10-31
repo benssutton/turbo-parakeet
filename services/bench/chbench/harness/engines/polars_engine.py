@@ -17,9 +17,9 @@ has set `POLARS_MAX_THREADS` (`inproc.InprocEngine`).
   sizes mirror pyarrow's writer on this layout — then read back from its bytes for the check (a
   memory-mapped read would lock the file on Windows), and scanned per query with `pl.scan_ipc`.
   `scan_ipc` memory-maps the file whatever its compression (Polars 2.0). An uncompressed file in
-  record batches is queried from the mapped pages without a private copy (the "uncompressed IPC"
-  cell); one whole-file batch is copied into private memory first, and a compressed file is
-  decoded into private memory batch by batch.
+  record batches (`ipc_batch_rows`, 122 880 rows by default) is queried from the mapped pages
+  without a private copy (the "uncompressed IPC" cell); one whole-file batch (`whole`) is copied
+  into private memory first, and a compressed file is decoded into private memory batch by batch.
 - Query: `.select(pl.len(), <polars_total>)`, filtered by `polars_predicate`, `.collect()`;
   Categorical / Enum columns are compared and totalled through their string values.
 """

@@ -32,7 +32,8 @@ Three additions go beyond those five tables as first designed:
 - `tables.engine` / `storage` / `threads` / `ipc_batch_rows` / `ipc_bytes` / `memory_bytes`
   (schema 3, ToDo 5): an in-process table (Polars, DataFusion) has its engine type label in
   `ch_type`, its IPC compression in `compression`, its engine's version in `clickhouse_version`,
-  its IPC record-batch size (`whole` or rows, as text), the IPC file's bytes and its resident size
+  its IPC record-batch size (rows, by default `122880`, or `whole`, as text; NULL for a
+  `memory` table), the IPC file's bytes and its resident size
   (informational: Polars' process-global categorical mapping can inflate it, ToDo 11);
   `runs.engine_versions` (JSON) the versions a run used. An in-process sample is a batch of
   `samples.repeats` runs of the query (`repeats_capped` 1 when the calibration hit its cap);

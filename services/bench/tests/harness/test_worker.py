@@ -25,14 +25,14 @@ def spec(
     expect=None,
     tid="t1",
     type_spec="Float64",
-    batch_rows="whole",
+    batch_rows="122880",
 ):
     return {
         "table_id": tid,
         "type_spec": type_spec,
         "storage": storage,
         "compression": compression,
-        "ipc_batch_rows": batch_rows,
+        "ipc_batch_rows": batch_rows if storage == "ipc" else None,
         "ipc_path": str(tmp_path / "ipc" / f"{tid}.arrow"),
         "expect_ipc_bytes": expect,
     }

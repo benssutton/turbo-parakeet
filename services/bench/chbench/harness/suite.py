@@ -20,6 +20,7 @@ import yaml
 from synthdata import DatasetSpec, Distribution, SpecError
 from synthdata.column.realdata import path_spec
 from chbench.harness.inproc_types import (
+    DEFAULT_IPC_BATCH_ROWS,
     STORAGES,
     feed_error,
     normalise_ipc_batch_rows,
@@ -94,7 +95,9 @@ class InprocAxes:
     storage: list[str]
     compression: list[str]
     threads: list[int] | None
-    ipc_batch_rows: list[str] = field(default_factory=lambda: ["whole"])
+    ipc_batch_rows: list[str] = field(
+        default_factory=lambda: [str(DEFAULT_IPC_BATCH_ROWS)]
+    )
 
 
 @dataclass(frozen=True)
@@ -418,8 +421,9 @@ def _check_dataset_against_type_axis(
 
 def _parse_inproc(block, engine: str) -> InprocAxes:
     """A `polars:` / `datafusion:` block: `type`, `storage`, `compression` (non-empty lists) and an
-    optional `threads` (positive integers) and `ipc_batch_rows` (`whole`, the default, or positive
-    integers). Every error names `<engine>.<axis>`."""
+    optional `threads` (positive integers) and `ipc_batch_rows` (positive integers, by default
+    122 880, or `whole`; it applies to `storage: ipc` cells only). Every error names
+    `<engine>.<axis>`."""
     if not isinstance(block, dict):
         raise SuiteError(f"{engine} block must be a mapping, got {block!r}")
     _reject_unknown_keys(block, _INPROC_KEYS, engine)
@@ -461,7 +465,7 @@ def _parse_inproc(block, engine: str) -> InprocAxes:
                     f"{engine}.threads must hold positive integers, got {t!r}"
                 )
 
-    batch_rows = block.get("ipc_batch_rows", ["whole"])
+    batch_rows = block.get("ipc_batch_rows", [DEFAULT_IPC_BATCH_ROWS])
     _require_non_empty_list(batch_rows, f"{engine}.ipc_batch_rows")
     try:
         batch_rows = list(

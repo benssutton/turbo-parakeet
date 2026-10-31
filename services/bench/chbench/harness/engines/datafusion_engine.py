@@ -5,8 +5,9 @@
   included: a dictionary whose indices cannot hold the distinct values fails, a skipped cell).
 - `memory_bytes` is the Arrow table's `nbytes`: every buffer, a dictionary's values included. It
   is informational, not comparable across engines.
-- `memory`: the column registered with `register_record_batches` as `threads` partitions of
-  65 536-row batches, so DataFusion can scan it on every thread (whatever `ipc_batch_rows` says).
+- `memory`: the column registered with `register_record_batches` as `threads` partitions, dealt
+  round-robin in batches of min(65 536, ceil(rows / threads)) rows, so every thread gets a
+  partition however small the table (a memory cell has no `ipc_batch_rows`).
   `ipc`: written once by pyarrow's IPC writer in the Arrow type (the layout the recommenders
   measure for DataFusion), in record batches of `ipc_batch_rows`, read back for the check, and
   registered (`register_arrow`) and deregistered around each query, so a run measures decode +
@@ -62,7 +63,8 @@ class DataFusionWorker(BaseWorker):
             return ipc.open_file(f).read_all()["v"].combine_chunks()
 
     def hold(self, table_id, held) -> None:
-        batches = held.to_batches(max_chunksize=_BATCH_ROWS)
+        rows = max(1, min(_BATCH_ROWS, -(-held.num_rows // self.threads)))
+        batches = held.to_batches(max_chunksize=rows)
         parts = [batches[i :: self.threads] for i in range(self.threads)]
         self.ctx.register_record_batches(
             datafusion_table(table_id), [p for p in parts if p] or [batches]

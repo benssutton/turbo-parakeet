@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 
 from chbench.harness.inproc_types import (
+    DEFAULT_IPC_BATCH_ROWS,
     PolarsType,
     arrow_family,
     column_family,
@@ -44,6 +45,7 @@ def test_unknown_compression_is_refused(value):
 def test_ipc_batch_rows_is_whole_or_a_positive_count():
     assert normalise_ipc_batch_rows("whole") == "whole"
     assert normalise_ipc_batch_rows(65536) == "65536"
+    assert normalise_ipc_batch_rows(DEFAULT_IPC_BATCH_ROWS) == "122880"
     assert ipc_batch_rows("whole") is None and ipc_batch_rows("65536") == 65536
     for bad in (0, -1, True, "big", "1000", 1.5):
         with pytest.raises(ValueError, match="whole' or a positive integer"):

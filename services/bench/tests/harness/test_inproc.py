@@ -36,7 +36,7 @@ VARIANT = TableVariant(
     storage="memory",
     threads=2,
     type_spec="Float64",
-    ipc_batch_rows="whole",
+    ipc_batch_rows=None,
 )
 PAYLOAD = {"predicate_kind": None, "values": None, "sql": None}
 
@@ -105,7 +105,14 @@ def test_prepare_then_a_timed_round_delivers_a_sample(engine, dataset, tmp_path)
 def test_ipc_prepare_writes_the_file(engine, dataset, tmp_path):
     e = engine()
     e.load(dataset, "value")
-    v = TableVariant(**{**vars(VARIANT), "storage": "ipc", "compression": "ZSTD(3)"})
+    v = TableVariant(
+        **{
+            **vars(VARIANT),
+            "storage": "ipc",
+            "compression": "ZSTD(3)",
+            "ipc_batch_rows": "122880",
+        }
+    )
     path = tmp_path / "ipc" / "t1.arrow"
     r = e.prepare(v, "t1", path, None)
     assert r.status == "ok" and r.ipc_bytes == path.stat().st_size

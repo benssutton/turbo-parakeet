@@ -365,7 +365,7 @@ def test_in_process_blocks_parse_with_their_defaults():
         storage=["memory", "ipc"],
         compression=["none", "ZSTD(1)", "LZ4_FRAME"],
         threads=None,
-        ipc_batch_rows=["whole"],
+        ipc_batch_rows=["122880"],
     )
     assert s.datafusion.threads == [2, 4] and s.datafusion.compression == ["ZSTD(3)"]
     assert s.source_yaml == INPROC

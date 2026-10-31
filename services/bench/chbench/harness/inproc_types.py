@@ -16,8 +16,10 @@ an engine (the worker processes do, with their thread count already set).
   dictionaries of string or binary values included. Run-end encoding is refused: DataFusion 54 and
   55 reject MIN / MAX over it (CLAUDE.md, Rules › Targets; ToDo 6).
 - Compression: `none`, `LZ4_FRAME`, `ZSTD` (level 1) or `ZSTD(N)`, N 1-22, stored as `none`,
-  `LZ4_FRAME` or `ZSTD(N)`. Storage: `memory` or `ipc`. IPC batching (`ipc_batch_rows`): `whole`
-  (one record batch, the default) or rows per batch, stored as text.
+  `LZ4_FRAME` or `ZSTD(N)`. Storage: `memory` or `ipc`. IPC batching (`ipc_batch_rows`, storage
+  `ipc` only): rows per record batch, stored as text, by default `122880` (Polars' own chunking:
+  realistic writers produce batched files, and one whole-file batch was 3-4x slower to query in
+  both engines), or `whole` (the file is one record batch).
 - Families (`numeric`, `boolean`, `string`, `categorical`, `binary`, `date`, `timestamp`, `time`)
   say which dataset types can feed which column types (`FEEDS`, checked at parse time) and what a
   query's total means (`queries.reference_result`).
@@ -32,6 +34,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 STORAGES = ("memory", "ipc")
+DEFAULT_IPC_BATCH_ROWS = 122_880  # rows per record batch; stored as "122880"
 
 _ZSTD_RE = re.compile(r"ZSTD\(([0-9]+)\)")
 _COMPRESSION_HELP = "none, LZ4_FRAME, ZSTD or ZSTD(N) for N from 1 to 22"
@@ -51,9 +54,10 @@ def normalise_ipc_compression(value) -> str:
 
 
 def normalise_ipc_batch_rows(value) -> str:
-    """An `ipc_batch_rows` axis value in its stored spelling: `whole` (the file is one record
-    batch, the layout the recommenders measure) or a positive integer as text (rows per record
-    batch); ValueError otherwise."""
+    """An `ipc_batch_rows` axis value in its stored spelling: a positive integer as text (rows
+    per record batch; `DEFAULT_IPC_BATCH_ROWS` by default) or `whole` (the file is one record
+    batch, the layout the recommenders' size predictions model); ValueError otherwise.
+    """
     if value == "whole":
         return "whole"
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:

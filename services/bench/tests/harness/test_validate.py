@@ -496,7 +496,7 @@ def test_the_id_of_a_clickhouse_variant_is_unchanged():
 def test_in_process_ids_hash_engine_type_storage_compression_threads_version():
     grid = expand_inproc_grid(parse_suite(INPROC), "polars", default_threads=4)
     assert len({table_id(v, "d1", "2.0.0") for v in grid}) == len(grid)
-    v = grid[0]
+    v = next(x for x in grid if x.storage == "ipc")
     same = table_id(v, "d1", "2.0.0")
     assert same == table_id(v, "d1", "2.0.0")
     assert same != table_id(dataclasses.replace(v, threads=2), "d1", "2.0.0")
@@ -508,9 +508,19 @@ def test_in_process_ids_hash_engine_type_storage_compression_threads_version():
     assert same != table_id(
         dataclasses.replace(v, ipc_batch_rows="65536"), "d1", "2.0.0"
     )
+    # A memory cell's id has no batch in it: the axis does not apply to it.
+    mem = grid[0]
+    assert mem.storage == "memory" and mem.ipc_batch_rows is None
+    key = "\x1f".join(
+        ["polars", "Float64", "Float64", "memory", "none", "4", "d1", "2.0.0"]
+    )
+    assert table_id(mem, "d1", "2.0.0") == hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
-def test_ipc_batch_rows_crosses_the_grid_and_skips_memory():
+def test_ipc_batch_rows_crosses_ipc_cells_only():
+    # The default is Polars' own chunking, 122 880 rows per record batch.
+    d = expand_inproc_grid(parse_suite(INPROC), "datafusion", default_threads=8)
+    assert {x.ipc_batch_rows for x in d} == {"122880"}
     y = INPROC.replace(
         "  threads: [2, 4]\n", "  threads: [2]\n  ipc_batch_rows: [whole, 1000]\n"
     )
@@ -520,16 +530,16 @@ def test_ipc_batch_rows_crosses_the_grid_and_skips_memory():
         ("ipc", "1000", "ok"),
     ]
     m = parse_suite(
-        y.replace(
-            "  storage: [ipc]\n", "  storage: [memory]\n  compression: [none]\n", 1
-        ).replace("  compression: [ZSTD(3)]\n", "", 1)
+        y.replace("  storage: [ipc]\n", "  storage: [memory, ipc]\n", 1).replace(
+            "  compression: [ZSTD(3)]\n", "  compression: [none]\n", 1
+        )
     )
-    mem = expand_inproc_grid(m, "datafusion", default_threads=8)
-    assert [(x.ipc_batch_rows, x.status) for x in mem] == [
-        ("whole", "ok"),
-        ("1000", "skipped"),
+    cells = expand_inproc_grid(m, "datafusion", default_threads=8)
+    assert [(x.storage, x.ipc_batch_rows, x.status) for x in cells] == [
+        ("memory", None, "ok"),
+        ("ipc", "whole", "ok"),
+        ("ipc", "1000", "ok"),
     ]
-    assert "ipc_batch_rows applies to storage ipc only" in mem[1].skip_reason
     assert all(
         x.ipc_batch_rows is None
         for x in expand_grid(

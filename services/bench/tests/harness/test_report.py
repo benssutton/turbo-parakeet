@@ -317,7 +317,7 @@ def engine_rows(qid, engine, ch_type, cpu):
             ch_type=ch_type,
             storage=None if engine == "clickhouse" else "ipc",
             threads=None if engine == "clickhouse" else 4,
-            ipc_batch_rows=None if engine == "clickhouse" else "whole",
+            ipc_batch_rows=None if engine == "clickhouse" else "122880",
             codec=None if engine != "clickhouse" else r["codec"],
             ipc_bytes=None if engine == "clickhouse" else 900,
             table_memory_bytes=None if engine == "clickhouse" else 4000,
@@ -338,7 +338,8 @@ def test_engine_storage_threads_are_axes():
     assert by["qp"]["engine"] == "polars" and by["qp"]["storage"] == "ipc"
     assert by["qp"]["threads"] == 4 and by["qp"]["ipc_bytes"] == 900
     assert (
-        by["qp"]["table_memory_bytes"] == 4000 and by["qp"]["ipc_batch_rows"] == "whole"
+        by["qp"]["table_memory_bytes"] == 4000
+        and by["qp"]["ipc_batch_rows"] == "122880"
     )
     assert by["qc"]["engine"] == "clickhouse"
     assert [s["engine"] for s in summarise(rows, [50])] == ["clickhouse", "polars"]
@@ -390,7 +391,7 @@ def test_csv_carries_the_engine_columns(tmp_path):
         "4",
         "900",
     )
-    assert row["table_memory_bytes"] == "4000" and row["ipc_batch_rows"] == "whole"
+    assert row["table_memory_bytes"] == "4000" and row["ipc_batch_rows"] == "122880"
     assert (row["repeats"], row["repeats_capped"]) == ("4", "False")
 
 
@@ -417,6 +418,6 @@ def test_where_and_baseline_take_the_batch_axis():
     }
     by = {
         s["query_id"]: s
-        for s in summarise(rows_, [50], baseline="ipc_batch_rows=whole")
+        for s in summarise(rows_, [50], baseline="ipc_batch_rows=122880")
     }
     assert by["qb"]["cpu_ratio"] == 0.5

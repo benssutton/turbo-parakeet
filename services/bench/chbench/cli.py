@@ -156,7 +156,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--where",
         metavar="EXPR",
         help='filter, e.g. "codec=T64,kind=filter" or '
-        '"engine=polars,storage=ipc,ipc_batch_rows=whole"; the boolean '
+        '"engine=polars,storage=ipc,ipc_batch_rows=122880"; the boolean '
         "axes nullable, primary_key and projection are "
         "written 1/0, not the y/- the table shows",
     )
