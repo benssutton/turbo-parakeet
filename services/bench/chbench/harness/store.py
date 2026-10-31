@@ -747,17 +747,44 @@ class Store:
         columns = [d[0] for d in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
+    def suite_tables(self, suite_name: str) -> list[tuple[str, str]]:
+        """`(table_id, engine)` of every table recorded against `suite_name`, by table id; a table
+        of a store from before engines is `clickhouse`."""
+        present = {r[1] for r in self.conn.execute("PRAGMA table_info(tables)")}
+        engine = (
+            "COALESCE(tb.engine, 'clickhouse')"
+            if "engine" in present
+            else "'clickhouse'"
+        )
+        rows = self.conn.execute(
+            f"SELECT st.table_id, {engine} FROM suite_tables st "
+            "LEFT JOIN tables tb ON tb.table_id = st.table_id "
+            "WHERE st.suite_name = ? ORDER BY st.table_id",
+            (suite_name,),
+        ).fetchall()
+        return [(table_id, eng) for table_id, eng in rows]
+
     def tables_for_suite(self, suite_name: str) -> list[str]:
         """The rendered ClickHouse table names (`ddl.table_name(suite_name,
         table_id)` -- the exact string `create_table_sql`/`drop_table_sql`
-        used, so `clean` can `DROP TABLE` it directly) of every table
-        `upsert_table` recorded against this suite (from the
+        used, so `clean` can `DROP TABLE` it directly) of every ClickHouse
+        table `upsert_table` recorded against this suite (from the
         `suite_tables` join table, not derived through `queries`/`samples`/
         `runs` -- that join missed a table whose run was interrupted before
         its first query produced a sample, even though the table was already
-        created in ClickHouse and needed dropping)."""
-        rows = self.conn.execute(
-            "SELECT table_id FROM suite_tables WHERE suite_name = ?",
-            (suite_name,),
-        ).fetchall()
-        return [table_name(suite_name, row[0]) for row in rows]
+        created in ClickHouse and needed dropping). In-process tables have
+        IPC files instead (`suite_tables`)."""
+        return [
+            table_name(suite_name, table_id)
+            for table_id, engine in self.suite_tables(suite_name)
+            if engine == "clickhouse"
+        ]
+
+    def table_ipc_bytes(self, table_id: str) -> int | None:
+        """The IPC file size the store holds for an in-process table: what a rerun's worker
+        compares the file on disk with before reusing it. None without a row or a file.
+        """
+        row = self.conn.execute(
+            "SELECT ipc_bytes FROM tables WHERE table_id = ?", (table_id,)
+        ).fetchone()
+        return row[0] if row else None

@@ -610,3 +610,35 @@ def test_an_unknown_memory_is_stored_as_null(tmp_path):
             "SELECT memory_bytes, repeats, repeats_capped FROM samples"
         ).fetchone()
     assert tuple(row) == (None, 4, 1)
+
+
+def test_table_ipc_bytes(tmp_path):
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        s.upsert_table(
+            "t9", "d1", inproc_variant(), prepared(), "2.0.0", suite_name="A"
+        )
+        assert s.table_ipc_bytes("t9") == 1234 and s.table_ipc_bytes("nope") is None
+
+
+def test_a_real_prepare_result_reaches_the_stores_size_columns(tmp_path):
+    from chbench.harness.engines.base import PrepareResult
+
+    result = PrepareResult("ok", None, 3.5, 4321, 8765, 50)
+    with Store(tmp_path / "r.db") as s:
+        s.init_schema()
+        s.upsert_table("t9", "d1", inproc_variant(), result, "2.0.0", suite_name="A")
+        row = s.conn.execute(
+            "SELECT ipc_bytes, memory_bytes, rows, insert_ms FROM tables"
+        ).fetchone()
+        assert s.table_ipc_bytes("t9") == 4321
+    assert row == (4321, 8765, 50, 3.5)
+
+
+def test_suite_tables_name_each_tables_engine(tmp_path):
+    with _filled(tmp_path / "r.db") as s:
+        s.upsert_table(
+            "t9", "d1", inproc_variant(), prepared(), "2.0.0", suite_name="A"
+        )
+        assert s.suite_tables("A") == [("t1", "clickhouse"), ("t9", "polars")]
+        assert s.tables_for_suite("A") == ["bench.A_t1"]
