@@ -282,6 +282,95 @@ def test_results_agree():
     )
 
 
+BIG_INTS = [
+    pa.array([2**64 - 1, 2**64 - 2, 2**64 - 2, None, 2**53 + 1] * 20, pa.uint64()),
+    pa.array([2**62 + 1, -(2**62) - 3, -(2**62) - 3, None, 7] * 20, pa.int64()),
+    pa.array(
+        [1_700_000_000_123_456_789, 3, 3, None, -1_700_000_000_987_654_321] * 20,
+        pa.timestamp("ns"),
+    ),
+]
+
+
+def test_reference_totals_integers_beyond_two_to_the_53():
+    """Hash / id columns and nanosecond timestamps do not fit a double exactly: the reference
+    rounds them as the engines' own CAST(v AS DOUBLE) does, rather than refusing."""
+    assert reference_result(BIG_INTS[0][:2], None, None).total == pytest.approx(
+        2.0 * 2**64
+    )
+    assert reference_result(BIG_INTS[1][:1], None, None).total == float(2**62)
+    assert reference_result(BIG_INTS[2][:1], None, None).total == pytest.approx(
+        1_700_000_000.123_456_789
+    )
+
+
+@pytest.mark.parametrize("array", BIG_INTS, ids=["uint64", "int64", "timestamp_ns"])
+def test_datafusion_agrees_on_integers_beyond_two_to_the_53(ctx, array):
+    """DataFusion's lossy CAST(v AS DOUBLE) and pyarrow's sum in a different order: the relative
+    tolerance absorbs the rounding."""
+    column_type = array.type
+    table = datafusion_table(f"x{next(_TABLES)}")
+    ctx.register_record_batches(table, [[pa.record_batch({"v": array})]])
+    values = query_values(array)
+    for choice in (None, choose_in(values, 0.4, 1)):
+        arrow_values = (
+            None if choice is None else choice_values_arrow(choice, array.type)
+        )
+        predicate = (
+            None
+            if choice is None
+            else render_datafusion(choice.predicate_kind, arrow_values, column_type)
+        )
+        got = ctx.sql(datafusion_sql(table, column_type, predicate)).to_arrow_table()
+        ref = reference_result(
+            array, None if choice is None else choice.predicate_kind, arrow_values
+        )
+        count, total = got.column(0)[0].as_py(), got.column(1)[0].as_py()
+        assert results_agree(ref, count, total), (predicate, count, total, ref)
+
+
+def test_non_finite_totals_agree_with_the_same_non_finite_result():
+    nan, inf = float("nan"), float("inf")
+    for values in ([nan, 1.0, inf], [1e308, 1e308], [-1e308, -1e308], [inf, 2.0]):
+        ref = reference_result(pa.array(values), None, None)
+        assert not np.isfinite(ref.total)
+        assert results_agree(ref, len(values), float(sum(values)))
+    ref_nan = reference_result(pa.array([nan, nan, 1.0]), "in", pa.array([nan]))
+    assert results_agree(ref_nan, ref_nan.count, nan)
+    # a finite result disagrees
+    assert not results_agree(Reference(1, inf, inf), 1, 1e308)
+    assert not results_agree(Reference(1, nan, nan), 1, 0.0)
+    assert not results_agree(Reference(1, nan, nan), 2, nan)
+    # a finite reference never accepts a non-finite result
+    assert not results_agree(Reference(1, 1.0, 1.0), 1, nan)
+    assert not results_agree(Reference(1, 1.0, 1.0), 1, inf)
+
+
+def test_a_non_finite_reference_accepts_any_non_finite_result():
+    """With overflow or both infinities in the data, summation order alone decides between
+    inf, -inf and nan (inf + -inf = nan; 1e308 + 1e308 + -inf = nan or -inf; 1e308, 1e308,
+    -1e308, -1e308 = inf or -inf), so a non-finite reference accepts any non-finite result.
+    """
+    nan, inf = float("nan"), float("inf")
+    ref = reference_result(pa.array([inf, -inf]), None, None)
+    assert np.isnan(ref.total)
+    assert results_agree(ref, 2, inf) and results_agree(ref, 2, -inf)
+    assert results_agree(Reference(3, inf, inf), 3, nan)
+    assert results_agree(Reference(3, -inf, inf), 3, nan)
+    assert results_agree(Reference(4, inf, inf), 4, -inf)
+    assert not results_agree(ref, 2, 0.0)
+
+
+def test_an_integer_total_is_not_matched_by_truncation():
+    r = Reference(2, 7, 7.0)
+    assert results_agree(r, 2, 7) and results_agree(r, 2, 7.0)
+    assert not results_agree(r, 2, 7.9) and not results_agree(r, 2, 6.99)
+    assert not results_agree(r, 2, float("nan")) and not results_agree(
+        r, 2, float("inf")
+    )
+    assert results_agree(Reference(0, 0, 0.0), 0, None)
+
+
 def test_render_predicate_refuses_an_unknown_engine():
     v = dataclasses.replace(variant(), engine="sqlite")
     with pytest.raises(ValueError, match="sqlite"):

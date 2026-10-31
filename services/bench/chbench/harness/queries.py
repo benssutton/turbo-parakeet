@@ -569,6 +569,9 @@ def choice_values_arrow(choice: ValueChoice, dtype: pa.DataType) -> pa.Array:
         return (
             pa.array(np.asarray(choice.values, dtype=np.int64)).cast(base).cast(dtype)
         )
+    if pa.types.is_integer(dtype) and choice.values.dtype == object:
+        # Python ints: a uint64 above 2**63 overflows pyarrow's int64 inference
+        return pa.array(choice.values, type=dtype)
     arr = pa.array(choice.values)
     return arr if arr.type == dtype else arr.cast(dtype)
 
@@ -700,6 +703,12 @@ def _widen_decimal(array: pa.Array) -> pa.Array:
     return array
 
 
+def _as_double(rows: pa.Array) -> pa.Array:
+    """`rows` as float64, rounding integers beyond 2**53 (hash / id columns, nanosecond
+    timestamps) as an engine's CAST(v AS DOUBLE) does instead of refusing them."""
+    return pc.cast(rows, pa.float64(), safe=False)
+
+
 def _total(rows: pa.Array) -> tuple[int | float, float]:
     t = rows.type
     if pa.types.is_string_view(t):
@@ -710,19 +719,17 @@ def _total(rows: pa.Array) -> tuple[int | float, float]:
         n = int(pc.sum(pc.binary_length(rows)).as_py() or 0)
         return n, float(n)
     if pa.types.is_date32(t):
-        x = rows.cast(pa.int32()).cast(pa.float64())
+        x = _as_double(rows.cast(pa.int32()))
     elif pa.types.is_timestamp(t):
         x = pc.divide(
-            rows.cast(pa.int64()).cast(pa.float64()),
+            _as_double(rows.cast(pa.int64())),
             float(10 ** _UNIT_PRECISION[t.unit]),
         )
     elif pa.types.is_time(t):
         base = pa.int32() if pa.types.is_time32(t) else pa.int64()
-        x = pc.divide(
-            rows.cast(base).cast(pa.float64()), float(10 ** _UNIT_PRECISION[t.unit])
-        )
+        x = pc.divide(_as_double(rows.cast(base)), float(10 ** _UNIT_PRECISION[t.unit]))
     else:
-        x = rows.cast(pa.float64())
+        x = _as_double(rows)
     return float(pc.sum(x).as_py() or 0.0), float(pc.sum(pc.abs(x)).as_py() or 0.0)
 
 
@@ -765,15 +772,30 @@ def reference_result(
 
 
 def results_agree(reference: Reference, count, total) -> bool:
-    """`count` exactly; an int total exactly; a float total within 1e-9 of the magnitude summed
-    (`Reference.magnitude`); no total compared when the reference has none. A NULL total (an
-    empty SQL sum) reads as 0."""
+    """`count` exactly; an int total exactly (an integral number equal to it: 7.9 does not match
+    7); a float total within 1e-9 of the magnitude summed (`Reference.magnitude`, which absorbs
+    the rounding of integers beyond 2**53 cast to double); no total compared when the reference
+    has none. A NULL total (an empty SQL sum) reads as 0.
+
+    Non-finite totals: a finite reference needs a finite result. A non-finite reference (NaN,
+    inf or -inf) accepts any non-finite result, because once the data holds a NaN, an infinity
+    or values whose sum overflows, summation order alone picks the outcome: inf + -inf is NaN
+    in one order and an infinity in another, and 1e308, 1e308, -1e308, -1e308 overflows to inf
+    or to -inf. A NaN in the data makes every order NaN, so a stricter rule would need to know
+    which case holds; the count still guards the rows selected."""
     if count is None or int(count) != reference.count:
         return False
     if reference.total is None:
         return True
     got = 0 if total is None else total
     if isinstance(reference.total, int):
-        return int(got) == reference.total
+        if isinstance(got, float):
+            return got.is_integer() and int(got) == reference.total
+        return isinstance(got, (int, np.integer)) and int(got) == reference.total
+    got = float(got)
+    if not math.isfinite(reference.total):
+        return not math.isfinite(got)
+    if not math.isfinite(got):
+        return False
     scale = max(reference.magnitude, abs(reference.total))
-    return abs(float(got) - reference.total) <= 1e-9 * scale
+    return abs(got - reference.total) <= 1e-9 * scale
