@@ -10,7 +10,7 @@ Re-run what depends on the upgraded engine, compare with the previous results, r
 `versions.yaml` in the same commit. Use a quiet machine for anything timed (services/bench/CLAUDE.md, Measurement notes).
 Commands run from the repository root unless a directory is given.
 
-**ClickHouse** (recreate the container from the new image, then; the spikes write their TSVs next to the script, over
+**ClickHouse** (recreate the container from the new image, services/bench/CLAUDE.md › Environment, then; the spikes write their TSVs next to the script, over
 the committed ones, so `git diff` is the comparison):
 - From `services/bench/`: `python spikes/spike_ch_vocabulary.py`: types, codecs and skip rules
   (`spikes/spike_ch_vocabulary_results.tsv`).

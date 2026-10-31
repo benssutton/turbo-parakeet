@@ -1,6 +1,6 @@
 # The engine versions the project's calibrations and spikes last ran on. Bump an entry only in the commit that
-# records the re-run (docs/engines/README.md, "After an engine upgrade"). `chbench run` warns when the server or
-# an engine in use differs.
+# records the re-run (docs/engines/README.md, "After an engine upgrade"). `chbench run` warns when the ClickHouse server
+# differs (Polars / DataFusion / pyarrow: once ToDo 5 wires them).
 clickhouse:
   image: "clickhouse/clickhouse-server:26.8.31.2@sha256:05d2e46507afdcf08da46e5528b68847104dbbed691c327e505414b4b7f4e4c8"
   version: "26.8.31.2"
