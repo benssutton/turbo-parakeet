@@ -67,6 +67,12 @@ Six decisions here are load-bearing and are not free to change:
    (36 valid cells x 12 query variants) is thousands of lines of console.
    `explain=True` (`chbench run --explain`) prints it.
 
+7. **Engine versions are recorded, in-process blocks are refused or flagged**
+   `begin_run` receives the ClickHouse server version plus `versions.installed()`
+   (Polars, DataFusion, pyarrow, Python), so a result names the engines that made it.
+   A suite with no `clickhouse:` block is refused before anything else; a
+   `polars:` / `datafusion:` block beside one only warns that it is not run yet.
+
 `finish_run` is in a `finally`, not on the success path: a
 `sqlite3.OperationalError` from a second run sharing `results.db`, or an
 `expand_queries` `ValueError` on an all-null dataset, would otherwise leave
@@ -387,6 +393,10 @@ def run_suite(
     `ignore_unfinished` (`--ignore-unfinished`) is the user's statement
     that the first process is gone.
 
+    A suite without a `clickhouse:` block is refused first thing (`NotImplementedError`,
+    also under `dry_run`): before the connection, the dataset, the store and any run row,
+    so nothing is left behind. The in-process engines arrive with ToDo 5.
+
     A dataset whose solve ended `invalid_bracket` does not hit its target, so the run would
     measure the wrong data: `UnsolvedDatasetError` stops it (before the grid, so before the
     store) unless `allow_unsolved`. Clamped and `not_converged` solves stay warnings.
@@ -394,6 +404,11 @@ def run_suite(
     force_utf8()
     console = console or default_console()
     summary = RunSummary()
+    if suite.clickhouse is None:
+        raise NotImplementedError(
+            "the in-process engines (polars / datafusion blocks) do not run yet (ToDo 5): this "
+            "suite has no clickhouse block to run"
+        )
 
     client = CHClient(Connection.from_env())
     version = client.version()
@@ -407,6 +422,15 @@ def run_suite(
         console,
         "versions",
         versions.drift(versions.load_pinned(), {"clickhouse": version}),
+    )
+    _warn(
+        console,
+        "suite",
+        [
+            f"the {engine} block is parsed but not run yet (ToDo 5)"
+            for engine in ("polars", "datafusion")
+            if getattr(suite, engine) is not None
+        ],
     )
 
     dataset = load_or_generate(suite.dataset, Path(cache_dir))
@@ -460,7 +484,9 @@ def run_suite(
                 f"running, rerun with --ignore-unfinished."
             )
         store.upsert_dataset(manifest, str(arrow_path))
-        run_id = store.begin_run(suite)
+        run_id = store.begin_run(
+            suite, engine_versions={"clickhouse": version, **versions.installed()}
+        )
         summary.run_id = run_id
         context = RunContext(
             console=console,

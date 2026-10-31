@@ -2,17 +2,19 @@
 snapshot are replaced; the dataset, grid, queries, runner and store are real."""
 
 import io
+import json
 
+import pyarrow as pa
 import pytest
 from rich.console import Console
 
-from chbench.harness import orchestrate, quiet
+from chbench.harness import orchestrate, quiet, versions
 from chbench.harness.loader import LoadResult, StorageStats
 from chbench.harness.orchestrate import run_suite
 from chbench.harness.store import Store
 from chbench.harness.suite import parse_suite
 from tests.harness.fakes import FakeClient, rounds
-from tests.harness.test_suite import MINIMAL
+from tests.harness.test_suite import MINIMAL, drop_block
 
 SUITE = (
     MINIMAL.replace("name: t", "name: t_rounds")
@@ -224,3 +226,45 @@ def test_an_invalid_bracket_is_refused_before_anything_is_loaded(
 def test_allow_unsolved_runs_it_with_a_warning(fake, tmp_path, monkeypatch):
     _unsolved(monkeypatch)
     assert _run(tmp_path, allow_unsolved=True).samples_written == 24
+
+
+def test_the_run_row_records_the_engine_versions(fake, tmp_path):
+    r = _run(tmp_path)
+    with Store(tmp_path / "r.db") as s:
+        (text,) = s.conn.execute(
+            "SELECT engine_versions FROM runs WHERE run_id = ?", (r.run_id,)
+        ).fetchone()
+    got = json.loads(text)
+    assert got["clickhouse"] == "26.8.31.2" and got["pyarrow"] == pa.__version__
+    assert set(got) == {"clickhouse", *versions.installed()}
+
+
+INPROC_ONLY = drop_block(SUITE, "clickhouse").replace(
+    "queries:",
+    "polars:\n  type: [Float64]\n  storage: [memory]\n  compression: [none]\nqueries:",
+)
+
+
+def test_a_suite_without_clickhouse_is_refused_until_the_engines_run(fake, tmp_path):
+    with pytest.raises(NotImplementedError, match="ToDo 5"):
+        run_suite(
+            parse_suite(INPROC_ONLY),
+            store_path=tmp_path / "r.db",
+            cache_dir=tmp_path / "ds",
+        )
+    assert not (tmp_path / "r.db").exists()
+
+
+def test_in_process_blocks_beside_clickhouse_warn_that_they_do_not_run(fake, tmp_path):
+    suite = SUITE.replace(
+        "queries:",
+        "polars:\n  type: [Float64]\n  storage: [memory]\n  compression: [none]\nqueries:",
+    )
+    console = _console()
+    run_suite(
+        parse_suite(suite),
+        store_path=tmp_path / "r.db",
+        cache_dir=tmp_path / "ds",
+        console=console,
+    )
+    assert "the polars block is parsed but not run yet" in console.file.getvalue()
