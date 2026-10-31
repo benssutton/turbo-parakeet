@@ -76,8 +76,8 @@ never run twice.
 Warnings reach the user from every source that produces them: the
 dataset `Manifest`'s (a metric missed its target), each `TableVariant`'s (the
 cell is degraded, e.g. a projection redundant with the primary key), each
-round's (a `system.query_log` row never appeared) and the quietness
-snapshots' (a busy host, active merges) and the version pin's (the server is not the
+round's (a `system.query_log` row never appeared), the quietness snapshots'
+(a busy host, active merges) and the version pin's (the server is not the
 ClickHouse in `docs/engines/versions.yaml`). None of them is allowed to vanish
 into the store unread.
 """

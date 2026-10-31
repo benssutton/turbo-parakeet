@@ -14,7 +14,8 @@ _HINT = "(docs/engines/versions.yaml; after an upgrade see docs/engines/README.m
 
 
 def load_pinned(path: str | Path | None = None) -> dict:
-    """The pinned versions; {} when the file is absent or not a mapping (an installed chbench outside the repository)."""
+    """The pinned versions; {} when the file is absent (an installed chbench outside the
+    repository) or not a mapping."""
     p = Path(path) if path is not None else PINNED_PATH
     if not p.is_file():
         return {}
