@@ -266,8 +266,9 @@ class InprocRound:
     as soon as its answer returns; the untimed warm-up calibrates each job's batch size
     (`BaseWorker.calibrate`; kept in `engine.repeats` for the run's timed rounds, a capped k a
     round warning) and compares its first answer with the job's reference, recording a mismatch as
-    the job's error. A sample's `client_ms` / k includes one pipe round trip per batch. A Ctrl-C during a batch interrupts `call` as during one query: the batch's
-    sample is not taken, and `close()` waits for the worker to finish the batch."""
+    the job's error. A sample's `client_ms` / k includes one pipe round trip per batch. A Ctrl-C
+    during a batch interrupts `call` as during one query: the batch's sample is not taken, and
+    `close()` waits for the worker to finish the batch."""
 
     def __init__(
         self,

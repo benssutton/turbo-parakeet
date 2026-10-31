@@ -2,9 +2,12 @@
 it is and answers every query with the pyarrow reference. `CHBENCH_FAKE` (read when the worker
 starts; comma-joined) plants faults: `skip=<type>` refuses that type at prepare, `wrong=<n>` makes
 the n-th run answer one row too many, `fail=<n>` raises on the n-th run, `die=<n>` exits the
-process on the n-th run, `hang=<op>` makes that op (`version`, `load`, `prepare`, `run`) sleep for
-an hour, `exit=start` exits the process as the worker is built. Its thread count is `POLARS_MAX_THREADS` when set (proving the parent's
-environment reached the child), else the one it was given."""
+process (exit code 3) on the n-th run, `hang=<op>` makes that op (`version`, `load`, `prepare`,
+`run`) sleep for an hour, `exit=start` exits the process as the worker is built. For `wrong`,
+`fail` and `die`, n counts every `execute` across all jobs: each repeat of a batch, and in a
+warm-up calibration's discarded cold run first (so `fail=1` there fails the cold run). Its thread
+count is `POLARS_MAX_THREADS` when set (proving the parent's environment reached the child), else
+the one it was given."""
 
 from __future__ import annotations
 

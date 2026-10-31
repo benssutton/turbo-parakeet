@@ -152,6 +152,11 @@ def test_two_tables_do_not_share_categories(tmp_path):
     assert w.prepare(spec("t1", "Categorical(UInt8)", tmp_path))["status"] == "ok"
     w.array = pa.array([f"b{i}" for i in range(200)])
     assert w.prepare(spec("t2", "Categorical(UInt8)", tmp_path))["status"] == "ok"
+    # the namespace is the table id: a reused id with new data adds to t1's 200 categories
+    w.array = pa.array([f"c{i}" for i in range(200)])
+    r = w.prepare(spec("t1", "Categorical(UInt8)", tmp_path))
+    assert r["status"] == "skipped"
+    assert "more categories than the maximum allowed" in r["reason"]
 
 
 def test_the_ipc_file_is_in_polars_layout(tmp_path):

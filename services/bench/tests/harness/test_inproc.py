@@ -142,6 +142,9 @@ def test_a_worker_error_is_that_jobs_error_and_the_round_carries_on(
     result = rd.finish()
     assert result.errors["q1"].startswith("WorkerError: RuntimeError: planted failure")
     assert list(result.samples) == ["q2"]
+    # no warm-up ran: both jobs were sampled uncalibrated, the failed one too
+    assert [w.split(":")[0] for w in result.warnings] == ["q1", "q2"]
+    assert all("not calibrated" in w for w in result.warnings)
 
 
 def test_a_dead_worker_fails_every_later_call(engine, dataset, tmp_path):
@@ -151,9 +154,46 @@ def test_a_dead_worker_fails_every_later_call(engine, dataset, tmp_path):
     rd = e.start_round(0)
     rd.run(job("q1"))
     rd.run(job("q2"))
-    errors = rd.finish().errors
+    result = rd.finish()
+    errors = result.errors
     assert set(errors) == {"q1", "q2"} and all("died" in t for t in errors.values())
+    assert [w.split(":")[0] for w in result.warnings] == ["q1", "q2"]
+    assert all("not calibrated" in w for w in result.warnings)
     assert e.prepare(VARIANT, "t2", tmp_path / "y.arrow", None).status == "error"
+
+
+def test_a_failure_in_the_warm_ups_cold_run_is_that_jobs_error_and_leaves_it_uncalibrated(
+    engine, dataset, tmp_path
+):
+    e = engine(fake="fail=1")  # run 1 is calibration's discarded cold run
+    e.load(dataset, "value")
+    e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
+    rd = e.start_round(None, timed=False)
+    rd.run(job("q1"))
+    rd.run(job("q2"))
+    result = rd.finish()
+    assert list(result.errors) == ["q1"]
+    assert result.errors["q1"].startswith("WorkerError: RuntimeError: planted failure")
+    assert "q1" not in e.repeats and "q2" in e.repeats
+
+
+def test_a_death_in_the_warm_ups_cold_run_fails_the_job_and_kills_the_engine(
+    engine, dataset, tmp_path
+):
+    e = engine(fake="die=1")
+    e.load(dataset, "value")
+    e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
+    rd = e.start_round(None, timed=False)
+    rd.run(job("q1"))
+    rd.run(job("q2"))
+    errors = rd.finish().errors
+    assert set(errors) == {"q1", "q2"}
+    assert all(t.startswith("WorkerDied: ") and "died" in t for t in errors.values())
+    assert e.repeats == {}
+    e._proc.join(5)  # the pipe can break a moment before the process is reaped
+    assert e._proc.exitcode == 3
+    with pytest.raises(inproc.WorkerDied, match="died"):
+        e.load(dataset, "value")
 
 
 def test_close_ends_the_process(engine):

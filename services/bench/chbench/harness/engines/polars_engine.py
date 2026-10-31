@@ -4,12 +4,22 @@ has set `POLARS_MAX_THREADS` (`inproc.InprocEngine`).
 - Cast: the dataset column as a Polars Series cast (strict) to the cell's dtype (`polars_dtype`):
   a Categorical of any width to categories named "v" in the table's own namespace (two tables never
   share a mapping, and none touches Polars' process-global one, ToDo 11); `Enum` to the column's
-  values in first-seen order unless the type lists them.
+  values in first-seen order unless the type lists them. A table id (`validate.table_id`) hashes
+  the variant and the dataset id, so a namespace never sees two datasets (a reused id with new
+  values would add to its categories, and a narrow width would overflow).
+- `memory_bytes` is Polars' own `DataFrame.estimated_size()`: the physical buffers only, leaving
+  out a string column's 16-byte views and a categorical's dictionary (1M rows of
+  Categorical(UInt8) are 1,000,000 bytes, the codes). It is informational, not comparable across
+  engines.
 - `memory`: the single-chunk DataFrame, queried through `.lazy()`. `ipc`: the frame in Polars' own
   layout (`to_arrow(compat_level=CompatLevel.newest())`: string_view, dictionary<…string_view>) written
   by pyarrow's IPC writer — Polars' `write_ipc` takes no ZSTD level, and the recommenders' Polars
   sizes mirror pyarrow's writer on this layout — then read back from its bytes for the check (a
   memory-mapped read would lock the file on Windows), and scanned per query with `pl.scan_ipc`.
+  `scan_ipc` memory-maps the file whatever its compression (Polars 2.0). An uncompressed file in
+  record batches is queried from the mapped pages without a private copy (the "uncompressed IPC"
+  cell); one whole-file batch is copied into private memory first, and a compressed file is
+  decoded into private memory batch by batch.
 - Query: `.select(pl.len(), <polars_total>)`, filtered by `polars_predicate`, `.collect()`;
   Categorical / Enum columns are compared and totalled through their string values.
 """
