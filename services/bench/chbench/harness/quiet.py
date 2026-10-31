@@ -33,6 +33,11 @@ def _docker() -> dict:
         return {"docker_cpus": None, "docker_mem_bytes": None}
 
 
+def docker_cpus() -> int | None:
+    """The Docker VM's CPU count (`docker info` NCPU); None without Docker."""
+    return _docker()["docker_cpus"]
+
+
 def _power_scheme() -> str | None:
     if sys.platform != "win32":
         return None
