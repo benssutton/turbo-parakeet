@@ -75,7 +75,9 @@ from dataclasses import dataclass
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
+from chbench.harness.inproc_types import arrow_family, parse_datafusion_type
 from chbench.harness.loader import arrow_type_for, base_type
 from chbench.harness.suite import QueryAxes
 from chbench.harness.validate import TableVariant
@@ -259,7 +261,7 @@ def _non_null_mask(v: np.ndarray) -> np.ndarray:
 @dataclass(frozen=True)
 class ValueChoice:
     """The engine-neutral half of a filter: the values its predicate names, chosen from the data,
-    and the achieved fraction. `range`: `values` holds the window's [lo, hi]; `in`: the chosen
+    and the achieved fraction. `range`: `values` is `[lo, hi]`, both bounds inclusive; `in`: the chosen
     values in choice order. The values are elements of the numpy array `query_values` gave.
     """
 
@@ -462,11 +464,20 @@ def choose_queries(
 def render_predicate(
     choice: ValueChoice, variant: TableVariant, dataset_type: pa.DataType | None = None
 ) -> str:
-    """`choice` written for `variant`'s engine (ClickHouse here; Task 5 adds the others)."""
-    engine = getattr(variant, "engine", "clickhouse")
+    """`choice` written for `variant`'s engine: ClickHouse SQL (`render_clickhouse`), DataFusion
+    SQL (`render_datafusion`; needs the dataset's Arrow type) or the Polars expression's text
+    (`render_polars_text`)."""
+    engine = variant.engine
     if engine == "clickhouse":
         return render_clickhouse(choice, variant.ch_type)
-    raise ValueError(f"no predicate renderer for engine {engine!r}")
+    if engine not in ("datafusion", "polars"):
+        raise ValueError(f"no predicate renderer for engine {engine!r}")
+    values = choice_values_arrow(choice, dataset_type)
+    if engine == "datafusion":
+        return render_datafusion(
+            choice.predicate_kind, values, parse_datafusion_type(variant.type_spec)
+        )
+    return render_polars_text(choice.predicate_kind, values)
 
 
 def render_queries(
@@ -478,7 +489,7 @@ def render_queries(
     """One `QueryVariant` per `axes.kinds` entry and its choice (`choose_queries`), the predicate
     written for `variant`'s engine (`render_predicate`)."""
     out: list[QueryVariant] = []
-    for kind, choice in zip(axes.kinds, choices):
+    for kind, choice in zip(axes.kinds, choices, strict=True):
         is_filter = kind.kind == "filter"
         out.append(
             QueryVariant(
@@ -522,3 +533,247 @@ def query_id(table_id: str, variant: QueryVariant) -> str:
         ]
     )
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+_DF_UNIT = {"s": "Second", "ms": "Millisecond", "us": "Microsecond", "ns": "Nanosecond"}
+
+
+def _is_text(t: pa.DataType) -> bool:
+    return (
+        pa.types.is_string(t)
+        or pa.types.is_large_string(t)
+        or pa.types.is_string_view(t)
+    )
+
+
+def _is_bytes(t: pa.DataType) -> bool:
+    return (
+        pa.types.is_binary(t)
+        or pa.types.is_large_binary(t)
+        or pa.types.is_binary_view(t)
+        or pa.types.is_fixed_size_binary(t)
+    )
+
+
+def _value_type(t: pa.DataType) -> pa.DataType:
+    """A dictionary column is queried as its value type."""
+    return t.value_type if pa.types.is_dictionary(t) else t
+
+
+def choice_values_arrow(choice: ValueChoice, dtype: pa.DataType) -> pa.Array:
+    """`choice.values` as an Arrow array of the dataset's type `dtype`. The numpy values are what
+    `query_values` made of the column: time ticks as integers, a nullable integer widened to
+    float64 (exact below 2**53), 64-bit integers with nulls as Python ints."""
+    if pa.types.is_time(dtype):
+        base = pa.int32() if pa.types.is_time32(dtype) else pa.int64()
+        return (
+            pa.array(np.asarray(choice.values, dtype=np.int64)).cast(base).cast(dtype)
+        )
+    arr = pa.array(choice.values)
+    return arr if arr.type == dtype else arr.cast(dtype)
+
+
+def _clock(ticks: int, unit: str) -> str:
+    """`HH:MM:SS[.fraction]` of `ticks` since midnight in `unit`."""
+    places = _UNIT_PRECISION[unit]
+    seconds, fraction = divmod(int(ticks), 10**places)
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    text = f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return text + (f".{fraction:0{places}d}" if places else "")
+
+
+def _datafusion_literal(scalar: pa.Scalar) -> str:
+    """One value as a DataFusion SQL literal of its own Arrow type: quoted strings (`'` doubled),
+    `X'..'` binaries, `CAST('..' AS DECIMAL(p, s))`, `DATE '..'`, timestamps and times through
+    `arrow_cast` at their unit (a zoned timestamp spelled as its UTC instant, `Z`)."""
+    t = scalar.type
+    if _is_text(t):
+        return "'" + scalar.as_py().replace("'", "''") + "'"
+    if _is_bytes(t):
+        return f"X'{scalar.as_py().hex()}'"
+    if pa.types.is_boolean(t):
+        return "true" if scalar.as_py() else "false"
+    if pa.types.is_integer(t):
+        return str(scalar.as_py())
+    if pa.types.is_floating(t):
+        sql = "FLOAT" if t.bit_width == 32 else "DOUBLE"
+        x = float(scalar.as_py())
+        text = repr(x)
+        return (
+            f"CAST({text} AS {sql})" if math.isfinite(x) else f"CAST('{text}' AS {sql})"
+        )
+    if pa.types.is_decimal(t):
+        text = format(scalar.as_py(), "f")
+        return f"CAST('{text}' AS DECIMAL({t.precision}, {t.scale}))"
+    if pa.types.is_date32(t):
+        return f"DATE '{scalar.as_py().isoformat()}'"
+    if pa.types.is_timestamp(t):
+        ticks = scalar.cast(pa.int64()).as_py()
+        iso = str(np.datetime_as_string(np.datetime64(ticks, t.unit), unit=t.unit))
+        zone = f'Some("{t.tz}")' if t.tz else "None"
+        suffix = "Z" if t.tz else ""
+        return f"arrow_cast('{iso}{suffix}', 'Timestamp({_DF_UNIT[t.unit]}, {zone})')"
+    if pa.types.is_time(t):
+        width = "Time32" if pa.types.is_time32(t) else "Time64"
+        ticks = scalar.cast(pa.int32() if width == "Time32" else pa.int64()).as_py()
+        return f"arrow_cast('{_clock(ticks, t.unit)}', '{width}({_DF_UNIT[t.unit]})')"
+    raise ValueError(f"no DataFusion literal for type {t}")
+
+
+def render_datafusion(
+    predicate_kind: str, values: pa.Array, column_type: pa.DataType
+) -> str:
+    """The DataFusion predicate over `v` naming `values` (the dataset's type), cast to the column's
+    (value) type first, as the worker casts the column."""
+    t = _value_type(column_type)
+    literals = [_datafusion_literal(s) for s in values.cast(t)]
+    if predicate_kind == "range":
+        return f"v BETWEEN {literals[0]} AND {literals[1]}"
+    return f"v IN ({', '.join(literals)})"
+
+
+def datafusion_total(column_type: pa.DataType) -> str:
+    """The aggregate beside `count(*)`, mirroring ClickHouse's `_aggregate_select` so every value
+    is read: bytes for strings and binaries (dictionaries as their value type), days for dates,
+    seconds for timestamps and times, the value as DOUBLE otherwise."""
+    t = _value_type(column_type)
+    if _is_text(t):
+        return "sum(octet_length(v))"
+    if _is_bytes(t):
+        return "sum(octet_length(encode(v, 'hex')) / 2)"
+    if pa.types.is_date32(t):
+        return "sum(CAST(arrow_cast(v, 'Int32') AS DOUBLE))"
+    if pa.types.is_timestamp(t):
+        scale = 10 ** _UNIT_PRECISION[t.unit]
+        return f"sum(CAST(arrow_cast(v, 'Int64') AS DOUBLE) / {scale}.0)"
+    if pa.types.is_time(t):
+        width = "Int32" if pa.types.is_time32(t) else "Int64"
+        scale = 10 ** _UNIT_PRECISION[t.unit]
+        return f"sum(CAST(arrow_cast(v, '{width}') AS DOUBLE) / {scale}.0)"
+    return "sum(CAST(v AS DOUBLE))"
+
+
+def datafusion_table(table_id: str) -> str:
+    """The name an in-process DataFusion table is registered under."""
+    return f"t_{table_id}"
+
+
+def datafusion_sql(
+    table: str, column_type: pa.DataType, predicate_sql: str | None
+) -> str:
+    """`SELECT count(*), <datafusion_total> FROM table [WHERE predicate_sql]`."""
+    sql = f"SELECT count(*), {datafusion_total(column_type)} FROM {table}"
+    return sql if predicate_sql is None else f"{sql} WHERE {predicate_sql}"
+
+
+def render_polars_text(predicate_kind: str, values: pa.Array) -> str:
+    """The stored text of the Polars predicate the worker builds from `values`
+    (`polars_engine.polars_predicate`): `col("v").is_in([...])` / `col("v").is_between(lo, hi)`.
+    """
+    items = [repr(x) for x in values.to_pylist()]
+    if predicate_kind == "range":
+        if _is_text(values.type):  # Polars reads a bare string bound as a column name
+            items = [f"lit({x})" for x in items]
+        return f'col("v").is_between({items[0]}, {items[1]})'
+    return f'col("v").is_in([{", ".join(items)}])'
+
+
+@dataclass(frozen=True)
+class Reference:
+    """What every in-process engine must answer for one query: the row count and the total (bytes
+    as an int; days, seconds or values as a float; None when the column holds the dataset's values
+    as engine-formatted text). `magnitude`, the total of absolute values, scales the float
+    tolerance."""
+
+    count: int
+    total: int | float | None
+    magnitude: float
+
+
+def _widen_decimal(array: pa.Array) -> pa.Array:
+    """decimal32 / decimal64 as decimal128 (pyarrow has no `is_in` / comparison kernels for the
+    narrow widths); anything else unchanged."""
+    t = array.type
+    if pa.types.is_decimal32(t) or pa.types.is_decimal64(t):
+        return array.cast(pa.decimal128(t.precision, t.scale))
+    return array
+
+
+def _total(rows: pa.Array) -> tuple[int | float, float]:
+    t = rows.type
+    if pa.types.is_string_view(t):
+        rows, t = rows.cast(pa.large_string()), pa.large_string()
+    if pa.types.is_binary_view(t):
+        rows, t = rows.cast(pa.large_binary()), pa.large_binary()
+    if _is_text(t) or _is_bytes(t):
+        n = int(pc.sum(pc.binary_length(rows)).as_py() or 0)
+        return n, float(n)
+    if pa.types.is_date32(t):
+        x = rows.cast(pa.int32()).cast(pa.float64())
+    elif pa.types.is_timestamp(t):
+        x = pc.divide(
+            rows.cast(pa.int64()).cast(pa.float64()),
+            float(10 ** _UNIT_PRECISION[t.unit]),
+        )
+    elif pa.types.is_time(t):
+        base = pa.int32() if pa.types.is_time32(t) else pa.int64()
+        x = pc.divide(
+            rows.cast(base).cast(pa.float64()), float(10 ** _UNIT_PRECISION[t.unit])
+        )
+    else:
+        x = rows.cast(pa.float64())
+    return float(pc.sum(x).as_py() or 0.0), float(pc.sum(pc.abs(x)).as_py() or 0.0)
+
+
+def reference_result(
+    array: pa.Array,
+    predicate_kind: str | None,
+    values: pa.Array | None,
+    family: str | None = None,
+) -> Reference:
+    """The pyarrow answer to one query over the dataset column `array`: every row for a full scan
+    (`predicate_kind` None), the rows whose value is in `values` (`in`) or between `values[0]` and
+    `values[1]` (`range`). `family` (`inproc_types.column_family` of the queried column; None: the
+    dataset's own) says what the total means: a date dataset in a timestamp column totals seconds,
+    a timestamp dataset in a date column days, and a text column of a non-text dataset has no
+    reference total (each engine formats the text itself)."""
+    array = _widen_decimal(array)
+    if values is not None:
+        values = _widen_decimal(values)
+    if predicate_kind is None:
+        rows = array
+    elif predicate_kind == "in":
+        rows = array.filter(pc.is_in(array, value_set=values))
+    else:
+        rows = array.filter(
+            pc.and_(pc.greater_equal(array, values[0]), pc.less_equal(array, values[1]))
+        )
+    source = arrow_family(array.type)
+    target = family or source
+    if target in ("string", "categorical", "binary") and source not in (
+        "string",
+        "binary",
+    ):
+        return Reference(count=len(rows), total=None, magnitude=0.0)
+    if target == "timestamp" and source == "date":
+        rows = rows.cast(pa.timestamp("s"))
+    elif target == "date" and source == "timestamp":
+        rows = pc.cast(rows, pa.date32(), safe=False)
+    total, magnitude = _total(rows)
+    return Reference(count=len(rows), total=total, magnitude=magnitude)
+
+
+def results_agree(reference: Reference, count, total) -> bool:
+    """`count` exactly; an int total exactly; a float total within 1e-9 of the magnitude summed
+    (`Reference.magnitude`); no total compared when the reference has none. A NULL total (an
+    empty SQL sum) reads as 0."""
+    if count is None or int(count) != reference.count:
+        return False
+    if reference.total is None:
+        return True
+    got = 0 if total is None else total
+    if isinstance(reference.total, int):
+        return int(got) == reference.total
+    scale = max(reference.magnitude, abs(reference.total))
+    return abs(float(got) - reference.total) <= 1e-9 * scale
