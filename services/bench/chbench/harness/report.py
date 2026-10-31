@@ -354,7 +354,8 @@ def _cell(summary: dict, key: str) -> str:
     value = summary[key]
     if key in _BOOL_AXES:
         return "y" if value else "-"
-    if key in ("clocks_disagree", "repeats_capped"):  # None: no ratio to compare
+    # None: no ratio to compare (clocks_disagree) or no repeats recorded (repeats_capped)
+    if key in ("clocks_disagree", "repeats_capped"):
         return "" if value is None else "y" if value else "-"
     if value is None:
         return "-"

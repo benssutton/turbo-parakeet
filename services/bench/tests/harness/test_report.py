@@ -349,15 +349,26 @@ def test_rows_without_an_engine_are_clickhouse():
     assert s["engine"] == "clickhouse" and s["storage"] is None
 
 
-def test_a_baseline_pairs_within_one_engine():
+def test_a_baseline_pairs_within_one_engine_not_across():
     rows_ = (
         engine_rows("qc", "clickhouse", "String", [2.0] * 6)
-        + engine_rows("qp", "polars", "String", [1.0] * 6)
-        + engine_rows("qq", "polars", "Categorical(UInt8)", [0.5] * 6)
+        + engine_rows("ps", "polars", "String", [1.0] * 6)
+        + engine_rows("pc", "polars", "Categorical(UInt8)", [0.5] * 6)
+        + engine_rows("ds", "datafusion", "String", [4.0] * 6)
+        + engine_rows(
+            "dd",
+            "datafusion",
+            "dictionary<values=string, indices=int8, ordered=0>",
+            [2.0] * 6,
+        )
     )
-    by = {s["query_id"]: s for s in summarise(rows_, [50], baseline="ch_type=String")}
-    assert by["qq"]["cpu_ratio"] == 0.5  # against polars String, not ClickHouse String
-    assert by["qc"]["cpu_ratio"] == 1.0 and by["qp"]["cpu_ratio"] == 1.0
+    by = {
+        s["query_id"]: s["cpu_ratio"]
+        for s in summarise(rows_, [50], baseline="ch_type=String")
+    }
+    # each engine's String row is its own reference; the two in-process engines share every
+    # other axis, so one shared reference (polars String) would give ds 4.0, dd 2.0
+    assert by == {"qc": 1.0, "ps": 1.0, "pc": 0.5, "ds": 1.0, "dd": 0.5}
 
 
 def test_a_baseline_naming_the_engine_is_refused():
