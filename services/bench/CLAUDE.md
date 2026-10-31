@@ -24,8 +24,10 @@ this produces evidence instead. Paths below are relative to `services/bench/`.
 - Python: the project's p312 env (root CLAUDE.md). Tests: `python scripts/check.py test-bench` from the repository root,
   or `python -m pytest` from `services/bench/` (`pytest.ini` deselects `slow`; `-m slow` runs the five full-scale
   tests). Tests marked `clickhouse` need the server and skip without it.
-- ClickHouse 26.8 in Docker Desktop: container `chbench-ch`, image `clickhouse/clickhouse-server:26.8`, HTTP port 8123
-  (`docker start chbench-ch`). Credentials are the literal strings user `CLICKHOUSE_USER`, password
+- ClickHouse in Docker Desktop: container `chbench-ch`, image pinned in `docs/engines/versions.yaml` (tag + digest;
+  `run` warns when the server's version differs), HTTP port 8123 (`docker start chbench-ch`; to recreate it:
+  `docker run -d --name chbench-ch -p 8123:8123 -e CLICKHOUSE_USER=CLICKHOUSE_USER -e CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 <image from versions.yaml>`).
+  After an upgrade: `docs/engines/README.md`. Credentials are the literal strings user `CLICKHOUSE_USER`, password
   `CLICKHOUSE_PASSWORD`. The harness reads `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`, defaulting to
   these.
 - Benchmark tables live in database `bench`. Results in `results.db` (SQLite) and cached datasets in `datasets/` (Arrow

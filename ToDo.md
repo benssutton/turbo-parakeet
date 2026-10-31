@@ -107,11 +107,12 @@ Track 1 is complete (item 1 lists its follow-ups). Dependencies: 2 before 4; 5 b
 5. **Polars and DataFusion in the empirical bench.** An engine axis in the suites; query time and size for the
    in-process recommendations (Arrow / Polars types, dictionary encoding, IPC compression), over in-memory data and
    Arrow IPC. Point-equality and full-scan queries first, as for ClickHouse.
-6. **Engine-upgrade watch.** Pin the ClickHouse image; after each ClickHouse, Polars or DataFusion release, re-run the
-   calibrations and spikes (`tests/performance/spike_*.py`, `services/bench/spikes/`). Run-end encoding is not
-   recommended because DataFusion 54 and 55 reject MIN / MAX over REE columns (every other operator probed works,
-   including IPC reads): re-run `tests/performance/spike_datafusion_ree.py` after a DataFusion upgrade, and add REE
-   (sizes and a recommendation) once MIN / MAX work.
+6. **Engine-upgrade watch — in place.** `docs/engines/versions.yaml` pins the ClickHouse image (tag + digest) and
+   records the Polars / DataFusion / pyarrow versions of the last calibration; `chbench run` warns on a ClickHouse
+   drift. After a release: `docs/engines/README.md`, "After an engine upgrade". Open: run-end encoding is not
+   recommended because DataFusion 54 and 55 reject MIN / MAX over REE columns. The canary
+   `tests/test_engine_canaries.py` (xfails while they are rejected) fails CI once they work: then re-run
+   `tests/performance/spike_datafusion_ree.py` and add REE (sizes and a recommendation).
 7. **ClickHouse in CI** (optional): a service container so the `clickhouse`-marked bench tests run in CI, weighed
    against the Actions minutes (private repo; see the cost-control notes in `.github/workflows/ci-cd.yml`).
 

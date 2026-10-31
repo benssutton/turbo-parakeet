@@ -29,7 +29,7 @@ quality; improve, and repeat b–d. Last: run the loop on (a sample of) real dat
   recommenders and detectors.
 - **Targets.**
   - DataFusion: Arrow types and encodings (dictionary; REE is not recommended — DataFusion 54 and 55 reject MIN / MAX
-    over it; ToDo 6 re-checks).
+    over it; the canary `tests/test_engine_canaries.py` re-checks, ToDo 6).
   - Polars: Polars dtypes (Categorical / Enum; no REE).
   - Both: Arrow IPC buffer compression (LZ4_FRAME / ZSTD + level).
   - ClickHouse: column type, codec chain (GCD, Delta, DoubleDelta, then LZ4 / ZSTD + level), skip indexes
@@ -59,7 +59,7 @@ turbo-parakeet/
 │   ├── bench/         # component 3: chbench — datagen, harness, CLI, suites, spikes (its CLAUDE.md)
 │   └── evaluate/      # component 4: the evaluation loop (its tests: check.py test-evaluate)
 ├── tests/             # turbo_parakeet's tests; performance/ (benchmarks, spikes)
-├── docs/engines/      # engine knowledge notes (clickhouse.md)
+├── docs/engines/      # engine notes (clickhouse.md), pinned versions (versions.yaml), upgrade procedure (README.md)
 ├── scripts/           # check.py (local = CI), check_layering.py
 ├── notebooks/, sonar/
 └── CLAUDE.md, README.md, ToDo.md

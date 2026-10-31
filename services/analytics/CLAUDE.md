@@ -75,7 +75,7 @@ Pairs are compared only within one **value family** (ints ≤64-bit; String/Cate
 
 ★ = accuracy reference.
 
-**Not implemented:** run-length / REE compression analysis (`run_length.py` was deleted in `93f6dcb`). The runs test (section 1b) covers run structure as a technique; REE is never recommended: DataFusion 54 and 55 reject MIN / MAX over REE columns (`tests/performance/spike_datafusion_ree.py` re-checks after an upgrade).
+**Not implemented:** run-length / REE compression analysis (`run_length.py` was deleted in `93f6dcb`). The runs test (section 1b) covers run structure as a technique; REE is never recommended: DataFusion 54 and 55 reject MIN / MAX over REE columns (the canary `tests/test_engine_canaries.py` fails CI once they work; `tests/performance/spike_datafusion_ree.py` is the full survey).
 
 # Project Structure
 
@@ -111,6 +111,7 @@ turbo-parakeet/
     ├── skip_index_helpers.py                # skip-index oracle, Monte Carlo sampler
     ├── harness.py                          # implementation_params/load/reference/run/assert_contract/assert_agrees/with_metrics
     ├── test_base.py, test_benchmark_harness.py
+    ├── test_engine_canaries.py             # engine-upgrade canary: DataFusion REE MIN / MAX (ToDo 6)
     ├── test_plugin.py, test_layering.py    # the Arrow boundary (128-bit ints, binding, Arrow inputs); scripts/check_layering.py
     ├── test_<technique>.py                 # one per technique package (incl. test_delta.py, test_distinct_count.py, test_population_cardinality.py, test_marginal_entropy.py)
     ├── test_recommend.py, test_streaming_recommend.py  # the recommenders: known answers, oracles, parity, ZSTD
