@@ -3,7 +3,7 @@ import math
 import pytest
 
 from chbench.harness.queries import QueryVariant
-from chbench.harness.runner import Job, explain_query, run_round
+from chbench.harness.runner import ChRound, Job, explain_query, run_round
 from chbench.harness.validate import TableVariant
 from tests.harness.fakes import FakeClient
 
@@ -109,3 +109,27 @@ def test_explain_query_returns_the_plan_or_the_error():
             raise RuntimeError("nope")
 
     assert explain_query(Failing(), job) == ("", "RuntimeError: nope")
+
+
+def test_a_round_handle_runs_one_job_at_a_time_and_reads_the_log_once():
+    client, seen = FakeClient(), []
+    rd = ChRound(client, 3, sample_no=1, on_sample=lambda k, s: seen.append(k))
+    for job in jobs("a", "b"):
+        rd.run(job)
+    assert seen == [] and not [c for c in client.calls if c[0] == "log"]
+    result = rd.finish()
+    assert seen == ["a", "b"] and result.samples["a"].round_no == 3
+    assert [c for c in client.calls if c[0] == "log"] == [("log",)]
+
+
+def test_interrupt_delivers_what_ran():
+    client, seen = FakeClient(), []
+    rd = ChRound(client, 0, on_sample=lambda k, s: seen.append(k))
+    rd.run(jobs("a")[0])
+    rd.interrupt()
+    assert seen == ["a"]
+
+
+def test_a_job_carries_an_optional_payload_and_reference():
+    [j] = jobs("a")
+    assert j.payload is None and j.reference is None

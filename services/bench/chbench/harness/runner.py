@@ -22,6 +22,9 @@ A run is rounds, scheduled by the orchestrator; one round, step by step:
 Ctrl-C (`KeyboardInterrupt`) during a round delivers what ran: the samples
 already taken are read and delivered, the partial `RoundResult` is attached
 to the exception as `round_result`, and the exception is re-raised.
+The orchestrator drives `ChRound` directly when a round interleaves
+ClickHouse with in-process engines (`engines.base.run_round`); `run_round` is
+the ClickHouse-only round.
 `explain_query` gives each job's `EXPLAIN indexes = 1` plan, once per job
 after the rounds.
 
@@ -143,12 +146,17 @@ def _fill_from_log(sample: Sample, row: tuple) -> None:
 
 @dataclass(frozen=True)
 class Job:
-    """One (table, query) pair of a round; `key` is its store `query_id`."""
+    """One (table, query) pair of a round; `key` is its store `query_id`. An in-process job's
+    `name` is its table id, `payload` what its worker runs (`engines.inproc.InprocRound`) and
+    `reference` the pyarrow answer its first result is checked against (`queries.Reference`).
+    """
 
     key: str
     name: str
     variant: TableVariant
     qv: QueryVariant
+    payload: dict | None = None
+    reference: object | None = None
 
 
 @dataclass
@@ -183,6 +191,96 @@ def _fill(client: CHClient, pending: dict[str, Sample], warnings: list[str]) -> 
             )
 
 
+class ChRound:
+    """One ClickHouse round, a job at a time: `run(job)` runs one query (the warm-up without a
+    query id), `finish()` reads the round's `system.query_log` rows in one go and delivers the
+    samples, `interrupt()` (after a Ctrl-C) delivers what ran. `run_round` is the three in order;
+    the orchestrator interleaves `run` with the in-process engines' jobs (`engines.base.run_round`).
+    """
+
+    def __init__(
+        self,
+        client: CHClient,
+        round_no: int | None = None,
+        *,
+        sample_no: int = 0,
+        timed: bool = True,
+        on_sample: Callable[[str, Sample], None] | None = None,
+    ):
+        self.client = client
+        self.round_no = round_no
+        self.sample_no = sample_no
+        self.timed = timed
+        self.on_sample = on_sample
+        self.result = RoundResult()
+        self._ids: dict[str, str] = {}  # query id -> job key
+        self._filled = False
+        self._delivering = False
+        self._delivered = 0
+
+    def run(self, job: Job) -> None:
+        sql = query_sql(job.name, job.variant, job.qv)
+        if not self.timed:
+            try:
+                self.client.query_rows(sql, settings=_SETTINGS)
+            except Exception as e:  # noqa: BLE001
+                self.result.errors[job.key] = _error_text(e)
+            return
+        qid = str(uuid.uuid4())
+        ran_at = datetime.datetime.now(datetime.timezone.utc)
+        t0 = time.perf_counter()
+        try:
+            self.client.query_rows(sql, query_id=qid, settings=_SETTINGS)
+        except Exception as e:  # noqa: BLE001
+            self.result.errors[job.key] = _error_text(e)
+            return
+        client_ms = (time.perf_counter() - t0) * 1000.0
+        self._ids[qid] = job.key
+        self.result.samples[job.key] = Sample(
+            sample_no=self.sample_no,
+            client_ms=client_ms,
+            server_ms=_NAN,
+            read_rows=_NAN,
+            read_bytes=_NAN,
+            memory_bytes=_NAN,
+            selected_marks=_NAN,
+            selected_granules=_NAN,
+            profile_events={},
+            ran_at=ran_at,
+            round_no=self.round_no,
+        )
+
+    def finish(self) -> RoundResult:
+        if not self._filled:
+            self._filled = True
+            pending = {qid: self.result.samples[key] for qid, key in self._ids.items()}
+            if pending:
+                try:
+                    _fill(self.client, pending, self.result.warnings)
+                except Exception as e:  # noqa: BLE001
+                    # The samples keep nan, named by _fill.
+                    self.result.warnings.append(
+                        f"system.query_log read failed: {_error_text(e)}"
+                    )
+        self._delivering = True
+        keys = list(self.result.samples)
+        while self._delivered < len(keys):
+            key = keys[self._delivered]
+            self._delivered += 1
+            if self.on_sample is not None:
+                self.on_sample(key, self.result.samples[key])
+        return self.result
+
+    def interrupt(self) -> None:
+        """After a Ctrl-C: read and deliver what ran, unless delivery had already begun; a second
+        Ctrl-C here is swallowed, so the first one is what propagates."""
+        if not self._delivering:
+            try:
+                self.finish()
+            except KeyboardInterrupt:
+                pass
+
+
 def run_round(
     client: CHClient,
     jobs: list[Job],
@@ -199,72 +297,18 @@ def run_round(
     queries without ids and takes no samples. Ctrl-C: the samples already taken are read and
     delivered, the partial result is attached as `round_result`, and the interrupt propagates.
     """
-    result = RoundResult()
-    ids: dict[str, str] = {}  # query id -> job key
-    state = {"filled": False, "delivering": False, "delivered": 0}
-
-    def finish() -> None:
-        if not state["filled"]:
-            state["filled"] = True
-            pending = {qid: result.samples[key] for qid, key in ids.items()}
-            if pending:
-                try:
-                    _fill(client, pending, result.warnings)
-                except Exception as e:  # noqa: BLE001
-                    # The samples keep nan, named by _fill.
-                    result.warnings.append(
-                        f"system.query_log read failed: {_error_text(e)}"
-                    )
-        state["delivering"] = True
-        keys = list(result.samples)
-        while state["delivered"] < len(keys):
-            key = keys[state["delivered"]]
-            state["delivered"] += 1
-            if on_sample is not None:
-                on_sample(key, result.samples[key])
-
+    rd = ChRound(
+        client, round_no, sample_no=sample_no, timed=timed, on_sample=on_sample
+    )
     try:
         for job in jobs:
-            sql = query_sql(job.name, job.variant, job.qv)
-            if not timed:
-                try:
-                    client.query_rows(sql, settings=_SETTINGS)
-                except Exception as e:  # noqa: BLE001
-                    result.errors[job.key] = _error_text(e)
-                continue
-            qid = str(uuid.uuid4())
-            ran_at = datetime.datetime.now(datetime.timezone.utc)
-            t0 = time.perf_counter()
-            try:
-                client.query_rows(sql, query_id=qid, settings=_SETTINGS)
-            except Exception as e:  # noqa: BLE001
-                result.errors[job.key] = _error_text(e)
-                continue
-            client_ms = (time.perf_counter() - t0) * 1000.0
-            ids[qid] = job.key
-            result.samples[job.key] = Sample(
-                sample_no=sample_no,
-                client_ms=client_ms,
-                server_ms=_NAN,
-                read_rows=_NAN,
-                read_bytes=_NAN,
-                memory_bytes=_NAN,
-                selected_marks=_NAN,
-                selected_granules=_NAN,
-                profile_events={},
-                ran_at=ran_at,
-                round_no=round_no,
-            )
-        finish()
+            rd.run(job)
+        rd.finish()
     except KeyboardInterrupt as e:
-        e.round_result = result  # type: ignore[attr-defined]
-        if not state["delivering"]:
-            try:
-                finish()
-            except KeyboardInterrupt:
-                pass
+        e.round_result = rd.result  # type: ignore[attr-defined]
+        rd.interrupt()
         raise
-    return result
+    return rd.result
 
 
 def explain_query(client: CHClient, job: Job) -> tuple[str, str | None]:
