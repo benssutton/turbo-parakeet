@@ -691,7 +691,7 @@ def _prepare_all(
         if variant.engine == "clickhouse":
             pending.extend(_prepare_variant(context, dataset, values, variant))
         else:
-            pending += _prepare_inproc_variant(context, dataset, variant)
+            pending.extend(_prepare_inproc_variant(context, dataset, variant))
 
 
 def _expand_variants(suite: Suite, dataset, version, default) -> list[TableVariant]:
