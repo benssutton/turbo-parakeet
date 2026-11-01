@@ -120,14 +120,7 @@ def solve_monotone(
                 f"invalid bracket: guard fails at lo={lo:.6g}",
             )
         if not guard(hi):
-            g_lo, g_hi = lo, hi
-            for _ in range(40):
-                mid = (g_lo + g_hi) / 2
-                if guard(mid):
-                    g_lo = mid
-                else:
-                    g_hi = mid
-            hi = g_lo
+            hi = _narrow_to_guard(guard, lo, hi)
             approximate = True
 
     f_lo, f_hi = f(lo), f(hi)
@@ -152,13 +145,7 @@ def solve_monotone(
             f"clamped: max reachable {high_val:.6g}{suffix}",
         )
 
-    for _ in range(iters):
-        mid = (lo + hi) / 2
-        if (f(mid) < target) == increasing:
-            lo = mid
-        else:
-            hi = mid
-    x = (lo + hi) / 2
+    x = _bisect(f, target, lo, hi, increasing, iters)
     achieved = f(x)
     if tol is not None and not abs(achieved - target) <= tol:
         return SolveResult(
@@ -171,3 +158,34 @@ def solve_monotone(
             "objective is not monotone on the bracket",
         )
     return SolveResult(x, achieved, SolveStatus.OK, None, "ok")
+
+
+def _narrow_to_guard(guard: Callable[[float], bool], lo: float, hi: float) -> float:
+    """Bisect the guard's boundary: the largest x found in [lo, hi] where it holds
+    (it holds at `lo` and fails at `hi`)."""
+    g_lo, g_hi = lo, hi
+    for _ in range(40):
+        mid = (g_lo + g_hi) / 2
+        if guard(mid):
+            g_lo = mid
+        else:
+            g_hi = mid
+    return g_lo
+
+
+def _bisect(
+    f: Callable[[float], float],
+    target: float,
+    lo: float,
+    hi: float,
+    increasing: bool,
+    iters: int,
+) -> float:
+    """The midpoint of the bracket after `iters` halvings towards f(x) = target."""
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        if (f(mid) < target) == increasing:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2

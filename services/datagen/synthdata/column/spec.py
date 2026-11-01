@@ -73,18 +73,7 @@ def _parse(s: str, allow_list: bool) -> pa.DataType:
 
     m = _DECIMAL_RE.match(s)
     if m:
-        name, precision_s, scale_s = m.group(1), m.group(2), m.group(3)
-        ctor, max_precision = _DECIMALS[name]
-        precision, scale = int(precision_s), int(scale_s)
-        if not (1 <= precision <= max_precision):
-            raise SpecError(
-                f"{name} precision must be between 1 and {max_precision}, "
-                f"got {precision}"
-            )
-        try:
-            return ctor(precision, scale)
-        except Exception as e:  # pragma: no cover - pyarrow validates scale etc.
-            raise SpecError(f"invalid {name}({precision},{scale}): {e}") from e
+        return _parse_decimal(m)
 
     m = _TIMESTAMP_RE.match(s)
     if m:
@@ -101,17 +90,11 @@ def _parse(s: str, allow_list: bool) -> pa.DataType:
 
     m = _TIME32_RE.match(s)
     if m:
-        unit = m.group(1)
-        if unit not in _TIME32_UNITS:
-            raise SpecError(f"unsupported time32 unit {unit!r} in {s!r}")
-        return pa.time32(unit)
+        return _parse_time(s, m.group(1), "time32", _TIME32_UNITS, pa.time32)
 
     m = _TIME64_RE.match(s)
     if m:
-        unit = m.group(1)
-        if unit not in _TIME64_UNITS:
-            raise SpecError(f"unsupported time64 unit {unit!r} in {s!r}")
-        return pa.time64(unit)
+        return _parse_time(s, m.group(1), "time64", _TIME64_UNITS, pa.time64)
 
     if allow_list:
         m = _LIST_RE.match(s)
@@ -120,6 +103,27 @@ def _parse(s: str, allow_list: bool) -> pa.DataType:
             return pa.list_(inner)
 
     raise SpecError(f"unsupported arrow_type {s!r}")
+
+
+def _parse_decimal(m: re.Match) -> pa.DataType:
+    name, precision_s, scale_s = m.group(1), m.group(2), m.group(3)
+    ctor, max_precision = _DECIMALS[name]
+    precision, scale = int(precision_s), int(scale_s)
+    if not (1 <= precision <= max_precision):
+        raise SpecError(
+            f"{name} precision must be between 1 and {max_precision}, "
+            f"got {precision}"
+        )
+    try:
+        return ctor(precision, scale)
+    except Exception as e:  # pragma: no cover - pyarrow validates scale etc.
+        raise SpecError(f"invalid {name}({precision},{scale}): {e}") from e
+
+
+def _parse_time(s: str, unit: str, kind: str, units, ctor) -> pa.DataType:
+    if unit not in units:
+        raise SpecError(f"unsupported {kind} unit {unit!r} in {s!r}")
+    return ctor(unit)
 
 
 _INT_BOUNDS: dict[str, tuple[int, int]] = {
@@ -254,6 +258,40 @@ class DatasetSpec:
         if self.path is not None or self.column is not None:
             self._validate_path_dataset(dtype)
             return
+        self._validate_generated_type(dtype)
+        if self.content_hash is not None:
+            raise SpecError(
+                "content_hash belongs to a path dataset; set path and column"
+            )
+        is_list = pa.types.is_list(dtype)
+        elem_dtype = dtype.value_type if is_list else dtype
+        self._validate_support(elem_dtype)
+        self._validate_decimal_places(elem_dtype)
+        self._validate_finite_targets()
+        self._validate_cardinality_entropy()
+        self._validate_distribution_params()
+        numeric_support = self._numeric_support(elem_dtype)
+        self._validate_dispersion(numeric_support)
+        self._validate_spread(numeric_support)
+        self._validate_uint64_range(elem_dtype)
+
+        if self.interarrival_cv is not None and self.interarrival_cv <= 0:
+            raise SpecError(
+                f"interarrival_cv must be positive, got {self.interarrival_cv}"
+            )
+
+        self._validate_list(is_list)
+
+        if (
+            pa.types.is_string(dtype)
+            and self.string_length is None
+            and self.categories is None
+        ):
+            raise SpecError(
+                "string arrow_type requires string_length or categories to be set"
+            )
+
+    def _validate_generated_type(self, dtype: pa.DataType) -> None:
         if (
             pa.types.is_fixed_size_binary(dtype)
             or pa.types.is_binary(dtype)
@@ -264,22 +302,24 @@ class DatasetSpec:
                 "is only available to a path dataset; the "
                 "generator draws no such values"
             )
-        if self.content_hash is not None:
-            raise SpecError(
-                "content_hash belongs to a path dataset; set path and column"
-            )
-        is_list = pa.types.is_list(dtype)
-        elem_dtype = dtype.value_type if is_list else dtype
 
+    def _validate_support(self, elem_dtype: pa.DataType) -> None:
         sources = (self.value_range, self.categories, self.string_length)
         if sum(x is not None for x in sources) != 1:
             raise SpecError(
                 "exactly one of value_range, categories or string_length must be set"
             )
+        if self.categories is not None:
+            self._validate_categories(elem_dtype)
+        if self.value_range is not None:
+            self._validate_value_range(elem_dtype)
+        if self.string_length is not None and self.string_length <= 0:
+            raise SpecError(f"string_length must be positive, got {self.string_length}")
 
-        if self.categories is not None and len(self.categories) == 0:
+    def _validate_categories(self, elem_dtype: pa.DataType) -> None:
+        if len(self.categories) == 0:
             raise SpecError("categories must contain at least one value")
-        if self.categories is not None and len(self.categories) > self.rows:
+        if len(self.categories) > self.rows:
             # Every support value must appear at least once, so the support
             # cannot be larger than the row count. The cardinality_ratio path
             # is already safe because the ratio is bounded by 1.
@@ -287,119 +327,127 @@ class DatasetSpec:
                 f"categories has {len(self.categories)} values but rows is "
                 f"{self.rows}; every category must appear at least once"
             )
-
-        if self.categories is not None:
-            is_num = [_is_number(c, elem_dtype) for c in self.categories]
-            if pa.types.is_string(elem_dtype) and not all(
-                isinstance(c, str) for c in self.categories
-            ):
-                raise SpecError(
-                    f"categories for the string arrow_type {self.arrow_type!r} "
-                    "must all be strings"
-                )
-            if not pa.types.is_string(elem_dtype) and not all(is_num):
-                raise SpecError(
-                    f"categories for the numeric arrow_type {self.arrow_type!r} "
-                    "must all be numeric (bool is accepted only for the bool type)"
-                )
-            bounds = representable_range(elem_dtype)
-            if bounds is not None and all(is_num):
-                outside = [c for c in self.categories if c < bounds[0] or c > bounds[1]]
-                if outside:
-                    raise SpecError(
-                        f"categories value {outside[0]!r} does not fit "
-                        f"arrow_type {self.arrow_type!r}, whose representable "
-                        f"range is [{bounds[0]}, {bounds[1]}]"
-                    )
-            fractional = pa.types.is_floating(elem_dtype) or pa.types.is_decimal(
-                elem_dtype
+        is_num = [_is_number(c, elem_dtype) for c in self.categories]
+        if pa.types.is_string(elem_dtype) and not all(
+            isinstance(c, str) for c in self.categories
+        ):
+            raise SpecError(
+                f"categories for the string arrow_type {self.arrow_type!r} "
+                "must all be strings"
             )
-            if all(is_num) and not (fractional and self.decimal_places is None):
-                # The metrics are measured on the categories as given and
-                # `wrap` rounds afterwards, so a category off the grid would
-                # make the manifest's cardinality overstate the array's.
-                # Lattice types (integers, temporals, bool) have no
-                # decimal_places and round to the integer grid. A fractional
-                # type with no decimal_places is rejected further down.
-                places = self.decimal_places if self.decimal_places is not None else 0
-                off_grid = [c for c in self.categories if round(c, places) != c]
-                if off_grid:
-                    raise SpecError(
-                        f"categories value {off_grid[0]!r} is not on the "
-                        f"decimal_places grid ({places} places) that "
-                        f"arrow_type {self.arrow_type!r} values are rounded "
-                        f"to before casting; it would collapse onto "
-                        f"{round(off_grid[0], places)!r} and the manifest "
-                        "would overstate the cardinality"
-                    )
+        if not pa.types.is_string(elem_dtype) and not all(is_num):
+            raise SpecError(
+                f"categories for the numeric arrow_type {self.arrow_type!r} "
+                "must all be numeric (bool is accepted only for the bool type)"
+            )
+        self._validate_categories_range(is_num, elem_dtype)
+        self._validate_categories_grid(is_num, elem_dtype)
 
-        if self.value_range is not None:
+    def _validate_categories_range(
+        self, is_num: list[bool], elem_dtype: pa.DataType
+    ) -> None:
+        bounds = representable_range(elem_dtype)
+        if bounds is not None and all(is_num):
+            outside = [c for c in self.categories if c < bounds[0] or c > bounds[1]]
+            if outside:
+                raise SpecError(
+                    f"categories value {outside[0]!r} does not fit "
+                    f"arrow_type {self.arrow_type!r}, whose representable "
+                    f"range is [{bounds[0]}, {bounds[1]}]"
+                )
+
+    def _validate_categories_grid(
+        self, is_num: list[bool], elem_dtype: pa.DataType
+    ) -> None:
+        fractional = pa.types.is_floating(elem_dtype) or pa.types.is_decimal(elem_dtype)
+        if all(is_num) and not (fractional and self.decimal_places is None):
+            # The metrics are measured on the categories as given and
+            # `wrap` rounds afterwards, so a category off the grid would
+            # make the manifest's cardinality overstate the array's.
+            # Lattice types (integers, temporals, bool) have no
+            # decimal_places and round to the integer grid. A fractional
+            # type with no decimal_places is rejected further down.
+            places = self.decimal_places if self.decimal_places is not None else 0
+            off_grid = [c for c in self.categories if round(c, places) != c]
+            if off_grid:
+                raise SpecError(
+                    f"categories value {off_grid[0]!r} is not on the "
+                    f"decimal_places grid ({places} places) that "
+                    f"arrow_type {self.arrow_type!r} values are rounded "
+                    f"to before casting; it would collapse onto "
+                    f"{round(off_grid[0], places)!r} and the manifest "
+                    "would overstate the cardinality"
+                )
+
+    def _validate_value_range(self, elem_dtype: pa.DataType) -> None:
+        lo, hi = self.value_range
+        if not (math.isfinite(lo) and math.isfinite(hi)):
+            raise SpecError(f"value_range {self.value_range} bounds must be finite")
+        if lo > hi:
+            raise SpecError(f"value_range {self.value_range} must have low <= high")
+        if pa.types.is_unsigned_integer(elem_dtype) and lo < 0:
+            raise SpecError(
+                f"unsigned arrow_type {self.arrow_type!r} cannot hold a "
+                f"negative value_range low bound {lo}; it does not fit"
+            )
+        if pa.types.is_boolean(elem_dtype) and not (0 <= lo and hi <= 1):
+            raise SpecError(
+                f"bool arrow_type draws on the lattice [0, 1]; value_range "
+                f"{self.value_range} lies outside it and does not fit"
+            )
+        self._validate_value_range_fits(lo, hi, elem_dtype)
+
+    def _validate_value_range_fits(
+        self, lo: float, hi: float, elem_dtype: pa.DataType
+    ) -> None:
+        bounds = representable_range(elem_dtype)
+        if bounds is not None:
+            # The generator rounds to the lattice (or to decimal_places)
+            # before casting, so check the bounds as the cast will see them.
+            places = self.decimal_places if self.decimal_places is not None else 0
+            r_lo, r_hi = round(lo, places), round(hi, places)
+            if r_lo < bounds[0] or r_hi > bounds[1]:
+                unit_note = (
+                    " (integers in the unit's resolution)"
+                    if pa.types.is_temporal(elem_dtype)
+                    else ""
+                )
+                raise SpecError(
+                    f"value_range {self.value_range} does not fit arrow_type "
+                    f"{self.arrow_type!r}, whose representable range is "
+                    f"[{bounds[0]}, {bounds[1]}]{unit_note}"
+                )
+
+    def _validate_decimal_places(self, elem_dtype: pa.DataType) -> None:
+        if not (pa.types.is_floating(elem_dtype) or pa.types.is_decimal(elem_dtype)):
+            return
+        if self.decimal_places is None or self.decimal_places < 0:
+            raise SpecError(
+                f"decimal_places must be set and non-negative for "
+                f"arrow_type {self.arrow_type!r}, got {self.decimal_places}"
+            )
+        if pa.types.is_decimal(elem_dtype) and self.decimal_places != elem_dtype.scale:
+            raise SpecError(
+                f"decimal_places ({self.decimal_places}) must equal the "
+                f"scale of arrow_type {self.arrow_type!r} "
+                f"({elem_dtype.scale})"
+            )
+        if pa.types.is_float32(elem_dtype) and self.value_range is not None:
             lo, hi = self.value_range
-            if not (math.isfinite(lo) and math.isfinite(hi)):
-                raise SpecError(f"value_range {self.value_range} bounds must be finite")
-            if lo > hi:
-                raise SpecError(f"value_range {self.value_range} must have low <= high")
-            if pa.types.is_unsigned_integer(elem_dtype) and lo < 0:
+            grid_points = max(abs(lo), abs(hi)) * 10**self.decimal_places
+            if grid_points > 2**24:
                 raise SpecError(
-                    f"unsigned arrow_type {self.arrow_type!r} cannot hold a "
-                    f"negative value_range low bound {lo}; it does not fit"
+                    f"float32 cannot represent {self.decimal_places} "
+                    f"decimal places over value_range {self.value_range}: "
+                    f"it has 24 significant bits, and max(|lo|, |hi|) * "
+                    f"10**decimal_places = {grid_points:.4g} exceeds "
+                    f"2**24 = {2**24}; values drawn at that precision "
+                    "collapse when cast, so the manifest would overstate "
+                    "the cardinality. Reduce decimal_places, narrow the "
+                    "range, or use float64"
                 )
-            if pa.types.is_boolean(elem_dtype) and not (0 <= lo and hi <= 1):
-                raise SpecError(
-                    f"bool arrow_type draws on the lattice [0, 1]; value_range "
-                    f"{self.value_range} lies outside it and does not fit"
-                )
-            bounds = representable_range(elem_dtype)
-            if bounds is not None:
-                # The generator rounds to the lattice (or to decimal_places)
-                # before casting, so check the bounds as the cast will see them.
-                places = self.decimal_places if self.decimal_places is not None else 0
-                r_lo, r_hi = round(lo, places), round(hi, places)
-                if r_lo < bounds[0] or r_hi > bounds[1]:
-                    unit_note = (
-                        " (integers in the unit's resolution)"
-                        if pa.types.is_temporal(elem_dtype)
-                        else ""
-                    )
-                    raise SpecError(
-                        f"value_range {self.value_range} does not fit arrow_type "
-                        f"{self.arrow_type!r}, whose representable range is "
-                        f"[{bounds[0]}, {bounds[1]}]{unit_note}"
-                    )
 
-        if self.string_length is not None and self.string_length <= 0:
-            raise SpecError(f"string_length must be positive, got {self.string_length}")
-
-        if pa.types.is_floating(elem_dtype) or pa.types.is_decimal(elem_dtype):
-            if self.decimal_places is None or self.decimal_places < 0:
-                raise SpecError(
-                    f"decimal_places must be set and non-negative for "
-                    f"arrow_type {self.arrow_type!r}, got {self.decimal_places}"
-                )
-            if (
-                pa.types.is_decimal(elem_dtype)
-                and self.decimal_places != elem_dtype.scale
-            ):
-                raise SpecError(
-                    f"decimal_places ({self.decimal_places}) must equal the "
-                    f"scale of arrow_type {self.arrow_type!r} "
-                    f"({elem_dtype.scale})"
-                )
-            if pa.types.is_float32(elem_dtype) and self.value_range is not None:
-                lo, hi = self.value_range
-                grid_points = max(abs(lo), abs(hi)) * 10**self.decimal_places
-                if grid_points > 2**24:
-                    raise SpecError(
-                        f"float32 cannot represent {self.decimal_places} "
-                        f"decimal places over value_range {self.value_range}: "
-                        f"it has 24 significant bits, and max(|lo|, |hi|) * "
-                        f"10**decimal_places = {grid_points:.4g} exceeds "
-                        f"2**24 = {2**24}; values drawn at that precision "
-                        "collapse when cast, so the manifest would overstate "
-                        "the cardinality. Reduce decimal_places, narrow the "
-                        "range, or use float64"
-                    )
-
+    def _validate_finite_targets(self) -> None:
         for name in (
             "cardinality_ratio",
             "entropy_bits",
@@ -411,6 +459,7 @@ class DatasetSpec:
             if target is not None and not math.isfinite(target):
                 raise SpecError(f"{name} must be finite, got {target}")
 
+    def _validate_cardinality_entropy(self) -> None:
         if self.cardinality_ratio is not None:
             if not (0 < self.cardinality_ratio <= 1):
                 raise SpecError(
@@ -430,6 +479,7 @@ class DatasetSpec:
                     "define a finite support set"
                 )
 
+    def _validate_distribution_params(self) -> None:
         if self.distribution.kind not in ("uniform", "normal", "lognormal"):
             raise SpecError(
                 f"distribution.kind must be one of uniform, normal or "
@@ -446,10 +496,14 @@ class DatasetSpec:
                     f"lognormal distribution requires a positive mean, got "
                     f"{self.distribution.mean}"
                 )
-        numeric_support = self.string_length is None and (
+
+    def _numeric_support(self, elem_dtype: pa.DataType) -> bool:
+        return self.string_length is None and (
             self.categories is None
             or all(_is_number(c, elem_dtype) for c in self.categories)
         )
+
+    def _validate_dispersion(self, numeric_support: bool) -> None:
         if self.index_of_dispersion is not None and not numeric_support:
             raise SpecError(
                 "index_of_dispersion is var/mean of the values, which needs a "
@@ -477,6 +531,8 @@ class DatasetSpec:
                     "spread while index_of_dispersion asks to solve for it; "
                     "set one or the other"
                 )
+
+    def _validate_spread(self, numeric_support: bool) -> None:
         if self.distribution.kind in ("normal", "lognormal"):
             if self.distribution.sigma is None and self.index_of_dispersion is None:
                 raise SpecError(
@@ -501,6 +557,7 @@ class DatasetSpec:
                     "which is not set: set distribution.mean or value_range"
                 )
 
+    def _validate_uint64_range(self, elem_dtype: pa.DataType) -> None:
         if (
             pa.types.is_uint64(elem_dtype)
             and self.value_range is not None
@@ -516,11 +573,7 @@ class DatasetSpec:
                 "distribution, or lower value_range's high bound to 2**63 - 1"
             )
 
-        if self.interarrival_cv is not None and self.interarrival_cv <= 0:
-            raise SpecError(
-                f"interarrival_cv must be positive, got {self.interarrival_cv}"
-            )
-
+    def _validate_list(self, is_list: bool) -> None:
         if is_list and self.array_len_range is None:
             raise SpecError(
                 f"array_len_range is required for the list arrow_type "
@@ -538,36 +591,30 @@ class DatasetSpec:
                 f"{self.array_null_count}"
             )
         if self.array_len_range is not None:
-            lo_len, hi_len = self.array_len_range
-            if lo_len > hi_len:
-                raise SpecError(
-                    f"array_len_range {self.array_len_range} must have low <= high"
-                )
-            if lo_len <= 0:
-                raise SpecError(
-                    f"array_len_range {self.array_len_range} bounds must be " "positive"
-                )
-            mean_len = int(round((lo_len + hi_len) / 2))
-            if mean_len < 1:
-                raise SpecError(
-                    f"array_len_range {self.array_len_range} rounds to a mean "
-                    "length below 1, so no inner values would be generated"
-                )
-            inner = self.rows * mean_len
-            if self.array_null_count > inner:
-                raise SpecError(
-                    f"array_null_count {self.array_null_count} exceeds the "
-                    f"inner value count rows ({self.rows}) * round(mean("
-                    f"array_len_range)) ({mean_len}) = {inner}"
-                )
+            self._validate_array_len_range()
 
-        if (
-            pa.types.is_string(dtype)
-            and self.string_length is None
-            and self.categories is None
-        ):
+    def _validate_array_len_range(self) -> None:
+        lo_len, hi_len = self.array_len_range
+        if lo_len > hi_len:
             raise SpecError(
-                "string arrow_type requires string_length or categories to be set"
+                f"array_len_range {self.array_len_range} must have low <= high"
+            )
+        if lo_len <= 0:
+            raise SpecError(
+                f"array_len_range {self.array_len_range} bounds must be " "positive"
+            )
+        mean_len = int(round((lo_len + hi_len) / 2))
+        if mean_len < 1:
+            raise SpecError(
+                f"array_len_range {self.array_len_range} rounds to a mean "
+                "length below 1, so no inner values would be generated"
+            )
+        inner = self.rows * mean_len
+        if self.array_null_count > inner:
+            raise SpecError(
+                f"array_null_count {self.array_null_count} exceeds the "
+                f"inner value count rows ({self.rows}) * round(mean("
+                f"array_len_range)) ({mean_len}) = {inner}"
             )
 
     def _validate_path_dataset(self, dtype: pa.DataType) -> None:
