@@ -83,7 +83,8 @@ def test_a_worker_reports_its_engine_and_the_threads_its_environment_gave_it(eng
     before = os.environ.get("POLARS_MAX_THREADS")
     e = engine(threads=3)
     assert e.info == {"engine": "fake", "version": "0.0.0", "threads": 3}
-    assert e.version() == "0.0.0" and e.pid != os.getpid()
+    assert e.version() == "0.0.0"
+    assert e.pid != os.getpid()
     assert os.environ.get("POLARS_MAX_THREADS") == before
 
 
@@ -91,15 +92,21 @@ def test_prepare_then_a_timed_round_delivers_a_sample(engine, dataset, tmp_path)
     e = engine()
     assert e.load(dataset, "value") == 4
     r = e.prepare(VARIANT, "t1", tmp_path / "ipc" / "t1.arrow", None)
-    assert (r.status, r.rows, r.ipc_bytes) == ("ok", 4, None) and r.memory_bytes > 0
+    assert (r.status, r.rows, r.ipc_bytes) == ("ok", 4, None)
+    assert r.memory_bytes > 0
     seen = []
     rd = e.start_round(5, sample_no=2, on_sample=lambda k, s: seen.append((k, s)))
     rd.run(job())
     result = rd.finish()
     [(key, s)] = seen
-    assert key == "q1" and result.samples == {"q1": s} and not result.errors
+    assert key == "q1"
+    assert result.samples == {"q1": s}
+    assert not result.errors
     assert (s.round_no, s.sample_no) == (5, 2)
-    assert s.server_ms > 0 and s.cpu_us >= 0 and s.memory_bytes >= 0 and s.client_ms > 0
+    assert s.server_ms > 0
+    assert s.cpu_us >= 0
+    assert s.memory_bytes >= 0
+    assert s.client_ms > 0
 
 
 def test_ipc_prepare_writes_the_file(engine, dataset, tmp_path):
@@ -115,7 +122,8 @@ def test_ipc_prepare_writes_the_file(engine, dataset, tmp_path):
     )
     path = tmp_path / "ipc" / "t1.arrow"
     r = e.prepare(v, "t1", path, None)
-    assert r.status == "ok" and r.ipc_bytes == path.stat().st_size
+    assert r.status == "ok"
+    assert r.ipc_bytes == path.stat().st_size
 
 
 def test_the_warm_up_checks_the_first_answer(engine, dataset, tmp_path):
@@ -127,14 +135,16 @@ def test_the_warm_up_checks_the_first_answer(engine, dataset, tmp_path):
     rd.run(job("q2"))
     errors = rd.finish().errors
     assert list(errors) == ["q1"]
-    assert "answered count 5" in errors["q1"] and "reference is count 4" in errors["q1"]
+    assert "answered count 5" in errors["q1"]
+    assert "reference is count 4" in errors["q1"]
 
 
 def test_a_skip_comes_back_as_skipped(engine, dataset, tmp_path):
     e = engine(fake="skip=Float64")
     e.load(dataset, "value")
     r = e.prepare(VARIANT, "t1", tmp_path / "x.arrow", None)
-    assert r.status == "skipped" and "planted skip" in r.error
+    assert r.status == "skipped"
+    assert "planted skip" in r.error
 
 
 def test_a_worker_error_is_that_jobs_error_and_the_round_carries_on(
@@ -163,7 +173,8 @@ def test_a_dead_worker_fails_every_later_call(engine, dataset, tmp_path):
     rd.run(job("q2"))
     result = rd.finish()
     errors = result.errors
-    assert set(errors) == {"q1", "q2"} and all("died" in t for t in errors.values())
+    assert set(errors) == {"q1", "q2"}
+    assert all("died" in t for t in errors.values())
     assert [w.split(":")[0] for w in result.warnings] == ["q1", "q2"]
     assert all("not calibrated" in w for w in result.warnings)
     assert e.prepare(VARIANT, "t2", tmp_path / "y.arrow", None).status == "error"
@@ -181,7 +192,8 @@ def test_a_failure_in_the_warm_ups_cold_run_is_that_jobs_error_and_leaves_it_unc
     result = rd.finish()
     assert list(result.errors) == ["q1"]
     assert result.errors["q1"].startswith("WorkerError: RuntimeError: planted failure")
-    assert "q1" not in e.repeats and "q2" in e.repeats
+    assert "q1" not in e.repeats
+    assert "q2" in e.repeats
 
 
 def test_a_death_in_the_warm_ups_cold_run_fails_the_job_and_kills_the_engine(
@@ -268,7 +280,8 @@ def test_a_start_that_raises_closes_both_pipe_ends(monkeypatch, pipes):
     monkeypatch.setattr(inproc._CONTEXT, "Process", Unstartable)
     with pytest.raises(OSError, match="planted start failure"):
         inproc.InprocEngine("fake", 1)
-    assert len(pipes) == 2 and all(c.closed for c in pipes)
+    assert len(pipes) == 2
+    assert all(c.closed for c in pipes)
     assert multiprocessing.active_children() == []
 
 
@@ -281,7 +294,8 @@ def test_a_child_gone_before_psutil_sees_it_is_worker_died(monkeypatch, pipes):
     monkeypatch.setattr(inproc, "_CLOSE_WAIT_S", 0.2)
     with pytest.raises(inproc.WorkerDied, match="died at start"):
         inproc.InprocEngine("fake", 1)
-    assert len(pipes) == 2 and all(c.closed for c in pipes)
+    assert len(pipes) == 2
+    assert all(c.closed for c in pipes)
     assert multiprocessing.active_children() == []
 
 
@@ -289,7 +303,8 @@ def test_a_worker_that_exits_at_once_is_worker_died(monkeypatch, pipes):
     monkeypatch.setenv("CHBENCH_FAKE", "exit=start")
     with pytest.raises(inproc.WorkerDied, match="died"):
         inproc.InprocEngine("fake", 1)
-    assert len(pipes) == 2 and all(c.closed for c in pipes)
+    assert len(pipes) == 2
+    assert all(c.closed for c in pipes)
     assert multiprocessing.active_children() == []
 
 
@@ -340,8 +355,10 @@ def test_the_docker_cpu_lookup_runs_once_per_process(monkeypatch):
     monkeypatch.setattr(quiet.subprocess, "run", run)
     quiet.docker_cpus.cache_clear()
     try:
-        assert quiet.docker_cpus() == 6 and quiet.docker_cpus() == 6
-        assert inproc.default_threads() == 6 and len(calls) == 1
+        assert quiet.docker_cpus() == 6
+        assert quiet.docker_cpus() == 6
+        assert inproc.default_threads() == 6
+        assert len(calls) == 1
     finally:
         quiet.docker_cpus.cache_clear()
 
@@ -372,7 +389,9 @@ def test_interrupt_after_finish_delivers_nothing_twice_and_talks_to_nobody(
     e.call = lambda *a, **k: calls.append(a) or real(*a, **k)
     rd.interrupt()
     rd.interrupt()
-    assert seen == ["q1"] and rd.finish() is result and not calls
+    assert seen == ["q1"]
+    assert rd.finish() is result
+    assert not calls
 
 
 def test_a_worker_that_cannot_start_leaves_no_process(monkeypatch):
@@ -409,7 +428,8 @@ def test_a_timed_sample_is_the_batch_divided_by_k():
         4,
         False,
     )
-    assert s.memory_bytes == 100 and e.calls == [("run", "t1", PAYLOAD, 4)]
+    assert s.memory_bytes == 100
+    assert e.calls == [("run", "t1", PAYLOAD, 4)]
 
 
 def test_the_warm_up_calibrates_and_every_timed_round_reuses_k(
@@ -438,9 +458,8 @@ def test_a_job_never_calibrated_runs_at_k_1_and_warns():
     rd = inproc.InprocRound(e, 0)
     rd.run(job())
     r = rd.finish()
-    assert r.samples["q1"].repeats == 1 and e.calls == [("run", "t1", PAYLOAD, 1)]
-    assert (
-        len(r.warnings) == 1
-        and "q1" in r.warnings[0]
-        and "not calibrated" in r.warnings[0]
-    )
+    assert r.samples["q1"].repeats == 1
+    assert e.calls == [("run", "t1", PAYLOAD, 1)]
+    assert len(r.warnings) == 1
+    assert "q1" in r.warnings[0]
+    assert "not calibrated" in r.warnings[0]

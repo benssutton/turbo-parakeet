@@ -136,15 +136,15 @@ def test_answers_equal_the_pyarrow_reference(tmp_path, array, name, storage):
 def test_a_categorical_too_narrow_for_the_column_is_skipped(tmp_path):
     w = worker_over(pa.array([f"v{i}" for i in range(300)]))
     r = w.prepare(spec("t1", "Categorical(UInt8)", tmp_path))
-    assert (
-        r["status"] == "skipped" and "cast to Categorical(UInt8) failed" in r["reason"]
-    )
+    assert r["status"] == "skipped"
+    assert "cast to Categorical(UInt8) failed" in r["reason"]
 
 
 def test_a_lossy_cast_is_skipped(tmp_path):
     w = worker_over(pa.array([0.5, 1.0]))
     r = w.prepare(spec("t1", "Int64", tmp_path))
-    assert r["status"] == "skipped" and "row 0: 0.5 became 0.0" in r["reason"]
+    assert r["status"] == "skipped"
+    assert "row 0: 0.5 became 0.0" in r["reason"]
 
 
 def test_two_tables_do_not_share_categories(tmp_path):
@@ -188,7 +188,8 @@ def test_ipc_batch_rows_sets_the_files_record_batches(tmp_path):
 
 def test_version_names_polars_and_its_thread_pool():
     info = PolarsWorker(2).version()
-    assert info["engine"] == "polars" and info["version"] == pl.__version__
+    assert info["engine"] == "polars"
+    assert info["version"] == pl.__version__
     assert info["threads"] == pl.thread_pool_size()
 
 
