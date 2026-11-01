@@ -689,7 +689,7 @@ def _prepare_all(
     (so an interrupt part-way still sees them)."""
     for variant in variants:
         if variant.engine == "clickhouse":
-            pending += _prepare_variant(context, dataset, values, variant)
+            pending.extend(_prepare_variant(context, dataset, values, variant))
         else:
             pending += _prepare_inproc_variant(context, dataset, variant)
 
