@@ -19,6 +19,23 @@ def _with_nulls(name: str, values: np.ndarray, null_mask: np.ndarray) -> pl.Seri
     return pl.from_arrow(pa.array(values, mask=null_mask)).alias(name)
 
 
+# token -> cell value, per dtype_spec ("arr", the fallback, is a 3-element list)
+_CELL = {
+    "float64": float,
+    "uint32": lambda t: t,
+    "boolean": lambda t: bool(t % 2),
+    "categorical": lambda t: f"cat_{t}",
+    "list": lambda t: [t, t + 1],
+}
+_SERIES_DTYPE = {
+    "float64": pl.Float64,
+    "uint32": pl.UInt32,
+    "boolean": pl.Boolean,
+    "categorical": pl.String,
+    "list": pl.List(pl.Int32),
+}
+
+
 def make_column(
     name: str,
     dtype_spec: str,
@@ -31,47 +48,25 @@ def make_column(
     dtype_spec : "float64" | "uint32" | "boolean" | "categorical" | "list" | "arr"
     shape      : "skewed" | "high_unique" | "sparse"
     """
+    tokens, null_mask = _tokens_and_nulls(shape, n_rows, rng)
+    cell = _CELL.get(dtype_spec, lambda t: [t, t + 1, t + 2])
+    values = [None if null_mask[i] else cell(int(tokens[i])) for i in range(n_rows)]
+    series = pl.Series(
+        name, values, dtype=_SERIES_DTYPE.get(dtype_spec, pl.Array(pl.Int32, 3))
+    )
+    return series.cast(pl.Categorical) if dtype_spec == "categorical" else series
+
+
+def _tokens_and_nulls(shape: str, n_rows: int, rng: np.random.Generator):
     if shape == "sparse":
-        tokens, null_mask = _sparse_tokens(n_rows, rng)
-    else:
-        tokens = (
-            _skewed_tokens(n_rows, rng)
-            if shape == "skewed"
-            else _high_unique_tokens(n_rows, rng)
-        )
-        null_rate = 0.10 if shape == "skewed" else 0.05
-        null_mask = rng.random(n_rows) < null_rate
-
-    values: list = []
-    for i in range(n_rows):
-        if null_mask[i]:
-            values.append(None)
-            continue
-        t = int(tokens[i])
-        if dtype_spec == "float64":
-            values.append(float(t))
-        elif dtype_spec == "uint32":
-            values.append(t)
-        elif dtype_spec == "boolean":
-            values.append(bool(t % 2))
-        elif dtype_spec == "categorical":
-            values.append(f"cat_{t}")
-        elif dtype_spec == "list":
-            values.append([t, t + 1])
-        else:  # arr
-            values.append([t, t + 1, t + 2])
-
-    if dtype_spec == "float64":
-        return pl.Series(name, values, dtype=pl.Float64)
-    if dtype_spec == "uint32":
-        return pl.Series(name, values, dtype=pl.UInt32)
-    if dtype_spec == "boolean":
-        return pl.Series(name, values, dtype=pl.Boolean)
-    if dtype_spec == "categorical":
-        return pl.Series(name, values, dtype=pl.String).cast(pl.Categorical)
-    if dtype_spec == "list":
-        return pl.Series(name, values, dtype=pl.List(pl.Int32))
-    return pl.Series(name, values, dtype=pl.Array(pl.Int32, 3))
+        return _sparse_tokens(n_rows, rng)
+    tokens = (
+        _skewed_tokens(n_rows, rng)
+        if shape == "skewed"
+        else _high_unique_tokens(n_rows, rng)
+    )
+    null_rate = 0.10 if shape == "skewed" else 0.05
+    return tokens, rng.random(n_rows) < null_rate
 
 
 def mixed_dtypes(n_rows: int = 1_000, seed: int = 42) -> pl.DataFrame:

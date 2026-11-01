@@ -170,28 +170,39 @@ def _relation_metrics(rel, child: pa.Array, parent: pa.Array) -> dict:
 
 def check(spec: FrameSpec, manifest: FrameManifest) -> None:
     """Raise TargetMissed for the first column or relation off its spec."""
+    _check_warnings(manifest)
+    for name, col in spec.columns.items():
+        got = manifest.columns[name]
+        if isinstance(col, ColumnSpec):
+            _check_distinct(spec, name, col, got)
+        else:
+            _check_relation(spec, name, col, manifest.relations[name], got)
+
+
+def _check_warnings(manifest: FrameManifest) -> None:
     for w in manifest.warnings:
         name, _, text = w.partition(": ")
         if text.startswith(("miss:", "clamp:")):
             metric = text.split(": ")[1] if ": " in text else text
             raise TargetMissed(name, metric, "within tolerance", text)
-    for name, col in spec.columns.items():
-        got = manifest.columns[name]
-        if isinstance(col, ColumnSpec):
-            m = spec.rows - round(col.null_share * spec.rows)
-            if m and not isinstance(col.structure, Walk):
-                want = distinct_count(col, m)
-                if abs(got["distinct"] - want) > max(1, 0.01 * want):
-                    raise TargetMissed(name, "distinct", want, got["distinct"])
-            continue
-        rel = manifest.relations[name]
-        if isinstance(col, (ForeignKey, NoisyCopy)) and rel["containment"] != 1.0:
-            raise TargetMissed(name, "containment", 1.0, rel["containment"])
-        if isinstance(col, Relabel) and not rel["nmi"] > 1 - 1e-9:
-            raise TargetMissed(name, "nmi", 1.0, rel["nmi"])
-        if isinstance(col, Subset) and abs(
-            rel["containment"] - col.share
-        ) > 0.02 + 1 / max(1, got["distinct"]):
-            raise TargetMissed(name, "containment", col.share, rel["containment"])
-        if isinstance(col, CompositeKey) and rel["joint_distinct"] != spec.rows:
-            raise TargetMissed(name, "joint_distinct", spec.rows, rel["joint_distinct"])
+
+
+def _check_distinct(spec: FrameSpec, name: str, col: ColumnSpec, got: dict) -> None:
+    m = spec.rows - round(col.null_share * spec.rows)
+    if m and not isinstance(col.structure, Walk):
+        want = distinct_count(col, m)
+        if abs(got["distinct"] - want) > max(1, 0.01 * want):
+            raise TargetMissed(name, "distinct", want, got["distinct"])
+
+
+def _check_relation(spec: FrameSpec, name: str, col, rel: dict, got: dict) -> None:
+    if isinstance(col, (ForeignKey, NoisyCopy)) and rel["containment"] != 1.0:
+        raise TargetMissed(name, "containment", 1.0, rel["containment"])
+    if isinstance(col, Relabel) and not rel["nmi"] > 1 - 1e-9:
+        raise TargetMissed(name, "nmi", 1.0, rel["nmi"])
+    if isinstance(col, Subset) and abs(rel["containment"] - col.share) > 0.02 + 1 / max(
+        1, got["distinct"]
+    ):
+        raise TargetMissed(name, "containment", col.share, rel["containment"])
+    if isinstance(col, CompositeKey) and rel["joint_distinct"] != spec.rows:
+        raise TargetMissed(name, "joint_distinct", spec.rows, rel["joint_distinct"])

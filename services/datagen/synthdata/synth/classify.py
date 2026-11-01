@@ -56,6 +56,22 @@ def _order(stats: dict) -> str:
     return UNKNOWN
 
 
+def _is_walk(stats: dict) -> bool:
+    return (
+        stats["max_step"] is not None
+        and stats["max_step"] <= MAX_STEP
+        and stats["descents"] > 0
+    )
+
+
+def _skew(e: float) -> str:
+    if e >= 0.9:
+        return "uniform"
+    if e <= 0.6:
+        return "heavy"
+    return UNKNOWN
+
+
 def classify(stats: dict, family: str) -> dict:
     """Levels from statistics; "?" where the statistics fall between two levels."""
     rows, nulls = stats["rows"], stats["null_count"]
@@ -65,27 +81,15 @@ def classify(stats: dict, family: str) -> dict:
     if out["nulls"] == "all":
         return out
     m, d = rows - nulls, stats["distinct"]
-    walk = (
-        stats["max_step"] is not None
-        and stats["max_step"] <= MAX_STEP
-        and stats["descents"] > 0
-    )
-    if (
-        family in STRUCTURED and d >= 3 and walk
-    ):  # a sorted dense column: small steps too
+    structured = family in STRUCTURED and d >= 3
+    if structured and _is_walk(stats):  # a sorted dense column: small steps too
         out["structure"] = "walk"
         return out
     out["cardinality"] = _cardinality(d, m)
-    if family in STRUCTURED and d >= 3:
+    if structured:
         out["structure"] = "multiples" if (stats["gcd"] or 1) > 1 else "plain"
     if d >= 2 and out["cardinality"] != "near_unique":
-        e = stats["entropy_norm"]
-        if e >= 0.9:
-            out["skew"] = "uniform"
-        elif e <= 0.6:
-            out["skew"] = "heavy"
-        else:
-            out["skew"] = UNKNOWN
+        out["skew"] = _skew(stats["entropy_norm"])
     if d >= 2:
         out["order"] = _order(stats)
     return out

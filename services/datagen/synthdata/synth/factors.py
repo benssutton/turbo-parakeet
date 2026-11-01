@@ -70,20 +70,31 @@ def mid_distinct(rows: int) -> int:
     return max(21, round(math.sqrt(rows)))
 
 
+def _all_null(lv: dict) -> dict:
+    return {
+        f: (lv["family"] if f == "family" else "all" if f == "nulls" else None)
+        for f in FACTORS
+    }
+
+
+def _normalise_family(lv: dict) -> bool:
+    """False if the family cannot take the combination; drops a structure it has none of."""
+    if lv["family"] not in STRUCTURED:
+        if lv["structure"] not in (None, "plain"):
+            return False
+        lv["structure"] = None
+    return not (
+        lv["family"] == "boolean" and lv["cardinality"] not in ("constant", "binary")
+    )
+
+
 def normalise(levels: dict) -> dict | None:
     """The canonical form of a combination: None if impossible; factors that do not apply
     to it become None."""
     lv = dict(levels)
     if lv["nulls"] == "all":
-        return {
-            f: (lv["family"] if f == "family" else "all" if f == "nulls" else None)
-            for f in FACTORS
-        }
-    if lv["family"] not in STRUCTURED:
-        if lv["structure"] not in (None, "plain"):
-            return None
-        lv["structure"] = None
-    if lv["family"] == "boolean" and lv["cardinality"] not in ("constant", "binary"):
+        return _all_null(lv)
+    if not _normalise_family(lv):
         return None
     if lv["structure"] == "walk":
         lv["cardinality"] = lv["skew"] = lv["order"] = None

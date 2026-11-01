@@ -184,33 +184,39 @@ def _validate_column(name: str, c: ColumnSpec) -> None:
         raise SpecError(f"{name}: null_run must be >= 1, got {c.null_run}")
     walk = isinstance(c.structure, Walk)
     if not walk and c.null_share < 1:
-        if (c.distinct is None) == (c.distinct_share is None):
-            raise SpecError(
-                f"{name}: exactly one of distinct or distinct_share must be set"
-            )
-        if c.distinct is not None and c.distinct < 1:
-            raise SpecError(f"{name}: distinct must be >= 1, got {c.distinct}")
-        if c.distinct_share is not None and not 0 < c.distinct_share <= 1:
-            raise SpecError(
-                f"{name}: distinct_share must be in (0, 1], got {c.distinct_share}"
-            )
+        _validate_distinct(name, c)
     if c.entropy is not None and not 0 < c.entropy <= 1:
         raise SpecError(
             f"{name}: entropy is H / log2(distinct), in (0, 1]; got {c.entropy}"
         )
     if not isinstance(c.structure, Plain):
-        if c.type not in STRUCTURED_TYPES:
-            raise SpecError(
-                f"{name}: structure {c.structure} needs an integer-backed type"
-            )
-        if walk and not isinstance(c.order, Random):
-            raise SpecError(f"{name}: a walk fixes the order; order must be Random()")
-        if isinstance(c.structure, Multiples) and c.structure.g < 2:
-            raise SpecError(f"{name}: Multiples(g) needs g >= 2")
+        _validate_structure(name, c, walk)
     if isinstance(c.order, Runs) and c.order.mean_run < 1:
         raise SpecError(f"{name}: Runs.mean_run must be >= 1")
     if isinstance(c.order, Clustered) and not 0 <= c.order.disorder <= 1:
         raise SpecError(f"{name}: Clustered.disorder must be in [0, 1]")
+
+
+def _validate_distinct(name: str, c: ColumnSpec) -> None:
+    if (c.distinct is None) == (c.distinct_share is None):
+        raise SpecError(
+            f"{name}: exactly one of distinct or distinct_share must be set"
+        )
+    if c.distinct is not None and c.distinct < 1:
+        raise SpecError(f"{name}: distinct must be >= 1, got {c.distinct}")
+    if c.distinct_share is not None and not 0 < c.distinct_share <= 1:
+        raise SpecError(
+            f"{name}: distinct_share must be in (0, 1], got {c.distinct_share}"
+        )
+
+
+def _validate_structure(name: str, c: ColumnSpec, walk: bool) -> None:
+    if c.type not in STRUCTURED_TYPES:
+        raise SpecError(f"{name}: structure {c.structure} needs an integer-backed type")
+    if walk and not isinstance(c.order, Random):
+        raise SpecError(f"{name}: a walk fixes the order; order must be Random()")
+    if isinstance(c.structure, Multiples) and c.structure.g < 2:
+        raise SpecError(f"{name}: Multiples(g) needs g >= 2")
 
 
 def _validate_relation(name: str, r, seen: dict) -> None:
