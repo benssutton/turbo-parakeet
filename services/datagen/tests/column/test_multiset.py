@@ -43,7 +43,8 @@ def test_support_values_are_sorted_unique_and_in_range():
     s = spec()
     d = draw_support(s, np.random.default_rng(s.seed))
     assert np.all(np.diff(d.values) > 0)
-    assert d.values.min() >= -1.0 and d.values.max() <= 10.0
+    assert d.values.min() >= -1.0
+    assert d.values.max() <= 10.0
 
 
 def test_support_values_are_rounded_to_decimal_places():
@@ -106,7 +107,8 @@ def test_integer_range_draw_is_within_bounds_and_integral():
     )
     d = draw_support(s, np.random.default_rng(0))
     assert d.values.dtype.kind in "iu"
-    assert d.values.min() >= 1_000_000 and d.values.max() <= 9_999_999
+    assert d.values.min() >= 1_000_000
+    assert d.values.max() <= 9_999_999
     assert d.values.size == s.support_size
 
 
@@ -125,7 +127,8 @@ def test_list_of_integer_draws_an_integer_support():
     )
     d = draw_support(s, np.random.default_rng(0))
     assert d.values.dtype.kind in "iu"
-    assert d.values.min() >= 0 and d.values.max() <= 99_999
+    assert d.values.min() >= 0
+    assert d.values.max() <= 99_999
     assert d.values.size == s.support_size
 
 
@@ -151,7 +154,8 @@ def test_temporal_and_bool_draw_from_the_integer_lattice(arrow_type, lo, hi):
     )
     d = draw_support(s, np.random.default_rng(0))
     assert d.values.dtype.kind in "iu"
-    assert d.values.min() >= lo and d.values.max() <= hi
+    assert d.values.min() >= lo
+    assert d.values.max() <= hi
     assert d.values.size == s.support_size
 
 
@@ -191,7 +195,8 @@ def test_uncapped_multiset_draws_rows_values_directly():
     m = build_multiset(s, np.random.default_rng(0))
     assert int(m.counts.sum()) == s.rows
     assert np.all(np.diff(m.support) > 0)
-    assert m.support.min() >= -1.0 and m.support.max() <= 10.0
+    assert m.support.min() >= -1.0
+    assert m.support.max() <= 10.0
 
 
 def test_is_deterministic_for_a_given_seed():
@@ -379,8 +384,10 @@ def test_uncapped_lattice_draws_honour_the_distribution(arrow_type):
     )
     m = build_multiset(s, np.random.default_rng(0))
     x = np.repeat(m.support, m.counts)
-    assert x.dtype.kind in "iu" and int(m.counts.sum()) == s.rows
-    assert x.min() >= 0 and x.max() <= 100_000
+    assert x.dtype.kind in "iu"
+    assert int(m.counts.sum()) == s.rows
+    assert x.min() >= 0
+    assert x.max() <= 100_000
     uniform_sd = 100_000 / np.sqrt(12)
     assert x.std() < 0.01 * uniform_sd
     assert abs(x.mean() - 50_000) < 10
@@ -392,7 +399,8 @@ def test_uncapped_lattice_uniform_draws_cover_the_range():
     )
     m = build_multiset(s, np.random.default_rng(0))
     x = np.repeat(m.support, m.counts)
-    assert x.min() == 0 and x.max() == 999
+    assert x.min() == 0
+    assert x.max() == 999
     assert abs(x.std() - 1000 / np.sqrt(12)) < 20
 
 
@@ -408,7 +416,8 @@ def test_numeric_categories_take_a_density_profile_without_value_range():
     )
     m = build_multiset(s, np.random.default_rng(0))
     assert int(m.counts.sum()) == 1_000
-    assert m.counts[1] > m.counts[0] and m.counts[1] > m.counts[2]
+    assert m.counts[1] > m.counts[0]
+    assert m.counts[1] > m.counts[2]
 
 
 def test_density_counts_raises_on_nan_densities_instead_of_masking_them():
@@ -451,8 +460,10 @@ def test_density_counts_still_floors_underflowed_zero_densities():
         distribution=Distribution(kind="normal", mean=0.5, sigma=0.1),
     )
     counts = density_counts(np.array([0.0, 0.5, 100.0]), s, 1_000, sigma=None)
-    assert int(counts.sum()) == 1_000 and counts.min() >= 1
-    assert counts[1] > counts[0] and counts[1] > counts[2]
+    assert int(counts.sum()) == 1_000
+    assert counts.min() >= 1
+    assert counts[1] > counts[0]
+    assert counts[1] > counts[2]
 
 
 def test_density_allocation_pulls_the_mean_below_the_support_mean():
@@ -659,7 +670,8 @@ def test_build_multiset_warns_about_collapse_that_survives_the_redraw_cap():
         distribution=Distribution(kind="normal", mean=0.5, sigma=0.03),
     )
     m = build_multiset(s, np.random.default_rng(s.seed))
-    assert m.round_collapsed > 0 and m.clip_collapsed == 0
+    assert m.round_collapsed > 0
+    assert m.clip_collapsed == 0
     rounding = [w for w in m.warnings if "rounding collapse" in w]
     assert len(rounding) == 1
     assert str(m.round_collapsed) in rounding[0]
@@ -673,4 +685,5 @@ def test_build_multiset_warns_about_clip_collapse_with_its_count():
     m = build_multiset(s, np.random.default_rng(s.seed))
     assert m.clip_collapsed > 0
     clip = [w for w in m.warnings if "clip collapse" in w]
-    assert len(clip) == 1 and str(m.clip_collapsed) in clip[0]
+    assert len(clip) == 1
+    assert str(m.clip_collapsed) in clip[0]

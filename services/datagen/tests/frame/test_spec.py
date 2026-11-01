@@ -56,8 +56,9 @@ def test_valid_frame():
     ],
 )
 def test_invalid(columns, match):
+    invalid = FrameSpec(rows=100, columns=columns)
     with pytest.raises(SpecError, match=match):
-        FrameSpec(rows=100, columns=columns).validate()
+        invalid.validate()
 
 
 def test_frame_id_depends_on_content_only():

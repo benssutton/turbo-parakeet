@@ -596,9 +596,8 @@ def test_explicit_combinations_in_the_given_order():
 
 def test_explicit_ineligible_combination_is_listed():
     out = Toy().add(FRAMES).result(combinations=[(F_A, F_S)])
-    assert out["status"].to_list() == ["ineligible"] and out["score"].to_list() == [
-        None
-    ]
+    assert out["status"].to_list() == ["ineligible"]
+    assert out["score"].to_list() == [None]
 
 
 def test_none_is_every_combination():
@@ -612,7 +611,8 @@ def test_explicit_combinations_per_scope():
     multi = MultiSetToy().add(FRAMES).result(combinations=[(F_A, G_A)])
     assert multi.select("df_a", "df_b").rows() == [("f", "g")]
     tri = TripletToy().add(FRAMES).result(combinations=[(F_S, F_A, F_BB)])
-    assert tri.height == 1 and tri["status"][0] == "computed"
+    assert tri.height == 1
+    assert tri["status"][0] == "computed"
 
 
 @pytest.mark.parametrize(
@@ -627,10 +627,12 @@ def test_explicit_combinations_per_scope():
     ],
 )
 def test_explicit_combinations_are_validated(combos, match):
+    toy = Toy().add(FRAMES)
     with pytest.raises(ValueError, match=match):
-        Toy().add(FRAMES).result(combinations=combos)
+        toy.result(combinations=combos)
 
 
 def test_explicit_combinations_accept_lists():
     out = Toy().add(FRAMES).result(combinations=[[["f", "a"], ["f", "bb"]]])
-    assert out.height == 1 and out["status"][0] == "computed"
+    assert out.height == 1
+    assert out["status"][0] == "computed"

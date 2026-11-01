@@ -27,7 +27,8 @@ STR = pa.array(["b", None, "a", "b"])
 )
 def test_types(type_, base, arrow):
     out = to_type(base, type_)
-    assert out.type == arrow and out.null_count == base.null_count
+    assert out.type == arrow
+    assert out.null_count == base.null_count
 
 
 def test_decimal_keeps_the_unscaled_value():
@@ -41,9 +42,8 @@ def test_decimal_keeps_the_unscaled_value():
 
 def test_enum_in_polars():
     df = to_polars(pa.table({"e": to_type(STR, "enum")}), {"e": "enum"})
-    assert str(df.schema["e"]).startswith("Enum") and list(
-        df.schema["e"].categories
-    ) == ["a", "b"]
+    assert str(df.schema["e"]).startswith("Enum")
+    assert list(df.schema["e"].categories) == ["a", "b"]
 
 
 def test_decimal_of_a_slice():

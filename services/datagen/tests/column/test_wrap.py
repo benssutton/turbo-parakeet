@@ -77,17 +77,18 @@ def test_decimal32_overflow_is_reported_against_rounded_values():
     rejects any value_range whose rounded bounds overflow, so reaching this
     check is a generator bug, not a spec error: it is an AssertionError."""
     v = np.array([9.999999995, 1.0])
+    sp = s(arrow_type="decimal32(9,8)", rows=2)
+    rng = np.random.default_rng(0)
     with pytest.raises(AssertionError, match="validation"):
-        wrap(v, s(arrow_type="decimal32(9,8)", rows=2), np.random.default_rng(0))
+        wrap(v, sp, rng)
 
 
 def test_integer_overflow_is_an_assertion_not_a_spec_error():
+    v = np.array([300, 1])
+    sp = s(arrow_type="int8", value_range=(0, 300), rows=2, decimal_places=None)
+    rng = np.random.default_rng(0)
     with pytest.raises(AssertionError, match="validation"):
-        wrap(
-            np.array([300, 1]),
-            s(arrow_type="int8", value_range=(0, 300), rows=2, decimal_places=None),
-            np.random.default_rng(0),
-        )
+        wrap(v, sp, rng)
 
 
 def test_list_type_chunks_into_arrays():
@@ -169,4 +170,6 @@ def test_a_large_string_column_is_one_array_not_chunked():
         s(rows=n, arrow_type="string", string_length=12),
         np.random.default_rng(0),
     )
-    assert isinstance(out, pa.Array) and out.type == pa.string() and len(out) == n
+    assert isinstance(out, pa.Array)
+    assert out.type == pa.string()
+    assert len(out) == n

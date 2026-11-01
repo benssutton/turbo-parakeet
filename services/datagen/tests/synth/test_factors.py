@@ -31,7 +31,9 @@ def test_normalise_rules():
         structure=None,
     )
     w = normalise({**FULL, "structure": "walk"})
-    assert w["cardinality"] is None and w["skew"] is None and w["order"] is None
+    assert w["cardinality"] is None
+    assert w["skew"] is None
+    assert w["order"] is None
     assert normalise({**FULL, "cardinality": "near_unique", "order": "runs"}) is None
     assert normalise({**FULL, "cardinality": "constant"})["skew"] is None
 

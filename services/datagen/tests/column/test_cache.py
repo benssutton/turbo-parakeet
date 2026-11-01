@@ -99,7 +99,8 @@ def test_manifest_is_written_as_readable_json(tmp_path):
     mpath = tmp_path / f"{uc1().dataset_id}.json"
     loaded = json.loads(mpath.read_text())
     assert loaded["dataset_id"] == uc1().dataset_id
-    assert "achieved" in loaded and "warnings" in loaded
+    assert "achieved" in loaded
+    assert "warnings" in loaded
 
 
 def test_use_case_2_shape_generates(tmp_path):
@@ -323,7 +324,8 @@ def test_solves_are_records_with_a_status_string_and_a_message():
     d = generate(uc1(rows=5_000, cardinality_ratio=0.02, entropy_bits=4.0))
     rec = d.manifest.solves["entropy_bits"]
     assert isinstance(rec, SolveRecord)
-    assert rec.status == "ok" and rec.message == "ok"
+    assert rec.status == "ok"
+    assert rec.message == "ok"
     as_json = json.loads(d.manifest.to_json())
     assert as_json["solves"]["entropy_bits"] == {"status": "ok", "message": "ok"}
     back = Manifest.from_dict(as_json)

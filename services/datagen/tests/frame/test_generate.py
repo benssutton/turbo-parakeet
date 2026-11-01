@@ -25,9 +25,12 @@ def test_frame_and_manifest():
             c=ColumnSpec("decimal", distinct_share=0.95, order=Sorted()),
         )
     )
-    assert df.columns == ["a", "b", "c"] and df.height == 1_000
-    assert df.schema["a"] == pl.Categorical and df.schema["c"] == pl.Decimal(12, 2)
-    assert man.columns["a"]["null_count"] == 100 and man.columns["a"]["distinct"] == 10
+    assert df.columns == ["a", "b", "c"]
+    assert df.height == 1_000
+    assert df.schema["a"] == pl.Categorical
+    assert df.schema["c"] == pl.Decimal(12, 2)
+    assert man.columns["a"]["null_count"] == 100
+    assert man.columns["a"]["distinct"] == 10
     assert man.columns["c"]["descents"] == 0
     assert abs(man.relations["b"]["nmi"] - 1) < 1e-9
     assert FrameManifest.from_json(man.to_json()) == man
@@ -57,10 +60,9 @@ def test_frame_level_order():
 
 
 def test_strict_raises_on_a_missed_target():
+    missed = spec(a=ColumnSpec("int64", distinct=10, entropy=0.01))
     with pytest.raises(TargetMissed, match="entropy"):
-        generate_frame(
-            spec(a=ColumnSpec("int64", distinct=10, entropy=0.01)), strict=True
-        )
+        generate_frame(missed, strict=True)
     generate_frame(
         spec(a=ColumnSpec("int64", distinct=10, entropy=0.01))
     )  # best effort: no raise

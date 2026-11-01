@@ -37,10 +37,10 @@ def test_generated_columns_classify_as_intended():
 
 
 def test_family_of_polars_dtypes():
-    assert family_of(pl.Int32) == "int" and family_of(pl.UInt8) == "uint"
-    assert (
-        family_of(pl.Date) == "temporal" and family_of(pl.Categorical) == "categorical"
-    )
+    assert family_of(pl.Int32) == "int"
+    assert family_of(pl.UInt8) == "uint"
+    assert family_of(pl.Date) == "temporal"
+    assert family_of(pl.Categorical) == "categorical"
     assert family_of(pl.List(pl.Int64)) is None
 
 
@@ -49,7 +49,8 @@ def test_coverage_of_any_frame():
     cov = coverage_of(df)
     assert cov.measured["a"]["family"] == "int"
     assert cov.measured["s"]["cardinality"] == "binary"
-    assert cov.covered and cov.missing
+    assert cov.covered
+    assert cov.missing
 
 
 def test_classify_constant():

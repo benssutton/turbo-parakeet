@@ -12,18 +12,21 @@ UNIQUE = pa.array([f"k{i}" for i in range(1_000)])
 
 def test_noisy_copy():
     out = derive(NoisyCopy("p", 0.2), PARENT, RNG())
-    assert len(out) == 1_000 and containment(out, PARENT) == 1.0
+    assert len(out) == 1_000
+    assert containment(out, PARENT) == 1.0
     assert 0.7 < (np.asarray(out) == np.asarray(PARENT)).mean() < 0.9
 
 
 def test_relabel_is_a_bijection():
     out = derive(Relabel("p", "string"), PARENT, RNG())
-    assert out.type == pa.string() and abs(nmi(out, PARENT) - 1) < 1e-9
+    assert out.type == pa.string()
+    assert abs(nmi(out, PARENT) - 1) < 1e-9
 
 
 def test_foreign_key():
     out = derive(ForeignKey("p", null_share=0.1, zipf_exponent=1.1), UNIQUE, RNG())
-    assert out.null_count == 100 and containment(out, UNIQUE) == 1.0
+    assert out.null_count == 100
+    assert containment(out, UNIQUE) == 1.0
 
 
 def test_subset():

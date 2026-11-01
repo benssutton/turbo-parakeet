@@ -36,7 +36,8 @@ def test_population_samples_and_measure_frame():
     df, truth = sc.population_samples(1_000, [(100, "uniform"), (50, ("zipf", 1.1))])
     assert truth == {"p0": 100, "p1": 50}
     man = sc.measure_frame(df)
-    assert man.columns["p0"]["distinct"] <= 100 and man.rows == 1_000
+    assert man.columns["p0"]["distinct"] <= 100
+    assert man.rows == 1_000
 
 
 # The planted structure that the root tests and benchmarks rely on.
@@ -198,7 +199,8 @@ def test_top_k_streams_shape_and_determinism():
 
 def test_runs_generators_plant_mean_run_length():
     df = sc.runs_int(100_000, 2, mean_run=50, cardinality=1_000)
-    assert df.columns == ["c0", "c1"] and df.height == 100_000
+    assert df.columns == ["c0", "c1"]
+    assert df.height == 100_000
     assert_frame_equal(df, sc.runs_int(100_000, 2, mean_run=50, cardinality=1_000))
     for c in df.columns:
         n_runs = 1 + (df[c].diff() != 0).sum()
@@ -206,7 +208,8 @@ def test_runs_generators_plant_mean_run_length():
     single = sc.runs_int(1_000, 1, mean_run=1, cardinality=1_000_000)
     assert (single["c0"].diff() != 0).sum() > 990  # every row its own draw
     s = sc.runs_str(1_000, 1, mean_run=10, cardinality=5)
-    assert s.columns == ["s0"] and s.schema["s0"] == pl.String
+    assert s.columns == ["s0"]
+    assert s.schema["s0"] == pl.String
     assert s["s0"][0].startswith("v")
 
 

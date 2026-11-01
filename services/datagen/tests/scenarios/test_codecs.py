@@ -30,7 +30,8 @@ def test_delta_frame_planted_steps():
     steps = df["ts_regular"].dt.epoch("ms").diff().drop_nulls()
     assert (steps == 1000).all()
     assert df["ids_sorted"].is_sorted()
-    assert df["walk_i16"].dtype == pl.Int16 and df["walk_i32"].dtype == pl.Int32
+    assert df["walk_i16"].dtype == pl.Int16
+    assert df["walk_i32"].dtype == pl.Int32
     assert df["walk"].diff().drop_nulls().abs().max() <= 1000
 
 
