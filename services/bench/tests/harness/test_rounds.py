@@ -63,12 +63,15 @@ def test_the_suite_is_four_tables_of_two_queries():
 
 def test_every_pair_runs_once_per_round_after_an_untimed_warm_up(fake, tmp_path):
     r = _run(tmp_path)
-    assert r.tables_ok == 4 and r.tables_skipped == 0
-    assert r.queries_run == 8 and r.samples_written == 24
+    assert r.tables_ok == 4
+    assert r.tables_skipped == 0
+    assert r.queries_run == 8
+    assert r.samples_written == 24
     calls = fake["client"].calls
     assert [c[2] for c in calls[:8]] == [None] * 8  # the warm-up round
     rs = rounds(calls)
-    assert len(rs) == 3 and all(len({c[1] for c in rd}) == 8 for rd in rs)
+    assert len(rs) == 3
+    assert all(len({c[1] for c in rd}) == 8 for rd in rs)
 
 
 def test_round_order_is_shuffled_per_round_and_reproducible(fake, tmp_path):
@@ -79,7 +82,8 @@ def test_round_order_is_shuffled_per_round_and_reproducible(fake, tmp_path):
     fake["client"] = FakeClient()
     _run(tmp_path / "b")
     second = [[c[1] for c in rd] for rd in rounds(fake["client"].calls)]
-    assert first == second and len({tuple(o) for o in first}) > 1
+    assert first == second
+    assert len({tuple(o) for o in first}) > 1
 
 
 def test_samples_carry_their_round_and_samples_add_continues_the_numbering(
@@ -110,7 +114,8 @@ def test_queries_added_later_warn_that_they_pair_only_among_themselves(fake, tmp
     r = run_suite(
         added, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", console=console
     )
-    assert r.queries_run == 4 and r.queries_skipped_existing == 8
+    assert r.queries_run == 4
+    assert r.queries_skipped_existing == 8
     out = " ".join(console.file.getvalue().split())
     assert "4 of 12 queries run without the others" in out
     assert "--samples-add" in out
@@ -129,7 +134,8 @@ def test_quietness_is_recorded_before_and_after(fake, tmp_path):
         before, after = s.conn.execute(
             "SELECT quiet_before, quiet_after FROM runs WHERE run_id = ?", (r.run_id,)
         ).fetchone()
-    assert before and after
+    assert before
+    assert after
 
 
 def test_a_failing_query_is_recorded_and_the_others_complete(fake, tmp_path):
@@ -146,7 +152,8 @@ def test_a_failing_query_is_recorded_and_the_others_complete(fake, tmp_path):
             "SELECT DISTINCT error FROM queries WHERE kind = 'filter'"
         ).fetchall()
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
-    assert status == {"filter": "error", "full_scan": "ok"} and finished
+    assert status == {"filter": "error", "full_scan": "ok"}
+    assert finished
     assert error == [("RuntimeError: boom",)]
 
 
@@ -160,7 +167,9 @@ def test_ctrl_c_mid_round_keeps_the_samples_and_marks_the_rest_interrupted(
         n = s.conn.execute("SELECT count(*) FROM samples").fetchone()[0]
         status = s.conn.execute("SELECT status FROM queries").fetchall()
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
-    assert n == 11 and {st for (st,) in status} == {"interrupted"} and finished
+    assert n == 11
+    assert {st for (st,) in status} == {"interrupted"}
+    assert finished
 
 
 def _statuses(tmp_path):
@@ -175,7 +184,8 @@ def test_ctrl_c_in_the_warm_up_marks_every_query_interrupted(fake, tmp_path):
     with pytest.raises(KeyboardInterrupt):
         _run(tmp_path)
     status, finished = _statuses(tmp_path)
-    assert status == ["interrupted"] * 8 and finished
+    assert status == ["interrupted"] * 8
+    assert finished
 
 
 def test_ctrl_c_while_loading_marks_the_loaded_tables_queries_interrupted(
@@ -193,7 +203,8 @@ def test_ctrl_c_while_loading_marks_the_loaded_tables_queries_interrupted(
     with pytest.raises(KeyboardInterrupt):
         _run(tmp_path)
     status, finished = _statuses(tmp_path)
-    assert status == ["interrupted"] * 4 and finished
+    assert status == ["interrupted"] * 4
+    assert finished
 
 
 def _unsolved(monkeypatch):
@@ -235,5 +246,6 @@ def test_the_run_row_records_the_engine_versions(fake, tmp_path):
             "SELECT engine_versions FROM runs WHERE run_id = ?", (r.run_id,)
         ).fetchone()
     got = json.loads(text)
-    assert got["clickhouse"] == "26.8.31.2" and got["pyarrow"] == pa.__version__
+    assert got["clickhouse"] == "26.8.31.2"
+    assert got["pyarrow"] == pa.__version__
     assert set(got) == {"clickhouse", *versions.installed()}

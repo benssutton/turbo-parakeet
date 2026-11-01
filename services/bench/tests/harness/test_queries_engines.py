@@ -53,13 +53,15 @@ def _vals():
 def test_one_choice_renders_the_old_clickhouse_predicates():
     vals = _vals()
     c = choose_range(vals, 0.1, np.random.default_rng(3))
-    assert c.predicate_kind == "range" and len(c.values) == 2
+    assert c.predicate_kind == "range"
+    assert len(c.values) == 2
     assert range_predicate(vals, 0.1, np.random.default_rng(3), ch_type="Float64") == (
         render_clickhouse(c, "Float64"),
         c.actual_fraction,
     )
     i = choose_in(vals, 0.01, 3)
-    assert i.predicate_kind == "in" and len(i.values) == 3
+    assert i.predicate_kind == "in"
+    assert len(i.values) == 3
     assert in_predicate(vals, 0.01, 3) == (render_clickhouse(i), i.actual_fraction)
 
 
@@ -233,7 +235,8 @@ def test_choice_values_come_back_in_the_dataset_type():
     ):
         choice = choose_in(query_values(array), 0.5, 1)
         out = choice_values_arrow(choice, array.type)
-        assert out.type == array.type and out[0].as_py() in array.to_pylist()
+        assert out.type == array.type
+        assert out[0].as_py() in array.to_pylist()
 
 
 def test_reference_counts_and_totals():
@@ -271,15 +274,14 @@ def test_reference_counts_and_totals():
 def test_results_agree():
     r = Reference(3, 10.0, 10.0)
     assert results_agree(r, 3, 10.0 + 1e-12)
-    assert not results_agree(r, 4, 10.0) and not results_agree(r, 3, 10.1)
+    assert not results_agree(r, 4, 10.0)
+    assert not results_agree(r, 3, 10.1)
     assert results_agree(Reference(2, 0.0, 4.0), 2, 1e-15)
     assert results_agree(Reference(0, 0.0, 0.0), 0, None)
-    assert results_agree(Reference(2, 7, 7.0), 2, 7) and not results_agree(
-        Reference(2, 7, 7.0), 2, 8
-    )
-    assert results_agree(Reference(2, None, 0.0), 2, 123) and not results_agree(
-        Reference(2, None, 0.0), 1, 123
-    )
+    assert results_agree(Reference(2, 7, 7.0), 2, 7)
+    assert not results_agree(Reference(2, 7, 7.0), 2, 8)
+    assert results_agree(Reference(2, None, 0.0), 2, 123)
+    assert not results_agree(Reference(2, None, 0.0), 1, 123)
 
 
 BIG_INTS = [
@@ -354,7 +356,8 @@ def test_a_non_finite_reference_accepts_any_non_finite_result():
     nan, inf = float("nan"), float("inf")
     ref = reference_result(pa.array([inf, -inf]), None, None)
     assert np.isnan(ref.total)
-    assert results_agree(ref, 2, inf) and results_agree(ref, 2, -inf)
+    assert results_agree(ref, 2, inf)
+    assert results_agree(ref, 2, -inf)
     assert results_agree(Reference(3, inf, inf), 3, nan)
     assert results_agree(Reference(3, -inf, inf), 3, nan)
     assert results_agree(Reference(4, inf, inf), 4, -inf)
@@ -363,18 +366,20 @@ def test_a_non_finite_reference_accepts_any_non_finite_result():
 
 def test_an_integer_total_is_not_matched_by_truncation():
     r = Reference(2, 7, 7.0)
-    assert results_agree(r, 2, 7) and results_agree(r, 2, 7.0)
-    assert not results_agree(r, 2, 7.9) and not results_agree(r, 2, 6.99)
-    assert not results_agree(r, 2, float("nan")) and not results_agree(
-        r, 2, float("inf")
-    )
+    assert results_agree(r, 2, 7)
+    assert results_agree(r, 2, 7.0)
+    assert not results_agree(r, 2, 7.9)
+    assert not results_agree(r, 2, 6.99)
+    assert not results_agree(r, 2, float("nan"))
+    assert not results_agree(r, 2, float("inf"))
     assert results_agree(Reference(0, 0, 0.0), 0, None)
 
 
 def test_render_predicate_refuses_an_unknown_engine():
     v = dataclasses.replace(variant(), engine="sqlite")
+    choice = ValueChoice("in", np.array([1.0]), 0.5)
     with pytest.raises(ValueError, match="sqlite"):
-        render_predicate(ValueChoice("in", np.array([1.0]), 0.5), v)
+        render_predicate(choice, v)
 
 
 def test_render_clickhouse_exact_sql():

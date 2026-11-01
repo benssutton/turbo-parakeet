@@ -40,8 +40,10 @@ MINIMAL = textwrap.dedent("""
 def test_parses_the_minimal_suite():
     s = parse_suite(MINIMAL)
     assert s.name == "t"
-    assert s.dataset.rows == 1000 and s.dataset.value_range == (-1.0, 10.0)
-    assert s.clickhouse.type == ["Float64"] and s.clickhouse.compression == ["LZ4"]
+    assert s.dataset.rows == 1000
+    assert s.dataset.value_range == (-1.0, 10.0)
+    assert s.clickhouse.type == ["Float64"]
+    assert s.clickhouse.compression == ["LZ4"]
     assert s.queries.kinds == [
         QueryKind(kind="full_scan", target_fraction=None, predicate=None, values=None)
     ]
@@ -57,7 +59,8 @@ def test_distribution_block_maps_onto_the_dataclass():
     )
     s = parse_suite(y)
     assert s.dataset.distribution.kind == "lognormal"
-    assert s.dataset.distribution.mean == 4.0 and s.dataset.distribution.shift == -1.0
+    assert s.dataset.distribution.mean == 4.0
+    assert s.dataset.distribution.shift == -1.0
     assert s.dataset.cardinality_ratio == 0.75
 
 
@@ -73,33 +76,36 @@ def test_filter_kind_carries_its_parameters():
 
 
 def test_invalid_dataset_fails_at_parse_time():
+    y = MINIMAL.replace("null_count: 0", "null_count: 5000")
     with pytest.raises(SuiteError, match="null_count"):
-        parse_suite(MINIMAL.replace("null_count: 0", "null_count: 5000"))
+        parse_suite(y)
 
 
 def test_missing_block_names_the_block():
+    y = MINIMAL.replace("queries:", "queriez:")
     with pytest.raises(SuiteError, match="queries"):
-        parse_suite(MINIMAL.replace("queries:", "queriez:"))
+        parse_suite(y)
 
 
 def test_unknown_query_kind_is_rejected():
+    y = MINIMAL.replace("kind: full_scan", "kind: everything")
     with pytest.raises(SuiteError, match="kind"):
-        parse_suite(MINIMAL.replace("kind: full_scan", "kind: everything"))
+        parse_suite(y)
 
 
 def test_filter_requires_target_and_predicate():
+    y = MINIMAL.replace("- {kind: full_scan}", "- {kind: filter}")
     with pytest.raises(SuiteError, match="target_fraction"):
-        parse_suite(MINIMAL.replace("- {kind: full_scan}", "- {kind: filter}"))
+        parse_suite(y)
 
 
 def test_in_predicate_requires_values():
+    y = MINIMAL.replace(
+        "- {kind: full_scan}",
+        "- {kind: filter, target_fraction: 0.1, predicate: in}",
+    )
     with pytest.raises(SuiteError, match="values"):
-        parse_suite(
-            MINIMAL.replace(
-                "- {kind: full_scan}",
-                "- {kind: filter, target_fraction: 0.1, predicate: in}",
-            )
-        )
+        parse_suite(y)
 
 
 @pytest.mark.parametrize("key", ["cache_mode", "query_condition_cache"])
@@ -110,8 +116,9 @@ def test_retired_query_keys_are_rejected_with_the_reason(key):
 
 
 def test_every_axis_must_be_a_non_empty_list():
+    y = MINIMAL.replace("compression: [LZ4]", "compression: []")
     with pytest.raises(SuiteError, match="compression"):
-        parse_suite(MINIMAL.replace("compression: [LZ4]", "compression: []"))
+        parse_suite(y)
 
 
 SUITES = ("float_codecs", "int_encodings", "decimal32_codecs", "replicates")
@@ -120,29 +127,30 @@ SUITES = ("float_codecs", "int_encodings", "decimal32_codecs", "replicates")
 @pytest.mark.parametrize("name", SUITES)
 def test_the_example_suites_load(name):
     s = load_suite(f"suites/{name}.yaml")
-    assert s.name == name and s.dataset.rows == 10_000_000
+    assert s.name == name
+    assert s.dataset.rows == 10_000_000
 
 
 def test_decimal32_has_its_own_suite_at_seven_places():
     s = load_suite("suites/decimal32_codecs.yaml")
-    assert (
-        s.clickhouse.type == ["Decimal32", "Decimal64"]
-        and s.dataset.decimal_places == 7
-    )
+    assert s.clickhouse.type == ["Decimal32", "Decimal64"]
+    assert s.dataset.decimal_places == 7
     assert "Decimal32" not in load_suite("suites/float_codecs.yaml").clickhouse.type
 
 
 def test_replicates_are_three_inert_indexes_on_one_table_shape():
     s = load_suite("suites/replicates.yaml")
     assert s.clickhouse.skip_index == ["minmax", "bloom_filter", "set(100)"]
-    assert s.clickhouse.codec == ["none"] and s.clickhouse.type == ["Int32"]
+    assert s.clickhouse.codec == ["none"]
+    assert s.clickhouse.type == ["Int32"]
     assert load_suite("suites/int_encodings.yaml").clickhouse.skip_index == ["none"]
 
 
 def test_int_encodings_suite_matches_the_settled_decisions():
     s = load_suite("suites/int_encodings.yaml")
     assert s.dataset.cardinality_ratio == 0.0001  # 1000 distinct at 10M
-    assert s.dataset.entropy_bits == 4.0 and s.dataset.runs_z == -0.25
+    assert s.dataset.entropy_bits == 4.0
+    assert s.dataset.runs_z == -0.25
 
 
 def test_distribution_typo_key_is_rejected():
@@ -369,7 +377,8 @@ def test_in_process_blocks_parse_with_their_defaults():
         threads=None,
         ipc_batch_rows=["122880"],
     )
-    assert s.datafusion.threads == [2, 4] and s.datafusion.compression == ["ZSTD(3)"]
+    assert s.datafusion.threads == [2, 4]
+    assert s.datafusion.compression == ["ZSTD(3)"]
     assert s.source_yaml == INPROC
 
 
@@ -389,17 +398,20 @@ def test_ipc_batch_rows_is_an_axis():
 
 def test_a_suite_may_omit_clickhouse():
     s = parse_suite(drop_block(INPROC, "clickhouse"))
-    assert s.clickhouse is None and s.polars is not None
+    assert s.clickhouse is None
+    assert s.polars is not None
 
 
 def test_a_clickhouse_only_suite_has_no_in_process_blocks():
     s = parse_suite(MINIMAL)
-    assert s.polars is None and s.datafusion is None
+    assert s.polars is None
+    assert s.datafusion is None
 
 
 def test_a_suite_names_at_least_one_engine():
+    y = drop_block(MINIMAL, "clickhouse")
     with pytest.raises(SuiteError, match="names no engine"):
-        parse_suite(drop_block(MINIMAL, "clickhouse"))
+        parse_suite(y)
 
 
 @pytest.mark.parametrize(
@@ -433,8 +445,9 @@ def test_a_suite_names_at_least_one_engine():
     ],
 )
 def test_in_process_block_errors_name_the_field(old, new, match):
+    y = INPROC.replace(old, new)
     with pytest.raises(SuiteError, match=match):
-        parse_suite(INPROC.replace(old, new))
+        parse_suite(y)
 
 
 def test_two_spellings_of_one_categorical_are_one_type():
@@ -474,7 +487,8 @@ def test_storage_and_threads_are_deduplicated_in_order(old, new, field, expected
 
 def test_the_inproc_strings_example_parses_and_expands():
     s = load_suite("suites/inproc_strings.yaml")
-    assert s.clickhouse is None and s.dataset.rows == 10_000_000
+    assert s.clickhouse is None
+    assert s.dataset.rows == 10_000_000
     assert [type_label("polars", t) for t in s.polars.type] == [
         "String",
         "Categorical(UInt8)",
@@ -483,7 +497,8 @@ def test_the_inproc_strings_example_parses_and_expands():
         "Enum",
     ]
     assert s.datafusion.type[1] == "dictionary<values=string, indices=uint8, ordered=0>"
-    assert s.polars.threads is None and s.datafusion.threads is None
+    assert s.polars.threads is None
+    assert s.datafusion.threads is None
     polars = expand_inproc_grid(s, "polars", default_threads=4)
     datafusion = expand_inproc_grid(s, "datafusion", default_threads=4)
     assert (len(polars), sum(v.status == "ok" for v in polars)) == (40, 25)

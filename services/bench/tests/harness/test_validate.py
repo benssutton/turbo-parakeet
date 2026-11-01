@@ -159,7 +159,8 @@ def test_nullable_keys_off_the_base_type():
         value_max=9.99999999,
         clickhouse_version="26.8.2.7",
     )
-    assert g.status == "skipped" and "Gorilla(4)" in g.skip_reason
+    assert g.status == "skipped"
+    assert "Gorilla(4)" in g.skip_reason
 
 
 @pytest.mark.parametrize(
@@ -182,7 +183,8 @@ def test_skip_index_applicability(ch_type, index, accepted):
     )
     assert (v.status == "ok") == accepted
     if not accepted:
-        assert "bloom filter index" in v.skip_reason and "Decimal(" in v.skip_reason
+        assert "bloom filter index" in v.skip_reason
+        assert "Decimal(" in v.skip_reason
 
 
 def test_nulls_in_data_require_nullable():
@@ -193,7 +195,8 @@ def test_nulls_in_data_require_nullable():
         value_max=9.99999999,
         clickhouse_version="26.8.2.7",
     )
-    assert v.status == "skipped" and "nullable" in v.skip_reason.lower()
+    assert v.status == "skipped"
+    assert "nullable" in v.skip_reason.lower()
 
 
 def test_unsigned_type_requires_non_negative_min():
@@ -204,7 +207,8 @@ def test_unsigned_type_requires_non_negative_min():
         value_max=9.99999999,
         clickhouse_version="26.8.2.7",
     )
-    assert v.status == "skipped" and "unsigned" in v.skip_reason.lower()
+    assert v.status == "skipped"
+    assert "unsigned" in v.skip_reason.lower()
 
 
 def test_projection_with_primary_key_warns_redundant_but_runs():
@@ -313,7 +317,8 @@ def test_decimal_range_overflow_skips_decimal32_but_not_decimal64():
         value_max=10.0,
         clickhouse_version="26.8.2.7",
     )
-    assert d32.status == "skipped" and "Decimal32" in d32.skip_reason
+    assert d32.status == "skipped"
+    assert "Decimal32" in d32.skip_reason
     [d64] = expand_grid(
         suite_with(type=["Decimal64"]),
         null_count=0,
@@ -431,7 +436,8 @@ def test_in_process_grid_crosses_type_storage_compression_threads():
     s = parse_suite(INPROC)
     v = expand_inproc_grid(s, "polars", default_threads=8)
     assert len(v) == 2 * 2 * 3
-    assert {x.engine for x in v} == {"polars"} and {x.threads for x in v} == {8}
+    assert {x.engine for x in v} == {"polars"}
+    assert {x.threads for x in v} == {8}
     mem = {(x.compression, x.status) for x in v if x.storage == "memory"}
     assert mem == {("none", "ok"), ("ZSTD(1)", "skipped"), ("LZ4_FRAME", "skipped")}
     assert all("ipc only" in x.skip_reason for x in v if x.status == "skipped")
@@ -439,9 +445,11 @@ def test_in_process_grid_crosses_type_storage_compression_threads():
     assert all(
         x.nullable is None and x.codec is None and x.skip_index is None for x in v
     )
-    assert [x.ch_type for x in v[:1]] == ["Float64"] and v[0].type_spec == "Float64"
+    assert [x.ch_type for x in v[:1]] == ["Float64"]
+    assert v[0].type_spec == "Float64"
     d = expand_inproc_grid(s, "datafusion", default_threads=8)
-    assert [x.threads for x in d] == [2, 4] and d[0].ch_type == "double"
+    assert [x.threads for x in d] == [2, 4]
+    assert d[0].ch_type == "double"
 
 
 def test_no_block_no_variants():
@@ -510,7 +518,8 @@ def test_in_process_ids_hash_engine_type_storage_compression_threads_version():
     )
     # A memory cell's id has no batch in it: the axis does not apply to it.
     mem = grid[0]
-    assert mem.storage == "memory" and mem.ipc_batch_rows is None
+    assert mem.storage == "memory"
+    assert mem.ipc_batch_rows is None
     key = "\x1f".join(
         ["polars", "Float64", "Float64", "memory", "none", "4", "d1", "2.0.0"]
     )

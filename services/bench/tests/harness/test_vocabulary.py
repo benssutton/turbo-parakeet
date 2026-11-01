@@ -331,9 +331,12 @@ def test_an_enum_with_more_than_32767_values_or_none_cannot_be_resolved(tmp_path
 def test_an_unresolvable_type_is_a_skipped_cell_with_the_reason(tmp_path):
     too_many = enum_strings(128)
     [v] = grid(tmp_path, too_many, type=["Enum8"], nullable=[False])
-    assert v.status == "skipped" and "127" in v.skip_reason and v.ch_type == "Enum8"
+    assert v.status == "skipped"
+    assert "127" in v.skip_reason
+    assert v.ch_type == "Enum8"
     [v] = grid(tmp_path, too_many, type=["Enum16"], nullable=[False])
-    assert v.status == "ok" and v.ch_type.startswith("Enum16(")
+    assert v.status == "ok"
+    assert v.ch_type.startswith("Enum16(")
 
 
 # --- codecs: the measured matrix ----------------------------------------------
@@ -482,7 +485,8 @@ def test_codec_matrix(tmp_path, case, codec, message):
     if message is OK:
         assert v.status == "ok", v.skip_reason
     else:
-        assert v.status == "skipped" and v.skip_reason == message
+        assert v.status == "skipped"
+        assert v.skip_reason == message
 
 
 @pytest.mark.parametrize(
@@ -518,7 +522,8 @@ def test_gorilla_on_a_two_axis_codec_cell_is_the_only_skip_for_enum_and_bool(
 
 def test_low_cardinality_is_accepted_on_fixedstring(tmp_path):
     v = one(tmp_path, "FixedString@binary", codec=["LowCardinality"])
-    assert v.status == "ok" and v.ch_type == "LowCardinality(Nullable(FixedString(4)))"
+    assert v.status == "ok"
+    assert v.ch_type == "LowCardinality(Nullable(FixedString(4)))"
 
 
 @pytest.mark.parametrize(
@@ -645,7 +650,8 @@ def test_integers_that_do_not_fit_the_axis_type_are_skipped(
         value_min=lo,
         value_max=hi,
     )
-    assert v.status == "skipped" and fragment in v.skip_reason
+    assert v.status == "skipped"
+    assert fragment in v.skip_reason
     assert axis_of(case) in v.skip_reason
 
 
@@ -683,7 +689,8 @@ def test_decimal128_range_check_uses_precision_38(tmp_path):
         value_min=-1.0,
         value_max=1e30,
     )
-    assert ok.status == "ok" and ok.ch_type == "Nullable(Decimal128(4))"
+    assert ok.status == "ok"
+    assert ok.ch_type == "Nullable(Decimal128(4))"
     [bad] = grid(
         tmp_path,
         array,
@@ -692,7 +699,8 @@ def test_decimal128_range_check_uses_precision_38(tmp_path):
         value_min=-1.0,
         value_max=1e35,
     )
-    assert bad.status == "skipped" and "Decimal128(4)" in bad.skip_reason
+    assert bad.status == "skipped"
+    assert "Decimal128(4)" in bad.skip_reason
 
 
 # --- the loader's Arrow types ---------------------------------------------------
@@ -790,8 +798,9 @@ def test_decimal128_needs_decimal_places(tmp_path):
 
 
 def test_the_unknown_type_error_names_the_vocabulary():
+    y = MINIMAL.replace("type: [Float64]", "type: [UUID]")
     with pytest.raises(SuiteError, match="UUID"):
-        parse_suite(MINIMAL.replace("type: [Float64]", "type: [UUID]"))
+        parse_suite(y)
 
 
 def test_gcd_parses_as_a_codec():
@@ -828,14 +837,16 @@ def test_each_admitted_type_loads_through_arrow_and_reads_back(
     [variant] = grid(
         tmp_path, array, type=[axis], nullable=[True], compression=[compression]
     )
-    assert variant.status == "ok" and variant.ch_type == f"Nullable({expected_type})"
+    assert variant.status == "ok"
+    assert variant.ch_type == f"Nullable({expected_type})"
     dataset = load_or_generate(
         path_spec(write(tmp_path, array), "v"), tmp_path / "cache"
     )
     name = table(f"{abs(hash((case, compression))) % 10**8:08d}0000000000000000")
     r = load_table(ch, name, variant, dataset)
     assert r.status == "ok", r.error
-    assert r.stats.rows == len(array) and r.stats.parts == 1
+    assert r.stats.rows == len(array)
+    assert r.stats.parts == 1
     [(count, nulls)] = ch.query_rows(f"SELECT count(v), countIf(v IS NULL) FROM {name}")
     assert (count, nulls) == (len(array) - array.null_count, array.null_count)
     [(value,)] = ch.query_rows(
