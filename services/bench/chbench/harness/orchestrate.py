@@ -547,45 +547,14 @@ def _run(
     allow_unsolved: bool,
 ) -> None:
     """`run_suite`'s body; `engines` is filled here and closed by the caller."""
-    client, version = None, None
     actual: dict[str, str | None] = {}
-    if suite.clickhouse is not None:
-        client = CHClient(Connection.from_env())
-        version = client.version()
-        _say(
-            console,
-            f"clickhouse {version} at "
-            f"{client.connection.host}:{client.connection.port}",
-            style="bold",
-        )
-        actual["clickhouse"] = version
-        engines["clickhouse"] = ClickHouseEngine(client)
+    client, version = _connect_clickhouse(suite, engines, console, actual)
 
     installed = versions.installed()
-    needs_default = any(
-        axes is not None and axes.threads is None
-        for axes in (suite.polars, suite.datafusion)
-    )
-    default = default_threads() if needs_default else None
-    pairs = _inproc_pairs(suite, default)
-    for engine in dict.fromkeys(e for e, _ in pairs):
-        threads = [t for e, t in pairs if e == engine]
-        _say(console, f"{engine} {installed[engine]}, threads {threads}", style="bold")
-        actual[engine] = installed[engine]
-    if pairs:
-        actual["pyarrow"] = installed["pyarrow"]
+    default, pairs = _plan_inproc(suite, installed, console, actual)
     _warn(console, "versions", versions.drift(versions.load_pinned(), actual))
     if not dry_run:
-        for engine, threads in pairs:
-            started = InprocEngine(engine, threads)
-            engines[f"{engine}:{threads}"] = started
-            ran = started.info.get("threads")
-            if ran != threads:
-                _warn(
-                    console,
-                    f"{engine}:{threads}",
-                    [f"asked for {threads} thread(s), the worker runs {ran}"],
-                )
+        _start_inproc_workers(engines, pairs, console)
 
     dataset = load_or_generate(suite.dataset, cache_dir)
     manifest = dataset.manifest
@@ -606,19 +575,7 @@ def _run(
     _warn(console, "dataset", manifest.warnings)
     _check_solves(manifest, allow_unsolved, console)
 
-    # The achieved bounds of the final, rounded, cast array -- the values
-    # the server will actually hold.
-    value_min, value_max = _achieved_bounds(dataset.array)
-    variants = expand_grid(
-        suite,
-        null_count=suite.dataset.null_count,
-        value_min=value_min,
-        value_max=value_max,
-        clickhouse_version=version or "",
-        array=dataset.array,
-    )
-    for engine in ("polars", "datafusion"):
-        variants += expand_inproc_grid(suite, engine, default_threads=default)
+    variants = _expand_variants(suite, dataset, version, default)
     _print_grid(console, variants)
 
     if dry_run:
@@ -635,28 +592,11 @@ def _run(
     values = query_values(dataset.array)
     inproc = None
     if pairs:
-        choices = choose_queries(
-            suite.queries, values, np.random.default_rng(suite.dataset.seed)
-        )
-        inproc = _InprocQueries(
-            array=dataset.array,
-            choices=choices,
-            values=[
-                None if c is None else choice_values_arrow(c, dataset.array.type)
-                for c in choices
-            ],
-        )
+        inproc = _inproc_queries(suite, dataset, values)
 
     with Store(store_path) as store:
         store.init_schema()
-        unfinished = store.unfinished_runs(suite.name)
-        if unfinished and not ignore_unfinished:
-            run_id, started_at = unfinished[-1]
-            raise UnfinishedRunError(
-                f"suite {suite.name!r} has an unfinished run {run_id} started "
-                f"at {started_at} in {store.path}. If that process is no longer "
-                f"running, rerun with --ignore-unfinished."
-            )
+        _check_unfinished(store, suite, ignore_unfinished)
         store.upsert_dataset(manifest, str(arrow_path))
         run_versions = {**({"clickhouse": version} if version else {}), **installed}
         run_id = store.begin_run(suite, engine_versions=run_versions)
@@ -678,59 +618,175 @@ def _run(
             cache_dir=cache_dir,
             inproc=inproc,
         )
-        # Every query row written so far, so an interrupt in any phase can close it.
-        pending: list[_Pending] = []
-        try:
-            # Every table first, then the rounds: module docstring, point 3.
-            for variant in variants:
-                if variant.engine == "clickhouse":
-                    pending += _prepare_variant(context, dataset, values, variant)
-                else:
-                    pending += _prepare_inproc_variant(context, dataset, variant)
-            _run_rounds(context, pending)
-        except KeyboardInterrupt:
-            # `run_round` already delivered every completed sample through
-            # `on_sample`, and `insert_sample` commits each one as it lands,
-            # so there is nothing left to flush. Without this write the
-            # pre-run upsert leaves each query's status NULL, and after the
-            # fact an interrupted query looks like one the run never reached;
-            # a row `_finish_queries` already wrote keeps its status. An
-            # in-process round's `interrupt()` is a no-op (its samples land
-            # as they are taken), so the queries it never ran are marked here
-            # like any other short of their samples.
-            # `finish_run` is the `finally`'s job, below; closing the workers
-            # is `run_suite`'s.
-            _close_open_queries(context, pending, "interrupted", None)
-            _say(
-                console,
-                f"\ninterrupted: {summary.samples_written} sample(s) "
-                f"written and committed",
-                style="yellow",
-            )
-            raise
-        except Exception as err:
-            # Anything else escaping (a `database is locked` from `on_sample`, say) marks the
-            # queries short of their samples `error` with its text, as a Ctrl-C marks them
-            # `interrupted`. When the store is what broke, marking fails too: that second
-            # failure becomes a note on the first rather than masking it.
-            try:
-                _close_open_queries(
-                    context, pending, "error", f"{type(err).__name__}: {err}"
-                )
-            except Exception as again:  # noqa: BLE001
-                err.add_note(f"marking the open queries failed too: {again!r}")
-            raise
-        finally:
-            # The only call: a run row must never keep `finished_at` NULL
-            # because something other than Ctrl-C escaped the loop -- a
-            # `database is locked` from a second run sharing this file, or
-            # `expand_queries` raising on an all-null dataset. Reached once
-            # per run, on every path, so it cannot run twice.
-            store.finish_run(run_id)
+        _run_guarded(context, dataset, values, variants)
         # Deliberately outside the `finally`: rendering a report while an
         # exception propagates would mask it if the store is the thing that
         # broke. `chbench report` shows the bank in that case.
         _print_report(console, store, suite)
+
+
+def _run_guarded(
+    context: RunContext, dataset, values, variants: list[TableVariant]
+) -> None:
+    """Prepare every table and run the rounds; whatever escapes, close the open queries and
+    finish the run row."""
+    console, summary = context.console, context.summary
+    # Every query row written so far, so an interrupt in any phase can close it.
+    pending: list[_Pending] = []
+    try:
+        # Every table first, then the rounds: module docstring, point 3.
+        _prepare_all(context, dataset, values, variants, pending)
+        _run_rounds(context, pending)
+    except KeyboardInterrupt:
+        # `run_round` already delivered every completed sample through
+        # `on_sample`, and `insert_sample` commits each one as it lands,
+        # so there is nothing left to flush. Without this write the
+        # pre-run upsert leaves each query's status NULL, and after the
+        # fact an interrupted query looks like one the run never reached;
+        # a row `_finish_queries` already wrote keeps its status. An
+        # in-process round's `interrupt()` is a no-op (its samples land
+        # as they are taken), so the queries it never ran are marked here
+        # like any other short of their samples.
+        # `finish_run` is the `finally`'s job, below; closing the workers
+        # is `run_suite`'s.
+        _close_open_queries(context, pending, "interrupted", None)
+        _say(
+            console,
+            f"\ninterrupted: {summary.samples_written} sample(s) "
+            f"written and committed",
+            style="yellow",
+        )
+        raise
+    except Exception as err:
+        # Anything else escaping (a `database is locked` from `on_sample`, say) marks the
+        # queries short of their samples `error` with its text, as a Ctrl-C marks them
+        # `interrupted`. When the store is what broke, marking fails too: that second
+        # failure becomes a note on the first rather than masking it.
+        try:
+            _close_open_queries(
+                context, pending, "error", f"{type(err).__name__}: {err}"
+            )
+        except Exception as again:  # noqa: BLE001
+            err.add_note(f"marking the open queries failed too: {again!r}")
+        raise
+    finally:
+        # The only call: a run row must never keep `finished_at` NULL
+        # because something other than Ctrl-C escaped the loop -- a
+        # `database is locked` from a second run sharing this file, or
+        # `expand_queries` raising on an all-null dataset. Reached once
+        # per run, on every path, so it cannot run twice.
+        context.store.finish_run(context.run_id)
+
+
+def _prepare_all(
+    context: RunContext,
+    dataset,
+    values,
+    variants: list[TableVariant],
+    pending: list[_Pending],
+) -> None:
+    """Create and load every table, appending each query row to `pending` as it is written
+    (so an interrupt part-way still sees them)."""
+    for variant in variants:
+        if variant.engine == "clickhouse":
+            pending += _prepare_variant(context, dataset, values, variant)
+        else:
+            pending += _prepare_inproc_variant(context, dataset, variant)
+
+
+def _expand_variants(suite: Suite, dataset, version, default) -> list[TableVariant]:
+    """Every table variant of the suite: ClickHouse's, then each in-process engine's."""
+    # The achieved bounds of the final, rounded, cast array -- the values
+    # the server will actually hold.
+    value_min, value_max = _achieved_bounds(dataset.array)
+    variants = expand_grid(
+        suite,
+        null_count=suite.dataset.null_count,
+        value_min=value_min,
+        value_max=value_max,
+        clickhouse_version=version or "",
+        array=dataset.array,
+    )
+    for engine in ("polars", "datafusion"):
+        variants += expand_inproc_grid(suite, engine, default_threads=default)
+    return variants
+
+
+def _check_unfinished(store: Store, suite: Suite, ignore_unfinished: bool) -> None:
+    unfinished = store.unfinished_runs(suite.name)
+    if unfinished and not ignore_unfinished:
+        run_id, started_at = unfinished[-1]
+        raise UnfinishedRunError(
+            f"suite {suite.name!r} has an unfinished run {run_id} started "
+            f"at {started_at} in {store.path}. If that process is no longer "
+            f"running, rerun with --ignore-unfinished."
+        )
+
+
+def _inproc_queries(suite: Suite, dataset, values) -> _InprocQueries:
+    choices = choose_queries(
+        suite.queries, values, np.random.default_rng(suite.dataset.seed)
+    )
+    return _InprocQueries(
+        array=dataset.array,
+        choices=choices,
+        values=[
+            None if c is None else choice_values_arrow(c, dataset.array.type)
+            for c in choices
+        ],
+    )
+
+
+def _connect_clickhouse(
+    suite: Suite, engines: dict, console: Console, actual: dict
+) -> tuple[CHClient | None, str | None]:
+    """Connect when the suite has a `clickhouse:` block; return `(client, version)`."""
+    if suite.clickhouse is None:
+        return None, None
+    client = CHClient(Connection.from_env())
+    version = client.version()
+    _say(
+        console,
+        f"clickhouse {version} at {client.connection.host}:{client.connection.port}",
+        style="bold",
+    )
+    actual["clickhouse"] = version
+    engines["clickhouse"] = ClickHouseEngine(client)
+    return client, version
+
+
+def _plan_inproc(
+    suite: Suite, installed: dict, console: Console, actual: dict
+) -> tuple[int | None, list[tuple[str, int]]]:
+    """Announce the in-process engines; return `(default threads, (engine, threads) pairs)`."""
+    needs_default = any(
+        axes is not None and axes.threads is None
+        for axes in (suite.polars, suite.datafusion)
+    )
+    default = default_threads() if needs_default else None
+    pairs = _inproc_pairs(suite, default)
+    for engine in dict.fromkeys(e for e, _ in pairs):
+        threads = [t for e, t in pairs if e == engine]
+        _say(console, f"{engine} {installed[engine]}, threads {threads}", style="bold")
+        actual[engine] = installed[engine]
+    if pairs:
+        actual["pyarrow"] = installed["pyarrow"]
+    return default, pairs
+
+
+def _start_inproc_workers(
+    engines: dict, pairs: list[tuple[str, int]], console: Console
+) -> None:
+    for engine, threads in pairs:
+        started = InprocEngine(engine, threads)
+        engines[f"{engine}:{threads}"] = started
+        ran = started.info.get("threads")
+        if ran != threads:
+            _warn(
+                console,
+                f"{engine}:{threads}",
+                [f"asked for {threads} thread(s), the worker runs {ran}"],
+            )
 
 
 def _inproc_jobs(

@@ -400,6 +400,78 @@ def _size_reason(codec: str, label: str) -> str:
     )
 
 
+def _gcd_skip_reason(axis_type: str, label: str) -> str | None:
+    if axis_type in _GCD_TYPES:
+        return None
+    return (
+        f"Codec GCD cannot be applied to column {label} because it can only be "
+        "used with Int*, UInt*, Decimal*, Date* or DateTime* types."
+    )
+
+
+def _delta_skip_reason(axis_type: str, width: int | None, label: str) -> str | None:
+    if axis_type == "String":
+        return (
+            "Codec Delta is not applicable for String because the data type is "
+            "not of fixed size."
+        )
+    if width in _CODEC_WIDTHS:
+        return None
+    return _size_reason("Delta", label)
+
+
+def _double_delta_skip_reason(
+    axis_type: str, width: int | None, label: str
+) -> str | None:
+    if axis_type in ("String", "FixedString"):
+        return (
+            f"Codec DoubleDelta is not applicable for {label} "
+            f"because the data type is not numeric."
+        )
+    if width in _CODEC_WIDTHS:
+        return None
+    return _size_reason("DoubleDelta", label)
+
+
+def _gorilla_skip_reason(
+    axis_type: str, width: int | None, label: str, compression: str
+) -> str | None:
+    if axis_type in _FLOATS:
+        return None
+    if axis_type == "String":
+        # Non-fixed-size: Gorilla gives Delta's clause under its own name.
+        return (
+            "Codec Gorilla is not applicable for String because the data type "
+            "is not of fixed size."
+        )
+    if width not in _CODEC_WIDTHS:
+        return _size_reason("Gorilla", label)
+    # The `compression` axis also allows ZSTD, and the DDL always applies
+    # CODEC(Gorilla, <compression>), so the server names the actual pair.
+    return (
+        f"The combination of compression codecs Gorilla({width}), {compression} "
+        "is meaningless, because it does not make sense to apply a "
+        "floating-point time series codec to non-floating-point columns "
+        "(Note: you can enable setting 'allow_suspicious_codecs' to skip "
+        "this check)."
+    )
+
+
+def _t64_skip_reason(axis_type: str, label: str) -> str | None:
+    if axis_type in _T64_TYPES:
+        return None
+    return f"T64 codec is not supported for specified type {label}."
+
+
+def _fpc_skip_reason(axis_type: str, label: str) -> str | None:
+    if axis_type in _FLOATS:
+        return None
+    return (
+        f"Codec 'FPC' is not applicable for {label} because the data "
+        f"type is not Float*."
+    )
+
+
 def _codec_skip_reason(
     axis_type: str, codec: str, resolved: str, compression: str, nullable: bool = False
 ) -> str | None:
@@ -419,66 +491,17 @@ def _codec_skip_reason(
     width = _width(axis_type, resolved)
 
     if codec == "GCD":
-        if axis_type in _GCD_TYPES:
-            return None
-        return (
-            f"Codec GCD cannot be applied to column {label} because it can only be "
-            "used with Int*, UInt*, Decimal*, Date* or DateTime* types."
-        )
-
+        return _gcd_skip_reason(axis_type, label)
     if codec == "Delta":
-        if axis_type == "String":
-            return (
-                "Codec Delta is not applicable for String because the data type is "
-                "not of fixed size."
-            )
-        if width in _CODEC_WIDTHS:
-            return None
-        return _size_reason("Delta", label)
-
+        return _delta_skip_reason(axis_type, width, label)
     if codec == "DoubleDelta":
-        if axis_type in ("String", "FixedString"):
-            return (
-                f"Codec DoubleDelta is not applicable for {label} "
-                f"because the data type is not numeric."
-            )
-        if width in _CODEC_WIDTHS:
-            return None
-        return _size_reason("DoubleDelta", label)
-
+        return _double_delta_skip_reason(axis_type, width, label)
     if codec == "Gorilla":
-        if axis_type in _FLOATS:
-            return None
-        if axis_type == "String":
-            # Non-fixed-size: Gorilla gives Delta's clause under its own name.
-            return (
-                "Codec Gorilla is not applicable for String because the data type "
-                "is not of fixed size."
-            )
-        if width not in _CODEC_WIDTHS:
-            return _size_reason("Gorilla", label)
-        # The `compression` axis also allows ZSTD, and the DDL always applies
-        # CODEC(Gorilla, <compression>), so the server names the actual pair.
-        return (
-            f"The combination of compression codecs Gorilla({width}), {compression} "
-            "is meaningless, because it does not make sense to apply a "
-            "floating-point time series codec to non-floating-point columns "
-            "(Note: you can enable setting 'allow_suspicious_codecs' to skip "
-            "this check)."
-        )
-
+        return _gorilla_skip_reason(axis_type, width, label, compression)
     if codec == "T64":
-        if axis_type in _T64_TYPES:
-            return None
-        return f"T64 codec is not supported for specified type {label}."
-
+        return _t64_skip_reason(axis_type, label)
     if codec == "FPC":
-        if axis_type in _FLOATS:
-            return None
-        return (
-            f"Codec 'FPC' is not applicable for {label} because the data "
-            f"type is not Float*."
-        )
+        return _fpc_skip_reason(axis_type, label)
 
     raise ValueError(f"unknown codec {codec!r}")
 
@@ -548,6 +571,55 @@ def _range_skip_reason(
     return None
 
 
+def _first_skip_reason(
+    dataset: DatasetSpec,
+    axis_type: str,
+    nullable: bool,
+    primary_key: bool,
+    codec: str,
+    skip_index: str,
+    compression: str,
+    null_count: int,
+    value_min,
+    value_max,
+    resolved: str,
+) -> str | None:
+    """The first rule the variant breaks, in rule order, or None."""
+    if null_count > 0 and not nullable:
+        return (
+            f"Dataset contains {null_count} null value(s) but the "
+            f"column is not nullable."
+        )
+
+    if axis_type.startswith("UInt") and value_min is not None and value_min < 0:
+        return (
+            f"Unsigned type {axis_type} cannot represent the achieved "
+            f"minimum value {value_min}, which is negative."
+        )
+
+    # Measured on ClickHouse 26.8.2.7, 2026-09-16, by executing the rendered
+    # DDL: a nullable column cannot be the sorting key unless the MergeTree
+    # setting `allow_nullable_key` is enabled, which the design never decided
+    # to turn on, so this is a skip rather than a DDL setting change.
+    if nullable and primary_key:
+        return (
+            "Sorting key contains nullable columns, but merge tree "
+            "setting `allow_nullable_key` is disabled"
+        )
+
+    reason = _range_skip_reason(axis_type, resolved, dataset, value_min, value_max)
+    if reason is not None:
+        return reason
+
+    reason = _codec_skip_reason(
+        axis_type, codec, resolved, compression, nullable=nullable
+    )
+    if reason is not None:
+        return reason
+
+    return _skip_index_skip_reason(axis_type, skip_index, resolved, nullable)
+
+
 def _build_variant(
     dataset: DatasetSpec,
     axis_type: str,
@@ -575,8 +647,6 @@ def _build_variant(
             f"before adding it."
         )
 
-    status = "ok"
-    skip_reason: str | None = None
     warnings: list[str] = []
 
     # Rule order (first skip wins): the dataset cannot parameterise the type;
@@ -584,59 +654,23 @@ def _build_variant(
     # sorting key; range fit (decimals, integers); codec applicability;
     # skip-index applicability; projection-with-primary-key warning.
     if isinstance(resolved, TypeResolutionError):
-        status = "skipped"
-        skip_reason = str(resolved)
+        skip_reason: str | None = str(resolved)
         resolved = axis_type
-
-    if status == "ok" and null_count > 0 and not nullable:
-        status = "skipped"
-        skip_reason = (
-            f"Dataset contains {null_count} null value(s) but the "
-            f"column is not nullable."
+    else:
+        skip_reason = _first_skip_reason(
+            dataset,
+            axis_type,
+            nullable,
+            primary_key,
+            codec,
+            skip_index,
+            compression,
+            null_count,
+            value_min,
+            value_max,
+            resolved,
         )
-
-    if (
-        status == "ok"
-        and axis_type.startswith("UInt")
-        and value_min is not None
-        and value_min < 0
-    ):
-        status = "skipped"
-        skip_reason = (
-            f"Unsigned type {axis_type} cannot represent the achieved "
-            f"minimum value {value_min}, which is negative."
-        )
-
-    # Measured on ClickHouse 26.8.2.7, 2026-09-16, by executing the rendered
-    # DDL: a nullable column cannot be the sorting key unless the MergeTree
-    # setting `allow_nullable_key` is enabled, which the design never decided
-    # to turn on, so this is a skip rather than a DDL setting change.
-    if status == "ok" and nullable and primary_key:
-        status = "skipped"
-        skip_reason = (
-            "Sorting key contains nullable columns, but merge tree "
-            "setting `allow_nullable_key` is disabled"
-        )
-
-    if status == "ok":
-        reason = _range_skip_reason(axis_type, resolved, dataset, value_min, value_max)
-        if reason is not None:
-            status = "skipped"
-            skip_reason = reason
-
-    if status == "ok":
-        reason = _codec_skip_reason(
-            axis_type, codec, resolved, compression, nullable=nullable
-        )
-        if reason is not None:
-            status = "skipped"
-            skip_reason = reason
-
-    if status == "ok":
-        reason = _skip_index_skip_reason(axis_type, skip_index, resolved, nullable)
-        if reason is not None:
-            status = "skipped"
-            skip_reason = reason
+    status = "ok" if skip_reason is None else "skipped"
 
     if status == "ok" and projection and primary_key:
         warnings.append(
