@@ -122,19 +122,7 @@ def draw_support(
     k = spec.support_size
 
     if spec.categories is not None:
-        if pa.types.is_boolean(element_dtype(spec)):
-            # bool categories draw on the lattice {0, 1} like a bool value_range.
-            values = np.array(sorted(int(c) for c in spec.categories), dtype=np.int64)
-        else:
-            values = np.array(sorted(spec.categories))
-        return SupportDraw(
-            values=values,
-            requested_k=k,
-            clipped_frac=0.0,
-            clip_collapsed=0,
-            round_collapsed=0,
-            warnings=[],
-        )
+        return _draw_categories(spec, k)
 
     if spec.string_length is not None:
         return _draw_strings(spec, rng, k)
@@ -145,11 +133,7 @@ def draw_support(
 
     if lattice:
         lo, hi = int(lo), int(hi)
-        capacity = hi - lo + 1
-        where = f"the integer lattice [{lo}, {hi}]"
-    else:
-        capacity = int(round((hi - lo) * 10**spec.decimal_places)) + 1
-        where = f"the range [{lo}, {hi}] at {spec.decimal_places} decimal " "places"
+    capacity, where = _support_capacity(spec, lo, hi, lattice)
     if k > capacity:
         warnings.append(
             f"clamp: cardinality_ratio: {k} distinct values requested "
@@ -192,17 +176,9 @@ def draw_support(
     round_collapsed = n - values.size - clip_collapsed
 
     if round_collapsed > 0 and clipped_frac <= CLIP_WARN_FRACTION:
-        missing = round_collapsed
-        attempts = 0
-        while missing > 0 and attempts < REDRAW_CAP:
-            extra_raw = _raw_draw(spec, rng, missing, sig)
-            # Drop out-of-range redraws rather than clipping them: clipping
-            # here would merge them onto a bound, silently converting
-            # rounding collapse into unaccounted clip collapse.
-            in_range = extra_raw[(extra_raw >= lo) & (extra_raw <= hi)]
-            values = np.union1d(values, to_grid(in_range))
-            missing = n - values.size - clip_collapsed
-            attempts += 1
+        values = _redraw_collapsed(
+            spec, rng, sig, values, n, clip_collapsed, lo, hi, to_grid
+        )
         round_collapsed = n - values.size - clip_collapsed
 
     if clipped_frac > CLIP_WARN_FRACTION:
@@ -221,6 +197,63 @@ def draw_support(
         round_collapsed=round_collapsed,
         warnings=warnings,
     )
+
+
+def _draw_categories(spec: DatasetSpec, k: int) -> SupportDraw:
+    """The support of a categories spec: the categories themselves, sorted."""
+    if pa.types.is_boolean(element_dtype(spec)):
+        # bool categories draw on the lattice {0, 1} like a bool value_range.
+        values = np.array(sorted(int(c) for c in spec.categories), dtype=np.int64)
+    else:
+        values = np.array(sorted(spec.categories))
+    return SupportDraw(
+        values=values,
+        requested_k=k,
+        clipped_frac=0.0,
+        clip_collapsed=0,
+        round_collapsed=0,
+        warnings=[],
+    )
+
+
+def _support_capacity(
+    spec: DatasetSpec, lo: float, hi: float, lattice: bool
+) -> tuple[int, str]:
+    """The number of representable points in [lo, hi] and a description of where."""
+    if lattice:
+        return hi - lo + 1, f"the integer lattice [{lo}, {hi}]"
+    capacity = int(round((hi - lo) * 10**spec.decimal_places)) + 1
+    return (
+        capacity,
+        f"the range [{lo}, {hi}] at {spec.decimal_places} decimal " "places",
+    )
+
+
+def _redraw_collapsed(
+    spec: DatasetSpec,
+    rng: np.random.Generator,
+    sig: float | None,
+    values: np.ndarray,
+    n: int,
+    clip_collapsed: int,
+    lo: float,
+    hi: float,
+    to_grid,
+) -> np.ndarray:
+    """Redraw the rounding-collapse shortfall (up to REDRAW_CAP rounds) and merge
+    the new points into `values`."""
+    missing = n - values.size - clip_collapsed
+    attempts = 0
+    while missing > 0 and attempts < REDRAW_CAP:
+        extra_raw = _raw_draw(spec, rng, missing, sig)
+        # Drop out-of-range redraws rather than clipping them: clipping
+        # here would merge them onto a bound, silently converting
+        # rounding collapse into unaccounted clip collapse.
+        in_range = extra_raw[(extra_raw >= lo) & (extra_raw <= hi)]
+        values = np.union1d(values, to_grid(in_range))
+        missing = n - values.size - clip_collapsed
+        attempts += 1
+    return values
 
 
 def _uniform_lattice(lo: int, hi: int, n: int, rng: np.random.Generator) -> np.ndarray:
@@ -349,37 +382,7 @@ def density_counts(
     as this once did would hide it.
     """
     d = spec.distribution
-    if d.kind == "uniform":
-        weights = np.ones(support.size, dtype=np.float64)
-    elif d.kind == "normal":
-        sig = sigma if sigma is not None else d.sigma
-        if sig is None:
-            raise ValueError(_NO_SIGMA)
-        if d.mean is not None:
-            mean = d.mean
-        else:  # validate() guarantees value_range here
-            lo, hi = spec.value_range
-            mean = (lo + hi) / 2
-        from scipy.stats import (
-            norm,
-        )  # imported here: scipy.stats costs ~1.4 s to import
-
-        weights = norm.pdf(support - d.shift, loc=mean, scale=sig)
-    elif d.kind == "lognormal":
-        sig = sigma if sigma is not None else d.sigma
-        if sig is None:
-            raise ValueError(_NO_SIGMA)
-        if d.mean is None:
-            raise ValueError(
-                "distribution.mean is None; a lognormal distribution "
-                "requires a positive mean"
-            )
-        mu_log = np.log(d.mean) - sig**2 / 2  # mean is BEFORE the shift
-        from scipy.stats import lognorm
-
-        weights = lognorm.pdf(support - d.shift, s=sig, scale=np.exp(mu_log))
-    else:
-        raise ValueError(f"unknown distribution kind {d.kind!r}")
+    weights = _density_weights(support, spec, sigma)
 
     weights = np.asarray(weights, dtype=np.float64)
     if np.isnan(weights).any():
@@ -395,6 +398,57 @@ def density_counts(
 
     k = support.size
     return largest_remainder(weights, rows - k) + 1
+
+
+def _density_weights(
+    support: np.ndarray, spec: DatasetSpec, sigma: float | None
+) -> np.ndarray:
+    """The distribution's own density at each support value (unfloored)."""
+    d = spec.distribution
+    if d.kind == "uniform":
+        return np.ones(support.size, dtype=np.float64)
+    if d.kind == "normal":
+        return _normal_density(support, spec, sigma)
+    if d.kind == "lognormal":
+        return _lognormal_density(support, spec, sigma)
+    raise ValueError(f"unknown distribution kind {d.kind!r}")
+
+
+def _normal_density(
+    support: np.ndarray, spec: DatasetSpec, sigma: float | None
+) -> np.ndarray:
+    d = spec.distribution
+    sig = sigma if sigma is not None else d.sigma
+    if sig is None:
+        raise ValueError(_NO_SIGMA)
+    if d.mean is not None:
+        mean = d.mean
+    else:  # validate() guarantees value_range here
+        lo, hi = spec.value_range
+        mean = (lo + hi) / 2
+    from scipy.stats import (
+        norm,
+    )  # imported here: scipy.stats costs ~1.4 s to import
+
+    return norm.pdf(support - d.shift, loc=mean, scale=sig)
+
+
+def _lognormal_density(
+    support: np.ndarray, spec: DatasetSpec, sigma: float | None
+) -> np.ndarray:
+    d = spec.distribution
+    sig = sigma if sigma is not None else d.sigma
+    if sig is None:
+        raise ValueError(_NO_SIGMA)
+    if d.mean is None:
+        raise ValueError(
+            "distribution.mean is None; a lognormal distribution "
+            "requires a positive mean"
+        )
+    mu_log = np.log(d.mean) - sig**2 / 2  # mean is BEFORE the shift
+    from scipy.stats import lognorm
+
+    return lognorm.pdf(support - d.shift, s=sig, scale=np.exp(mu_log))
 
 
 @dataclass
