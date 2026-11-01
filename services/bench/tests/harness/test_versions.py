@@ -84,7 +84,8 @@ def test_installed_versions_come_from_the_distributions():
     assert set(got) == {"polars", "datafusion", "pyarrow", "python"}
     assert got["pyarrow"] == pa.__version__
     assert got["python"] == platform.python_version()
-    assert got["polars"] and got["datafusion"]
+    assert got["polars"]
+    assert got["datafusion"]
 
 
 def test_an_engine_that_is_not_installed_is_none(monkeypatch):

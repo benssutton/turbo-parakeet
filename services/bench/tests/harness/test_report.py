@@ -39,11 +39,16 @@ def rows():
 
 def test_summary_stats():
     [s] = summarise(rows(), [50, 90])
-    assert s["n"] == 5 and s["client_mean"] == 30 and s["client_max"] == 50
-    assert s["client_p50"] == 30 and s["client_p90"] == 46
+    assert s["n"] == 5
+    assert s["client_mean"] == 30
+    assert s["client_max"] == 50
+    assert s["client_p50"] == 30
+    assert s["client_p90"] == 46
     assert s["server_mean"] == 29.5
-    assert s["compression_ratio"] == 2.0 and s["actual_fraction"] == 0.101
-    assert s["index_compressed_bytes"] == 30 and s["index_uncompressed_bytes"] == 60
+    assert s["compression_ratio"] == 2.0
+    assert s["actual_fraction"] == 0.101
+    assert s["index_compressed_bytes"] == 30
+    assert s["index_uncompressed_bytes"] == 60
 
 
 def test_csv_has_the_index_size_columns(tmp_path):
@@ -51,10 +56,8 @@ def test_csv_has_the_index_size_columns(tmp_path):
     write_csv(summarise(rows(), [50]), path)
     with open(path, newline="") as f:
         [row] = list(csv.DictReader(f))
-    assert (
-        row["index_compressed_bytes"] == "30"
-        and row["index_uncompressed_bytes"] == "60"
-    )
+    assert row["index_compressed_bytes"] == "30"
+    assert row["index_uncompressed_bytes"] == "60"
 
 
 def test_groups_by_query_and_sorts_by_axes():
@@ -69,11 +72,9 @@ def test_groups_by_query_and_sorts_by_axes():
 def test_render_table_has_a_column_per_requested_percentile():
     t = render_table(summarise(rows(), [50, 99]), [50, 99])
     headers = [c.header for c in t.columns]
-    assert (
-        "p50 client" in headers
-        and "p99 client" in headers
-        and "p90 client" not in headers
-    )
+    assert "p50 client" in headers
+    assert "p99 client" in headers
+    assert "p90 client" not in headers
 
 
 def test_write_csv_round_trips(tmp_path):
@@ -81,7 +82,8 @@ def test_write_csv_round_trips(tmp_path):
     write_csv(summarise(rows(), [50]), p)
     with open(p, newline="") as f:
         [row] = list(csv.DictReader(f))
-    assert row["codec"] == "Delta" and float(row["client_mean"]) == 30
+    assert row["codec"] == "Delta"
+    assert float(row["client_mean"]) == 30
 
 
 def test_filter_where():
@@ -123,8 +125,9 @@ def test_skipped_table_has_none_compression_ratio():
 
 
 def test_filter_where_unknown_axis_raises():
+    r = rows()
     with pytest.raises(ValueError, match="nope"):
-        filter_where(rows(), "nope=1")
+        filter_where(r, "nope=1")
 
 
 def test_filter_where_numeric_value_matches_string_form():
@@ -158,7 +161,9 @@ def test_summarise_single_sample_group():
     )
     r = [dict(base, sample_no=0, client_ms=7.0, server_ms=6.5)]
     [s] = summarise(r, [50])
-    assert s["n"] == 1 and s["client_mean"] == 7.0 and s["client_p50"] == 7.0
+    assert s["n"] == 1
+    assert s["client_mean"] == 7.0
+    assert s["client_p50"] == 7.0
 
 
 def test_sort_tolerates_none_vs_float_on_the_same_axis():
@@ -218,9 +223,11 @@ def test_baseline_ratios_pair_by_round():
     by = {s["codec"]: s for s in summarise(base + half, [50], baseline="codec=none")}
     d = by["Delta"]
     assert d["cpu_ratio"] == d["cpu_ratio_lo"] == d["cpu_ratio_hi"] == 0.5
-    assert d["server_ratio"] == 2.0 and d["n_rounds"] == 8
+    assert d["server_ratio"] == 2.0
+    assert d["n_rounds"] == 8
     assert d["clocks_disagree"] is True  # CPU resolved faster, wall resolved slower
-    assert by["none"]["cpu_ratio"] == 1.0 and by["none"]["clocks_disagree"] is False
+    assert by["none"]["cpu_ratio"] == 1.0
+    assert by["none"]["clocks_disagree"] is False
 
 
 def test_a_group_without_its_baseline_row_has_no_ratio():
@@ -236,7 +243,8 @@ def test_a_group_without_its_baseline_row_has_no_ratio():
     by = {s["query_id"]: s for s in summarise(rows_, [50], baseline="codec=none")}
     assert by["qd"]["cpu_ratio"] == 0.5
     s = by["qf"]  # the full_scan group has no codec=none row
-    assert s["cpu_ratio"] is None and s["n_rounds"] == 0
+    assert s["cpu_ratio"] is None
+    assert s["n_rounds"] == 0
     assert s["clocks_disagree"] is None
 
 
@@ -296,8 +304,9 @@ def test_clocks_disagree_renders_true_false_and_none_apart():
 
 
 def test_an_unknown_baseline_axis_is_named():
+    r = rows()
     with pytest.raises(ValueError, match="kodec"):
-        summarise(rows(), [50], baseline="kodec=none")
+        summarise(r, [50], baseline="kodec=none")
 
 
 def test_csv_carries_the_ratio_columns_with_a_baseline(tmp_path):
@@ -306,7 +315,8 @@ def test_csv_carries_the_ratio_columns_with_a_baseline(tmp_path):
     write_csv(summarise(r, [50], baseline="codec=none"), p)
     with open(p, newline="") as f:
         [row] = list(csv.DictReader(f))
-    assert row["cpu_ratio"] == "1.0" and row["cpu_p50"] == "1.0"
+    assert row["cpu_ratio"] == "1.0"
+    assert row["cpu_p50"] == "1.0"
 
 
 def engine_rows(qid, engine, ch_type, cpu):
@@ -335,19 +345,20 @@ def test_engine_storage_threads_are_axes():
         "qp", "polars", "String", [1.0] * 6
     )
     by = {s["query_id"]: s for s in summarise(rows, [50])}
-    assert by["qp"]["engine"] == "polars" and by["qp"]["storage"] == "ipc"
-    assert by["qp"]["threads"] == 4 and by["qp"]["ipc_bytes"] == 900
-    assert (
-        by["qp"]["table_memory_bytes"] == 4000
-        and by["qp"]["ipc_batch_rows"] == "122880"
-    )
+    assert by["qp"]["engine"] == "polars"
+    assert by["qp"]["storage"] == "ipc"
+    assert by["qp"]["threads"] == 4
+    assert by["qp"]["ipc_bytes"] == 900
+    assert by["qp"]["table_memory_bytes"] == 4000
+    assert by["qp"]["ipc_batch_rows"] == "122880"
     assert by["qc"]["engine"] == "clickhouse"
     assert [s["engine"] for s in summarise(rows, [50])] == ["clickhouse", "polars"]
 
 
 def test_rows_without_an_engine_are_clickhouse():
     [s] = summarise(rows(), [50])
-    assert s["engine"] == "clickhouse" and s["storage"] is None
+    assert s["engine"] == "clickhouse"
+    assert s["storage"] is None
 
 
 def test_a_baseline_pairs_within_one_engine_not_across():
@@ -373,8 +384,9 @@ def test_a_baseline_pairs_within_one_engine_not_across():
 
 
 def test_a_baseline_naming_the_engine_is_refused():
+    r = rows()
     with pytest.raises(ValueError, match="within one engine"):
-        summarise(rows(), [50], baseline="engine=polars")
+        summarise(r, [50], baseline="engine=polars")
 
 
 def test_csv_carries_the_engine_columns(tmp_path):
@@ -391,7 +403,8 @@ def test_csv_carries_the_engine_columns(tmp_path):
         "4",
         "900",
     )
-    assert row["table_memory_bytes"] == "4000" and row["ipc_batch_rows"] == "122880"
+    assert row["table_memory_bytes"] == "4000"
+    assert row["ipc_batch_rows"] == "122880"
     assert (row["repeats"], row["repeats_capped"]) == ("4", "False")
 
 
@@ -403,9 +416,11 @@ def test_repeats_summarise_as_the_largest_k_and_whether_any_was_capped():
         )
     ]
     [s] = summarise(r, [50])
-    assert s["repeats"] == 8 and s["repeats_capped"] is True
+    assert s["repeats"] == 8
+    assert s["repeats_capped"] is True
     [ch] = summarise(engine_rows("qc", "clickhouse", "String", [1.0] * 3), [50])
-    assert ch["repeats"] is None and ch["repeats_capped"] is None
+    assert ch["repeats"] is None
+    assert ch["repeats_capped"] is None
 
 
 def test_where_and_baseline_take_the_batch_axis():

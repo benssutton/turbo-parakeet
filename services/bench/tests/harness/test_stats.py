@@ -39,7 +39,9 @@ def test_paired_ratio_pairs_by_round_and_skips_missing_or_non_positive():
     a = {0: 50.0, 1: 60.0, 2: 0.0, 3: 40.0, 4: 55.0, 5: 45.0, 6: 50.0, 7: None, 9: 1.0}
     b = {0: 100.0, 1: 120.0, 2: 100.0, 3: 80.0, 4: 110.0, 5: 90.0, 6: 100.0, 7: 9.0}
     ratio, lo, hi, n = paired_ratio(a, b)
-    assert n == 6 and ratio == pytest.approx(0.5) and lo == hi == pytest.approx(0.5)
+    assert n == 6
+    assert ratio == pytest.approx(0.5)
+    assert lo == hi == pytest.approx(0.5)
 
 
 def test_paired_ratio_without_shared_rounds():

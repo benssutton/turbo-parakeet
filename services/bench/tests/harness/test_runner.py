@@ -108,8 +108,14 @@ def test_a_live_round_records_server_timings_and_cpu(ch, loaded):
     r = run_round(ch, js, 0)
     assert not r.errors, r.errors
     s, f = r.samples["scan"], r.samples["filt"]
-    assert s.cpu_us and s.cpu_us > 0 and s.round_no == 0
-    assert s.client_ms > 0 and s.server_ms >= 0 and "SelectedParts" in s.profile_events
-    assert f.read_rows < s.read_rows and f.selected_marks < s.selected_marks
+    assert s.cpu_us
+    assert s.cpu_us > 0
+    assert s.round_no == 0
+    assert s.client_ms > 0
+    assert s.server_ms >= 0
+    assert "SelectedParts" in s.profile_events
+    assert f.read_rows < s.read_rows
+    assert f.selected_marks < s.selected_marks
     plan, error = explain_query(ch, js[0])
-    assert error is None and "ReadFromMergeTree" in plan
+    assert error is None
+    assert "ReadFromMergeTree" in plan

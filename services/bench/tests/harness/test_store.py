@@ -104,7 +104,8 @@ def test_tables_uses_marks_bytes_not_marks(tmp_path):
     with Store(tmp_path / "r.db") as s:
         s.init_schema()
         cols = [r[1] for r in s.conn.execute("PRAGMA table_info(tables)")]
-    assert "marks_bytes" in cols and "marks" not in cols
+    assert "marks_bytes" in cols
+    assert "marks" not in cols
 
 
 def test_upserts_are_idempotent(tmp_path):
@@ -147,8 +148,11 @@ def test_query_rows_joins_for_the_report(tmp_path):
         rows = s.query_rows("suite")
     assert len(rows) == 1
     r = rows[0]
-    assert r["codec"] == "none" and r["kind"] == "filter" and r["client_ms"] == 1.5
-    assert r["compressed_bytes"] == 100 and r["actual_fraction"] == 0.11
+    assert r["codec"] == "none"
+    assert r["kind"] == "filter"
+    assert r["client_ms"] == 1.5
+    assert r["compressed_bytes"] == 100
+    assert r["actual_fraction"] == 0.11
     assert (
         r["index_compressed_bytes"],
         r["index_uncompressed_bytes"],
@@ -221,7 +225,8 @@ def test_dataset_json_survives_numpy_scalars_and_solve_records(tmp_path):
     payload = json.loads(row[0])
     assert payload["achieved"]["cardinality_ratio"] == 0.5
     entropy = payload["achieved"]["entropy_bits"]
-    assert entropy == 4 and isinstance(entropy, int)
+    assert entropy == 4
+    assert isinstance(entropy, int)
     assert payload["solves"]["entropy_bits"] == {"status": "ok", "message": "converged"}
 
 
@@ -321,7 +326,9 @@ def test_query_rows_follows_suite_tables_not_the_run_that_sampled(tmp_path):
         s.insert_sample("q1", run_a, sample(0))
         s.insert_sample("q1", run_a, sample(1))
         rows_a, rows_b, rows_c = s.query_rows("A"), s.query_rows("B"), s.query_rows("C")
-    assert len(rows_a) == 2 and len(rows_b) == 2 and rows_c == []
+    assert len(rows_a) == 2
+    assert len(rows_b) == 2
+    assert rows_c == []
     assert {r["run_id"] for r in rows_b} == {run_a}
 
 
@@ -393,7 +400,8 @@ def test_next_round_follows_the_suites_highest_round(tmp_path):
         run = s.begin_run(NS(name="A", source_yaml=""))
         s.insert_sample("q1", run, sample_r(0, 0, 1.0))
         s.insert_sample("q1", run, sample_r(1, 6, 1.0))
-        assert s.next_round("A") == 7 and s.next_round("B") == 0
+        assert s.next_round("A") == 7
+        assert s.next_round("B") == 0
 
 
 def test_record_quiet_writes_the_snapshot_on_the_run_row(tmp_path):
@@ -438,7 +446,9 @@ def test_an_old_store_still_reads_with_null_new_columns(tmp_path):
     _old_store(tmp_path / "old.db")
     with Store(tmp_path / "old.db") as s:
         (row,) = s.query_rows("A")
-    assert row["round_no"] is None and row["cpu_us"] is None and row["server_ms"] == 1.0
+    assert row["round_no"] is None
+    assert row["cpu_us"] is None
+    assert row["server_ms"] == 1.0
 
 
 def test_a_newer_store_is_refused_not_restamped(tmp_path):
@@ -460,7 +470,8 @@ def test_query_rows_carry_the_in_list_size(tmp_path):
         run = s.begin_run(NS(name="A", source_yaml=""))
         s.insert_sample("q1", run, sample(0))
         (row,) = s.query_rows("A")
-    assert row["predicate_kind"] == "in" and row["values_n"] == 3
+    assert row["predicate_kind"] == "in"
+    assert row["values_n"] == 3
 
 
 def inproc_variant():
@@ -530,7 +541,8 @@ def test_a_clickhouse_table_is_engine_clickhouse(tmp_path):
         repeats = s.conn.execute(
             "SELECT repeats, repeats_capped FROM samples"
         ).fetchone()
-    assert row == ("clickhouse", None, None, None, None) and repeats == (None, None)
+    assert row == ("clickhouse", None, None, None, None)
+    assert repeats == (None, None)
 
 
 def test_query_rows_carry_the_engine_axes(tmp_path):
@@ -547,7 +559,8 @@ def test_query_rows_carry_the_engine_axes(tmp_path):
         (row,) = s.query_rows("A")
     assert (row["engine"], row["storage"], row["threads"]) == ("polars", "ipc", 4)
     assert row["ipc_batch_rows"] == "65536"
-    assert row["ipc_bytes"] == 1234 and row["table_memory_bytes"] == 5678
+    assert row["ipc_bytes"] == 1234
+    assert row["table_memory_bytes"] == 5678
     assert row["memory_bytes"] == 1000  # the sample's, unshadowed
     assert (row["repeats"], row["repeats_capped"]) == (64, 1)
 
@@ -566,7 +579,8 @@ def test_a_run_records_its_engine_versions(tmp_path):
         (none,) = s.conn.execute(
             "SELECT engine_versions FROM runs WHERE run_id = ?", (bare,)
         ).fetchone()
-    assert json.loads(text) == {"polars": "2.0.0", "python": "3.12"} and none is None
+    assert json.loads(text) == {"polars": "2.0.0", "python": "3.12"}
+    assert none is None
 
 
 def _v2_store(path):
@@ -602,10 +616,11 @@ def test_a_v2_store_reads_as_clickhouse(tmp_path):
     with Store(tmp_path / "v2.db") as s:
         (row,) = s.query_rows("A")
     assert row["engine"] == "clickhouse"
-    assert (
-        row["storage"] is None and row["threads"] is None and row["ipc_bytes"] is None
-    )
-    assert row["ipc_batch_rows"] is None and row["repeats"] is None
+    assert row["storage"] is None
+    assert row["threads"] is None
+    assert row["ipc_bytes"] is None
+    assert row["ipc_batch_rows"] is None
+    assert row["repeats"] is None
 
 
 def test_a_v2_store_suite_tables_are_clickhouse(tmp_path):
@@ -635,7 +650,8 @@ def test_table_ipc_bytes(tmp_path):
         s.upsert_table(
             "t9", "d1", inproc_variant(), prepared(), "2.0.0", suite_name="A"
         )
-        assert s.table_ipc_bytes("t9") == 1234 and s.table_ipc_bytes("nope") is None
+        assert s.table_ipc_bytes("t9") == 1234
+        assert s.table_ipc_bytes("nope") is None
 
 
 def test_a_real_prepare_result_reaches_the_stores_size_columns(tmp_path):

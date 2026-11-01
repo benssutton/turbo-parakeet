@@ -42,10 +42,13 @@ def test_a_round_runs_each_job_once_and_delivers_filled_samples_in_order():
         sample_no=2,
         on_sample=lambda k, s: seen.append((k, s)),
     )
-    assert [k for k, _ in seen] == ["a", "b", "c"] and not r.errors and not r.warnings
+    assert [k for k, _ in seen] == ["a", "b", "c"]
+    assert not r.errors
+    assert not r.warnings
     for _, s in seen:
         assert (s.round_no, s.sample_no, s.cpu_us, s.server_ms) == (7, 2, 150.0, 12.0)
-        assert s.selected_marks == 2 and s.client_ms > 0
+        assert s.selected_marks == 2
+        assert s.client_ms > 0
     assert [c for c in client.calls if c[0] == "log"] == [
         ("log",)
     ]  # one read per round
@@ -60,20 +63,23 @@ def test_every_query_runs_with_both_caches_off():
 def test_a_failing_job_is_recorded_and_the_round_carries_on():
     client = FakeClient(fail_sql="bench.b")
     r = run_round(client, jobs("a", "b", "c"), 0)
-    assert list(r.samples) == ["a", "c"] and r.errors["b"] == "RuntimeError: boom"
+    assert list(r.samples) == ["a", "c"]
+    assert r.errors["b"] == "RuntimeError: boom"
 
 
 def test_a_missing_log_row_keeps_nan_and_names_the_id():
     client = FakeClient(missing={1})
     r = run_round(client, jobs("a", "b"), 3)
-    assert math.isnan(r.samples["b"].server_ms) and r.samples["b"].cpu_us is None
+    assert math.isnan(r.samples["b"].server_ms)
+    assert r.samples["b"].cpu_us is None
     assert any("round 3" in w and client.ids[1] in w for w in r.warnings)
 
 
 def test_an_untimed_round_takes_no_samples_and_reads_no_log():
     client = FakeClient()
     r = run_round(client, jobs("a", "b"), timed=False)
-    assert r.samples == {} and client.ids == []
+    assert r.samples == {}
+    assert client.ids == []
     assert all(c[0] == "query" and c[2] is None for c in client.calls)
 
 
@@ -84,16 +90,19 @@ def test_cpu_us_is_none_when_the_profile_has_neither_counter():
 
 def test_ctrl_c_mid_round_delivers_what_ran_then_propagates():
     client, seen = FakeClient(interrupt_at=2), []
+    js = jobs("a", "b", "c")
     with pytest.raises(KeyboardInterrupt) as e:
-        run_round(client, jobs("a", "b", "c"), 0, on_sample=lambda k, s: seen.append(k))
-    assert seen == ["a"] and list(e.value.round_result.samples) == ["a"]
+        run_round(client, js, 0, on_sample=lambda k, s: seen.append(k))
+    assert seen == ["a"]
+    assert list(e.value.round_result.samples) == ["a"]
     assert math.isfinite(e.value.round_result.samples["a"].server_ms)
 
 
 def test_ctrl_c_inside_the_log_read_still_warns_every_pending_sample():
     client, seen = FakeClient(log_interrupt_at=1), []
+    js = jobs("a", "b")
     with pytest.raises(KeyboardInterrupt) as e:
-        run_round(client, jobs("a", "b"), 0, on_sample=lambda k, s: seen.append(s))
+        run_round(client, js, 0, on_sample=lambda k, s: seen.append(s))
     assert len(seen) == 2
     for s in seen:
         named = any(f"sample {s.sample_no}" in w for w in e.value.round_result.warnings)
@@ -116,9 +125,11 @@ def test_a_round_handle_runs_one_job_at_a_time_and_reads_the_log_once():
     rd = ChRound(client, 3, sample_no=1, on_sample=lambda k, s: seen.append(k))
     for job in jobs("a", "b"):
         rd.run(job)
-    assert seen == [] and not [c for c in client.calls if c[0] == "log"]
+    assert seen == []
+    assert not [c for c in client.calls if c[0] == "log"]
     result = rd.finish()
-    assert seen == ["a", "b"] and result.samples["a"].round_no == 3
+    assert seen == ["a", "b"]
+    assert result.samples["a"].round_no == 3
     assert [c for c in client.calls if c[0] == "log"] == [("log",)]
 
 
@@ -152,4 +163,5 @@ def test_finish_then_interrupt_and_a_second_interrupt_deliver_nothing_twice():
 
 def test_a_job_carries_an_optional_payload_and_reference():
     [j] = jobs("a")
-    assert j.payload is None and j.reference is None
+    assert j.payload is None
+    assert j.reference is None

@@ -58,20 +58,26 @@ def test_load_reads_the_column(worker):
 
 def test_prepare_memory_holds_the_table(worker, tmp_path):
     r = worker.prepare(spec(tmp_path))
-    assert r["status"] == "ok" and r["reason"] is None and r["rows"] == 4
-    assert r["ipc_bytes"] is None and r["memory_bytes"] > 0 and r["prepare_ms"] >= 0
+    assert r["status"] == "ok"
+    assert r["reason"] is None
+    assert r["rows"] == 4
+    assert r["ipc_bytes"] is None
+    assert r["memory_bytes"] > 0
+    assert r["prepare_ms"] >= 0
     assert "t1" in worker.tables
 
 
 def test_prepare_ipc_writes_once_and_reuses_the_file(worker, tmp_path):
     first = worker.prepare(spec(tmp_path, storage="ipc", compression="ZSTD(3)"))
     path = tmp_path / "ipc" / "t1.arrow"
-    assert first["status"] == "ok" and first["ipc_bytes"] == path.stat().st_size
+    assert first["status"] == "ok"
+    assert first["ipc_bytes"] == path.stat().st_size
     stamp = path.stat().st_mtime_ns
     again = worker.prepare(
         spec(tmp_path, storage="ipc", compression="ZSTD(3)", expect=first["ipc_bytes"])
     )
-    assert again["ipc_bytes"] == first["ipc_bytes"] and path.stat().st_mtime_ns == stamp
+    assert again["ipc_bytes"] == first["ipc_bytes"]
+    assert path.stat().st_mtime_ns == stamp
     assert not list((tmp_path / "ipc").glob("*.tmp"))
 
 
@@ -89,7 +95,8 @@ def test_a_planted_cast_failure_is_a_skip(tmp_path, monkeypatch, worker):
     w = FakeWorker(1)
     w.array = ARRAY
     r = w.prepare(spec(tmp_path))
-    assert r["status"] == "skipped" and "cast to Float64 failed" in r["reason"]
+    assert r["status"] == "skipped"
+    assert "cast to Float64 failed" in r["reason"]
     assert "planted skip" in r["reason"]
 
 
@@ -97,7 +104,8 @@ def test_run_answers_with_its_clocks(worker, tmp_path):
     worker.prepare(spec(tmp_path))
     out = worker.run("t1", {"predicate_kind": None, "values": None, "sql": None})
     assert (out["count"], out["total"]) == (4, 5.0)
-    assert out["wall_ns"] > 0 and out["cpu_ns"] >= 0
+    assert out["wall_ns"] > 0
+    assert out["cpu_ns"] >= 0
 
 
 def test_mismatch_names_the_first_differing_row():
@@ -116,7 +124,11 @@ def test_mismatch_names_the_first_differing_row():
 def test_timed_pauses_the_collector():
     seen = []
     out, wall, cpu = timed(lambda: seen.append(gc.isenabled()) or 7)
-    assert out == 7 and seen == [False] and gc.isenabled() and wall > 0 and cpu >= 0
+    assert out == 7
+    assert seen == [False]
+    assert gc.isenabled()
+    assert wall > 0
+    assert cpu >= 0
 
 
 def test_mismatch_accepts_a_chunked_array():
@@ -132,10 +144,10 @@ def test_a_cast_that_changes_values_is_a_skip(worker, tmp_path, monkeypatch):
         FakeWorker, "values", lambda self, held: pa.array([1.0, 9.0, 2.0, None])
     )
     r = worker.prepare(spec(tmp_path))
-    assert (
-        r["status"] == "skipped" and "does not hold the dataset's values" in r["reason"]
-    )
-    assert "row 1: 2.0 became 9.0" in r["reason"] and "t1" not in worker.tables
+    assert r["status"] == "skipped"
+    assert "does not hold the dataset's values" in r["reason"]
+    assert "row 1: 2.0 became 9.0" in r["reason"]
+    assert "t1" not in worker.tables
 
 
 def test_an_ipc_file_of_the_wrong_size_is_rewritten(worker, tmp_path):
@@ -143,7 +155,8 @@ def test_an_ipc_file_of_the_wrong_size_is_rewritten(worker, tmp_path):
     path.parent.mkdir()
     path.write_bytes(b"not an arrow file")
     r = worker.prepare(spec(tmp_path, storage="ipc", expect=999_999))
-    assert r["status"] == "ok" and r["ipc_bytes"] == path.stat().st_size != 17
+    assert r["status"] == "ok"
+    assert r["ipc_bytes"] == path.stat().st_size != 17
     assert mismatch(ARRAY, worker.read_ipc(path)) is None
     assert not list(path.parent.glob("*.tmp"))
 
@@ -188,14 +201,17 @@ def test_the_loop_answers_ok_and_reports_a_raising_op_and_carries_on(loop):
         {"engine": "fake", "version": "0.0.0", "threads": 1},
     )
     status, text = ask(parent, "load", "/no/such/file.arrow", "value")
-    assert status == "error" and ": " in text
-    assert ask(parent, "version")[0] == "ok" and t.is_alive()
+    assert status == "error"
+    assert ": " in text
+    assert ask(parent, "version")[0] == "ok"
+    assert t.is_alive()
 
 
 def test_an_unknown_op_is_an_error_and_the_loop_carries_on(loop):
     parent, t = loop
     status, text = ask(parent, "no_such_op")
-    assert status == "error" and text.startswith("AttributeError")
+    assert status == "error"
+    assert text.startswith("AttributeError")
     assert ask(parent, "version")[0] == "ok"
 
 
@@ -221,7 +237,8 @@ def test_calibration_picks_the_smallest_power_of_two_over_the_target():
         asked.append(k)
         return walls[k]
 
-    assert calibrate_repeats(wall, 250, 1024) == (16, False) and asked == [
+    assert calibrate_repeats(wall, 250, 1024) == (16, False)
+    assert asked == [
         1,
         2,
         4,
@@ -235,7 +252,8 @@ def test_calibration_picks_the_smallest_power_of_two_over_the_target():
 def test_run_repeats_the_query_and_answers_the_first(worker, tmp_path):
     worker.prepare(spec(tmp_path))
     out = worker.run("t1", PAYLOAD, 5)
-    assert worker.runs == 5 and (out["count"], out["total"], out["repeats"]) == (
+    assert worker.runs == 5
+    assert (out["count"], out["total"], out["repeats"]) == (
         4,
         5.0,
         5,
@@ -268,6 +286,7 @@ def test_a_write_that_raises_leaves_no_tmp_and_no_file(worker, tmp_path, monkeyp
         raise OSError("disk full")
 
     monkeypatch.setattr(worker, "write_ipc", half_written)
+    s = spec(tmp_path, storage="ipc")
     with pytest.raises(OSError, match="disk full"):
-        worker.prepare(spec(tmp_path, storage="ipc"))
+        worker.prepare(s)
     assert not list((tmp_path / "ipc").iterdir())
