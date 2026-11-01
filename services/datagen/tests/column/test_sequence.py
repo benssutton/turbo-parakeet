@@ -50,7 +50,9 @@ def skewed(n=20_000, k=1_000, s=1.2, seed=0):
 def test_composition_splits_into_positive_parts_summing_exactly():
     rng = np.random.default_rng(0)
     c = composition(1000, 7, rng)
-    assert c.sum() == 1000 and c.size == 7 and c.min() >= 1
+    assert c.sum() == 1000
+    assert c.size == 7
+    assert c.min() >= 1
 
 
 def test_composition_handles_a_single_part():
@@ -359,7 +361,8 @@ def test_out_of_band_runs_target_is_clamped_with_a_warning_naming_the_band():
     clamp = [w for w in r.warnings if "clamped" in w]
     assert len(clamp) == 1
     assert "-10000" in clamp[0]
-    assert f"{p.z_lo:.2f}" in clamp[0] and f"{p.z_hi:.2f}" in clamp[0]
+    assert f"{p.z_lo:.2f}" in clamp[0]
+    assert f"{p.z_hi:.2f}" in clamp[0]
     assert run_count(dichotomise(r.values)) == p.target_runs == 2
     assert np.array_equal(np.sort(r.values), np.repeat(support, counts))
 
@@ -401,8 +404,10 @@ def test_strong_combined_warning_states_the_condition_not_a_z_label():
     r = layout_sequence(support, counts, s, np.random.default_rng(1))
     strong = [w for w in r.warnings if "strongly" in w]
     assert len(strong) == 1
-    assert "near-random" not in strong[0] and "positive" not in strong[0]
-    assert "mean block length" in strong[0] and "mean run gap" in strong[0]
+    assert "near-random" not in strong[0]
+    assert "positive" not in strong[0]
+    assert "mean block length" in strong[0]
+    assert "mean run gap" in strong[0]
     assert f"{n / runs:.2f}" in strong[0]
 
 
@@ -414,7 +419,8 @@ def test_runs_plan_tolerates_a_single_group_split():
     assert (p.n1, p.n2) == (0, 100)
     assert p.target_runs == 1
     assert not p.clamped
-    assert np.isnan(p.z_lo) and np.isnan(p.z_hi)
+    assert np.isnan(p.z_lo)
+    assert np.isnan(p.z_hi)
 
 
 def test_cv_target_with_too_few_repeat_runs_warns_that_the_metric_is_undefined():
@@ -454,7 +460,8 @@ def test_layout_sequence_returns_its_runs_plan_so_the_clamp_can_be_recorded():
         runs_z=-10_000.0,
     )
     r = layout_sequence(support, counts, s, np.random.default_rng(1))
-    assert r.plan is not None and r.plan.clamped
+    assert r.plan is not None
+    assert r.plan.clamped
     assert r.plan.status is SolveStatus.CLAMPED_LOW
     no_target = layout_sequence(
         support,

@@ -440,9 +440,8 @@ def test_to_chbench_in_process_blocks(chbench_out):
     for engine in ("polars", "datafusion"):
         block = tag[engine]
         assert block["storage"] == ["memory", "ipc"]
-        assert (
-            "threads" not in block and "ipc_batch_rows" not in block
-        )  # chbench's defaults
+        assert "threads" not in block
+        assert "ipc_batch_rows" not in block
         assert block["compression"][:5] == [
             "none",
             "LZ4_FRAME",
@@ -454,7 +453,8 @@ def test_to_chbench_in_process_blocks(chbench_out):
     assert suites["id"]["datafusion"]["type"] == ["uint8", "int64"]
     for name, suite in suites.items():
         if name.endswith("_original"):
-            assert "polars" not in suite and "datafusion" not in suite
+            assert "polars" not in suite
+            assert "datafusion" not in suite
 
 
 def test_to_chbench_lists_the_recommended_compression(chbench_run):
@@ -518,8 +518,10 @@ def test_to_chbench_drops_an_engine_block_it_cannot_express(tmp_path):
     )
     skipped = dict(to_chbench(result, frame, tmp_path))
     suite = _suite(tmp_path, "t")
-    assert "polars" not in suite and "datafusion" in suite
-    assert skipped["t"].startswith("polars: ") and "Duration" in skipped["t"]
+    assert "polars" not in suite
+    assert "datafusion" in suite
+    assert skipped["t"].startswith("polars: ")
+    assert "Duration" in skipped["t"]
 
 
 def test_clickhouse_profile_binding():

@@ -27,7 +27,9 @@ def seq(n=0):
 @pytest.mark.parametrize("type_", ["int64", "string", "float64", "date32", "decimal"])
 def test_distinct_count_is_exact(type_):
     v, warnings = base_values(ColumnSpec(type_, distinct=37), 2_000, seq())
-    assert len(v) == 2_000 and len(set(v.to_pylist())) == 37 and not warnings
+    assert len(v) == 2_000
+    assert len(set(v.to_pylist())) == 37
+    assert not warnings
 
 
 def test_distinct_share_and_entropy():
@@ -65,7 +67,8 @@ def test_null_masks():
     m = null_mask(1_000, 100, None, rng)
     assert m.sum() == 100
     c = null_mask(1_000, 100, 10.0, rng)
-    assert c.sum() == 100 and np.count_nonzero(np.diff(c.astype(int)) == 1) <= 12
+    assert c.sum() == 100
+    assert np.count_nonzero(np.diff(c.astype(int)) == 1) <= 12
     assert null_mask(5, 5, None, rng).all()
 
 

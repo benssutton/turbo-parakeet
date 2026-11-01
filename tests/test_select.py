@@ -52,4 +52,5 @@ def test_at_most_n_and_all_when_n_is_large():
 def test_picked_combinations_compute():
     picked = stratified_combinations(PairwiseEntropyRust(), FRAMES, n=5)
     out = PairwiseEntropyRust().add(FRAMES).result(combinations=picked)
-    assert out.height == 5 and set(out["status"]) == {"computed"}
+    assert out.height == 5
+    assert set(out["status"]) == {"computed"}

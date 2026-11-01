@@ -97,8 +97,9 @@ def test_round_trips_through_json():
 
 
 def test_entropy_target_requires_a_finite_support_set():
+    invalid = base(entropy_bits=4.0)
     with pytest.raises(SpecError, match="entropy_bits requires"):
-        base(entropy_bits=4.0).validate()
+        invalid.validate()
     base(entropy_bits=4.0, cardinality_ratio=0.1).validate()
     DatasetSpec(
         rows=100,
@@ -111,46 +112,54 @@ def test_entropy_target_requires_a_finite_support_set():
 
 
 def test_null_count_cannot_exceed_rows():
+    invalid = base(null_count=1001)
     with pytest.raises(SpecError, match="null_count"):
-        base(null_count=1001).validate()
+        invalid.validate()
 
 
 def test_cardinality_ratio_must_yield_at_least_one_value():
+    invalid = base(cardinality_ratio=0.0)
     with pytest.raises(SpecError, match="cardinality_ratio"):
-        base(cardinality_ratio=0.0).validate()
+        invalid.validate()
+    invalid = base(cardinality_ratio=1.5)
     with pytest.raises(SpecError, match="cardinality_ratio"):
-        base(cardinality_ratio=1.5).validate()
+        invalid.validate()
 
 
 def test_exactly_one_value_source_is_required():
+    invalid = DatasetSpec(rows=10, arrow_type="float64", null_count=0, seed=1)
     with pytest.raises(SpecError, match="exactly one"):
-        DatasetSpec(rows=10, arrow_type="float64", null_count=0, seed=1).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="float64",
+        value_range=(0.0, 1.0),
+        categories=["a"],
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match="exactly one"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="float64",
-            value_range=(0.0, 1.0),
-            categories=["a"],
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
 
 
 def test_value_range_must_be_ordered():
+    invalid = base(value_range=(10.0, 0.0))
     with pytest.raises(SpecError, match="value_range"):
-        base(value_range=(10.0, 0.0)).validate()
+        invalid.validate()
 
 
 def test_unsigned_type_rejects_a_negative_range():
+    invalid = DatasetSpec(
+        rows=10, arrow_type="uint32", value_range=(-5, 5), null_count=0, seed=1
+    )
     with pytest.raises(SpecError, match="unsigned"):
-        DatasetSpec(
-            rows=10, arrow_type="uint32", value_range=(-5, 5), null_count=0, seed=1
-        ).validate()
+        invalid.validate()
 
 
 def test_array_parameters_require_a_list_type():
+    invalid = base(array_len_range=(1, 5))
     with pytest.raises(SpecError, match="array_len_range"):
-        base(array_len_range=(1, 5)).validate()
+        invalid.validate()
     DatasetSpec(
         rows=10,
         arrow_type="list<int32>",
@@ -162,13 +171,15 @@ def test_array_parameters_require_a_list_type():
 
 
 def test_string_type_requires_a_length_or_categories():
+    invalid = DatasetSpec(rows=10, arrow_type="string", null_count=0, seed=1)
     with pytest.raises(SpecError, match="string_length"):
-        DatasetSpec(rows=10, arrow_type="string", null_count=0, seed=1).validate()
+        invalid.validate()
 
 
 def test_interarrival_cv_must_be_positive():
+    invalid = base(interarrival_cv=0.0)
     with pytest.raises(SpecError, match="interarrival_cv"):
-        base(interarrival_cv=0.0).validate()
+        invalid.validate()
 
 
 def test_valid_spec_validates_silently():
@@ -176,44 +187,49 @@ def test_valid_spec_validates_silently():
 
 
 def test_decimal_places_required_for_float_and_decimal_types():
+    invalid = DatasetSpec(
+        rows=10, arrow_type="float64", value_range=(0.0, 1.0), null_count=0, seed=1
+    )
     with pytest.raises(SpecError, match="decimal_places"):
-        DatasetSpec(
-            rows=10, arrow_type="float64", value_range=(0.0, 1.0), null_count=0, seed=1
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="decimal64(18,8)",
+        value_range=(0.0, 1.0),
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match="decimal_places"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="decimal64(18,8)",
-            value_range=(0.0, 1.0),
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="list<float32>",
+        value_range=(0.0, 1.0),
+        null_count=0,
+        seed=1,
+        array_len_range=(1, 3),
+    )
     with pytest.raises(SpecError, match="decimal_places"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="list<float32>",
-            value_range=(0.0, 1.0),
-            null_count=0,
-            seed=1,
-            array_len_range=(1, 3),
-        ).validate()
+        invalid.validate()
 
 
 def test_decimal_places_must_be_non_negative():
+    invalid = base(decimal_places=-1)
     with pytest.raises(SpecError, match="decimal_places"):
-        base(decimal_places=-1).validate()
+        invalid.validate()
 
 
 def test_decimal_places_must_match_decimal_scale():
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="decimal64(18,8)",
+        value_range=(0.0, 1.0),
+        decimal_places=5,
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match="decimal_places"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="decimal64(18,8)",
-            value_range=(0.0, 1.0),
-            decimal_places=5,
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
     DatasetSpec(
         rows=10,
         arrow_type="decimal64(18,8)",
@@ -225,16 +241,18 @@ def test_decimal_places_must_match_decimal_scale():
 
 
 def test_distribution_kind_must_be_recognised():
+    invalid = base(distribution=Distribution(kind="triangular"))
     with pytest.raises(SpecError, match="kind"):
-        base(distribution=Distribution(kind="triangular")).validate()
+        invalid.validate()
 
 
 @pytest.mark.parametrize("kind", ["normal", "lognormal"])
 def test_spread_distributions_require_sigma_or_a_dispersion_target(kind):
     """Neither sigma nor index_of_dispersion fixes the spread, so the draw
     cannot proceed; that must be a SpecError here, not a ValueError later."""
+    invalid = base(distribution=Distribution(kind=kind, mean=5.0))
     with pytest.raises(SpecError, match="sigma.*index_of_dispersion"):
-        base(distribution=Distribution(kind=kind, mean=5.0)).validate()
+        invalid.validate()
     base(distribution=Distribution(kind=kind, mean=5.0, sigma=1.0)).validate()
     base(
         distribution=Distribution(kind=kind, mean=5.0), index_of_dispersion=0.5
@@ -242,10 +260,9 @@ def test_spread_distributions_require_sigma_or_a_dispersion_target(kind):
 
 
 def test_list_type_requires_array_len_range():
+    invalid = base(arrow_type="list<int32>", value_range=(0, 100), decimal_places=None)
     with pytest.raises(SpecError, match="array_len_range.*list"):
-        base(
-            arrow_type="list<int32>", value_range=(0, 100), decimal_places=None
-        ).validate()
+        invalid.validate()
     base(
         arrow_type="list<int32>",
         value_range=(0, 100),
@@ -269,26 +286,30 @@ def test_float_targets_must_be_finite(field, value):
     kw = {field: value}
     if field == "entropy_bits":
         kw["cardinality_ratio"] = 0.5
+    invalid = base(**kw)
     with pytest.raises(SpecError, match=f"{field}.*finite"):
-        base(**kw).validate()
+        invalid.validate()
 
 
 @pytest.mark.parametrize("bad", [(float("nan"), 1.0), (0.0, float("inf"))])
 def test_value_range_bounds_must_be_finite(bad):
+    invalid = base(value_range=bad)
     with pytest.raises(SpecError, match="value_range.*finite"):
-        base(value_range=bad).validate()
+        invalid.validate()
 
 
 def test_string_length_must_be_positive():
+    invalid = base(
+        arrow_type="string", string_length=0, value_range=None, decimal_places=None
+    )
     with pytest.raises(SpecError, match="string_length must be positive"):
-        base(
-            arrow_type="string", string_length=0, value_range=None, decimal_places=None
-        ).validate()
+        invalid.validate()
 
 
 def test_bool_value_range_must_lie_within_the_lattice():
+    invalid = base(arrow_type="bool", value_range=(0, 5), decimal_places=None)
     with pytest.raises(SpecError, match="bool.*\[0, 1\]"):
-        base(arrow_type="bool", value_range=(0, 5), decimal_places=None).validate()
+        invalid.validate()
     base(arrow_type="bool", value_range=(0, 1), decimal_places=None).validate()
 
 
@@ -307,8 +328,9 @@ def test_a_density_profile_needs_a_numeric_support(support):
         **support,
         distribution=Distribution(kind="normal", mean=1.0, sigma=1.0),
     )
+    invalid = base(**kw)
     with pytest.raises(SpecError, match="normal.*density.*numeric"):
-        base(**kw).validate()
+        invalid.validate()
 
 
 @pytest.mark.parametrize(
@@ -320,19 +342,21 @@ def test_a_density_profile_needs_a_numeric_support(support):
 )
 def test_a_dispersion_target_needs_a_numeric_support(support):
     """index_of_dispersion is var/mean of the values; strings have neither."""
+    invalid = base(
+        value_range=None, decimal_places=None, index_of_dispersion=1.0, **support
+    )
     with pytest.raises(SpecError, match="index_of_dispersion.*numeric"):
-        base(
-            value_range=None, decimal_places=None, index_of_dispersion=1.0, **support
-        ).validate()
+        invalid.validate()
 
 
 def test_a_normal_with_no_mean_needs_value_range_to_centre_it():
+    invalid = base(
+        value_range=None,
+        categories=[1.0, 2.0, 3.0],
+        distribution=Distribution(kind="normal", sigma=1.0),
+    )
     with pytest.raises(SpecError, match="normal.*mean.*value_range"):
-        base(
-            value_range=None,
-            categories=[1.0, 2.0, 3.0],
-            distribution=Distribution(kind="normal", sigma=1.0),
-        ).validate()
+        invalid.validate()
     base(
         value_range=None,
         categories=[1.0, 2.0, 3.0],
@@ -341,44 +365,49 @@ def test_a_normal_with_no_mean_needs_value_range_to_centre_it():
 
 
 def test_lognormal_requires_a_positive_mean():
+    invalid = base(distribution=Distribution(kind="lognormal"))
     with pytest.raises(SpecError, match="mean"):
-        base(distribution=Distribution(kind="lognormal")).validate()
+        invalid.validate()
+    invalid = base(distribution=Distribution(kind="lognormal", mean=-1.0))
     with pytest.raises(SpecError, match="mean"):
-        base(distribution=Distribution(kind="lognormal", mean=-1.0)).validate()
+        invalid.validate()
     base(distribution=Distribution(kind="lognormal", mean=1.0, sigma=0.5)).validate()
 
 
 def test_categories_must_be_non_empty():
+    invalid = DatasetSpec(
+        rows=10, arrow_type="string", categories=[], null_count=0, seed=1
+    )
     with pytest.raises(SpecError, match="categories"):
-        DatasetSpec(
-            rows=10, arrow_type="string", categories=[], null_count=0, seed=1
-        ).validate()
+        invalid.validate()
 
 
 def test_array_null_count_must_be_within_the_inner_count():
     """The inner count `wrap` actually produces is rows * round(mean(range)),
     not rows * upper: 10 rows of (1, 5) hold 30 values, and 31 inner nulls
     made `_null_mask` raise a ValueError from `rng.choice`."""
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="list<int32>",
+        value_range=(0, 10),
+        null_count=0,
+        seed=1,
+        array_len_range=(1, 5),
+        array_null_count=-1,
+    )
     with pytest.raises(SpecError, match="array_null_count"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="list<int32>",
-            value_range=(0, 10),
-            null_count=0,
-            seed=1,
-            array_len_range=(1, 5),
-            array_null_count=-1,
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="list<int32>",
+        value_range=(0, 10),
+        null_count=0,
+        seed=1,
+        array_len_range=(1, 5),
+        array_null_count=31,
+    )
     with pytest.raises(SpecError, match="array_null_count.*30"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="list<int32>",
-            value_range=(0, 10),
-            null_count=0,
-            seed=1,
-            array_len_range=(1, 5),
-            array_null_count=31,
-        ).validate()
+        invalid.validate()
     DatasetSpec(
         rows=10,
         arrow_type="list<int32>",
@@ -393,14 +422,15 @@ def test_array_null_count_must_be_within_the_inner_count():
 def test_categories_cannot_outnumber_rows():
     """Three categories over two rows cannot all appear at least once, which the
     multiset build otherwise turns into a zero count for one support value."""
+    invalid = DatasetSpec(
+        rows=2,
+        arrow_type="string",
+        categories=["a", "b", "c"],
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match=r"categories.*rows"):
-        DatasetSpec(
-            rows=2,
-            arrow_type="string",
-            categories=["a", "b", "c"],
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
     DatasetSpec(
         rows=3, arrow_type="string", categories=["a", "b", "c"], null_count=0, seed=1
     ).validate()
@@ -412,29 +442,29 @@ def test_float32_rejects_more_decimal_places_than_it_can_represent():
     distinct values after measurement (use case 1's shape at 2 million rows:
     manifest cardinality 0.749989, array 0.7133). Reject when
     max(|lo|, |hi|) * 10**decimal_places exceeds 2**24."""
+    invalid = base(arrow_type="float32", value_range=(-1.0, 10.0), decimal_places=8)
     with pytest.raises(SpecError, match="float32.*decimal_places"):
-        base(
-            arrow_type="float32", value_range=(-1.0, 10.0), decimal_places=8
-        ).validate()
+        invalid.validate()
     base(arrow_type="float32", value_range=(-1.0, 10.0), decimal_places=6).validate()
     base(arrow_type="float32", value_range=(0.0, 1.0), decimal_places=3).validate()
+    invalid = base(
+        arrow_type="list<float32>",
+        value_range=(0.0, 1000.0),
+        decimal_places=5,
+        array_len_range=(1, 3),
+    )
     with pytest.raises(SpecError, match="float32.*decimal_places"):
-        base(
-            arrow_type="list<float32>",
-            value_range=(0.0, 1000.0),
-            decimal_places=5,
-            array_len_range=(1, 3),
-        ).validate()
+        invalid.validate()
 
 
 def test_sigma_must_be_strictly_positive_when_set():
     """sigma=0 made scipy's density nan everywhere and the draw a constant."""
+    invalid = base(distribution=Distribution(kind="normal", mean=5.0, sigma=0.0))
     with pytest.raises(SpecError, match="sigma.*positive"):
-        base(distribution=Distribution(kind="normal", mean=5.0, sigma=0.0)).validate()
+        invalid.validate()
+    invalid = base(distribution=Distribution(kind="lognormal", mean=5.0, sigma=-1.0))
     with pytest.raises(SpecError, match="sigma.*positive"):
-        base(
-            distribution=Distribution(kind="lognormal", mean=5.0, sigma=-1.0)
-        ).validate()
+        invalid.validate()
 
 
 @pytest.mark.parametrize(
@@ -461,8 +491,9 @@ def test_value_range_must_fit_the_element_type(arrow_type, value_range):
         kw["decimal_places"] = 2
     if arrow_type.startswith("list"):
         kw["array_len_range"] = (1, 3)
+    invalid = base(**kw)
     with pytest.raises(SpecError, match="does not fit"):
-        base(**kw).validate()
+        invalid.validate()
 
 
 @pytest.mark.parametrize(
@@ -494,12 +525,15 @@ def test_array_len_range_must_be_ordered_positive_and_average_at_least_one():
             array_len_range=rng,
         )
 
+    invalid = lst((5, 1))
     with pytest.raises(SpecError, match="array_len_range"):
-        lst((5, 1)).validate()
+        invalid.validate()
+    invalid = lst((-1, 3))
     with pytest.raises(SpecError, match="array_len_range"):
-        lst((-1, 3)).validate()
+        invalid.validate()
+    invalid = lst((0, 0))
     with pytest.raises(SpecError, match="array_len_range"):
-        lst((0, 0)).validate()
+        invalid.validate()
     lst((1, 1)).validate()
     lst((1, 5)).validate()
 
@@ -507,23 +541,26 @@ def test_array_len_range_must_be_ordered_positive_and_average_at_least_one():
 def test_categories_must_match_the_arrow_type():
     """String categories under a numeric type reached the median dichotomy and
     raised a UFuncTypeError; numeric categories under string were cast."""
+    invalid = DatasetSpec(
+        rows=10, arrow_type="int32", categories=["a", "b"], null_count=0, seed=1
+    )
     with pytest.raises(SpecError, match="categories.*numeric"):
-        DatasetSpec(
-            rows=10, arrow_type="int32", categories=["a", "b"], null_count=0, seed=1
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10, arrow_type="string", categories=[1, 2], null_count=0, seed=1
+    )
     with pytest.raises(SpecError, match="categories.*string"):
-        DatasetSpec(
-            rows=10, arrow_type="string", categories=[1, 2], null_count=0, seed=1
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="float64",
+        categories=[1.0, True],
+        decimal_places=1,
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match="categories.*numeric"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="float64",
-            categories=[1.0, True],
-            decimal_places=1,
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
     DatasetSpec(
         rows=10, arrow_type="int32", categories=[1, 2, 3], null_count=0, seed=1
     ).validate()
@@ -554,19 +591,21 @@ def test_dataset_id_accepts_numpy_scalar_categories():
 def test_numeric_categories_must_fit_the_element_type():
     """Categories bypass value_range, so they need the same fit check, or
     `wrap` would be the first to notice."""
+    invalid = DatasetSpec(
+        rows=10, arrow_type="int8", categories=[1, 300], null_count=0, seed=1
+    )
     with pytest.raises(SpecError, match="categories.*does not fit"):
-        DatasetSpec(
-            rows=10, arrow_type="int8", categories=[1, 300], null_count=0, seed=1
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="decimal32(9,8)",
+        categories=[1.0, 10.0],
+        decimal_places=8,
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match="categories.*does not fit"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="decimal32(9,8)",
-            categories=[1.0, 10.0],
-            decimal_places=8,
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
 
 
 def test_numeric_categories_must_sit_on_the_decimal_places_grid():
@@ -574,28 +613,31 @@ def test_numeric_categories_must_sit_on_the_decimal_places_grid():
     before `wrap` rounded them to two distinct values, so the manifest lied.
     Every numeric category must equal itself rounded to decimal_places; the
     lattice types round to 0 places."""
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="float64",
+        categories=[1.001, 1.002, 2.0],
+        decimal_places=2,
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match=r"categories.*1\.001.*decimal_places"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="float64",
-            categories=[1.001, 1.002, 2.0],
-            decimal_places=2,
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10,
+        arrow_type="decimal32(9,8)",
+        categories=[0.123456789],
+        decimal_places=8,
+        null_count=0,
+        seed=1,
+    )
     with pytest.raises(SpecError, match=r"categories.*0\.123456789.*decimal_places"):
-        DatasetSpec(
-            rows=10,
-            arrow_type="decimal32(9,8)",
-            categories=[0.123456789],
-            decimal_places=8,
-            null_count=0,
-            seed=1,
-        ).validate()
+        invalid.validate()
+    invalid = DatasetSpec(
+        rows=10, arrow_type="int32", categories=[1, 1.5], null_count=0, seed=1
+    )
     with pytest.raises(SpecError, match=r"categories.*1\.5"):
-        DatasetSpec(
-            rows=10, arrow_type="int32", categories=[1, 1.5], null_count=0, seed=1
-        ).validate()
+        invalid.validate()
     DatasetSpec(
         rows=10,
         arrow_type="float64",
@@ -614,33 +656,36 @@ def test_entropy_and_dispersion_targets_together_are_rejected():
     target's rank shuffle the sorted support reorders with sigma while the
     count permutation stays fixed, so the dispersion objective is not monotone
     in sigma and the bisection lands on an arbitrary point."""
+    invalid = base(
+        cardinality_ratio=0.1,
+        entropy_bits=4.0,
+        index_of_dispersion=0.5,
+        distribution=Distribution(kind="lognormal", mean=4.0),
+    )
     with pytest.raises(
         SpecError, match="entropy_bits.*index_of_dispersion.*not supported"
     ):
-        base(
-            cardinality_ratio=0.1,
-            entropy_bits=4.0,
-            index_of_dispersion=0.5,
-            distribution=Distribution(kind="lognormal", mean=4.0),
-        ).validate()
+        invalid.validate()
 
 
 def test_dispersion_target_needs_a_distribution_with_a_spread_parameter():
     """uniform has no sigma, so the solve had nothing to bisect on and
     reported a clamp against a fixed value."""
+    invalid = base(cardinality_ratio=0.1, index_of_dispersion=0.5)
     with pytest.raises(SpecError, match="index_of_dispersion.*uniform"):
-        base(cardinality_ratio=0.1, index_of_dispersion=0.5).validate()
+        invalid.validate()
 
 
 def test_explicit_sigma_and_a_dispersion_target_are_rejected():
     """One fixes the spread, the other asks to solve for it; the solve was
     silently skipped with no record."""
+    invalid = base(
+        cardinality_ratio=0.1,
+        index_of_dispersion=0.5,
+        distribution=Distribution(kind="normal", mean=5.0, sigma=1.0),
+    )
     with pytest.raises(SpecError, match="sigma.*index_of_dispersion"):
-        base(
-            cardinality_ratio=0.1,
-            index_of_dispersion=0.5,
-            distribution=Distribution(kind="normal", mean=5.0, sigma=1.0),
-        ).validate()
+        invalid.validate()
     base(
         cardinality_ratio=0.1,
         index_of_dispersion=0.5,
@@ -654,5 +699,6 @@ def test_binary_is_an_arrow_type_for_path_datasets():
 
 
 def test_a_generated_binary_dataset_is_refused():
+    invalid = DatasetSpec(rows=10, arrow_type="binary", null_count=0, seed=0)
     with pytest.raises(SpecError, match="binary"):
-        DatasetSpec(rows=10, arrow_type="binary", null_count=0, seed=0).validate()
+        invalid.validate()

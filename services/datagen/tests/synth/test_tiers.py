@@ -16,7 +16,9 @@ def test_small_tier_proves_its_coverage():
     df = synth_small()
     man, intended = synth_manifest(2_000)
     cov = coverage(man, intended)
-    assert df.height == 2_000 and cov.mismatches == {} and cov.missing == set()
+    assert df.height == 2_000
+    assert cov.mismatches == {}
+    assert cov.missing == set()
     assert cov.covered == allowed_pairs()
     assert {"list_int", "array_int", "struct"} <= set(df.columns)
     assert df.schema["struct"] == pl.Struct
@@ -28,7 +30,9 @@ def test_window_tier_proves_its_coverage():
     df = synth_windows()
     man, intended = synth_manifest(WINDOW_ROWS)
     cov = coverage(man, intended)
-    assert df.height == WINDOW_ROWS and cov.mismatches == {} and cov.missing == set()
+    assert df.height == WINDOW_ROWS
+    assert cov.mismatches == {}
+    assert cov.missing == set()
     assert df.columns == synth_small().columns
 
 
@@ -40,7 +44,8 @@ def test_tiers_share_columns_and_seeds():
 def test_spread():
     df = synth_small()
     s = spread(df, 10)
-    assert s.width == 10 and s.columns[0] == df.columns[0]
+    assert s.width == 10
+    assert s.columns[0] == df.columns[0]
     assert spread(df, 10_000).width == df.width
 
 

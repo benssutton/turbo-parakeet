@@ -108,7 +108,8 @@ def test_is_deterministic():
     b = refine_interarrival(
         support, counts, spec_for(counts, interarrival_cv=1.0), np.random.default_rng(1)
     )
-    assert np.array_equal(a.values, b.values) and a.input_cv == b.input_cv
+    assert np.array_equal(a.values, b.values)
+    assert a.input_cv == b.input_cv
 
 
 def test_refinement_is_skipped_when_the_metric_is_undefined():
@@ -121,5 +122,6 @@ def test_refinement_is_skipped_when_the_metric_is_undefined():
         support, counts, spec_for(counts, interarrival_cv=0.5), np.random.default_rng(1)
     )
     assert r.skipped is True
-    assert "undefined" in r.reason and "repeat-runs" in r.reason
+    assert "undefined" in r.reason
+    assert "repeat-runs" in r.reason
     assert r.values is None

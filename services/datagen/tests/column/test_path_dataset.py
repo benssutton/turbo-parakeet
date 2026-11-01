@@ -65,14 +65,16 @@ def test_the_spec_fields_are_measured_from_the_file(tmp_path):
     )
     assert spec.value_range == (1.0, 9.0)
     assert spec.decimal_places is None
-    assert spec.column == "v" and spec.path.endswith("x.arrow")
+    assert spec.column == "v"
+    assert spec.path.endswith("x.arrow")
     spec.validate()
 
 
 def test_decimal_scale_and_explicit_decimal_places(tmp_path):
     p = write(tmp_path, COLUMNS["dec"])
     spec = path_spec(p, "v")
-    assert spec.arrow_type == "decimal128(9,2)" and spec.decimal_places == 2
+    assert spec.arrow_type == "decimal128(9,2)"
+    assert spec.decimal_places == 2
     assert spec.value_range == (-3.5, 1.25)
     with pytest.raises(SpecError, match="decimal_places"):
         path_spec(p, "v", decimal_places=3)  # must equal the scale
@@ -88,7 +90,8 @@ def test_string_and_temporal_columns(tmp_path):
     assert path_spec(write(tmp_path, COLUMNS["text"]), "v").value_range is None
     assert path_spec(write(tmp_path, COLUMNS["day"]), "v").arrow_type == "date32"
     spec = path_spec(write(tmp_path, COLUMNS["ts"]), "v")
-    assert spec.arrow_type == "timestamp[ms]" and spec.value_range is not None
+    assert spec.arrow_type == "timestamp[ms]"
+    assert spec.value_range is not None
 
 
 def test_manifest_has_measured_metrics_and_no_targets(tmp_path):
@@ -99,7 +102,9 @@ def test_manifest_has_measured_metrics_and_no_targets(tmp_path):
     # a, b, a, c, a: 3 distinct of 5 non-null values; counts 3, 1, 1
     assert m.achieved["cardinality_ratio"] == pytest.approx(3 / 5)
     assert m.achieved["entropy_bits"] == pytest.approx(1.3709505944546687)
-    assert m.targets == {} and m.within_tolerance == {} and m.solves == {}
+    assert m.targets == {}
+    assert m.within_tolerance == {}
+    assert m.solves == {}
     assert m.warnings == []
     assert m.dataset_id == m.spec.dataset_id
 
@@ -149,7 +154,8 @@ def test_spec_and_manifest_round_trip_through_json(tmp_path):
     spec = ds.manifest.spec
     assert DatasetSpec.from_dict(json.loads(spec.to_json())) == spec
     again = Manifest.from_dict(json.loads(ds.manifest.to_json()))
-    assert again.spec == spec and again.dataset_id == ds.manifest.dataset_id
+    assert again.spec == spec
+    assert again.dataset_id == ds.manifest.dataset_id
     assert again.achieved == ds.manifest.achieved
 
 
@@ -167,16 +173,19 @@ def test_spec_and_manifest_round_trip_through_json(tmp_path):
 )
 def test_validate_rejects_generator_fields_beside_a_path(tmp_path, bad):
     spec = path_spec(write(tmp_path, COLUMNS["int32"]), "v")
+    invalid = replace(spec, **bad)
     with pytest.raises(SpecError, match="path"):
-        replace(spec, **bad).validate()
+        invalid.validate()
 
 
 def test_column_without_path_and_path_without_column_are_rejected(tmp_path):
     spec = path_spec(write(tmp_path, COLUMNS["int32"]), "v")
+    invalid = replace(spec, column=None)
     with pytest.raises(SpecError, match="column"):
-        replace(spec, column=None).validate()
+        invalid.validate()
+    invalid = replace(spec, path=None)
     with pytest.raises(SpecError, match="path"):
-        replace(spec, path=None).validate()
+        invalid.validate()
 
 
 def test_missing_file_column_and_unexpressible_type(tmp_path):
@@ -218,17 +227,20 @@ def test_arrow_type_strings_round_trip_zones_and_fixed_size_binary(dtype, text):
 def test_zoned_timestamp_and_fixed_size_binary_files_are_measured(tmp_path):
     zoned = pa.array([1, None, 3], pa.timestamp("s", tz="UTC"))
     spec = path_spec(write(tmp_path, zoned), "v")
-    assert spec.arrow_type == "timestamp[s, tz=UTC]" and spec.value_range == (1.0, 3.0)
+    assert spec.arrow_type == "timestamp[s, tz=UTC]"
+    assert spec.value_range == (1.0, 3.0)
     fixed = pa.array([b"abcd", None, b"wxyz"], pa.binary(4))
     spec = path_spec(write(tmp_path, fixed, file="f.arrow"), "v")
-    assert spec.arrow_type == "fixed_size_binary(4)" and spec.value_range is None
+    assert spec.arrow_type == "fixed_size_binary(4)"
+    assert spec.value_range is None
     assert load_or_generate(spec, tmp_path / "c").array.equals(fixed)
 
 
 def test_a_binary_file_is_measured_and_loaded(tmp_path):
     binary = pa.array([b"\xff\x00", None, b"ab", b"\xff\x00"], pa.binary())
     spec = path_spec(write(tmp_path, binary), "v")
-    assert spec.arrow_type == "binary" and spec.value_range is None
+    assert spec.arrow_type == "binary"
+    assert spec.value_range is None
     ds = load_or_generate(spec, tmp_path / "c")
     assert ds.array.equals(binary)
     assert ds.manifest.achieved["cardinality_ratio"] == pytest.approx(2 / 3)

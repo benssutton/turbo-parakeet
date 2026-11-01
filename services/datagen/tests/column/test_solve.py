@@ -116,7 +116,8 @@ def test_a_non_monotone_objective_is_reported_as_not_converged_not_ok():
     r = solve_monotone(f, target=5.0, lo=0.0, hi=10.0, increasing=True, tol=0.1)
     assert r.status is SolveStatus.NOT_CONVERGED
     assert abs(r.achieved - 5.0) > 0.1
-    assert "not converged" in r.message and "5" in r.message
+    assert "not converged" in r.message
+    assert "5" in r.message
     assert not r.ok
 
 
