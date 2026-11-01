@@ -48,7 +48,7 @@ def median_ci(values, level: float = 0.95) -> tuple:
 
 
 def _positive(x) -> bool:
-    return x is not None and x == x and x > 0
+    return x is not None and x > 0
 
 
 def paired_ratio(a: dict, b: dict, level: float = 0.95) -> tuple:

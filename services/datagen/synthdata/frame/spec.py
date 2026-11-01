@@ -160,7 +160,7 @@ class FrameSpec:
         seen: dict[str, object] = {}
         for name, col in self.columns.items():
             if isinstance(col, ColumnSpec):
-                _validate_column(name, col, self.rows)
+                _validate_column(name, col)
             elif isinstance(col, RELATIONS):
                 _validate_relation(name, col, seen)
             else:
@@ -175,7 +175,7 @@ class FrameSpec:
             )
 
 
-def _validate_column(name: str, c: ColumnSpec, rows: int) -> None:
+def _validate_column(name: str, c: ColumnSpec) -> None:
     if c.type not in TYPES:
         raise SpecError(f"{name}: unknown type {c.type!r}; one of {', '.join(TYPES)}")
     if not 0 <= c.null_share <= 1:

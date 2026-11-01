@@ -356,7 +356,9 @@ def _cell(summary: dict, key: str) -> str:
         return "y" if value else "-"
     # None: no ratio to compare (clocks_disagree) or no repeats recorded (repeats_capped)
     if key in ("clocks_disagree", "repeats_capped"):
-        return "" if value is None else "y" if value else "-"
+        if value is None:
+            return ""
+        return "y" if value else "-"
     if value is None:
         return "-"
     if isinstance(value, float):

@@ -290,8 +290,9 @@ class DatasetSpec:
 
         if self.categories is not None:
             is_num = [_is_number(c, elem_dtype) for c in self.categories]
-            is_str = [isinstance(c, str) for c in self.categories]
-            if pa.types.is_string(elem_dtype) and not all(is_str):
+            if pa.types.is_string(elem_dtype) and not all(
+                isinstance(c, str) for c in self.categories
+            ):
                 raise SpecError(
                     f"categories for the string arrow_type {self.arrow_type!r} "
                     "must all be strings"

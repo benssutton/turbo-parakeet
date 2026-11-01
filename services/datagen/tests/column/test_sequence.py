@@ -100,7 +100,7 @@ def test_runs_plan_flags_a_target_outside_the_band():
     x = skewed()
     p = runs_plan(x, -10_000.0, "median")
     assert p.clamped
-    assert p.target_R == 2
+    assert p.target_runs == 2
 
 
 def test_layout_clamps_rather_than_failing_outside_the_band():
@@ -360,7 +360,7 @@ def test_out_of_band_runs_target_is_clamped_with_a_warning_naming_the_band():
     assert len(clamp) == 1
     assert "-10000" in clamp[0]
     assert f"{p.z_lo:.2f}" in clamp[0] and f"{p.z_hi:.2f}" in clamp[0]
-    assert run_count(dichotomise(r.values)) == p.target_R == 2
+    assert run_count(dichotomise(r.values)) == p.target_runs == 2
     assert np.array_equal(np.sort(r.values), np.repeat(support, counts))
 
 
@@ -412,7 +412,7 @@ def test_runs_plan_tolerates_a_single_group_split():
     n1, n2 to detect this, so the plan must not raise."""
     p = runs_plan(np.full(100, 3.0), -0.25, "median")
     assert (p.n1, p.n2) == (0, 100)
-    assert p.target_R == 1
+    assert p.target_runs == 1
     assert not p.clamped
     assert np.isnan(p.z_lo) and np.isnan(p.z_hi)
 

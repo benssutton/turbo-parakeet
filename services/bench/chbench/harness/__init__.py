@@ -14,14 +14,11 @@ client, synthdata and Polars into every worker (about 1.2 s per spawn) for nothi
 
 import importlib
 
-_EXPORTS = {
-    "RunSummary": "chbench.harness.orchestrate",
-    "run_suite": "chbench.harness.orchestrate",
-    "Suite": "chbench.harness.suite",
-    "SuiteError": "chbench.harness.suite",
-    "load_suite": "chbench.harness.suite",
-    "parse_suite": "chbench.harness.suite",
+_MODULES = {
+    "chbench.harness.orchestrate": ("RunSummary", "run_suite"),
+    "chbench.harness.suite": ("Suite", "SuiteError", "load_suite", "parse_suite"),
 }
+_EXPORTS = {name: module for module, names in _MODULES.items() for name in names}
 __all__ = sorted(_EXPORTS)
 
 

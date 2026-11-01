@@ -75,7 +75,7 @@ def read_column(path: str | Path, column: str) -> pa.Array:
             table = pa.ipc.open_file(source).read_all()
     except (OSError, pa.ArrowInvalid) as e:
         raise SpecError(
-            f"dataset path {str(path)!r} is not a readable Arrow IPC " f"file: {e}"
+            f"dataset path {str(path)!r} is not a readable Arrow IPC file: {e}"
         ) from e
     if column not in table.schema.names:
         raise SpecError(

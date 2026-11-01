@@ -59,7 +59,7 @@ def _order(stats: dict) -> str:
 def classify(stats: dict, family: str) -> dict:
     """Levels from statistics; "?" where the statistics fall between two levels."""
     rows, nulls = stats["rows"], stats["null_count"]
-    out = {f: None for f in FACTORS}
+    out = dict.fromkeys(FACTORS)
     out["family"] = family
     out["nulls"] = _nulls(nulls / rows if rows else 0.0)
     if out["nulls"] == "all":
@@ -80,7 +80,12 @@ def classify(stats: dict, family: str) -> dict:
         out["structure"] = "multiples" if (stats["gcd"] or 1) > 1 else "plain"
     if d >= 2 and out["cardinality"] != "near_unique":
         e = stats["entropy_norm"]
-        out["skew"] = "uniform" if e >= 0.9 else "heavy" if e <= 0.6 else UNKNOWN
+        if e >= 0.9:
+            out["skew"] = "uniform"
+        elif e <= 0.6:
+            out["skew"] = "heavy"
+        else:
+            out["skew"] = UNKNOWN
     if d >= 2:
         out["order"] = _order(stats)
     return out

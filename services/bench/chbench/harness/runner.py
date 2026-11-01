@@ -100,9 +100,8 @@ class Sample:
     )
 
 
-def explain_sql(name: str, sql: str) -> str:
-    """`EXPLAIN indexes = 1 <sql>`; `name` is accepted for symmetry with the
-    other SQL builders and is not needed to render the statement."""
+def explain_sql(sql: str) -> str:
+    """`EXPLAIN indexes = 1 <sql>`."""
     return f"EXPLAIN indexes = 1 {sql}"
 
 
@@ -326,9 +325,7 @@ def run_round(
 def explain_query(client: CHClient, job: Job) -> tuple[str, str | None]:
     """The job's `EXPLAIN indexes = 1` plan and None, or ("", the error text)."""
     try:
-        rows = client.query_rows(
-            explain_sql(job.name, query_sql(job.name, job.variant, job.qv))
-        )
+        rows = client.query_rows(explain_sql(query_sql(job.name, job.variant, job.qv)))
     except Exception as e:  # noqa: BLE001
         return "", _error_text(e)
     return "\n".join(str(r[0]) for r in rows), None

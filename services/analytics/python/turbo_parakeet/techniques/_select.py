@@ -64,7 +64,12 @@ def strata(technique: Technique, frames: dict) -> dict[tuple, list[Combo]]:
     out: dict[tuple, list[Combo]] = {}
     for k in candidates:
         product = math.prod(distinct[col] for col in k)
-        regime = "flat" if product <= FLAT else "hash" if product <= HASH else "u128"
+        if product <= FLAT:
+            regime = "flat"
+        elif product <= HASH:
+            regime = "hash"
+        else:
+            regime = "u128"
         families = tuple(sorted(_family(schemas[n][c]) for n, c in k))
         out.setdefault((families, regime), []).append(k)
     return out

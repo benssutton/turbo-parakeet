@@ -52,7 +52,7 @@ def distinct_count(spec: ColumnSpec, m: int) -> int:
 
 def dataset_spec(spec: ColumnSpec, m: int, seed: int) -> DatasetSpec:
     d = distinct_count(spec, m)
-    kw = dict(rows=m, null_count=0, seed=seed, cardinality_ratio=d / m)
+    kw = {"rows": m, "null_count": 0, "seed": seed, "cardinality_ratio": d / m}
     if spec.entropy is not None and 2 <= d < m:
         kw["entropy_bits"] = spec.entropy * math.log2(d)
     kind = base_kind(spec.type)

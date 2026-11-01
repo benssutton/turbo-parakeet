@@ -360,7 +360,7 @@ def _print_grid(console: Console, variants: list[TableVariant]) -> None:
     ok = sum(1 for v in variants if v.status == "ok")
     _say(
         console,
-        f"\ngrid: {len(variants)} cells, {ok} valid, " f"{len(variants) - ok} skipped",
+        f"\ngrid: {len(variants)} cells, {ok} valid, {len(variants) - ok} skipped",
         style="bold",
     )
     for variant in variants:
@@ -428,7 +428,7 @@ def _print_report(console: Console, store: Store, suite: Suite) -> None:
     summary = summarise(rows, suite.results.percentiles)
     _say(
         console,
-        f"\nreport: {suite.name} " f"({len(summary)} queries, {len(rows)} samples)",
+        f"\nreport: {suite.name} ({len(summary)} queries, {len(rows)} samples)",
         style="bold",
     )
     console.print(render_table(summary, suite.results.percentiles))

@@ -120,7 +120,7 @@ class RunsPlan:
     r_max: int
     z_lo: float
     z_hi: float
-    target_R: int
+    target_runs: int
     clamped: bool
     z: float
     status: SolveStatus
@@ -133,7 +133,7 @@ class RunsPlan:
         side = "min" if self.status is SolveStatus.CLAMPED_LOW else "max"
         return (
             f"clamped: {side} reachable {bound:.6g} for the measured split "
-            f"n1={self.n1}, n2={self.n2}; laid out {self.target_R} runs"
+            f"n1={self.n1}, n2={self.n2}; laid out {self.target_runs} runs"
         )
 
 
@@ -148,9 +148,9 @@ def runs_plan(x: np.ndarray, z: float, kind: str) -> RunsPlan:
         # Single-group split: the run count is deterministically 1, the band is
         # undefined (nan) and there is nothing to clamp. `layout_sequence` reads
         # n1, n2 off the plan to drop the runs target with a warning.
-        target_R, status = 1, SolveStatus.OK
+        target_runs, status = 1, SolveStatus.OK
     else:
-        target_R = target_run_count(n1, n2, z)
+        target_runs = target_run_count(n1, n2, z)
         if z < z_lo:
             status = SolveStatus.CLAMPED_LOW
         elif z > z_hi:
@@ -165,7 +165,7 @@ def runs_plan(x: np.ndarray, z: float, kind: str) -> RunsPlan:
         r_max=r_max,
         z_lo=z_lo,
         z_hi=z_hi,
-        target_R=target_R,
+        target_runs=target_runs,
         clamped=status is not SolveStatus.OK,
         z=z,
         status=status,
@@ -285,7 +285,7 @@ def _combined_warnings(plan: RunsPlan, counts: np.ndarray) -> list[str]:
     """
     n = int(counts.sum())
     runs = int(np.count_nonzero(counts >= 2))
-    block = n / plan.target_R
+    block = n / plan.target_runs
     gap = n / runs if runs else float("inf")
     out = [
         "skipped: interarrival_cv: tolerance not applied, because runs_z and "
@@ -297,7 +297,7 @@ def _combined_warnings(plan: RunsPlan, counts: np.ndarray) -> list[str]:
     if block < gap:
         out.append(
             f"miss: interarrival_cv: pulled strongly toward 1, because the "
-            f"mean block length {block:.2f} rows (rows / {plan.target_R} "
+            f"mean block length {block:.2f} rows (rows / {plan.target_runs} "
             f"runs-test runs) is below the mean run gap {gap:.2f} rows (rows "
             f"/ {runs} repeat-runs), so block boundaries split most "
             "repeat-runs; this eases only when runs_z is negative enough for "
@@ -358,7 +358,7 @@ def layout_sequence(
                 f"clamp: runs_z: target {z:g} is outside the reachable band "
                 f"[{plan.z_lo:.2f}, {plan.z_hi:.2f}] for the measured split "
                 f"n1={plan.n1}, n2={plan.n2}; the target has been clamped to "
-                f"{plan.target_R} runs"
+                f"{plan.target_runs} runs"
             )
 
     if cv is not None:

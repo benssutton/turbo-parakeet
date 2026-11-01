@@ -28,6 +28,8 @@ warning with `re.match(r"^(\w+): (\w+): ", w)` without parsing the prose:
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
@@ -102,7 +104,7 @@ def solve_monotone(
     that stops a non-monotone objective being reported as solved. Clamps are
     unaffected: they are decided from the bracket ends before any search.
     """
-    if not (target == target) or target in (float("inf"), float("-inf")):
+    if not math.isfinite(target):
         raise ValueError(f"target must be finite, got {target!r}")
     if not lo < hi:
         raise ValueError(f"need lo < hi, got lo={lo!r} hi={hi!r}")

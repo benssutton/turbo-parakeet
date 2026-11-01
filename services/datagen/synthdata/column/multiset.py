@@ -23,6 +23,10 @@ from synthdata.column.spec import DatasetSpec
 
 CLIP_WARN_FRACTION = 0.01  # FINDINGS §4
 REDRAW_CAP = 20
+_NO_SIGMA = (
+    "distribution.sigma is None and no sigma override was supplied; pass sigma explicitly "
+    "or set index_of_dispersion so the dispersion solver can supply one"
+)
 STRING_ALPHABET = np.array(list(string.digits + string.ascii_letters))  # 62 symbols
 
 
@@ -67,20 +71,12 @@ def _raw_draw(spec, rng, size, sigma):
         return rng.uniform(lo, hi, size=size)
     if d.kind == "normal":
         if sigma is None:
-            raise ValueError(
-                "distribution.sigma is None and no sigma override was "
-                "supplied; pass sigma explicitly or set index_of_dispersion "
-                "so the dispersion solver can supply one"
-            )
+            raise ValueError(_NO_SIGMA)
         mean = d.mean if d.mean is not None else (lo + hi) / 2
         return rng.normal(mean, sigma, size=size) + d.shift
     if d.kind == "lognormal":
         if sigma is None:
-            raise ValueError(
-                "distribution.sigma is None and no sigma override was "
-                "supplied; pass sigma explicitly or set index_of_dispersion "
-                "so the dispersion solver can supply one"
-            )
+            raise ValueError(_NO_SIGMA)
         if d.mean is None:
             raise ValueError(
                 "distribution.mean is None; a lognormal distribution "
@@ -358,11 +354,7 @@ def density_counts(
     elif d.kind == "normal":
         sig = sigma if sigma is not None else d.sigma
         if sig is None:
-            raise ValueError(
-                "distribution.sigma is None and no sigma override was "
-                "supplied; pass sigma explicitly or set index_of_dispersion "
-                "so the dispersion solver can supply one"
-            )
+            raise ValueError(_NO_SIGMA)
         if d.mean is not None:
             mean = d.mean
         else:  # validate() guarantees value_range here
@@ -376,11 +368,7 @@ def density_counts(
     elif d.kind == "lognormal":
         sig = sigma if sigma is not None else d.sigma
         if sig is None:
-            raise ValueError(
-                "distribution.sigma is None and no sigma override was "
-                "supplied; pass sigma explicitly or set index_of_dispersion "
-                "so the dispersion solver can supply one"
-            )
+            raise ValueError(_NO_SIGMA)
         if d.mean is None:
             raise ValueError(
                 "distribution.mean is None; a lognormal distribution "

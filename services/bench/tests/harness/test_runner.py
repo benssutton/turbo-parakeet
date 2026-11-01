@@ -94,7 +94,7 @@ class _InterruptOnTimedCall:
 
 def test_explain_sql():
     assert (
-        explain_sql("bench.t", "SELECT count() FROM bench.t")
+        explain_sql("SELECT count() FROM bench.t")
         == "EXPLAIN indexes = 1 SELECT count() FROM bench.t"
     )
 

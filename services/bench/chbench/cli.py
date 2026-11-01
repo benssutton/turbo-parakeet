@@ -414,7 +414,10 @@ def _metric_cell(manifest: Manifest, metric: str) -> str:
     if metric not in manifest.targets:
         return achieved
     within = manifest.within_tolerance.get(metric)
-    mark = "?" if within is None else ("ok" if within else "MISS")
+    if within is None:
+        mark = "?"
+    else:
+        mark = "ok" if within else "MISS"
     return f"{achieved} ({manifest.targets[metric]:g}) {mark}"
 
 
@@ -483,7 +486,7 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
     for name in known:
         try:
             client.command(drop_table_sql(name))
-        except Exception as exc:  # noqa: BLE001 -- report, go on with the rest
+        except Exception as exc:  # report, go on with the rest
             failed += 1
             _warn(console, f"error: could not drop {name}: {exc}")
             continue

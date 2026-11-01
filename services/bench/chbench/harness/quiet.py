@@ -57,7 +57,7 @@ def _server(client) -> dict:
             "SELECT value FROM system.asynchronous_metrics WHERE metric = 'LoadAverage1'"
         )
         merges = client.query_rows("SELECT count() FROM system.merges")
-    except Exception:  # noqa: BLE001 - a probe, never a reason to stop
+    except Exception:  # a probe, never a reason to stop
         return {"ch_load_average_1": None, "ch_active_merges": None}
     return {
         "ch_load_average_1": float(load[0][0]) if load else None,
