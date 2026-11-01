@@ -618,7 +618,7 @@ def test_explicit_combinations_per_scope():
 @pytest.mark.parametrize(
     "combos, match",
     [
-        ([(F_A,)], "2 \(frame, column\) pairs"),
+        ([(F_A,)], r"2 \(frame, column\) pairs"),
         ([(F_A, ("f", "nope"))], "unknown column"),
         ([(F_A, ("h", "a"))], "unknown column"),
         ([(F_A, F_A)], "repeats a column"),
