@@ -225,7 +225,7 @@ def _support_capacity(
     capacity = int(round((hi - lo) * 10**spec.decimal_places)) + 1
     return (
         capacity,
-        f"the range [{lo}, {hi}] at {spec.decimal_places} decimal " "places",
+        f"the range [{lo}, {hi}] at {spec.decimal_places} decimal places",
     )
 
 

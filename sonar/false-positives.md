@@ -34,13 +34,21 @@ pattern; their rows are kept so a future flag is recognised.
 | `marginal_entropy/__init__.py` | `MarginalEntropyPolars` |
 | `population_cardinality/__init__.py` | `PopulationCardinalityPolars` |
 
-## `python:S3776` — cognitive complexity 16 against the limit of 15 (1, CRITICAL)
+## `python:S3776` — cognitive complexity 16–17 against the limit of 15 (6, CRITICAL)
 
-Accepted like the Rust cases below: one point over, no natural seam. Marked *False positive*;
+Accepted like the Rust cases below: one or two points over, no natural seam. Marked *False positive*;
 do not refactor to chase the score.
 
 - `top_k/base.py` `TopK.agreement` (16): a single pass building found / wanted / rel per
   column, then three checks
+- `turbo_parakeet/recommenders/chbench.py` `_predicted_inproc` (16)
+- `turbo_parakeet/techniques/base.py` `_requested` (17)
+- `chbench/harness/engines/inproc.py` `InProcEngine.call` (16): one request / reply exchange with its timeout and
+  dead-worker handling
+- `chbench/cli.py` `_cmd_datasets` (17)
+- `chbench/harness/validate.py` `resolve_type` (17)
+
+(The 2026-10-31 analysis also flagged 19 functions at 18–143 in the bench and datagen; all were split.)
 
 ## `rust:S3776` — cognitive complexity 16–17 against the limit of 15 (6, CRITICAL)
 
@@ -78,9 +86,21 @@ Marked *Accepted* (won't fix), not *False positive*: the count is right.
 
 **Do not:** remove a parameter, which would break the override.
 
-## `python:S1940` — "use the opposite operator" for `not a <= b` (2, MINOR)
+The same holds for the bench's in-process engine protocol (`chbench/harness/engines/inproc.py`):
+`datafusion_engine.py` `cast(type_spec, table_id)`, `attach(table_id, path, held)` and
+`plan(table_id, query)` (3) do not need the flagged parameters, but the Polars engine's
+implementations of the same methods do. Marked *False positive*.
 
-`pairwise_entropy/ams.py` lines 83 and 90: `not abs(got - ref) <= bound`.
+`chbench/harness/validate.py` `expand_grid(..., clickhouse_version)` (1): unused today, kept on
+purpose because the applicability matrices are per ClickHouse version (its docstring). Marked
+*Accepted*.
+
+## `python:S1940` — "use the opposite operator" for `not a <= b` (6, MINOR)
+
+`pairwise_entropy/ams.py` lines 83 and 90: `not abs(got - ref) <= bound`. In synthdata:
+`column/solve.py` `solve_monotone` (`not lo < hi`, `not abs(achieved - target) <= tol`),
+`column/spec.py` (`not (self.distribution.sigma > 0)`) and `frame/generate.py`
+(`not rel["nmi"] > 1 - 1e-9`).
 
 **Why it is wrong:** the form is deliberately NaN-safe. A NaN estimate makes `abs(got - ref) <=
 bound` False, so it is reported as a mismatch; the suggested `abs(got - ref) > bound` is False
@@ -95,6 +115,42 @@ check is `tech.add({"t": data}).result()` because Polars-built malformed data is
 `result()` while the rest is refused in `add()`. Both calls are the pipeline under test;
 the operands are already built outside the block. Marked *False positive*; the other
 `S5778` findings were fixed by building operands outside the block.
+
+## `python:S5754` — `except BaseException` that does not re-raise (2, CRITICAL)
+
+`chbench/harness/engines/base.py` `_interrupt_all` and `chbench/harness/orchestrate.py`
+`_close_all`. Deliberate: in cleanup, one engine whose `interrupt()` / `close()` fails, including
+on a second Ctrl-C, must not skip the others or mask the exception already propagating; the
+failure becomes a note on that exception (or a warning when the run succeeded). Marked *False
+positive*; do not narrow to `Exception`.
+
+## `python:S6353` — `[0-9]` instead of `\d` (6, MINOR)
+
+`chbench/harness/inproc_types.py`, the Polars / Arrow type-spec regexes. In a Python `str`
+pattern `\d` matches every Unicode decimal digit (`"٣"`), which these parsers must reject;
+`[0-9]` is ASCII only. Marked *False positive*; do not "simplify".
+
+## `python:S1244` — floating-point equality (4, MAJOR)
+
+`synthdata/column/metrics.py` (`mean == 0.0`, `sd == 0.0`, twice): guards against dividing by
+an exact zero; `frame/generate.py` `rel["containment"] != 1.0`: the ratio of contained to all
+values is exactly 1.0 when every value is contained, and a foreign key must be fully contained.
+Marked *False positive*.
+
+## Other single-case rejections (all *False positive*)
+
+- `python:S1515` (2): `chbench/harness/queries.py` and `synthdata/synth/pairwise.py`, a lambda
+  over the loop variable passed as a `key=` to `min` / `max` / `sorted` and consumed in the same
+  iteration.
+- `python:S3516` (1): `chbench/cli.py` `_cmd_datasets` always returns 0: every subcommand handler
+  returns the exit code through the same dispatch.
+- `python:S5655` (1): `chbench/harness/orchestrate.py`, `skipped(v, ...)` with
+  `v = dataclasses.replace(variant, ...)`, which is a `TableVariant`; Sonar loses the type.
+- `python:S5863` (2): `test_queries.py` / `test_pairwise.py` determinism tests compare two
+  separate evaluations of the same seeded call.
+- `python:S7517` (2): `turbo_parakeet/techniques/base.py`, `used` is a dict used as an ordered
+  set of `(frame, column)` keys; the loops unpack the key tuples.
+- `python:S3415` (1): `services/datagen/tests/column/test_sequence.py` asserts actual-first throughout.
 
 ## `java:S1602` — "useless curly braces" around a lambda body (1, MINOR)
 

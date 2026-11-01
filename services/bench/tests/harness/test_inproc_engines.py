@@ -176,7 +176,7 @@ def test_ipc_compression_shrinks_strings_and_files_are_reused(strings):
     assert (
         by[("datafusion", "string", "ZSTD(3)")] < by[("datafusion", "string", "none")]
     )
-    assert len(files) == 10
+    assert len(files) == 10  # 6 Polars + 4 DataFusion ipc cells
     assert all(f.is_file() for f in files)
     assert second.samples_written == 15 * 3
     assert [f.stat().st_mtime_ns for f in files] == stamps
