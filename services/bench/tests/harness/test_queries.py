@@ -59,7 +59,8 @@ def test_in_predicate_picks_the_most_frequent_values_closest_to_target():
     assert sql == "v IN (1)"  # 30/100 is closest to 0.20 among singles
     assert actual == pytest.approx(0.30)
     sql5, actual5 = in_predicate(vals, 0.20, 5)
-    assert sql5.startswith("v IN (") and actual5 > 0
+    assert sql5.startswith("v IN (")
+    assert actual5 > 0
 
 
 def test_in_predicate_quotes_strings():
@@ -138,8 +139,10 @@ def test_expand_queries_gives_one_variant_per_kind():
     )
     vals = np.arange(1000, dtype=float)
     scan, filt = expand_queries(axes, vals, variant(), np.random.default_rng(0))
-    assert scan.kind == "full_scan" and scan.predicate_sql is None
-    assert filt.predicate_sql and filt.actual_fraction == pytest.approx(0.1, abs=0.01)
+    assert scan.kind == "full_scan"
+    assert scan.predicate_sql is None
+    assert filt.predicate_sql
+    assert filt.actual_fraction == pytest.approx(0.1, abs=0.01)
 
 
 def test_query_id_is_stable_and_distinct_per_kind():
@@ -155,7 +158,8 @@ def test_query_id_is_stable_and_distinct_per_kind():
     again = expand_queries(axes, vals, variant(), np.random.default_rng(0))
     ids = [query_id("t", q) for q in qs]
     assert ids == [query_id("t", q) for q in again]
-    assert len(set(ids)) == 2 and all(len(i) == 16 for i in ids)
+    assert len(set(ids)) == 2
+    assert all(len(i) == 16 for i in ids)
 
 
 # --- Fix-report regression tests: literal rendering must follow the column

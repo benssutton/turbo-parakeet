@@ -99,7 +99,8 @@ def test_dictionary_indices_too_narrow_are_skipped(tmp_path):
     r = w.prepare(
         spec("t1", "dictionary<values=string, indices=int8, ordered=0>", tmp_path)
     )
-    assert r["status"] == "skipped" and "cast to dictionary" in r["reason"]
+    assert r["status"] == "skipped"
+    assert "cast to dictionary" in r["reason"]
 
 
 @pytest.mark.parametrize("width", ["int8", "int16", "uint16", "int32"])

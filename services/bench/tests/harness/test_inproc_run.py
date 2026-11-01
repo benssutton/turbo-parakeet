@@ -92,7 +92,8 @@ def _queries(tmp_path):
 def test_an_in_process_suite_runs_without_a_server(fake, tmp_path):
     r = _run(tmp_path)
     assert (r.tables_ok, r.tables_skipped, r.tables_error) == (6, 2, 0)
-    assert r.queries_run == 12 and r.samples_written == 36
+    assert r.queries_run == 12
+    assert r.samples_written == 36
     assert fake["client"].calls == []  # no ClickHouse at all
     with Store(tmp_path / "r.db") as s:
         rows = s.query_rows("t_inproc")
@@ -102,8 +103,10 @@ def test_an_in_process_suite_runs_without_a_server(fake, tmp_path):
     assert all(r["server_ms"] > 0 and r["cpu_us"] is not None for r in rows)
     ipc = [t for t in tables if t["storage"] == "ipc" and t["status"] == "ok"]
     # a real PrepareResult reaches the store's ipc_bytes column
-    assert len(ipc) == 4 and all(t["ipc_bytes"] > 0 for t in ipc)
-    assert "clickhouse" not in json.loads(text) and json.loads(text)["polars"]
+    assert len(ipc) == 4
+    assert all(t["ipc_bytes"] > 0 for t in ipc)
+    assert "clickhouse" not in json.loads(text)
+    assert json.loads(text)["polars"]
     assert {st for st, _ in _queries(tmp_path)} == {"ok"}
 
 
@@ -125,7 +128,9 @@ def test_ipc_files_are_reused_on_resume_and_a_full_rerun_prepares_nothing(
         lambda self, *a: calls.append(a) or real(self, *a),
     )
     r3 = _run(tmp_path)
-    assert r3.samples_written == 0 and r3.queries_skipped_existing == 12 and calls == []
+    assert r3.samples_written == 0
+    assert r3.queries_skipped_existing == 12
+    assert calls == []
 
 
 def test_a_wrong_first_answer_is_an_error_with_both_answers_and_takes_no_samples(
@@ -136,7 +141,8 @@ def test_a_wrong_first_answer_is_an_error_with_both_answers_and_takes_no_samples
     r = _run(tmp_path)
     assert r.samples_written == 33
     errors = [e for st, e in _queries(tmp_path) if st == "error"]
-    assert len(errors) == 1 and "pyarrow reference" in errors[0]
+    assert len(errors) == 1
+    assert "pyarrow reference" in errors[0]
 
 
 def test_a_samples_add_run_checks_the_answers_again(fake, tmp_path, monkeypatch):
@@ -154,10 +160,12 @@ def test_a_query_added_later_is_warmed_up_and_checked(fake, tmp_path, monkeypatc
     # job's first answer (each job runs a cold run, then the compared one).
     monkeypatch.setenv("CHBENCH_FAKE", "wrong=4")
     r = _run(tmp_path)
-    assert r.queries_skipped_existing == 6 and r.queries_run == 6
+    assert r.queries_skipped_existing == 6
+    assert r.queries_run == 6
     assert r.samples_written == 5 * 3
     statuses = _queries(tmp_path)
-    assert sum(st == "error" for st, _ in statuses) == 1 and len(statuses) == 12
+    assert sum(st == "error" for st, _ in statuses) == 1
+    assert len(statuses) == 12
 
 
 def test_a_planted_skip_is_recorded_with_its_reason(fake, tmp_path, monkeypatch):
@@ -188,7 +196,8 @@ def test_a_worker_that_dies_errors_its_pending_queries_and_the_run_finishes(
 
 def test_a_mixed_suite_runs_both_engines_in_every_round(fake, tmp_path):
     r = _run(tmp_path, MIXED)
-    assert r.tables_ok == 2 and r.samples_written == 6
+    assert r.tables_ok == 2
+    assert r.samples_written == 6
     assert len(rounds(fake["client"].calls)) == 3  # one query_log read per timed round
     with Store(tmp_path / "r.db") as s:
         got = s.conn.execute(
@@ -234,9 +243,8 @@ def test_a_dry_run_starts_no_worker(fake, tmp_path, monkeypatch):
 
     monkeypatch.setattr(inproc.InprocEngine, "__init__", refuse)
     r = _run(tmp_path, dry_run=True)
-    assert (r.tables_ok, r.tables_skipped) == (6, 2) and not (
-        tmp_path / "r.db"
-    ).exists()
+    assert (r.tables_ok, r.tables_skipped) == (6, 2)
+    assert not (tmp_path / "r.db").exists()
 
 
 def test_a_polars_version_off_its_pin_warns(fake, tmp_path, monkeypatch):
@@ -290,13 +298,10 @@ def test_each_query_keeps_its_k_across_rounds_and_a_capped_k_is_recorded(
             "SELECT query_id, count(DISTINCT round_no), group_concat(DISTINCT repeats), "
             "group_concat(DISTINCT repeats_capped) FROM samples GROUP BY query_id"
         ).fetchall()
-    assert len(got) == 12 and all(
-        n == 3 and k == "4" and c == "1" for _, n, k, c in got
-    )
-    assert (
-        "warning warm-up" in console.file.getvalue()
-        and "(the cap)" in console.file.getvalue()
-    )
+    assert len(got) == 12
+    assert all(n == 3 and k == "4" and c == "1" for _, n, k, c in got)
+    assert "warning warm-up" in console.file.getvalue()
+    assert "(the cap)" in console.file.getvalue()
 
 
 def test_ipc_batch_rows_cells_run_and_are_stored(fake, tmp_path):
@@ -333,7 +338,8 @@ def test_ctrl_c_in_a_timed_round_marks_the_queries_it_never_ran_interrupted(
         n = s.conn.execute("SELECT count(*) FROM samples").fetchone()[0]
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
     # four samples landed; every query is short of its three, so none is left unmarked
-    assert n == 4 and finished
+    assert n == 4
+    assert finished
     assert {st for st, _ in _queries(tmp_path)} == {"interrupted"}
 
 
@@ -354,7 +360,8 @@ def test_ctrl_c_in_the_warm_up_marks_every_in_process_query_interrupted(
     with pytest.raises(KeyboardInterrupt):
         _run(tmp_path)
     statuses = _queries(tmp_path)
-    assert len(statuses) == 12 and {st for st, _ in statuses} == {"interrupted"}
+    assert len(statuses) == 12
+    assert {st for st, _ in statuses} == {"interrupted"}
 
 
 def test_a_failure_while_preparing_still_closes_the_workers(
@@ -410,5 +417,6 @@ def test_a_close_failing_after_a_good_run_is_a_printed_warning(
     seen = _failing_close(monkeypatch)
     out = io.StringIO()
     summary = _run(tmp_path, TWO_WORKERS, console=Console(file=out, width=400))
-    assert len(seen) == 2 and summary.samples_written > 0
+    assert len(seen) == 2
+    assert summary.samples_written > 0
     assert out.getvalue().count("broken pipe") == 2

@@ -46,7 +46,8 @@ def test_ipc_batch_rows_is_whole_or_a_positive_count():
     assert normalise_ipc_batch_rows("whole") == "whole"
     assert normalise_ipc_batch_rows(65536) == "65536"
     assert normalise_ipc_batch_rows(DEFAULT_IPC_BATCH_ROWS) == "122880"
-    assert ipc_batch_rows("whole") is None and ipc_batch_rows("65536") == 65536
+    assert ipc_batch_rows("whole") is None
+    assert ipc_batch_rows("65536") == 65536
     for bad in (0, -1, True, "big", "1000", 1.5):
         with pytest.raises(ValueError, match="whole' or a positive integer"):
             normalise_ipc_batch_rows(bad)
@@ -56,7 +57,8 @@ def test_ipc_codec():
     assert ipc_codec("none") is None
     assert ipc_codec("LZ4_FRAME").name == "lz4"
     z = ipc_codec("ZSTD(9)")
-    assert z.name == "zstd" and z.compression_level == 9
+    assert z.name == "zstd"
+    assert z.compression_level == 9
 
 
 @pytest.mark.parametrize(
@@ -210,7 +212,7 @@ def test_feed_errors_name_both_sides():
     )
     assert feed_error(pa.int64(), "datafusion", "string") is None
     msg = feed_error(pa.int64(), "polars", "Enum")
-    assert (
-        "polars.type value 'Enum'" in msg and "categorical" in msg and "numeric" in msg
-    )
+    assert "polars.type value 'Enum'" in msg
+    assert "categorical" in msg
+    assert "numeric" in msg
     assert "cannot feed" in feed_error(pa.list_(pa.int64()), "polars", "Int64")

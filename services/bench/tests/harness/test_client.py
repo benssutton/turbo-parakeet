@@ -22,7 +22,8 @@ def test_connection_reads_env(monkeypatch):
     monkeypatch.setenv("CH_PORT", "9000")
     monkeypatch.setenv("CH_DATABASE", "other")
     c = Connection.from_env()
-    assert c.port == 9000 and c.database == "other"
+    assert c.port == 9000
+    assert c.database == "other"
 
 
 @pytest.mark.clickhouse

@@ -47,8 +47,11 @@ def drop_orch_tables(request):
 def test_run_suite_end_to_end(ch, tmp_path):
     suite = parse_suite(SMALL)
     r = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
-    assert r.tables_ok == 1 and r.tables_skipped == 1 and r.tables_error == 0
-    assert r.queries_run == 1 and r.samples_written == 3
+    assert r.tables_ok == 1
+    assert r.tables_skipped == 1
+    assert r.tables_error == 0
+    assert r.queries_run == 1
+    assert r.samples_written == 3
     with Store(tmp_path / "r.db") as s:
         rows = s.query_rows("t_orch")
         skipped = s.conn.execute(
@@ -63,7 +66,8 @@ def test_rerun_skips_queries_that_already_hold_enough_samples(ch, tmp_path):
     suite = parse_suite(SMALL)
     run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     r2 = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
-    assert r2.queries_skipped_existing == 1 and r2.samples_written == 0
+    assert r2.queries_skipped_existing == 1
+    assert r2.samples_written == 0
     r3 = run_suite(
         suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", samples_add=2
     )
@@ -104,8 +108,11 @@ def test_rerun_does_not_reload_a_table_whose_queries_are_all_held(
 
     r2 = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     assert calls == []
-    assert r2.tables_ok == 1 and r2.tables_skipped == 1 and r2.tables_error == 0
-    assert r2.queries_skipped_existing == 1 and r2.samples_written == 0
+    assert r2.tables_ok == 1
+    assert r2.tables_skipped == 1
+    assert r2.tables_error == 0
+    assert r2.queries_skipped_existing == 1
+    assert r2.samples_written == 0
     with Store(tmp_path / "r.db") as s:
         after = s.conn.execute(
             "SELECT table_id, insert_ms, created_at FROM tables WHERE status='ok'"
@@ -115,7 +122,8 @@ def test_rerun_does_not_reload_a_table_whose_queries_are_all_held(
     r3 = run_suite(
         suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds", samples_add=1
     )
-    assert len(calls) == 1 and r3.samples_written == 1
+    assert len(calls) == 1
+    assert r3.samples_written == 1
 
 
 @pytest.mark.clickhouse
@@ -126,7 +134,9 @@ def test_dry_run_touches_nothing(ch, tmp_path):
         cache_dir=tmp_path / "ds",
         dry_run=True,
     )
-    assert r.tables_ok == 1 and r.tables_skipped == 1 and r.samples_written == 0
+    assert r.tables_ok == 1
+    assert r.tables_skipped == 1
+    assert r.samples_written == 0
     assert not (tmp_path / "r.db").exists()
 
 
@@ -159,10 +169,9 @@ def test_finish_run_is_called_when_something_other_than_ctrl_c_escapes(
         raise ValueError("range_predicate: values are all null")
 
     monkeypatch.setattr(orchestrate, "expand_queries", exploding)
+    suite = parse_suite(SMALL)
     with pytest.raises(ValueError):
-        run_suite(
-            parse_suite(SMALL), store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds"
-        )
+        run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
     with Store(tmp_path / "r.db") as s:
         finished = s.conn.execute("SELECT finished_at FROM runs").fetchone()[0]
     assert finished is not None
@@ -221,7 +230,8 @@ def test_refuses_to_start_while_an_unfinished_run_of_the_suite_exists(ch, tmp_pa
         cache_dir=tmp_path / "ds",
         ignore_unfinished=True,
     )
-    assert r.run_id is not None and r.samples_written == 3
+    assert r.run_id is not None
+    assert r.samples_written == 3
 
 
 @pytest.mark.clickhouse
@@ -254,7 +264,8 @@ def test_ctrl_c_mid_query_records_the_interrupted_query_and_finishes_the_run(
     assert samples == [(0,)]
     assert len(queries) == 1
     status, error, explain = queries[0]
-    assert status == "interrupted" and error is None
+    assert status == "interrupted"
+    assert error is None
     assert finished is not None
 
 

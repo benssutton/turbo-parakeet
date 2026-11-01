@@ -64,11 +64,14 @@ def test_load_produces_one_wide_part_with_per_column_stats(ch, table, small_data
     name = table("aaaaaaaa00000000")
     r = load_table(ch, name, variant(), small_dataset)
     assert r.status == "ok", r.error
-    assert r.error is None and r.insert_ms > 0
+    assert r.error is None
+    assert r.insert_ms > 0
     s = r.stats
-    assert s.rows == 50_000 and s.parts == 1
+    assert s.rows == 50_000
+    assert s.parts == 1
     assert s.uncompressed_bytes == 50_000 * 8  # v alone: Float64 is 8 bytes
-    assert 0 < s.compressed_bytes and s.marks_bytes > 0
+    assert 0 < s.compressed_bytes
+    assert s.marks_bytes > 0
     assert storage_stats(ch, name) == s
 
 
@@ -121,9 +124,11 @@ def test_a_failing_cast_is_contained_and_the_table_dropped(ch, table, small_data
     dropped so an errored variant never leaves a table in bench."""
     name = table("dddddddd00000000")
     r = load_table(ch, name, variant(ch_type="UInt32"), small_dataset)
-    assert r.status == "error" and r.error
+    assert r.status == "error"
+    assert r.error
     assert r.error.startswith("ArrowInvalid")
-    assert r.stats is None and r.insert_ms is None
+    assert r.stats is None
+    assert r.insert_ms is None
     assert not table_exists(ch, name)
 
 
@@ -136,9 +141,12 @@ def test_a_failing_server_insert_is_recorded_not_raised(ch, table, small_dataset
     exception, nothing raised, and the half-loaded table dropped."""
     name = table("dddddddd00000001")
     r = load_table(ch, name, variant(ch_type="UUID"), small_dataset)
-    assert r.status == "error" and r.error
-    assert r.error.startswith("DatabaseError") and "ClickHouse exception" in r.error
-    assert r.stats is None and r.insert_ms is None
+    assert r.status == "error"
+    assert r.error
+    assert r.error.startswith("DatabaseError")
+    assert "ClickHouse exception" in r.error
+    assert r.stats is None
+    assert r.insert_ms is None
     assert not table_exists(ch, name)
 
 
@@ -163,7 +171,8 @@ def test_storage_stats_use_the_per_column_fields(ch, table, small_dataset):
         parameters={"t": name.split(".")[1]},
     )
     by_col = dict(rows)
-    assert by_col["row_id"] == 50_000 * 8 and by_col["v"] == 50_000 * 4
+    assert by_col["row_id"] == 50_000 * 8
+    assert by_col["v"] == 50_000 * 4
     assert storage_stats(ch, name).uncompressed_bytes == by_col["v"]
 
 
@@ -182,7 +191,8 @@ def test_index_bytes_recorded(ch, table, small_dataset, skip_index, nonzero):
     assert r.status == "ok", r.error
     s = r.stats
     if nonzero:
-        assert s.index_compressed_bytes > 0 and s.index_uncompressed_bytes > 0
+        assert s.index_compressed_bytes > 0
+        assert s.index_uncompressed_bytes > 0
     else:
         assert (
             s.index_compressed_bytes,

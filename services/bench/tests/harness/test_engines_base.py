@@ -68,7 +68,8 @@ def test_jobs_run_in_order_on_their_engines_then_every_round_finishes():
     last_run = max(i for i, e in enumerate(log) if e[0] == "run")
     assert log.index(("finish", "ch")) > last_run
     assert log.index(("finish", "pl")) > last_run
-    assert ("start", "ch", 4, True) in log and r.samples == {
+    assert ("start", "ch", 4, True) in log
+    assert r.samples == {
         "a": "ch",
         "b": "pl",
         "c": "ch",
@@ -85,9 +86,11 @@ def test_an_engine_without_jobs_is_not_started():
 def test_ctrl_c_interrupts_every_started_round_and_attaches_what_ran():
     log = []
     engines = {"clickhouse": FakeEngine(log, "ch"), "polars:2": FakeEngine(log, "pl")}
+    jobs = [job("a", VARIANT), job("b", POLARS), job("stop", POLARS)]
     with pytest.raises(KeyboardInterrupt) as info:
-        run_round(engines, [job("a", VARIANT), job("b", POLARS), job("stop", POLARS)])
-    assert ("interrupt", "ch") in log and ("interrupt", "pl") in log
+        run_round(engines, jobs)
+    assert ("interrupt", "ch") in log
+    assert ("interrupt", "pl") in log
     assert info.value.round_result.samples == {"a": "ch", "b": "pl"}
 
 
@@ -97,9 +100,11 @@ PL = "polars:2"
 def test_any_failure_in_run_interrupts_every_started_round_and_attaches_what_ran():
     log = []
     engines = {"clickhouse": FakeEngine(log, "ch"), PL: FakeEngine(log, "pl")}
+    jobs = [job("a", VARIANT), job("b", POLARS), job("boom", POLARS)]
     with pytest.raises(RuntimeError, match="worker died") as info:
-        run_round(engines, [job("a", VARIANT), job("b", POLARS), job("boom", POLARS)])
-    assert ("interrupt", "ch") in log and ("interrupt", "pl") in log
+        run_round(engines, jobs)
+    assert ("interrupt", "ch") in log
+    assert ("interrupt", "pl") in log
     assert not any(e[0] == "finish" for e in log)
     assert info.value.round_result.samples == {"a": "ch", "b": "pl"}
 
@@ -110,8 +115,9 @@ def test_a_raising_finish_still_finishes_the_other_rounds():
         "clickhouse": FakeEngine(log, "ch", fail=("finish",)),
         PL: FakeEngine(log, "pl"),
     }
+    jobs = [job("a", VARIANT), job("b", POLARS)]
     with pytest.raises(RuntimeError, match="ch finish failed") as info:
-        run_round(engines, [job("a", VARIANT), job("b", POLARS)])
+        run_round(engines, jobs)
     assert ("finish", "pl") in log
     assert info.value.round_result.samples == {"a": "ch", "b": "pl"}
 
@@ -122,8 +128,9 @@ def test_every_raising_finish_is_named_on_the_first():
         "clickhouse": FakeEngine(log, "ch", fail=("finish",)),
         PL: FakeEngine(log, "pl", fail=("finish",)),
     }
+    jobs = [job("a", VARIANT), job("b", POLARS)]
     with pytest.raises(RuntimeError, match="ch finish failed") as info:
-        run_round(engines, [job("a", VARIANT), job("b", POLARS)])
+        run_round(engines, jobs)
     assert any("pl finish failed" in n for n in info.value.__notes__)
 
 
@@ -133,9 +140,11 @@ def test_ctrl_c_while_finishing_interrupts_every_round():
         "clickhouse": FakeEngine(log, "ch", fail=("finish_ki",)),
         PL: FakeEngine(log, "pl"),
     }
+    jobs = [job("a", VARIANT), job("b", POLARS)]
     with pytest.raises(KeyboardInterrupt) as info:
-        run_round(engines, [job("a", VARIANT), job("b", POLARS)])
-    assert ("interrupt", "ch") in log and ("interrupt", "pl") in log
+        run_round(engines, jobs)
+    assert ("interrupt", "ch") in log
+    assert ("interrupt", "pl") in log
     assert info.value.round_result.samples == {"a": "ch", "b": "pl"}
 
 
@@ -145,8 +154,9 @@ def test_a_raising_interrupt_skips_no_other_round_and_keeps_the_original():
         "clickhouse": FakeEngine(log, "ch", fail=("interrupt",)),
         PL: FakeEngine(log, "pl"),
     }
+    jobs = [job("a", VARIANT), job("b", POLARS), job("stop", POLARS)]
     with pytest.raises(KeyboardInterrupt) as info:
-        run_round(engines, [job("a", VARIANT), job("b", POLARS), job("stop", POLARS)])
+        run_round(engines, jobs)
     assert ("interrupt", "pl") in log
     assert info.value.round_result.samples == {"a": "ch", "b": "pl"}
     assert any("ch interrupt failed" in n for n in info.value.__notes__)
@@ -155,8 +165,9 @@ def test_a_raising_interrupt_skips_no_other_round_and_keeps_the_original():
 def test_an_unknown_engine_is_refused_before_any_job_runs():
     log = []
     engines = {"clickhouse": FakeEngine(log, "ch")}
+    jobs = [job("a", VARIANT), job("b", POLARS)]
     with pytest.raises(ValueError, match=r"no engine started for \['polars:2'\]"):
-        run_round(engines, [job("a", VARIANT), job("b", POLARS)])
+        run_round(engines, jobs)
     assert log == []
 
 
@@ -165,7 +176,8 @@ def test_merge_takes_every_engines_samples_errors_and_warnings_in_start_order():
     a.result = RoundResult(samples={"a": 1}, errors={"x": "e1"}, warnings=["w1"])
     b.result = RoundResult(samples={"b": 2}, errors={"y": "e2"}, warnings=["w2", "w3"])
     m = _merge([a, b])
-    assert m.samples == {"a": 1, "b": 2} and m.errors == {"x": "e1", "y": "e2"}
+    assert m.samples == {"a": 1, "b": 2}
+    assert m.errors == {"x": "e1", "y": "e2"}
     assert m.warnings == ["w1", "w2", "w3"]
 
 

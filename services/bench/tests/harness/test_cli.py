@@ -265,7 +265,8 @@ def test_run_refuses_an_unfinished_run_unless_told_to_ignore_it(ch, tmp_path):
     common = ("--store", str(store), "--cache-dir", str(tmp_path / "ds"))
     p = run_cli("run", str(suite_path), *common)
     assert p.returncode == 2
-    assert stale in p.stderr and "--ignore-unfinished" in p.stderr
+    assert stale in p.stderr
+    assert "--ignore-unfinished" in p.stderr
     p = run_cli("run", str(suite_path), "--ignore-unfinished", *common)
     assert p.returncode == 0, p.stderr
 
@@ -286,7 +287,8 @@ def test_run_reports_an_old_schema_store_cleanly(tmp_path):
         "run", str(suite_path), "--store", str(old), "--cache-dir", str(tmp_path / "ds")
     )
     assert p.returncode == 2
-    assert "--store" in p.stderr and "Traceback" not in p.stderr
+    assert "--store" in p.stderr
+    assert "Traceback" not in p.stderr
 
 
 def _inproc_variant():
@@ -344,7 +346,9 @@ def test_clean_deletes_the_ipc_files_without_a_server(tmp_path, capsys):
     other = ipc_file.with_name("other.arrow")
     other.write_bytes(b"x")
     code = _clean(db, tmp_path / "ds")
-    assert code == 0 and not ipc_file.exists() and other.exists()
+    assert code == 0
+    assert not ipc_file.exists()
+    assert other.exists()
     assert "deleted 1 IPC file(s) for suite p" in capsys.readouterr().out
 
 
@@ -358,7 +362,8 @@ def test_clean_deletes_a_left_over_tmp_of_a_recorded_table_only(tmp_path, capsys
     other = ipc / "other.tmp"
     other.write_bytes(b"x")
     assert _clean(db, tmp_path / "ds") == 0
-    assert not tmp.exists() and other.exists()
+    assert not tmp.exists()
+    assert other.exists()
     assert "deleted 1 IPC file(s) for suite p" in capsys.readouterr().out
 
 
@@ -387,8 +392,10 @@ def test_clean_reports_an_undeletable_file_and_goes_on(tmp_path, capsys, monkeyp
     code = _clean(db, tmp_path / "ds")
     out = capsys.readouterr()
     assert code == 1
-    assert (ipc / "aaa111.arrow").exists() and not (ipc / "bbb222.arrow").exists()
-    assert "aaa111.arrow" in out.out + out.err and "deleted 1 IPC file(s)" in out.out
+    assert (ipc / "aaa111.arrow").exists()
+    assert not (ipc / "bbb222.arrow").exists()
+    assert "aaa111.arrow" in out.out + out.err
+    assert "deleted 1 IPC file(s)" in out.out
 
 
 class _FakeClient:
@@ -415,7 +422,8 @@ def test_clean_on_a_v2_store_drops_its_tables_and_touches_no_files(
     code = main(
         ["clean", "--suite", "A", "--store", str(db), "--cache-dir", str(cache)]
     )
-    assert code == 0 and not cache.exists()
+    assert code == 0
+    assert not cache.exists()
     with Store(db) as s:
         (name,) = s.tables_for_suite("A")
     assert fake.commands == [f"DROP TABLE IF EXISTS {name}"]

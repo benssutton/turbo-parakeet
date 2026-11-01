@@ -154,14 +154,17 @@ def test_every_query_answers_the_reference(fixture, ok, skipped, request):
     assert seen["statuses"] == [("ok", None)]
     assert r.samples_written == ok * 3 * 2
     ks = seen["samples"]
-    assert ks and all(1 <= k <= 16 and capped in (0, 1) for k, capped in ks)
+    assert ks
+    assert all(1 <= k <= 16 and capped in (0, 1) for k, capped in ks)
     for t in seen["tables"]:
         if t["status"] != "ok":
             continue
         if t["storage"] == "ipc":
-            assert t["ipc_bytes"] > 0 and t["ipc_batch_rows"] == "122880"
+            assert t["ipc_bytes"] > 0
+            assert t["ipc_batch_rows"] == "122880"
         else:
-            assert t["ipc_bytes"] is None and t["ipc_batch_rows"] is None
+            assert t["ipc_bytes"] is None
+            assert t["ipc_batch_rows"] is None
             assert t["memory_bytes"] > 0
 
 
@@ -173,13 +176,10 @@ def test_ipc_compression_shrinks_strings_and_files_are_reused(strings):
     assert (
         by[("datafusion", "string", "ZSTD(3)")] < by[("datafusion", "string", "none")]
     )
-    assert len(files) == 10 and all(
-        f.is_file() for f in files
-    )  # 6 Polars + 4 DataFusion ipc cells
-    assert (
-        second.samples_written == 15 * 3
-        and [f.stat().st_mtime_ns for f in files] == stamps
-    )
+    assert len(files) == 10
+    assert all(f.is_file() for f in files)
+    assert second.samples_written == 15 * 3
+    assert [f.stat().st_mtime_ns for f in files] == stamps
 
 
 def test_a_baseline_pairs_within_each_engine(strings):
@@ -190,7 +190,8 @@ def test_a_baseline_pairs_within_each_engine(strings):
     cat = [x for x in summary if x["ch_type"] == "Categorical(UInt8)"]
     # Paired on wall time: process CPU time ticks in 15.6 ms steps on Windows, so cpu_ratio and
     # n_rounds are mostly empty for 2 ms batches.
-    assert len(cat) == 3 * 3 and all(x["server_ratio"] is not None for x in cat)
+    assert len(cat) == 3 * 3
+    assert all(x["server_ratio"] is not None for x in cat)
     assert all(
         x["server_ratio"] is None for x in summary if x["engine"] == "datafusion"
     )
@@ -212,7 +213,8 @@ def test_a_baseline_pairs_within_each_engine(strings):
     )
     with open(out, newline="") as f:
         written = list(csv.DictReader(f))
-    assert code == 0 and {r["engine"] for r in written} == {"polars"}
+    assert code == 0
+    assert {r["engine"] for r in written} == {"polars"}
     assert any(
         r["ch_type"] == "Categorical(UInt8)" and r["server_ratio"] for r in written
     )
@@ -233,4 +235,5 @@ def test_clean_removes_the_ipc_files(numbers):
             str(root / "ds"),
         ]
     )
-    assert code == 0 and not any(f.exists() for f in files)
+    assert code == 0
+    assert not any(f.exists() for f in files)

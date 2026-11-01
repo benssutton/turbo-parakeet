@@ -59,8 +59,10 @@ def test_a_path_suite_runs_end_to_end_and_the_store_records_the_dataset(ch, tmp_
 
     cache = tmp_path / "ds"
     r = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=cache)
-    assert r.tables_ok == 2 and r.tables_error == 0
-    assert r.queries_run == 4 and r.samples_written == 8
+    assert r.tables_ok == 2
+    assert r.tables_error == 0
+    assert r.queries_run == 4
+    assert r.samples_written == 8
     assert not cache.exists()  # a path dataset is not copied
 
     with Store(tmp_path / "r.db") as s:
@@ -68,8 +70,10 @@ def test_a_path_suite_runs_end_to_end_and_the_store_records_the_dataset(ch, tmp_
             "SELECT dataset_id, spec_json, arrow_path FROM datasets"
         ).fetchall()
         n = s.conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
-    assert len(ds) == 1 and ds[0][0] == suite.dataset.dataset_id
-    assert '"path"' in ds[0][1] and ds[0][2] == suite.dataset.path
+    assert len(ds) == 1
+    assert ds[0][0] == suite.dataset.dataset_id
+    assert '"path"' in ds[0][1]
+    assert ds[0][2] == suite.dataset.path
     assert n == 8
 
 
@@ -115,7 +119,9 @@ def test_a_binary_path_suite_loads_into_string_and_both_literal_forms_match(
     assert suite.dataset.arrow_type == "binary"
 
     r = run_suite(suite, store_path=tmp_path / "r.db", cache_dir=tmp_path / "ds")
-    assert r.tables_ok == 2 and r.tables_error == 0 and r.queries_run == 6
+    assert r.tables_ok == 2
+    assert r.tables_error == 0
+    assert r.queries_run == 6
 
     with Store(tmp_path / "r.db") as s:
         tables = dict(s.conn.execute("SELECT table_id, codec FROM tables").fetchall())
@@ -130,7 +136,8 @@ def test_a_binary_path_suite_loads_into_string_and_both_literal_forms_match(
         assert all(q[2] == "ok" for q in mine)
         filters = [q for q in mine if q[1] == "filter"]
         predicates = " ".join(q[4] for q in filters)
-        assert "unhex(" in predicates and "'a" in predicates
+        assert "unhex(" in predicates
+        assert "'a" in predicates
         name = f"bench.t_orchpath_{table_id[:8]}"
         assert ch.query_rows(f"SELECT count() FROM {name}")[0][0] == 1000
         for _, _, _, fraction, predicate in filters:
@@ -138,4 +145,5 @@ def test_a_binary_path_suite_loads_into_string_and_both_literal_forms_match(
             (matched,) = ch.query_rows(f"SELECT count() FROM {name} WHERE {predicate}")[
                 0
             ]
-            assert fraction > 0 and matched == round(fraction * 1000)
+            assert fraction > 0
+            assert matched == round(fraction * 1000)
