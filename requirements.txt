@@ -14,7 +14,7 @@ datafusion>=55.0.0,<56
 -e services/evaluate  # evaluate: the evaluation loop
 psutil>=7.0,<8        # evaluate: peak memory on Windows (peak_wset)
 pyyaml>=6.0,<7  # to_chbench suite files; services/bench suites
-clickhouse-connect>=1.1.1,<2  # services/bench: the ClickHouse client
+clickhouse-connect>=1.11.0,<2  # services/bench: the ClickHouse client
 rich>=15.0,<16                # services/bench: the report tables
 
 # Testing
@@ -30,6 +30,6 @@ scikit-learn>=1.9.1,<2   # AdjustedRandSklearn, adjusted_rand's reference
 datasketch>=2.0.0,<3     # MinHashDatasketch (similarity)
 polars-ds>=0.13.0,<1     # ChiSquaredPolarsDS (chi_squared)
 fastbloom-rs>=0.5.10,<1  # BloomFastbloom (membership)
-statsmodels>=0.14,<1     # tests/test_runs_test.py: binary runs-test cross-check
+statsmodels>=0.15.0,<1     # tests/test_runs_test.py: binary runs-test cross-check
 zstandard>=0.25,<1       # services/bench/spikes/spike_decimal32_zstd.py --emulator: raw libzstd cross-check
 # (datafusion, above, is also DescribeDataFusion and tests/performance/spike_datafusion_ree.py)
