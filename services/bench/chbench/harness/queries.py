@@ -135,93 +135,113 @@ def _render_literal_runtime(value) -> str:
     return str(value)
 
 
+def _literal_string(value) -> str:
+    """A `String` column's literal: text, or `unhex` for bytes that are not UTF-8."""
+    if isinstance(value, (bytes, bytearray)):
+        # a binary path dataset, loaded as it is (`cast_column`)
+        try:
+            text = bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return f"unhex('{bytes(value).hex()}')"
+    elif isinstance(value, (str, np.str_)):
+        text = str(value)
+    else:
+        # Match the loader's own cast exactly (`cast_column` ->
+        # `pc.cast`), rather than Python's `str()`: pyarrow's numeric
+        # cast to string does not agree with `str()` in general — e.g.
+        # `3.0` -> `'3'` (not `'3.0'`) and `1e10` -> `'1e+10'` (not
+        # `'10000000000.0'`). A literal built with `str()` would then
+        # never match the stored row for a whole-number value.
+        text = pa.array([value]).cast(pa.string())[0].as_py()
+    return _quote(text)
+
+
+def _literal_decimal(t: str, value) -> str:
+    m = _DECIMAL_SCALE_RE.match(t)
+    places = int(m.group(1)) if m else 0
+    if isinstance(value, decimal.Decimal):
+        return _quote(f"{value:.{places}f}")
+    return _quote(f"{float(value):.{places}f}")
+
+
+def _literal_fixed_string(value) -> str:
+    if isinstance(value, (bytes, bytearray)):
+        data = bytes(value).rstrip(b"\0")
+        try:
+            return _quote(data.decode("utf-8"))
+        except UnicodeDecodeError:
+            return f"unhex('{data.hex()}')"
+    return _quote(str(value))
+
+
+def _literal_time64(places: int, value) -> str:
+    # `value` is the integer ticks since midnight in the dataset's unit,
+    # which is the column's own precision (`resolve_type`).
+    seconds, ticks = divmod(int(value), 10**places)
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    text = f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return _quote(text + (f".{ticks:0{places}d}" if places else ""))
+
+
+def _literal_datetime(t: str, ch_type: str, value) -> str:
+    # The raw value is whatever numeric/date-like scalar the generator
+    # produced; convert it the way the loader does (`cast_column` ->
+    # `pc.cast`, from an Arrow array of the dataset's own type), so the
+    # rendered literal names the exact date the loaded row actually
+    # has. It goes through numpy, not a Python list: on pyarrow 24
+    # `pa.array([np.datetime64('1970-01-02', 'D')])`, with or without a
+    # `type=`, raises `TypeError: int() argument must be ... not
+    # 'datetime.date'`, which is what crashed every `Date` filter query,
+    # while the numpy path infers `date32` and casts cleanly.
+    # A nullable integer dataset reaches here as float64 (numpy has no
+    # nullable int, so `to_numpy` widens and puts NaN in the holes), and
+    # Arrow has no double -> date cast; the loader's array is still
+    # integer-typed, so recover the integer before casting.
+    target = arrow_type_for(ch_type)
+    raw = np.asarray([value])
+    if raw.dtype.kind == "f":
+        raw = raw.astype(np.int32 if pa.types.is_date32(target) else np.int64)
+    casted = pa.array(raw).cast(target)
+    if not pa.types.is_timestamp(target) or (not target.tz and target.unit != "ns"):
+        return _quote(casted[0].as_py().isoformat().replace("T", " "))
+    # A nanosecond or zoned timestamp: Python's datetime has microseconds
+    # and local-time zones, so spell the UTC instant at the column's
+    # precision through numpy, and for a zoned column name the zone the
+    # string is in -- a bare string would be read in the column's own zone.
+    naive = casted.cast(pa.timestamp(target.unit)) if target.tz else casted
+    text = _quote(
+        np.datetime_as_string(
+            naive.to_numpy(zero_copy_only=False)[0], unit=target.unit
+        ).replace("T", " ")
+    )
+    if not target.tz:
+        return text
+    if t.startswith("DateTime64"):
+        return f"toDateTime64({text}, {_UNIT_PRECISION[target.unit]}, 'UTC')"
+    return f"toDateTime({text}, 'UTC')"
+
+
 def _render_literal_typed(value, ch_type: str) -> str:
     """Render one value as a ClickHouse SQL literal for the given column
     type (unwrapping `Nullable`/`LowCardinality`). See the module docstring
     for why this must key off `ch_type` and not the value's runtime type."""
     t = base_type(ch_type)
     if t == "String":
-        if isinstance(value, (bytes, bytearray)):
-            # a binary path dataset, loaded as it is (`cast_column`)
-            try:
-                text = bytes(value).decode("utf-8")
-            except UnicodeDecodeError:
-                return f"unhex('{bytes(value).hex()}')"
-        elif isinstance(value, (str, np.str_)):
-            text = str(value)
-        else:
-            # Match the loader's own cast exactly (`cast_column` ->
-            # `pc.cast`), rather than Python's `str()`: pyarrow's numeric
-            # cast to string does not agree with `str()` in general — e.g.
-            # `3.0` -> `'3'` (not `'3.0'`) and `1e10` -> `'1e+10'` (not
-            # `'10000000000.0'`). A literal built with `str()` would then
-            # never match the stored row for a whole-number value.
-            text = pa.array([value]).cast(pa.string())[0].as_py()
-        return _quote(text)
+        return _literal_string(value)
     if t.startswith("Decimal"):
-        m = _DECIMAL_SCALE_RE.match(t)
-        places = int(m.group(1)) if m else 0
-        if isinstance(value, decimal.Decimal):
-            return _quote(f"{value:.{places}f}")
-        return _quote(f"{float(value):.{places}f}")
+        return _literal_decimal(t, value)
     if t.startswith("Enum"):
         return _quote(str(value))
     if t.startswith("FixedString"):
-        if isinstance(value, (bytes, bytearray)):
-            data = bytes(value).rstrip(b"\0")
-            try:
-                return _quote(data.decode("utf-8"))
-            except UnicodeDecodeError:
-                return f"unhex('{data.hex()}')"
-        return _quote(str(value))
+        return _literal_fixed_string(value)
     if t == "Bool":
         return "true" if bool(value) else "false"
     m = _TIME64_SCALE_RE.match(t)
     if m:
-        # `value` is the integer ticks since midnight in the dataset's unit,
-        # which is the column's own precision (`resolve_type`).
-        places = int(m.group(1))
-        seconds, ticks = divmod(int(value), 10**places)
-        hours, rest = divmod(seconds, 3600)
-        minutes, secs = divmod(rest, 60)
-        text = f"{hours:02d}:{minutes:02d}:{secs:02d}"
-        return _quote(text + (f".{ticks:0{places}d}" if places else ""))
+        return _literal_time64(int(m.group(1)), value)
     if t in ("Date", "Date32") or t.startswith("DateTime"):
-        # The raw value is whatever numeric/date-like scalar the generator
-        # produced; convert it the way the loader does (`cast_column` ->
-        # `pc.cast`, from an Arrow array of the dataset's own type), so the
-        # rendered literal names the exact date the loaded row actually
-        # has. It goes through numpy, not a Python list: on pyarrow 24
-        # `pa.array([np.datetime64('1970-01-02', 'D')])`, with or without a
-        # `type=`, raises `TypeError: int() argument must be ... not
-        # 'datetime.date'`, which is what crashed every `Date` filter query,
-        # while the numpy path infers `date32` and casts cleanly.
-        # A nullable integer dataset reaches here as float64 (numpy has no
-        # nullable int, so `to_numpy` widens and puts NaN in the holes), and
-        # Arrow has no double -> date cast; the loader's array is still
-        # integer-typed, so recover the integer before casting.
-        target = arrow_type_for(ch_type)
-        raw = np.asarray([value])
-        if raw.dtype.kind == "f":
-            raw = raw.astype(np.int32 if pa.types.is_date32(target) else np.int64)
-        casted = pa.array(raw).cast(target)
-        if not pa.types.is_timestamp(target) or (not target.tz and target.unit != "ns"):
-            return _quote(casted[0].as_py().isoformat().replace("T", " "))
-        # A nanosecond or zoned timestamp: Python's datetime has microseconds
-        # and local-time zones, so spell the UTC instant at the column's
-        # precision through numpy, and for a zoned column name the zone the
-        # string is in -- a bare string would be read in the column's own zone.
-        naive = casted.cast(pa.timestamp(target.unit)) if target.tz else casted
-        text = _quote(
-            np.datetime_as_string(
-                naive.to_numpy(zero_copy_only=False)[0], unit=target.unit
-            ).replace("T", " ")
-        )
-        if not target.tz:
-            return text
-        if t.startswith("DateTime64"):
-            return f"toDateTime64({text}, {_UNIT_PRECISION[target.unit]}, 'UTC')"
-        return f"toDateTime({text}, 'UTC')"
+        return _literal_datetime(t, ch_type, value)
     if _INTEGER_RE.match(t) and isinstance(value, (float, np.floating)):
         # a nullable Int8-Int32 column is float64 here (exact: below 2**53); 64-bit ones stay
         # Python ints (`query_values`)
@@ -586,6 +606,27 @@ def _clock(ticks: int, unit: str) -> str:
     return text + (f".{fraction:0{places}d}" if places else "")
 
 
+def _datafusion_float(t: pa.DataType, scalar: pa.Scalar) -> str:
+    sql = "FLOAT" if t.bit_width == 32 else "DOUBLE"
+    x = float(scalar.as_py())
+    text = repr(x)
+    return f"CAST({text} AS {sql})" if math.isfinite(x) else f"CAST('{text}' AS {sql})"
+
+
+def _datafusion_timestamp(t: pa.DataType, scalar: pa.Scalar) -> str:
+    ticks = scalar.cast(pa.int64()).as_py()
+    iso = str(np.datetime_as_string(np.datetime64(ticks, t.unit), unit=t.unit))
+    zone = f'Some("{t.tz}")' if t.tz else "None"
+    suffix = "Z" if t.tz else ""
+    return f"arrow_cast('{iso}{suffix}', 'Timestamp({_DF_UNIT[t.unit]}, {zone})')"
+
+
+def _datafusion_time(t: pa.DataType, scalar: pa.Scalar) -> str:
+    width = "Time32" if pa.types.is_time32(t) else "Time64"
+    ticks = scalar.cast(pa.int32() if width == "Time32" else pa.int64()).as_py()
+    return f"arrow_cast('{_clock(ticks, t.unit)}', '{width}({_DF_UNIT[t.unit]})')"
+
+
 def _datafusion_literal(scalar: pa.Scalar) -> str:
     """One value as a DataFusion SQL literal of its own Arrow type: quoted strings (`'` doubled),
     `X'..'` binaries, `CAST('..' AS DECIMAL(p, s))`, `DATE '..'`, timestamps and times through
@@ -600,27 +641,16 @@ def _datafusion_literal(scalar: pa.Scalar) -> str:
     if pa.types.is_integer(t):
         return str(scalar.as_py())
     if pa.types.is_floating(t):
-        sql = "FLOAT" if t.bit_width == 32 else "DOUBLE"
-        x = float(scalar.as_py())
-        text = repr(x)
-        return (
-            f"CAST({text} AS {sql})" if math.isfinite(x) else f"CAST('{text}' AS {sql})"
-        )
+        return _datafusion_float(t, scalar)
     if pa.types.is_decimal(t):
         text = format(scalar.as_py(), "f")
         return f"CAST('{text}' AS DECIMAL({t.precision}, {t.scale}))"
     if pa.types.is_date32(t):
         return f"DATE '{scalar.as_py().isoformat()}'"
     if pa.types.is_timestamp(t):
-        ticks = scalar.cast(pa.int64()).as_py()
-        iso = str(np.datetime_as_string(np.datetime64(ticks, t.unit), unit=t.unit))
-        zone = f'Some("{t.tz}")' if t.tz else "None"
-        suffix = "Z" if t.tz else ""
-        return f"arrow_cast('{iso}{suffix}', 'Timestamp({_DF_UNIT[t.unit]}, {zone})')"
+        return _datafusion_timestamp(t, scalar)
     if pa.types.is_time(t):
-        width = "Time32" if pa.types.is_time32(t) else "Time64"
-        ticks = scalar.cast(pa.int32() if width == "Time32" else pa.int64()).as_py()
-        return f"arrow_cast('{_clock(ticks, t.unit)}', '{width}({_DF_UNIT[t.unit]})')"
+        return _datafusion_time(t, scalar)
     raise ValueError(f"no DataFusion literal for type {t}")
 
 

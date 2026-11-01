@@ -203,33 +203,19 @@ def _parse_path_dataset(block: dict, base_dir: str | Path | None) -> DatasetSpec
         raise SuiteError(str(e)) from e
 
 
-def _parse_dataset(block: dict, base_dir: str | Path | None = None) -> DatasetSpec:
-    if not isinstance(block, dict):
-        raise SuiteError(f"dataset block must be a mapping, got {block!r}")
-    _reject_unknown_keys(block, _DATASET_FIELDS - {"content_hash"}, "dataset")
-    if "path" in block or "column" in block:
-        return _parse_path_dataset(block, base_dir)
-
-    d = dict(block)
-
-    if d.get("value_range") is not None:
+def _tuple_field(d: dict, key: str) -> None:
+    """Turn the dataset field `key`, a list of two numbers, into a tuple, in place."""
+    if d.get(key) is not None:
         try:
-            d["value_range"] = tuple(d["value_range"])
+            d[key] = tuple(d[key])
         except TypeError as e:
             raise SuiteError(
-                f"dataset.value_range must be a list of two numbers, got "
-                f"{d['value_range']!r}"
+                f"dataset.{key} must be a list of two numbers, got {d[key]!r}"
             ) from e
 
-    if d.get("array_len_range") is not None:
-        try:
-            d["array_len_range"] = tuple(d["array_len_range"])
-        except TypeError as e:
-            raise SuiteError(
-                f"dataset.array_len_range must be a list of two numbers, got "
-                f"{d['array_len_range']!r}"
-            ) from e
 
+def _distribution_field(d: dict) -> None:
+    """Build the dataset's `distribution` mapping into a `Distribution`, in place."""
     if d.get("distribution") is not None:
         dist = d["distribution"]
         if not isinstance(dist, dict):
@@ -243,6 +229,19 @@ def _parse_dataset(block: dict, base_dir: str | Path | None = None) -> DatasetSp
             d["distribution"] = Distribution(**dist)
         except (TypeError, ValueError) as e:
             raise SuiteError(f"dataset.distribution: {e}") from e
+
+
+def _parse_dataset(block: dict, base_dir: str | Path | None = None) -> DatasetSpec:
+    if not isinstance(block, dict):
+        raise SuiteError(f"dataset block must be a mapping, got {block!r}")
+    _reject_unknown_keys(block, _DATASET_FIELDS - {"content_hash"}, "dataset")
+    if "path" in block or "column" in block:
+        return _parse_path_dataset(block, base_dir)
+
+    d = dict(block)
+    _tuple_field(d, "value_range")
+    _tuple_field(d, "array_len_range")
+    _distribution_field(d)
 
     try:
         spec = DatasetSpec(**d)
@@ -419,6 +418,33 @@ def _check_dataset_against_type_axis(
                 )
 
 
+def _inproc_type_labels(block: dict, engine: str) -> None:
+    """Reject a `type` axis that names one type twice (as labelled)."""
+    labels = []
+    for value in block["type"]:
+        try:
+            labels.append(type_label(engine, value))
+        except ValueError as e:
+            raise SuiteError(f"{engine}.type: {e}") from e
+    if len(set(labels)) != len(labels):
+        raise SuiteError(
+            f"{engine}.type names one type twice (as labelled: {labels!r}); give each once"
+        )
+
+
+def _inproc_threads(block: dict, engine: str) -> list | None:
+    """The optional `threads` axis (positive integers), or None."""
+    threads = block.get("threads")
+    if threads is not None:
+        _require_non_empty_list(threads, f"{engine}.threads")
+        for t in threads:
+            if not isinstance(t, int) or isinstance(t, bool) or t <= 0:
+                raise SuiteError(
+                    f"{engine}.threads must hold positive integers, got {t!r}"
+                )
+    return threads
+
+
 def _parse_inproc(block, engine: str) -> InprocAxes:
     """A `polars:` / `datafusion:` block: `type`, `storage`, `compression` (non-empty lists) and an
     optional `threads` (positive integers) and `ipc_batch_rows` (positive integers, by default
@@ -432,16 +458,7 @@ def _parse_inproc(block, engine: str) -> InprocAxes:
             raise SuiteError(f"{engine} block is missing the {axis!r} axis")
         _require_non_empty_list(block[axis], f"{engine}.{axis}")
 
-    labels = []
-    for value in block["type"]:
-        try:
-            labels.append(type_label(engine, value))
-        except ValueError as e:
-            raise SuiteError(f"{engine}.type: {e}") from e
-    if len(set(labels)) != len(labels):
-        raise SuiteError(
-            f"{engine}.type names one type twice (as labelled: {labels!r}); give each once"
-        )
+    _inproc_type_labels(block, engine)
 
     for value in block["storage"]:
         if value not in STORAGES:
@@ -456,14 +473,7 @@ def _parse_inproc(block, engine: str) -> InprocAxes:
     except ValueError as e:
         raise SuiteError(f"{engine}.compression: {e}") from e
 
-    threads = block.get("threads")
-    if threads is not None:
-        _require_non_empty_list(threads, f"{engine}.threads")
-        for t in threads:
-            if not isinstance(t, int) or isinstance(t, bool) or t <= 0:
-                raise SuiteError(
-                    f"{engine}.threads must hold positive integers, got {t!r}"
-                )
+    threads = _inproc_threads(block, engine)
 
     batch_rows = block.get("ipc_batch_rows", [DEFAULT_IPC_BATCH_ROWS])
     _require_non_empty_list(batch_rows, f"{engine}.ipc_batch_rows")

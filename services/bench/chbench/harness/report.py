@@ -164,16 +164,11 @@ def _resolved(lo, hi) -> int:
     return 0
 
 
-def _apply_baseline(
-    summaries: list[dict], groups: dict, baseline: dict[str, str]
-) -> None:
-    """Within each group of rows sharing every axis not named in `baseline` (the query axes
-    and the predicate shape included, so a row is only compared with the same query on another
-    table), the row matching `baseline` is the reference: each row gains its per-round paired
-    ratio against it (CPU and wall), `n_rounds` (the CPU pairing count) and `clocks_disagree`
-    (both resolved, in opposite directions). A group without a matching row gets None ratios;
-    a baseline no row matches at all is a misspelling and raises ValueError."""
-    free = [a for a in _AXES if a not in baseline] + list(_SHAPE)
+def _baseline_refs(
+    summaries: list[dict], baseline: dict[str, str], free: list[str]
+) -> dict[tuple, dict]:
+    """The reference row of each group (the first row matching `baseline`); ValueError if no row
+    matches at all."""
     refs: dict[tuple, dict] = {}
     for s in summaries:
         if all(str(s[a]) == v for a, v in baseline.items()):
@@ -185,28 +180,47 @@ def _apply_baseline(
             f"value as the table shows it, booleans as 1/0 (e.g. primary_key=1, "
             f"target_fraction=0.1)"
         )
+    return refs
+
+
+def _set_ratios(s: dict, ref: dict | None, groups: dict) -> None:
+    """Give `s` its paired ratios against `ref` (None ratios without one), `n_rounds` and
+    `clocks_disagree`."""
+    n = 0
+    for clock, key in (("cpu", "cpu_us"), ("server", "server_ms")):
+        ratio = lo = hi = None
+        if ref is not None:
+            ratio, lo, hi, count = paired_ratio(
+                _by_round(groups[s["query_id"]], key),
+                _by_round(groups[ref["query_id"]], key),
+            )
+            if clock == "cpu":
+                n = count
+        s[f"{clock}_ratio"] = ratio
+        s[f"{clock}_ratio_lo"] = lo
+        s[f"{clock}_ratio_hi"] = hi
+    s["n_rounds"] = n
+    if s["cpu_ratio"] is None or s["server_ratio"] is None:
+        s["clocks_disagree"] = None
+    else:
+        c = _resolved(s["cpu_ratio_lo"], s["cpu_ratio_hi"])
+        w = _resolved(s["server_ratio_lo"], s["server_ratio_hi"])
+        s["clocks_disagree"] = c * w == -1
+
+
+def _apply_baseline(
+    summaries: list[dict], groups: dict, baseline: dict[str, str]
+) -> None:
+    """Within each group of rows sharing every axis not named in `baseline` (the query axes
+    and the predicate shape included, so a row is only compared with the same query on another
+    table), the row matching `baseline` is the reference: each row gains its per-round paired
+    ratio against it (CPU and wall), `n_rounds` (the CPU pairing count) and `clocks_disagree`
+    (both resolved, in opposite directions). A group without a matching row gets None ratios;
+    a baseline no row matches at all is a misspelling and raises ValueError."""
+    free = [a for a in _AXES if a not in baseline] + list(_SHAPE)
+    refs = _baseline_refs(summaries, baseline, free)
     for s in summaries:
-        ref = refs.get(tuple(s[a] for a in free))
-        n = 0
-        for clock, key in (("cpu", "cpu_us"), ("server", "server_ms")):
-            ratio = lo = hi = None
-            if ref is not None:
-                ratio, lo, hi, count = paired_ratio(
-                    _by_round(groups[s["query_id"]], key),
-                    _by_round(groups[ref["query_id"]], key),
-                )
-                if clock == "cpu":
-                    n = count
-            s[f"{clock}_ratio"] = ratio
-            s[f"{clock}_ratio_lo"] = lo
-            s[f"{clock}_ratio_hi"] = hi
-        s["n_rounds"] = n
-        if s["cpu_ratio"] is None or s["server_ratio"] is None:
-            s["clocks_disagree"] = None
-        else:
-            c = _resolved(s["cpu_ratio_lo"], s["cpu_ratio_hi"])
-            w = _resolved(s["server_ratio_lo"], s["server_ratio_hi"])
-            s["clocks_disagree"] = c * w == -1
+        _set_ratios(s, refs.get(tuple(s[a] for a in free)), groups)
 
 
 def _summarise_group(group: list[dict], percentiles: list[int]) -> dict:
