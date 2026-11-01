@@ -448,33 +448,53 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
     # and the exit code is 1 if there was any.
     failed = 0
     if inproc:
-        deleted = 0
-        for tid in inproc:
-            # the file, and the `.tmp` a worker killed mid-write leaves beside it
-            target = ipc_path(args.cache_dir, tid)
-            for path in (target, target.with_suffix(".tmp")):
-                if not path.is_file():
-                    continue
-                try:
-                    path.unlink()
-                except OSError as exc:
-                    failed += 1
-                    _warn(console, f"error: could not delete {path}: {exc}")
-                    continue
-                deleted += 1
-                console.print(f"deleted {path}", markup=False, highlight=False)
-        console.print(
-            f"deleted {deleted} IPC file(s) for suite {args.suite}",
-            style="bold",
-            markup=False,
-            highlight=False,
-        )
+        failed += _delete_ipc_files(args, console, inproc)
     if not known:
         return 1 if failed else 0
 
     client = CHClient(Connection.from_env())
     present = _present_tables(client, args.suite)
+    failed += _drop_tables(args, console, client, known, present)
+    return 1 if failed else 0
 
+
+def _delete_ipc_files(
+    args: argparse.Namespace, console: Console, inproc: list[str]
+) -> int:
+    """Delete the in-process tables' IPC files; return the number of failures."""
+    failed = 0
+    deleted = 0
+    for tid in inproc:
+        # the file, and the `.tmp` a worker killed mid-write leaves beside it
+        target = ipc_path(args.cache_dir, tid)
+        for path in (target, target.with_suffix(".tmp")):
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+            except OSError as exc:
+                failed += 1
+                _warn(console, f"error: could not delete {path}: {exc}")
+                continue
+            deleted += 1
+            console.print(f"deleted {path}", markup=False, highlight=False)
+    console.print(
+        f"deleted {deleted} IPC file(s) for suite {args.suite}",
+        style="bold",
+        markup=False,
+        highlight=False,
+    )
+    return failed
+
+
+def _drop_tables(
+    args: argparse.Namespace,
+    console: Console,
+    client: CHClient,
+    known: list[str],
+    present: set[str],
+) -> int:
+    """Drop the suite's recorded ClickHouse tables; return the number of failures."""
     # Every recorded name is dropped, because the store is the authority on
     # what this suite owns. Only the ones the server actually has are
     # counted and announced: a grid cell `expand_grid` skipped is recorded
@@ -482,7 +502,7 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
     # table was ever created for it, and reporting it as dropped would
     # overstate what happened.
     dropped = 0
-    failed_before = failed
+    failed = 0
     for name in known:
         try:
             client.command(drop_table_sql(name))
@@ -504,7 +524,7 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
             soft_wrap=True,
         )
 
-    never_created = len(known) - dropped - (failed - failed_before)
+    never_created = len(known) - dropped - failed
     tail = f" ({never_created} recorded but never created)" if never_created else ""
     console.print(
         f"dropped {dropped} table(s) for suite {args.suite}{tail}",
@@ -512,7 +532,7 @@ def _cmd_clean(args: argparse.Namespace, console: Console) -> int:
         markup=False,
         highlight=False,
     )
-    return 1 if failed else 0
+    return failed
 
 
 def _warn(console: Console, message: str) -> None:
