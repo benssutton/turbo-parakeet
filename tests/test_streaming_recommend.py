@@ -325,7 +325,10 @@ def assert_skip_index_parity(name: str, r: dict, o: dict):
             )
             assert g["bytes"] == w["bytes"], (name, g, w)
             for k in ("skip_rows", "skip_values", "expected_skip_rows"):
-                assert g[k] == pytest.approx(w[k], rel=1e-9), (name, k, g, w)
+                if w[k] is None:
+                    assert g[k] is None, (name, k, g, w)
+                else:
+                    assert g[k] == pytest.approx(w[k], rel=1e-9), (name, k, g, w)
         return
     if r["clickhouse_skip_index"] != o["clickhouse_skip_index"]:
         best = sorted(

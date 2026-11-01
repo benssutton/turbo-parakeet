@@ -20,6 +20,7 @@ from turbo_parakeet.techniques.describe import _sizes
 from turbo_parakeet.recommenders import OneShotRecommender, StreamingRecommender
 from synthdata.synth import synth_small
 from synthdata.scenarios import describe_mixed, stringified
+from approx_helpers import assert_close
 from harness import pyarrow_body
 
 
@@ -944,8 +945,7 @@ def test_rust_conclusions_match_describe():
     # Same rule; float operation order may differ by an ulp.
     for c in CONCLUSIONS:
         if CONCLUSIONS[c] == pl.Float64:
-            got = a[c].to_list()
-            assert got == pytest.approx(b[c].to_list(), rel=1e-12, nan_ok=True), c
+            assert_close(a[c].to_list(), b[c].to_list(), c, rel=1e-12, nan_ok=True)
         else:
             assert a[c].to_list() == b[c].to_list(), c
 
