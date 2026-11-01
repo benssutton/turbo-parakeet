@@ -308,7 +308,7 @@ def test_string_length_must_be_positive():
 
 def test_bool_value_range_must_lie_within_the_lattice():
     invalid = base(arrow_type="bool", value_range=(0, 5), decimal_places=None)
-    with pytest.raises(SpecError, match="bool.*\[0, 1\]"):
+    with pytest.raises(SpecError, match=r"bool.*\[0, 1\]"):
         invalid.validate()
     base(arrow_type="bool", value_range=(0, 1), decimal_places=None).validate()
 
