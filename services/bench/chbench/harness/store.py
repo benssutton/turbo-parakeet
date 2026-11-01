@@ -328,16 +328,18 @@ class Store:
                 f"one writes schema {SCHEMA_VERSION}): upgrade chbench, or pass --store"
             )
         self.conn.executescript(_SCHEMA)
+        # PRAGMA takes no bound parameters; SCHEMA_VERSION is a module-level int.
+        # nosemgrep
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 
     def _query_rows_sql(self) -> str:
         parts = []
         for alias, table, columns in _ROW_COLUMNS:
-            present = {
-                r[1]
-                for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
+            # `table` comes from the fixed _ROW_COLUMNS; PRAGMA takes no bound parameters.
+            # nosemgrep
+            info = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            present = {r[1] for r in info}
             for c in columns:
                 column, name, default = (
                     (c, c, None) if isinstance(c, str) else (*c, None)[:3]
@@ -632,11 +634,11 @@ class Store:
 
     def record_quiet(self, run_id: str, when: str, snapshot: dict) -> None:
         """The quietness snapshot (`quiet.snapshot`) taken `when` ("before" / "after") the rounds."""
-        column = {"before": "quiet_before", "after": "quiet_after"}[when]
-        self.conn.execute(
-            f"UPDATE runs SET {column} = ? WHERE run_id = ?",
-            (json.dumps(snapshot, default=_json_default), run_id),
-        )
+        sql = {
+            "before": "UPDATE runs SET quiet_before = ? WHERE run_id = ?",
+            "after": "UPDATE runs SET quiet_after = ? WHERE run_id = ?",
+        }[when]
+        self.conn.execute(sql, (json.dumps(snapshot, default=_json_default), run_id))
         self.conn.commit()
 
     def next_round(self, suite_name: str) -> int:

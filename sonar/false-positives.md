@@ -1,4 +1,4 @@
-# SonarQube findings reviewed and rejected
+# SonarQube and Semgrep findings reviewed and rejected
 
 Findings below were investigated and are **not** to be "fixed". Each is marked *False positive*
 in the local SonarQube server (status lives in its database: `docker compose down -v`
@@ -174,3 +174,23 @@ The 14 test findings once deferred here (`python:S5778` and `python:S9073` in
 `test_set_index.py`, `test_minmax_index.py`, `test_runs_test.py`, `test_top_k.py` and
 `test_datagen.py`) have since been fixed: none came back in the 2026-10-24 analysis after the
 server's database was reset.
+
+## Semgrep (GitHub code scanning, `p/default`)
+
+Dismissed as *False positive* on GitHub with a comment each (alerts live in GitHub, not in
+the repo). The source lines carry a bare `# nosemgrep` under an explanatory comment, which
+Semgrep records as a suppression but GitHub does not act on, so the alert must be dismissed
+as well. `store.py` `record_quiet` was changed instead of dismissed: it used an f-string for
+a column name taken from a two-key dict, and now selects one of two literal `UPDATE` strings.
+
+- `python.lang.security.audit.formatted-sql-query` and
+  `python.sqlalchemy.security.sqlalchemy-execute-raw-query` (4): `chbench/harness/store.py`,
+  `PRAGMA user_version = {SCHEMA_VERSION}` and `PRAGMA table_info({table})`. SQLite takes no
+  bound parameters in a `PRAGMA`; the values are a module-level int and names from the fixed
+  `_ROW_COLUMNS`. Do not "parametrise" them.
+- `python.lang.security.audit.non-literal-import` (3): the lazy `__getattr__` in
+  `techniques/base.py` (`lazy_attributes`) and `chbench/harness/__init__.py` look the name up in
+  a fixed map; `chbench/harness/engines/worker.py` imports `inproc.FACTORIES`' entry (tests pass
+  their own fake workers, so an allow-list there would break them).
+- `python.lang.security.use-defused-xml-parse` (1): `scripts/check.py` `_repo_relative_coverage`
+  parses the `coverage.xml` coverage.py wrote in the same step.

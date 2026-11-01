@@ -230,6 +230,8 @@ def _repo_relative_coverage(report: Path, source: Path) -> None:
     """
     import xml.etree.ElementTree as ET
 
+    # `report` is the coverage.xml the step above just wrote, not untrusted input.
+    # nosemgrep
     tree = ET.parse(report)
     prefix = source.relative_to(ROOT).as_posix()
     for cls in tree.iter("class"):

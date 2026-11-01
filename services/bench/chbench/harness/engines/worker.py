@@ -40,6 +40,8 @@ def main(conn, factory: str, threads: int) -> None:
     `BaseWorker` subclass, built with `threads`."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     module, _, name = factory.partition(":")
+    # `factory` is a fixed entry of inproc.FACTORIES (or a test's own worker), never user input.
+    # nosemgrep
     impl = getattr(importlib.import_module(module), name)(threads)
     try:
         while True:

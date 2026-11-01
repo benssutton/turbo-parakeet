@@ -24,5 +24,7 @@ __all__ = sorted(_EXPORTS)
 
 def __getattr__(name: str):
     if name in _EXPORTS:
+        # Looked up in the fixed name -> module map above, never imported by name.
+        # nosemgrep
         return getattr(importlib.import_module(_EXPORTS[name]), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
